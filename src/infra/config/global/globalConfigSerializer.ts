@@ -4,6 +4,7 @@ import {
   denormalizePersonaProviders,
   denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
+  denormalizeRateLimitFallback,
 } from '../configNormalizers.js';
 
 export function serializeGlobalConfig(config: GlobalConfig): Record<string, unknown> {
@@ -110,6 +111,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   const rawProviderOptions = denormalizeProviderOptions(config.providerOptions);
   if (rawProviderOptions) {
     raw.provider_options = rawProviderOptions;
+  }
+  const rawRateLimitFallback = denormalizeRateLimitFallback(config.rateLimitFallback);
+  if (rawRateLimitFallback) {
+    raw.rate_limit_fallback = rawRateLimitFallback;
   }
   const rawProviderProfiles = denormalizeProviderProfiles(config.providerProfiles);
   if (rawProviderProfiles && Object.keys(rawProviderProfiles).length > 0) {

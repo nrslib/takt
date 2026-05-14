@@ -82,6 +82,7 @@ const EffectReferenceScalarSchema = z.union([TemplateReferenceSchema, z.number()
 
 const EnqueueIssueRawSchema = z.object({
   create: z.boolean().optional(),
+  title: z.string().optional(),
   labels: z.array(z.string()).optional(),
 }).strict();
 

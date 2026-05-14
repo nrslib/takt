@@ -21,7 +21,8 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { buildSessionKey } from '../session-key.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
-import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntry } from '../types.js';
+import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntry, StepRunResult } from '../types.js';
+import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 
@@ -111,7 +112,8 @@ export class ParallelRunner {
     task: string,
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-  ): Promise<{ response: AgentResponse; instruction: string }> {
+    runtime?: RuntimeStepResolution,
+  ): Promise<StepRunResult> {
     if (!step.parallel) {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
     }
@@ -128,7 +130,9 @@ export class ParallelRunner {
       ? new ParallelLogger(this.buildParallelLoggerOptions(step.name, stepIteration, subSteps.map((s) => s.name), state.iteration, maxSteps))
       : undefined;
 
-    const parentPm = this.deps.optionsBuilder.resolveStepProviderModel(step);
+    const parentPm = runtime
+      ? this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)
+      : this.deps.optionsBuilder.resolveStepProviderModel(step);
     const parentRuleCtx = {
       state,
       cwd: this.deps.getCwd(),
@@ -157,9 +161,18 @@ export class ParallelRunner {
         }
         try {
         const subIteration = incrementStepIteration(state, subStep.name);
-        const subInstruction = this.deps.stepExecutor.buildInstruction(subStep, subIteration, state, task, maxSteps);
+        const subInstruction = this.deps.stepExecutor.buildInstruction(
+          subStep,
+          subIteration,
+          state,
+          task,
+          maxSteps,
+          runtime?.fallback,
+        );
         const parentIteration = state.iteration;
-        const subPm = this.deps.optionsBuilder.resolveStepProviderModel(subStep);
+        const subPm = runtime
+          ? this.deps.optionsBuilder.resolveStepProviderModel(subStep, runtime)
+          : this.deps.optionsBuilder.resolveStepProviderModel(subStep);
         const subRuleCtx = {
           ...parentRuleCtx,
           provider: subPm.provider,
@@ -170,10 +183,10 @@ export class ParallelRunner {
         // Session key uses buildSessionKey (persona:provider) — same as normal steps.
         // This ensures sessions are shared across steps with the same persona+provider,
         // while different providers (e.g., claude-eye vs codex-eye) get separate sessions.
-        const subSessionKey = buildSessionKey(subStep);
+        const subSessionKey = buildSessionKey(subStep, runtime?.providerInfo?.provider);
 
         // Phase 1: main execution (Write excluded if sub-step has report)
-        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subStep);
+        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subStep, runtime);
         let didEmitPhaseStart = false;
 
         // Override onStream with parallel logger's prefixed handler (immutable)
@@ -190,8 +203,12 @@ export class ParallelRunner {
         }
         updatePersonaSession(subSessionKey, subResponse.sessionId);
         this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, undefined, parentIteration);
+        if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
+          state.stepOutputs.set(subStep.name, subResponse);
+          return { subStep, response: subResponse, instruction: subInstruction, providerInfo: subPm };
+        }
 
-        // Phase 2/3 context — no overrides needed, phase-runner uses buildSessionKey internally
+        // Phase 2/3 context resolves the same runtime-aware session key as Phase 1.
         const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
           state,
           subResponse.content,
@@ -200,11 +217,29 @@ export class ParallelRunner {
           this.deps.onPhaseComplete,
           this.deps.onJudgeStage,
           parentIteration,
+          runtime,
         );
 
         // Phase 2: report output for sub-step
         if (subStep.outputContracts && subStep.outputContracts.length > 0) {
-          await runReportPhase(subStep, subIteration, phaseCtx);
+          const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
+          if (reportResult && 'blocked' in reportResult) {
+            const blockedResponse: AgentResponse = {
+              ...subResponse,
+              status: 'blocked',
+              content: reportResult.response.content,
+            };
+            state.stepOutputs.set(subStep.name, blockedResponse);
+            return { subStep, response: blockedResponse, instruction: subInstruction, providerInfo: subPm };
+          }
+          if (reportResult && 'rateLimited' in reportResult) {
+            const rateLimitedResponse: AgentResponse = {
+              ...reportResult.response,
+              persona: subStep.name,
+            };
+            state.stepOutputs.set(subStep.name, rateLimitedResponse);
+            return { subStep, response: rateLimitedResponse, instruction: subInstruction, providerInfo: subPm };
+          }
         }
 
         // Phase 3: status judgment for sub-step
@@ -233,7 +268,7 @@ export class ParallelRunner {
         state.stepOutputs.set(subStep.name, finalResponse);
         this.deps.stepExecutor.emitStepReports(subStep);
 
-        return { subStep, response: finalResponse, instruction: subInstruction };
+        return { subStep, response: finalResponse, instruction: subInstruction, providerInfo: subPm };
         } finally {
           if (semaphore) {
             semaphore.release();
@@ -258,8 +293,27 @@ export class ParallelRunner {
         error: errorMsg,
       };
       state.stepOutputs.set(failedStep.name, errorResponse);
-      return { subStep: failedStep, response: errorResponse, instruction: '' };
+      return { subStep: failedStep, response: errorResponse, instruction: '', providerInfo: undefined };
     });
+
+    const rateLimitedResult = subResults.find((r) => r.response.status === 'rate_limited');
+    if (rateLimitedResult) {
+      const rateLimitedResponse: AgentResponse = {
+        ...rateLimitedResult.response,
+        persona: step.name,
+      };
+      state.stepOutputs.set(step.name, rateLimitedResponse);
+      state.lastOutput = rateLimitedResponse;
+      return {
+        response: rateLimitedResponse,
+        instruction: rateLimitedResult.instruction,
+        providerInfo: rateLimitedResult.providerInfo,
+        consumedStepIterations: [
+          step.name,
+          ...subResults.map((result) => result.subStep.name),
+        ],
+      };
+    }
 
     // If all sub-steps failed (error-originated), throw
     const allFailed = subResults.every(r => r.response.error != null);
@@ -310,7 +364,7 @@ export class ParallelRunner {
       aggregatedResponse.content,
     );
     this.deps.stepExecutor.emitStepReports(step);
-    return { response: aggregatedResponse, instruction: aggregatedInstruction };
+    return { response: aggregatedResponse, instruction: aggregatedInstruction, providerInfo: parentPm };
   }
 
   private buildParallelLoggerOptions(

@@ -19,12 +19,13 @@ import type { RunAgentOptions } from '../../../agents/runner.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { incrementStepIteration } from './state-manager.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, delay } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
-import type { PhaseName, PhasePromptParts } from '../types.js';
+import type { PhaseName, PhasePromptParts, RuntimeStepResolution, StepRunResult } from '../types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
+import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -95,12 +96,14 @@ async function executeBatchWithRetry(
   agentOptions: RunAgentOptions,
   maxRetries: number,
   retryDelayMs: number,
+  runtime?: RuntimeStepResolution,
 ): Promise<BatchResult> {
   const prompt = buildArpeggioPrompt(
     template,
     batch,
     allowGitCommit,
     agentOptions.language ?? 'en',
+    runtime,
   );
   let lastError: string | undefined;
 
@@ -124,6 +127,15 @@ async function executeBatchWithRetry(
           content: '',
           success: false,
           error: lastError,
+        };
+      }
+      if (response.status === 'rate_limited') {
+        return {
+          batchIndex: batch.batchIndex,
+          content: response.content,
+          success: false,
+          error: response.error ?? response.content,
+          rateLimitedResponse: response,
         };
       }
       return {
@@ -154,22 +166,21 @@ async function executeBatchWithRetry(
   };
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function buildArpeggioPrompt(
   template: string,
   batch: DataBatch,
   allowGitCommit: boolean | undefined,
   language: NonNullable<RunAgentOptions['language']>,
+  runtime?: RuntimeStepResolution,
 ): string {
   const prompt = expandTemplate(template, batch);
   const gitRules = buildGitRules(allowGitCommit, language, 'phase1');
-  if (!gitRules) {
-    return prompt;
-  }
-  return `${gitRules}\n\n${prompt}`;
+  const fallbackNotice = runtime?.fallback
+    ? renderFallbackNotice(runtime.fallback, language)
+    : '';
+  return [gitRules, fallbackNotice, prompt]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join('\n\n');
 }
 
 export class ArpeggioRunner {
@@ -184,7 +195,8 @@ export class ArpeggioRunner {
   async runArpeggioStep(
     step: WorkflowStep,
     state: WorkflowState,
-  ): Promise<{ response: AgentResponse; instruction: string }> {
+    runtime?: RuntimeStepResolution,
+  ): Promise<StepRunResult> {
     const arpeggioConfig = step.arpeggio;
     if (!arpeggioConfig) {
       throw new Error(`Step "${step.name}" has no arpeggio configuration`);
@@ -214,7 +226,10 @@ export class ArpeggioRunner {
 
     const template = loadTemplate(arpeggioConfig.templatePath);
 
-    const agentOptions = this.deps.optionsBuilder.buildAgentOptions(step);
+    const stepProviderModel = runtime
+      ? this.deps.optionsBuilder.resolveStepProviderModel(step, runtime)
+      : this.deps.optionsBuilder.resolveStepProviderModel(step);
+    const agentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
     const semaphore = new Semaphore(arpeggioConfig.concurrency);
     const results = await this.executeBatches(
       batches,
@@ -225,7 +240,20 @@ export class ArpeggioRunner {
       agentOptions,
       arpeggioConfig,
       semaphore,
+      runtime,
     );
+
+    const instruction = `[Arpeggio] ${step.name}: ${batches.length} batches, source=${arpeggioConfig.source}`;
+    const rateLimitedResult = results.find((result) => result.rateLimitedResponse);
+    if (rateLimitedResult?.rateLimitedResponse) {
+      const rateLimitedResponse: AgentResponse = {
+        ...rateLimitedResult.rateLimitedResponse,
+        persona: step.name,
+      };
+      state.stepOutputs.set(step.name, rateLimitedResponse);
+      state.lastOutput = rateLimitedResponse;
+      return { response: rateLimitedResponse, instruction, providerInfo: stepProviderModel };
+    }
 
     const failedBatches = results.filter((r) => !r.success);
     if (failedBatches.length > 0) {
@@ -245,7 +273,6 @@ export class ArpeggioRunner {
       log.info('Arpeggio output written', { outputPath: arpeggioConfig.outputPath });
     }
 
-    const stepProviderModel = this.deps.optionsBuilder.resolveStepProviderModel(step);
     const ruleCtx = {
       state,
       cwd: this.deps.getCwd(),
@@ -275,9 +302,7 @@ export class ArpeggioRunner {
       aggregatedResponse.content,
     );
 
-    const instruction = `[Arpeggio] ${step.name}: ${batches.length} batches, source=${arpeggioConfig.source}`;
-
-    return { response: aggregatedResponse, instruction };
+    return { response: aggregatedResponse, instruction, providerInfo: stepProviderModel };
   }
 
   /** Execute all batches with concurrency control */
@@ -290,6 +315,7 @@ export class ArpeggioRunner {
     agentOptions: RunAgentOptions,
     config: ArpeggioStepConfig,
     semaphore: Semaphore,
+    runtime?: RuntimeStepResolution,
   ): Promise<BatchResult[]> {
     const promises = batches.map(async (batch) => {
       await semaphore.acquire();
@@ -312,6 +338,7 @@ export class ArpeggioRunner {
           batchAgentOptions,
           config.maxRetries,
           config.retryDelayMs,
+          runtime,
         );
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);

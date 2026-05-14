@@ -344,7 +344,7 @@ Provider options (`provider_options`) and permission profiles (`provider_profile
 
 | Priority | Source | Example |
 |----------|--------|---------|
-| 1 (highest) | Env-resolved config leaf | `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS` -> `provider_options.codex.network_access` |
+| 1 (highest) | Env-resolved config leaf | `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS` -> `provider_options.codex.network_access`; `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT` -> `provider_options.opencode.variant` |
 | 2 | Step `provider_options` | `steps[].provider_options.codex.network_access` |
 | 3 | Workflow `workflow_config.provider_options` | `workflow_config.provider_options.codex.network_access` |
 | 4 | Persona `persona_providers.<persona>.provider_options` | `persona_providers.coder.provider_options.codex.network_access` |

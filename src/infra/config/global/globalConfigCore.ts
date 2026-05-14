@@ -14,6 +14,7 @@ import {
   normalizeTaktProviders,
   buildRawTaktProvidersOrThrow,
   normalizeRuntime,
+  normalizeRateLimitFallback,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -156,6 +157,7 @@ export class GlobalConfigManager {
       bookmarksFile: expandOptionalHomePath(parsed.bookmarks_file),
       workflowCategoriesFile: expandOptionalHomePath(parsed.workflow_categories_file),
       providerOptions: normalizedProvider.providerOptions,
+      rateLimitFallback: normalizeRateLimitFallback(parsed.rate_limit_fallback),
       providerProfiles: normalizeProviderProfiles(
         parsed.provider_profiles as Record<string, {
           default_permission_mode: string;

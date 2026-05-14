@@ -31,10 +31,12 @@ export async function enqueueTaskEffect(
   const baseBranch = resolveValidatedBaseBranch(options.projectCwd, payload.base_branch);
   let issueNumber: number | undefined;
   if (payload.issue?.create === true) {
-    issueNumber = createIssueFromTask(payload.task, {
+    const issueOptions = {
       cwd: options.projectCwd,
       labels: filterIssueLabels(payload.issue),
-    });
+      ...(payload.issue.title !== undefined ? { title: payload.issue.title } : {}),
+    };
+    issueNumber = createIssueFromTask(payload.task, issueOptions);
     if (issueNumber === undefined) {
       return { success: false, failed: true, error: 'Failed to create issue from task' };
     }

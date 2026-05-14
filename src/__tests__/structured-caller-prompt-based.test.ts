@@ -1,7 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRunAgent } = vi.hoisted(() => ({
-  mockRunAgent: vi.fn(),
+const { mockRunAgent, infoMock, createLoggerMock } = vi.hoisted(() => {
+  const infoMock = vi.fn();
+  const createLoggerMock = vi.fn(() => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: infoMock,
+    error: vi.fn(),
+    enter: vi.fn(),
+    exit: vi.fn(),
+  }));
+  return {
+    mockRunAgent: vi.fn(),
+    infoMock,
+    createLoggerMock,
+  };
+});
+
+vi.mock('../shared/utils/debug.js', () => ({
+  createLogger: createLoggerMock,
 }));
 
 vi.mock('../agents/runner.js', () => ({
@@ -9,11 +26,18 @@ vi.mock('../agents/runner.js', () => ({
 }));
 
 import { PromptBasedStructuredCaller } from '../agents/structured-caller.js';
+import { RETRY_DELAY_MS } from '../agents/structured-caller/prompt-based-structured-caller.js';
 import { resolveStructuredStep } from '../agents/structured-caller/shared.js';
 
 describe('PromptBasedStructuredCaller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    mockRunAgent.mockReset();
   });
 
   it('should evaluate conditions from [JUDGE:N] tags without outputSchema', async () => {
@@ -198,6 +222,243 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
+  it('should retry decomposeTask when first response has no JSON block and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: 'no json here',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([
+            { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+          ]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+    ]);
+  });
+
+  it('should retry decomposeTask when first response is an empty array and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: '```json\n[]\n```',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([
+            { id: 'p1', title: 'Recovered', instruction: 'Do it' },
+          ]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { id: 'p1', title: 'Recovered', instruction: 'Do it' },
+    ]);
+  });
+
+  it('should throw decomposeTask after three consecutive failures', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'done',
+      content: 'never any json',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    const assertion = expect(promise).rejects.toThrow(/```json \.\.\. ``` block/);
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    await assertion;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should retry decomposeTask when first response status is error and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'error',
+        content: '',
+        error: 'provider failed',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([
+            { id: 'p1', title: 'Recovered', instruction: 'Do it' },
+          ]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { id: 'p1', title: 'Recovered', instruction: 'Do it' },
+    ]);
+  });
+
+  it('should throw decomposeTask after three consecutive status:error responses with original detail', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'error',
+      content: '',
+      error: 'provider blew up',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    const assertion = expect(promise).rejects.toThrow(/Team leader failed: provider blew up/);
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    await assertion;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should succeed decomposeTask on the third attempt (boundary case)', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'done',
+      content: 'no json here',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([
+            { id: 'p1', title: 'Late success', instruction: 'Done' },
+          ]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+    expect(result).toEqual([
+      { id: 'p1', title: 'Late success', instruction: 'Done' },
+    ]);
+  });
+
+  it('should log one retry attempt when decomposeTask succeeds on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: 'no json here',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([{ id: 'p1', title: 'Recovered', instruction: 'Do it' }]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+    });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    await promise;
+
+    expect(infoMock).toHaveBeenCalledTimes(1);
+    expect(infoMock).toHaveBeenCalledWith(
+      'Structured call failed, retrying',
+      expect.objectContaining({
+        attempt: 1,
+        maxAttempts: 3,
+        error: expect.stringContaining('```json ... ``` block'),
+      }),
+    );
+  });
+
   it('should parse additional parts from fenced JSON without outputSchema', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -323,6 +584,261 @@ describe('PromptBasedStructuredCaller', () => {
         cwd: '/tmp/project',
         workflowMeta,
       }),
+    );
+  });
+
+  it('should retry requestMoreParts when first response has no JSON block and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: 'no json here',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify({
+            done: false,
+            reasoning: 'retry succeeded',
+            parts: [
+              { id: 'p2', title: 'Follow up', instruction: 'Handle remaining gap' },
+            ],
+          }),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      { cwd: '/tmp/project', provider: 'cursor' },
+    );
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      done: false,
+      reasoning: 'retry succeeded',
+      parts: [
+        { id: 'p2', title: 'Follow up', instruction: 'Handle remaining gap' },
+      ],
+    });
+  });
+
+  it('should retry requestMoreParts when first response fails structural validation and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify({ done: 'not-bool', reasoning: 'x', parts: [] }),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify({
+            done: true,
+            reasoning: 'recovered',
+            parts: [],
+          }),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      { cwd: '/tmp/project', provider: 'cursor' },
+    );
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      done: true,
+      reasoning: 'recovered',
+      parts: [],
+    });
+  });
+
+  it('should throw requestMoreParts after three consecutive failures', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'done',
+      content: 'never any json',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      { cwd: '/tmp/project', provider: 'cursor' },
+    );
+    const assertion = expect(promise).rejects.toThrow(/```json \.\.\. ``` block/);
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    await assertion;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should retry requestMoreParts when first response status is error and succeed on second attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'error',
+        content: '',
+        error: 'provider failed',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify({ done: true, reasoning: 'recovered', parts: [] }),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      { cwd: '/tmp/project', provider: 'cursor' },
+    );
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ done: true, reasoning: 'recovered', parts: [] });
+  });
+
+  it('should throw requestMoreParts after three consecutive status:error responses with original detail', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'error',
+      content: '',
+      error: 'provider blew up',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      { cwd: '/tmp/project', provider: 'cursor' },
+    );
+    const assertion = expect(promise).rejects.toThrow(/Team leader feedback failed: provider blew up/);
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    await assertion;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should succeed requestMoreParts on the third attempt (boundary case)', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'done',
+      content: 'no json here',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify({ done: true, reasoning: 'late ok', parts: [] }),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      { cwd: '/tmp/project', provider: 'cursor' },
+    );
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    const result = await promise;
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+    expect(result).toEqual({ done: true, reasoning: 'late ok', parts: [] });
+  });
+
+  it('should log two retry attempts when requestMoreParts fails three times', async () => {
+    const failingResponse = {
+      persona: 'leader',
+      status: 'done',
+      content: 'never any json',
+      timestamp: new Date(),
+    };
+    mockRunAgent
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse)
+      .mockResolvedValueOnce(failingResponse);
+
+    const caller = new PromptBasedStructuredCaller();
+    const promise = caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      { cwd: '/tmp/project', provider: 'cursor' },
+    );
+    const assertion = expect(promise).rejects.toThrow(/```json \.\.\. ``` block/);
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+    await assertion;
+
+    expect(infoMock).toHaveBeenCalledTimes(2);
+    expect(infoMock).toHaveBeenNthCalledWith(
+      1,
+      'Structured call failed, retrying',
+      expect.objectContaining({ attempt: 1, maxAttempts: 3 }),
+    );
+    expect(infoMock).toHaveBeenNthCalledWith(
+      2,
+      'Structured call failed, retrying',
+      expect.objectContaining({ attempt: 2, maxAttempts: 3 }),
     );
   });
 

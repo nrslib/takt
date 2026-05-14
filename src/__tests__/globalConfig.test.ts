@@ -50,6 +50,53 @@ describe('globalConfig', () => {
   });
 
   describe('workflow_overrides empty array round-trip', () => {
+    it('should preserve empty rate_limit_fallback switch_chain in save/load cycle', () => {
+      writeFileSync(testConfigPath, 'rate_limit_fallback:\n  switch_chain: []\n', 'utf-8');
+
+      const manager = GlobalConfigManager.getInstance();
+      const loaded = manager.load();
+      expect(loaded.rateLimitFallback?.switchChain).toEqual([]);
+
+      manager.save(loaded);
+
+      const raw = readFileSync(testConfigPath, 'utf-8');
+      expect(raw).toContain('rate_limit_fallback:');
+      expect(raw).toContain('switch_chain: []');
+
+      GlobalConfigManager.resetInstance();
+      const reloaded = GlobalConfigManager.getInstance().load();
+      expect(reloaded.rateLimitFallback?.switchChain).toEqual([]);
+    });
+
+    it('should normalize rate_limit_fallback without switch_chain as disabled fallback', () => {
+      writeFileSync(testConfigPath, 'rate_limit_fallback: {}\n', 'utf-8');
+
+      const manager = GlobalConfigManager.getInstance();
+      const loaded = manager.load();
+      expect(loaded.rateLimitFallback?.switchChain).toEqual([]);
+
+      manager.save(loaded);
+
+      const raw = readFileSync(testConfigPath, 'utf-8');
+      expect(raw).toContain('rate_limit_fallback:');
+      expect(raw).toContain('switch_chain: []');
+    });
+
+    it('should reject rate_limit_fallback opencode entry without model', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'rate_limit_fallback:',
+          '  switch_chain:',
+          '    - provider: opencode',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const manager = GlobalConfigManager.getInstance();
+      expect(() => manager.load()).toThrow(/provider 'opencode' requires model/);
+    });
+
     it('should preserve empty quality_gates array in save/load cycle', () => {
       // Write config with empty quality_gates array
       const configContent = `

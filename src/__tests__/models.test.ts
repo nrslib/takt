@@ -14,6 +14,7 @@ import {
   GlobalConfigSchema,
   ProjectConfigSchema,
 } from '../core/models/index.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { STATUS_VALUES } from '../core/models/status.js';
 import type { WorkflowTemplateReference } from '../core/models/index.js';
 import {
@@ -41,6 +42,7 @@ describe('StatusSchema', () => {
     expect(StatusSchema.parse('done')).toBe('done');
     expect(StatusSchema.parse('blocked')).toBe('blocked');
     expect(StatusSchema.parse('error')).toBe('error');
+    expect(StatusSchema.parse('rate_limited')).toBe('rate_limited');
   });
 
   it('should align with the shared status contract values', () => {
@@ -73,6 +75,144 @@ describe('PermissionModeSchema', () => {
     expect(() => PermissionModeSchema.parse('default')).toThrow();
     expect(() => PermissionModeSchema.parse('acceptEdits')).toThrow();
     expect(() => PermissionModeSchema.parse('bypassPermissions')).toThrow();
+  });
+});
+
+describe('Rate limit fallback config schema', () => {
+  it('should parse project config rate_limit_fallback.switch_chain', () => {
+    const result = ProjectConfigSchema.parse({
+      rate_limit_fallback: {
+        switch_chain: [
+          { provider: 'codex', model: 'gpt-5' },
+          { provider: 'opencode' },
+        ],
+      },
+    });
+
+    expect((result as Record<string, unknown>).rate_limit_fallback).toEqual({
+      switch_chain: [
+        { provider: 'codex', model: 'gpt-5' },
+        { provider: 'opencode' },
+      ],
+    });
+  });
+
+  it('should parse global config rate_limit_fallback.switch_chain without adding env-only fields', () => {
+    const result = GlobalConfigSchema.parse({
+      rate_limit_fallback: {
+        switch_chain: [
+          { provider: 'codex', model: 'gpt-5' },
+        ],
+      },
+    });
+
+    expect((result as Record<string, unknown>).rate_limit_fallback).toEqual({
+      switch_chain: [
+        { provider: 'codex', model: 'gpt-5' },
+      ],
+    });
+  });
+
+  it('should parse workflow config rate_limit_fallback.switch_chain at the workflow root', () => {
+    const result = WorkflowConfigRawSchema.parse({
+      name: 'rate-limit-fallback-workflow',
+      rate_limit_fallback: {
+        switch_chain: [
+          { provider: 'codex', model: 'gpt-5' },
+          { provider: 'opencode' },
+        ],
+      },
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'Done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect((result as Record<string, unknown>).rate_limit_fallback).toEqual({
+      switch_chain: [
+        { provider: 'codex', model: 'gpt-5' },
+        { provider: 'opencode' },
+      ],
+    });
+  });
+
+  it('should preserve empty rate_limit_fallback.switch_chain in config schemas', () => {
+    expect(ProjectConfigSchema.parse({
+      rate_limit_fallback: { switch_chain: [] },
+    }).rate_limit_fallback).toEqual({ switch_chain: [] });
+
+    expect(GlobalConfigSchema.parse({
+      rate_limit_fallback: { switch_chain: [] },
+    }).rate_limit_fallback).toEqual({ switch_chain: [] });
+
+    expect(WorkflowConfigRawSchema.parse({
+      name: 'rate-limit-disabled-workflow',
+      rate_limit_fallback: { switch_chain: [] },
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'Done', next: 'COMPLETE' }],
+        },
+      ],
+    }).rate_limit_fallback).toEqual({ switch_chain: [] });
+  });
+
+  it('should accept rate_limit_fallback without switch_chain in config schemas', () => {
+    expect(ProjectConfigSchema.parse({
+      rate_limit_fallback: {},
+    }).rate_limit_fallback).toEqual({});
+
+    expect(GlobalConfigSchema.parse({
+      rate_limit_fallback: {},
+    }).rate_limit_fallback).toEqual({});
+
+    expect(WorkflowConfigRawSchema.parse({
+      name: 'rate-limit-disabled-workflow',
+      rate_limit_fallback: {},
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'Done', next: 'COMPLETE' }],
+        },
+      ],
+    }).rate_limit_fallback).toEqual({});
+  });
+
+  it('should reject a switch_chain entry without provider', () => {
+    expect(() => ProjectConfigSchema.parse({
+      rate_limit_fallback: {
+        switch_chain: [
+          { model: 'gpt-5' },
+        ],
+      },
+    })).toThrow(/provider/);
+  });
+
+  it('should reject workflow config rate_limit_fallback opencode entry without model during normalization', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'rate-limit-invalid-workflow',
+      rate_limit_fallback: {
+        switch_chain: [
+          { provider: 'opencode' },
+        ],
+      },
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'Done', next: 'COMPLETE' }],
+        },
+      ],
+    }, process.cwd())).toThrow(/provider 'opencode' requires model/);
   });
 });
 

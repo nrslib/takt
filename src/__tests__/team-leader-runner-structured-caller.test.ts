@@ -871,4 +871,139 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(executedInstruction).not.toContain('Do NOT run git add');
     }
   });
+
+  describe('onPhaseStart deduplication on decomposeTask retry', () => {
+    function buildRunner(
+      structuredCaller: {
+        decomposeTask: ReturnType<typeof vi.fn>;
+        requestMoreParts: ReturnType<typeof vi.fn>;
+      },
+      onPhaseStart: ReturnType<typeof vi.fn>,
+    ) {
+      return new TeamLeaderRunner({
+        optionsBuilder: {
+          buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+          buildBaseOptions: vi.fn().mockReturnValue({}),
+          buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveStepProviderModel: vi.fn().mockReturnValue({
+            provider: 'claude',
+            model: 'opus',
+          }),
+        },
+        stepExecutor: {
+          buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+          applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+          persistPreviousResponseSnapshot: vi.fn(),
+          emitStepReports: vi.fn(),
+        },
+        engineOptions: {
+          projectCwd: '/tmp/project',
+          structuredCaller,
+        },
+        onPhaseStart,
+        getCwd: () => '/tmp/project',
+        getInteractive: () => false,
+      } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+        engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+      });
+    }
+
+    function buildStep(): WorkflowStep {
+      return {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'Task: {task}',
+        passPreviousResponse: true,
+        teamLeader: {
+          persona: 'team-leader',
+          maxParts: 1,
+          refillThreshold: 0,
+          timeoutMs: 1000,
+          partPersona: 'coder',
+        },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      };
+    }
+
+    function buildState(): WorkflowState {
+      return {
+        workflowName: 'workflow',
+        currentStep: 'implement',
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        lastOutput: undefined,
+        previousResponseSourcePath: undefined,
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        status: 'running',
+      };
+    }
+
+    it('emits onPhaseStart only once even when decomposeTask retries (onPromptResolved fires multiple times)', async () => {
+      mockExecuteAgent.mockResolvedValue({
+        persona: 'coder',
+        status: 'done',
+        content: 'API done',
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+
+      const onPhaseStart = vi.fn();
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+        }),
+        requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'enough', parts: [] }),
+      };
+
+      const runner = buildRunner(structuredCaller, onPhaseStart);
+
+      await runner.runTeamLeaderStep(buildStep(), buildState(), 'implement feature', 5, vi.fn());
+
+      expect(onPhaseStart).toHaveBeenCalledTimes(1);
+    });
+
+    it('emits onPhaseStart only once on the success path (single onPromptResolved call)', async () => {
+      mockExecuteAgent.mockResolvedValue({
+        persona: 'coder',
+        status: 'done',
+        content: 'API done',
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+
+      const onPhaseStart = vi.fn();
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+        }),
+        requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'enough', parts: [] }),
+      };
+
+      const runner = buildRunner(structuredCaller, onPhaseStart);
+
+      await runner.runTeamLeaderStep(buildStep(), buildState(), 'implement feature', 5, vi.fn());
+
+      expect(onPhaseStart).toHaveBeenCalledTimes(1);
+    });
+  });
 });

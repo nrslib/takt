@@ -19,6 +19,8 @@ import {
   normalizeWorkflowOverrides,
   denormalizeWorkflowOverrides,
   normalizeRuntime,
+  normalizeRateLimitFallback,
+  denormalizeRateLimitFallback,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -79,6 +81,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     concurrency,
     task_poll_interval_ms,
     runtime,
+    rate_limit_fallback,
     sync_project_local_takt_on_retry,
     sync_conflict_resolver,
   } = parsedConfigResult;
@@ -137,6 +140,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
+    rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
         default_permission_mode: string;
@@ -200,6 +204,12 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.provider_options;
   }
+  const rawRateLimitFallback = denormalizeRateLimitFallback(config.rateLimitFallback);
+  if (rawRateLimitFallback) {
+    savePayload.rate_limit_fallback = rawRateLimitFallback;
+  } else {
+    delete savePayload.rate_limit_fallback;
+  }
   for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewSteps', 'interactive_preview_steps'], ['syncProjectLocalTaktOnRetry', 'sync_project_local_takt_on_retry'], ['concurrency', 'concurrency']] as const) {
     if (config[camel] !== undefined) savePayload[snake] = config[camel];
   }
@@ -234,7 +244,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'taktProviders', 'workflowRuntimePrepare', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'taktProviders', 'workflowRuntimePrepare', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

@@ -109,12 +109,15 @@ const loadMore = async () => {
 ## Custom Hook Responsibility
 
 A React custom hook should encapsulate state, effects, refs, or event translation. Pure calculations belong in function modules, not in a `use*` hook.
+`useState` inside a custom hook creates a separate state instance for each caller. Calling the same hook from multiple components does not share state.
+When shared state is required, call the hook once in the nearest common parent and pass data through props, or move the state into Context/external store.
 
 | Criteria | Judgment |
 |----------|----------|
 | A module is named `use*` but does not use React state/effect/ref | Warning |
 | Pure functions are modeled as a custom hook | Warning |
 | Stateful UI control lives in a custom hook and pure calculations live in functions | OK |
+| Multiple components call the same stateful hook independently when they need shared state | REJECT |
 | A hook returns JSX | REJECT |
 
 ## Handling exhaustive-deps

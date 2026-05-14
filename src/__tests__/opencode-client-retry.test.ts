@@ -97,6 +97,38 @@ describe('OpenCodeClient retry', () => {
     runPlanIndex = 0;
   });
 
+  it('session.error が HTTP 429 を示す場合は retry せず rate_limited を返す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          {
+            type: 'session.error',
+            properties: {
+              sessionID: 'session-1',
+              error: { name: 'RateLimitError', data: { message: 'HTTP 429: rate limit exceeded' } },
+            },
+          },
+        ],
+      },
+    ];
+
+    const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
+    const client = new OpenCodeClient();
+
+    const result = await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.content).toBe('');
+  });
+
   it('ストリームの idle timeout を retry して成功を返す', async () => {
     vi.useFakeTimers();
 

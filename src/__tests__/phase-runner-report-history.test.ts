@@ -39,6 +39,7 @@ function createContext(
     cwd: reportDir,
     reportDir,
     lastResponse: currentLastResponse,
+    resolveSessionKey: (step) => step.persona ?? step.name,
     getSessionId: (_persona: string) => currentSessionId,
     buildResumeOptions: (
       _step,

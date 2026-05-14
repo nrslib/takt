@@ -15,6 +15,7 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.network_access',
       'provider_options.codex.reasoning_effort',
       'provider_options.opencode.network_access',
+      'provider_options.opencode.variant',
       'provider_options.claude.effort',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
@@ -22,6 +23,7 @@ describe('providerOptionsContract', () => {
     ]));
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
   });
 
@@ -32,16 +34,20 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude.allowed_tools');
     expect(toProviderOptionsTracePath('codex.reasoningEffort'))
       .toBe('provider_options.codex.reasoning_effort');
+    expect(toProviderOptionsTracePath('opencode.variant'))
+      .toBe('provider_options.opencode.variant');
   });
 
   it('enumerates only present provider option leaves', () => {
     expect(getPresentProviderOptionPaths({
       codex: { networkAccess: true, reasoningEffort: 'high' },
+      opencode: { variant: 'high' },
       claude: { effort: 'medium', sandbox: { excludedCommands: ['rm -rf'] } },
       copilot: { effort: 'high' },
     })).toEqual([
       'codex.networkAccess',
       'codex.reasoningEffort',
+      'opencode.variant',
       'claude.effort',
       'claude.sandbox.excludedCommands',
       'copilot.effort',

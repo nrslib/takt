@@ -2,7 +2,7 @@
   template: perform_phase1_message
   phase: 1 (main execution)
   vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
-        hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
+        hasFallbackNotice, fallbackNotice, hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
         hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
@@ -11,6 +11,10 @@
 -->
 ## Execution Context
 - Working Directory: {{workingDirectory}}
+{{#if hasFallbackNotice}}
+
+{{fallbackNotice}}
+{{/if}}
 
 ## Execution Rules
 {{#if hasGitRules}}{{gitRules}}
@@ -19,6 +23,12 @@
 {{#if editRule}}- {{editRule}}
 {{/if}}
 Note: This section is metadata. Follow the language used in the rest of the prompt.
+
+## Judgment Rules
+
+- Base judgments and outputs on facts verified from files, command outputs, and actual code — not on guesses. Do not write "probably ..." or "should be ..." for unconfirmed claims. Mark unconfirmed items explicitly as "unconfirmed".
+- Session memory degrades as the session grows (context rot). Even if you read a file or ran a command earlier in this session, re-read or re-run it immediately before using it as a basis for judgment or output. Do not rely on memory like "I already read this" or "I checked this before".
+- Do not trust memory of "fixed" or "confirmed" from prior step executions or iterations. Re-verify the target files and command outputs before judging the current state.
 {{#if hasKnowledge}}
 
 ## Knowledge

@@ -1,25 +1,9 @@
-Review the changes from the perspective of CQRS (Command Query Responsibility Segregation) and Event Sourcing.
-AI-specific issue review is not needed (already covered by the ai-antipattern-review-1st step).
+Focus on reviewing **CQRS (Command Query Responsibility Segregation) and Event Sourcing**.
+Do not review AI-specific issues (already covered by the ai-antipattern-review-1st step).
 
-**Review criteria:**
-- Aggregate design validity
-- Event design (granularity, naming, schema)
-- Command/Query separation
-- Projection design
-- Eventual consistency considerations
+Procedure:
+1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
+2. List every `##` section in each of them (do not cherry-pick)
+3. Match the criteria in each listed section against the diff and detect any issues
 
-**Note**: If this project does not use the CQRS+ES pattern,
-review from a general domain design perspective instead.
-
-
-**Design decisions reference:**
-Review {report:coder-decisions.md} to understand the recorded design decisions.
-- Do not flag intentionally documented decisions as FP
-- However, also evaluate whether the design decisions themselves are sound, and flag any problems
-
-## Judgment Procedure
-
-1. Review the change diff and detect issues based on the CQRS and Event Sourcing criteria above
-   - Cross-check changes against REJECT criteria tables defined in knowledge
-2. For each detected issue, classify as blocking/non-blocking based on Policy's scope determination table and judgment rules
-3. If there is even one blocking issue, judge as REJECT
+**Note:** If this project does not use the CQRS+ES pattern, review from a general domain design perspective instead.

@@ -109,12 +109,15 @@ const loadMore = async () => {
 ## custom hook の責務
 
 React custom hook は「React の state/effect/ref を使う状態遷移」に限定する。純粋計算だけなら custom hook ではなく関数モジュールでよい。
+custom hook 内の `useState` は呼び出し元ごとに別インスタンスになる。同じ hook を複数コンポーネントから呼んでも状態は共有されない。
+共有状態が必要な場合は、最小共通親で hook を1回だけ呼んで props で渡すか、Context/外部 store に移す。
 
 | 基準 | 判定 |
 |------|------|
 | React の state/effect を使わないのに `use*` と命名する | 警告 |
 | 純関数群を custom hook として扱う | 警告 |
 | stateful な UI 制御は custom hook に、純粋計算は function module に分ける | OK |
+| 共有状態が必要な複数コンポーネントで同じ stateful hook を個別に呼ぶ | REJECT |
 | hook が JSX を返す | REJECT |
 
 ## exhaustive-deps の扱い

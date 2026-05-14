@@ -232,6 +232,24 @@ data class OrderCancelledEvent(
 | UseCase層 | ビジネスルール検証 | Read Modelへの問い合わせ | 重複チェック、前提条件の存在確認 |
 | ドメイン層 | 状態遷移の不変条件 | `require` | 「PENDINGでないと承認できない」 |
 
+### Aggregateの判断境界
+
+Aggregate は、自身のイベント履歴から復元できる状態と、コマンドとして明示された事実だけで判断する。境界由来の入力を解釈・正規化・所有権確認する場所ではない。
+
+Aggregate に入れてよい検証は「イベント再生だけで再現できる状態」に基づくものに限る。それ以外の検証は、コマンド送信前に境界側で解決し、Aggregate には解決済みの事実を渡す。
+
+| 判断対象 | 置き場所 |
+|---------|---------|
+| 現在状態でその操作が可能か | Aggregate |
+| コマンド実行者がAggregate ownerと一致するか | Aggregate |
+| HTTP/API入力の形式が正しいか | API層 |
+| object key、URL、path などの外部識別子の形式解釈 | UseCase層または境界側Policy/Verifier |
+| 外部識別子が現在user/tenantに属するか | UseCase層または境界側Policy/Verifier |
+| Read Modelや他Aggregateの状態確認 | UseCase層 |
+| 外部サービス上に実体があるか | Application層の外部サービス連携 |
+
+例: アップロード完了コマンドでは、Aggregate は「このセッションのownerと実行者が一致するか」「現在状態で完了可能か」を判断する。保存先object keyの文字列形式や、そのkeyが現在user/tenantの領域かどうかは、コマンド送信前にUseCase層で検証する。
+
 ```kotlin
 // API層: 構造的バリデーション
 data class OrderPostRequest(

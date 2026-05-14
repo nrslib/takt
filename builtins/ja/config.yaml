@@ -74,6 +74,8 @@ language: ja         # 表示言語: ja | en
 # provider_options:
 #   codex:
 #     network_access: true
+#   opencode:
+#     variant: high
 #   claude:
 #     sandbox:
 #       allow_unsandboxed_commands: true

@@ -33,6 +33,10 @@ import {
   ensureRunDirsExist,
   type WorkflowEngineServices,
 } from './WorkflowEngineSetup.js';
+import {
+  createStructuredOutputNormalizerRegistry,
+  type StructuredOutputNormalizerRegistry,
+} from './structured-output-normalizer.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -61,7 +65,7 @@ export class WorkflowEngine extends EventEmitter {
   private projectCwd: string;
   private cwd: string;
   private task: string;
-  private options: WorkflowEngineOptions;
+  private options: WorkflowEngineOptions & { structuredOutputNormalizers: StructuredOutputNormalizerRegistry };
   private maxSteps: WorkflowMaxSteps;
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
@@ -87,37 +91,38 @@ export class WorkflowEngine extends EventEmitter {
     super();
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.config = config;
-    this.projectCwd = options.projectCwd;
-    this.cwd = cwd;
-    this.task = task;
-    this.options = options;
-    this.loopDetector = new LoopDetector(config.loopDetection);
-    this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
-    if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
-      throw new Error(`Invalid reportDirName: ${options.reportDirName}`);
-    }
-
-    const reportDirName = options.reportDirName ?? generateReportDir(task);
-    const initialMaxSteps = options.maxStepsOverride ?? config.maxSteps;
-    this.sharedRuntime = options.sharedRuntime ?? createSharedRuntime(options.resumePoint, initialMaxSteps);
-    this.sharedRuntime.maxSteps ??= initialMaxSteps;
-    this.maxSteps = this.sharedRuntime.maxSteps;
-    this.resumeStackPrefix = options.resumeStackPrefix ?? [];
-    this.runPaths = buildRunPaths(this.cwd, reportDirName, options.runPathNamespace);
-    this.reportDir = this.runPaths.reportsRel;
-    ensureRunDirsExist(this.runPaths);
-    applyRuntimeEnvironment(this.cwd, this.config, 'init');
-    validateWorkflowConfig(this.config, this.options);
-
-    this.state = createInitialState(config, options);
-    this.detectRuleIndex = options.detectRuleIndex ?? (() => {
-      throw new Error('detectRuleIndex is required for rule evaluation');
-    });
     this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
     this.options = {
       ...options,
+      rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
+      structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
     };
+    this.projectCwd = this.options.projectCwd;
+    this.cwd = cwd;
+    this.task = task;
+    this.loopDetector = new LoopDetector(config.loopDetection);
+    this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
+    if (this.options.reportDirName !== undefined && !isValidReportDirName(this.options.reportDirName)) {
+      throw new Error(`Invalid reportDirName: ${this.options.reportDirName}`);
+    }
+
+    const reportDirName = this.options.reportDirName ?? generateReportDir(task);
+    const initialMaxSteps = this.options.maxStepsOverride ?? config.maxSteps;
+    this.sharedRuntime = this.options.sharedRuntime ?? createSharedRuntime(this.options.resumePoint, initialMaxSteps);
+    this.sharedRuntime.maxSteps ??= initialMaxSteps;
+    this.maxSteps = this.sharedRuntime.maxSteps;
+    this.resumeStackPrefix = this.options.resumeStackPrefix ?? [];
+    this.runPaths = buildRunPaths(this.cwd, reportDirName, this.options.runPathNamespace);
+    this.reportDir = this.runPaths.reportsRel;
+    ensureRunDirsExist(this.runPaths);
+    applyRuntimeEnvironment(this.cwd, this.config, 'init');
+    validateWorkflowConfig(this.config, options);
+
+    this.state = createInitialState(config, this.options);
+    this.detectRuleIndex = this.options.detectRuleIndex ?? (() => {
+      throw new Error('detectRuleIndex is required for rule evaluation');
+    });
     const services = createWorkflowEngineServices({
       config: this.config,
       state: this.state,
@@ -180,6 +185,7 @@ export class WorkflowEngine extends EventEmitter {
         options: this.options,
         getCwd: () => this.cwd,
         getMaxSteps: () => this.maxSteps,
+        getReportDir: () => this.runPaths.reportsAbs,
         abortRequested: () => this.abortRequested,
         getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
         applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
@@ -316,6 +322,7 @@ export class WorkflowEngine extends EventEmitter {
         options: this.options,
         getCwd: () => this.cwd,
         getMaxSteps: () => this.maxSteps,
+        getReportDir: () => this.runPaths.reportsAbs,
         abortRequested: () => this.abortRequested,
         getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
         applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),

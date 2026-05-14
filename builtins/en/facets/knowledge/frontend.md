@@ -84,6 +84,7 @@ Third-party UI libraries such as data grids, date pickers, charts, and virtualiz
 ## State Management
 
 Child components do not modify their own state. They bubble events to parent, and parent manipulates state.
+When multiple components read or update the same state, first place that state in their nearest common parent, then pass data and event callbacks down through props.
 
 ```tsx
 // ❌ Child modifies its own state
@@ -110,7 +111,7 @@ Exception (OK for child to have local state):
 | Criteria | Judgment |
 |----------|----------|
 | Unnecessary global state | Consider localizing |
-| Same state managed in multiple places | Needs normalization |
+| Same state managed in multiple places | REJECT. Normalize it in the nearest common parent or shared store |
 | State changes from child to parent (reverse data flow) | REJECT |
 | API response stored as-is in state | Consider normalization |
 | Inappropriate useEffect dependencies | REJECT |
@@ -122,7 +123,8 @@ State Placement Guidelines:
 |--------------|----------------------|
 | Temporary UI state (modal open/close, etc.) | Local (useState) |
 | Form input values | Local or form library |
-| Shared across multiple components | Context or state management library |
+| Shared across nearby parent/child or sibling components | Nearest common parent, passed through props |
+| Shared across deep hierarchy or multiple screens | Context or state management library |
 | Server data cache | Data fetching library (TanStack Query, etc.) |
 
 ## Initial load and refetch boundaries

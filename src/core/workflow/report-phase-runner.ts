@@ -7,13 +7,13 @@ import { executeAgent } from '../../agents/agent-usecases.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { getReportFiles } from './evaluation/rule-utils.js';
-import { buildSessionKey } from './session-key.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
 
 const log = createLogger('phase-runner');
 
 /** Result when Phase 2 encounters a blocked status */
 export type ReportPhaseBlockedResult = { blocked: true; response: AgentResponse };
+export type ReportPhaseRateLimitedResult = { rateLimited: true; response: AgentResponse };
 
 function formatHistoryTimestamp(date: Date): string {
   const year = date.getUTCFullYear();
@@ -69,8 +69,8 @@ export async function runReportPhase(
   step: WorkflowStep,
   stepIteration: number,
   ctx: PhaseRunnerContext,
-): Promise<ReportPhaseBlockedResult | void> {
-  const sessionKey = buildSessionKey(step);
+): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
+  const sessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(sessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
 
@@ -120,6 +120,9 @@ export async function runReportPhase(
     if (firstAttempt.kind === 'blocked') {
       return { blocked: true, response: firstAttempt.response };
     }
+    if (firstAttempt.kind === 'rate_limited') {
+      return { rateLimited: true, response: firstAttempt.response };
+    }
     if (firstAttempt.kind === 'success') {
       writeReportFile(ctx.reportDir, fileName, firstAttempt.content);
       if (firstAttempt.response.sessionId) {
@@ -130,7 +133,7 @@ export async function runReportPhase(
       continue;
     }
 
-    if (!currentSessionId || !hasLastResponse || firstAttempt.errorKind === 'rate_limit') {
+    if (!currentSessionId || !hasLastResponse) {
       throw new Error(`Report phase failed for ${fileName}: ${firstAttempt.errorMessage}`);
     }
 
@@ -153,6 +156,9 @@ export async function runReportPhase(
     const retryAttempt = await runSingleReportAttempt(step, retryInstruction, retryOptions, ctx);
     if (retryAttempt.kind === 'blocked') {
       return { blocked: true, response: retryAttempt.response };
+    }
+    if (retryAttempt.kind === 'rate_limited') {
+      return { rateLimited: true, response: retryAttempt.response };
     }
     if (retryAttempt.kind === 'retryable_failure') {
       throw new Error(`Report phase failed for ${fileName}: ${retryAttempt.errorMessage}`);
@@ -179,6 +185,7 @@ function buildNewSessionRetryOptions(step: WorkflowStep, ctx: PhaseRunnerContext
 type ReportAttemptResult =
   | { kind: 'success'; content: string; response: AgentResponse }
   | { kind: 'blocked'; response: AgentResponse }
+  | { kind: 'rate_limited'; response: AgentResponse }
   | { kind: 'retryable_failure'; errorMessage: string; errorKind?: AgentResponse['errorKind'] };
 
 async function runSingleReportAttempt(
@@ -213,6 +220,20 @@ async function runSingleReportAttempt(
   if (response.status === 'blocked') {
     ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, undefined, ctx.iteration);
     return { kind: 'blocked', response };
+  }
+
+  if (response.status === 'rate_limited' || response.errorKind === 'rate_limit') {
+    const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, undefined, ctx.iteration);
+    return {
+      kind: 'rate_limited',
+      response: {
+        ...response,
+        status: 'rate_limited',
+        content: '',
+        error: errorMessage,
+      },
+    };
   }
 
   if (response.status !== 'done') {

@@ -8,32 +8,87 @@
         "wait_before_next_scan"
       ]
     },
-    "task_markdown": {
+    "title": {
       "type": "string"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "feature",
+        "bug",
+        "chore",
+        "docs"
+      ]
+    },
+    "scope": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "goals": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "issue": {
       "type": "object",
       "properties": {
         "create": {
           "type": "boolean"
-        },
-        "labels": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         }
       },
       "required": [
-        "create",
-        "labels"
+        "create"
       ],
       "additionalProperties": false
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "enqueue_new_task"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "goals": {
+            "minItems": 1
+          },
+          "acceptance_criteria": {
+            "minItems": 2
+          }
+        }
+      }
+    }
+  ],
   "required": [
     "action",
-    "task_markdown",
+    "title",
+    "type",
+    "scope",
+    "summary",
+    "goals",
+    "acceptance_criteria",
     "issue"
   ],
   "additionalProperties": false

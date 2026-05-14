@@ -2,7 +2,7 @@
   template: perform_phase1_message
   phase: 1 (main execution)
   vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
-        hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
+        hasFallbackNotice, fallbackNotice, hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
         hasReport, reportInfo, phaseNote, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
@@ -11,6 +11,10 @@
 -->
 ## 実行コンテキスト
 - 作業ディレクトリ: {{workingDirectory}}
+{{#if hasFallbackNotice}}
+
+{{fallbackNotice}}
+{{/if}}
 
 ## 実行ルール
 {{#if hasGitRules}}{{gitRules}}
@@ -18,6 +22,12 @@
 - **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
 {{#if editRule}}- {{editRule}}
 {{/if}}
+
+## 判断ルール
+
+- 判断・出力の根拠は、推測ではなく、ファイル・コマンド出力・実コードで確認した事実に限ってください。確認していないことを「たぶんこう」「〜のはず」と書かないでください。確認できないことは「未確認」と明記してください。
+- セッションが長くなると、過去に読んだ内容の正確な記憶は劣化します（context rot）。判断・出力の根拠にするファイル・コマンド出力は、過去に同じセッションで参照したものであっても、判断直前に再読・再実行してください。「すでに読んだから知っている」「前に確認したから大丈夫」という記憶に依存しないでください。
+- 過去のステップ実行・iteration での「修正済み」「確認済み」の記憶を信用せず、対象ファイル・コマンド出力を再確認してから状態を判定してください。
 {{#if hasKnowledge}}
 
 ## Knowledge

@@ -74,6 +74,8 @@ language: en        # UI language: en | ja
 # provider_options:
 #   codex:
 #     network_access: true
+#   opencode:
+#     variant: high
 #   claude:
 #     sandbox:
 #       allow_unsandboxed_commands: true

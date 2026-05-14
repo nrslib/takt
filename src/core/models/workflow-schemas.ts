@@ -12,6 +12,7 @@ import {
   PermissionModeSchema,
   WorkflowProviderOptionsSchema,
   ProviderReferenceSchema,
+  RateLimitFallbackSchema,
   QualityGatesSchema,
   hasProviderOptionsLeaf,
 } from './schema-base.js';
@@ -470,6 +471,7 @@ export const WorkflowConfigRawSchema = z.object({
   description: z.string().optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsSchema,
+  rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),
   personas: z.record(z.string(), z.string()).optional(),

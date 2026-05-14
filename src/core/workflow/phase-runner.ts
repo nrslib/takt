@@ -9,7 +9,7 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, ProviderType, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { hasTagBasedRules } from './evaluation/rule-utils.js';
-export { runReportPhase, type ReportPhaseBlockedResult } from './report-phase-runner.js';
+export { runReportPhase, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
 export interface PhaseRunnerContext {
@@ -27,6 +27,8 @@ export interface PhaseRunnerContext {
   iteration?: number;
   /** Get persona session ID */
   getSessionId: (persona: string) => string | undefined;
+  /** Resolve the session key shared by Phase 1 and resume phases */
+  resolveSessionKey: (step: WorkflowStep) => string;
   /** Build resume options for a step */
   buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   /** Build options for report phase retry in a new session */

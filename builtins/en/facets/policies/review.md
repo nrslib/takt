@@ -203,6 +203,36 @@ Do not tolerate problems just because existing code does the same. If existing c
 - "The code itself existed before" is not a valid reason for non-blocking. As long as it is in a changed file, the Boy Scout rule applies
 - If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited
 
+## Basic Review Procedure
+
+Common procedure that every reviewer must follow. Do not duplicate this in individual instructions.
+
+### Referring to Primary Sources
+
+- Use `order.md`, `plan.md`, and the actual code as primary sources
+- Treat decisions from earlier steps (prior review results, planning decisions) as supplementary
+- When information conflicts, prioritize `order.md` / `plan.md` / actual code
+
+### Referring to Design Decisions
+
+- If the implementation step has emitted `coder-decisions.md`, read it and understand the recorded design decisions
+- Do not dismiss intentional decisions as false positives just because they were recorded. Evaluate validity against `order.md` / `plan.md` / actual code
+- If the design decision itself is flawed, raise it
+
+### Tracking Findings from Previous Reviews
+
+- Look in the Report Directory for review reports this step has previously produced, along with their timestamped history
+- Treat the unsuffixed file as the latest result and the most recent `{report-name}.{timestamp}` as the previous result
+- `Previous Response` may be used as supplementary information, but finding state determinations must prioritize the report history
+- Do not drop open findings from the previous report when producing the new report
+- Apply the `finding_id` management rules when classifying each finding as `new` / `persists` / `resolved` / `reopened`
+
+### Final Decision Steps
+
+1. Classify each detected issue as blocking / non-blocking according to the scope rules and decision rules above
+2. When citing test, build, or behavior verification as evidence, record the target, the check, and the result in the report
+3. REJECT if there is at least one blocking issue (`new`, `persists`, or `reopened`)
+
 ## Detecting Circular Arguments
 
 When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating the same fix instructions.

@@ -23,6 +23,9 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
       concurrency: 2,
       taskPollIntervalMs: 2000,
       interactivePreviewSteps: 4,
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
     }),
     invalidateGlobalConfigCache: () => undefined,
   };
@@ -54,6 +57,8 @@ describe('IT: project-local config keys should prefer project over global', () =
         'concurrency: 5',
         'task_poll_interval_ms: 1300',
         'interactive_preview_steps: 1',
+        'rate_limit_fallback:',
+        '  switch_chain: []',
       ].join('\n'),
       'utf-8',
     );
@@ -79,6 +84,7 @@ describe('IT: project-local config keys should prefer project over global', () =
       'concurrency',
       'taskPollIntervalMs',
       'interactivePreviewSteps',
+      'rateLimitFallback',
     ]);
 
     expect(resolved.pipeline).toEqual({
@@ -92,6 +98,7 @@ describe('IT: project-local config keys should prefer project over global', () =
     expect(resolved.concurrency).toBe(5);
     expect(resolved.taskPollIntervalMs).toBe(1300);
     expect(resolved.interactivePreviewSteps).toBe(1);
+    expect(resolved.rateLimitFallback).toEqual({ switchChain: [] });
   });
 
   it('should resolve keys from global when project config does not set them', () => {
@@ -111,6 +118,7 @@ describe('IT: project-local config keys should prefer project over global', () =
       'concurrency',
       'taskPollIntervalMs',
       'interactivePreviewSteps',
+      'rateLimitFallback',
     ]);
 
     expect(resolved.pipeline).toEqual({ defaultBranchPrefix: 'global/' });
@@ -122,6 +130,9 @@ describe('IT: project-local config keys should prefer project over global', () =
     expect(resolved.concurrency).toBe(2);
     expect(resolved.taskPollIntervalMs).toBe(2000);
     expect(resolved.interactivePreviewSteps).toBe(4);
+    expect(resolved.rateLimitFallback).toEqual({
+      switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+    });
   });
 
   it('should mark key source as global when only global defines the key', () => {

@@ -9,12 +9,15 @@ import type {
   WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
+  RateLimitFallbackConfig,
+  FallbackContext,
 } from '../models/types.js';
 import type { PersonaProviderEntry } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
+import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
 
 import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
@@ -85,6 +88,13 @@ export interface StepProviderInfo {
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
 }
 
+export interface StepRunResult {
+  response: AgentResponse;
+  instruction: string;
+  providerInfo?: StepProviderInfo;
+  consumedStepIterations?: readonly string[];
+}
+
 export interface TeamLeaderPartRuntimeResolution {
   partAllowedTools?: string[];
   processSafety?: { protectedParentRunPid: number };
@@ -92,6 +102,7 @@ export interface TeamLeaderPartRuntimeResolution {
 
 export interface RuntimeStepResolution {
   providerInfo?: StepProviderInfo;
+  fallback?: FallbackContext;
   teamLeaderPart?: TeamLeaderPartRuntimeResolution;
 }
 
@@ -107,6 +118,7 @@ export type WorkflowAbortKind =
   | 'loop_detected'
   | 'blocked'
   | 'step_error'
+  | 'rate_limited'
   | 'user_input_required'
   | 'user_input_cancelled'
   | 'step_transition'
@@ -144,6 +156,7 @@ export interface WorkflowEvents {
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
+  'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
   'phase:start': (
     step: WorkflowStep,
@@ -239,6 +252,8 @@ export interface WorkflowEngineOptions {
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
+  /** Resolved rate limit fallback provider switch chain */
+  rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
   /** Source layer for resolved provider options */
@@ -255,6 +270,8 @@ export interface WorkflowEngineOptions {
   detectRuleIndex?: RuleIndexDetector;
   /** Structured caller (required for rule evaluation and status/decomposition flows) */
   structuredCaller?: StructuredCaller;
+  /** Structured output normalizers supplied by the composition root. */
+  structuredOutputNormalizers?: StructuredOutputNormalizerRegistry;
   /** Override initial step (default: workflow config's initialStep) */
   startStep?: string;
   /** Retry note explaining why task is being retried */

@@ -13,6 +13,7 @@ import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { renderFallbackNotice } from './fallback-notice.js';
 import {
   trimContextContent,
   renderConflictNotice,
@@ -75,6 +76,10 @@ export class InstructionBuilder {
     const editRule = buildEditRule(this.step.edit, language);
     const gitRules = buildGitRules(this.step.allowGitCommit, language, 'phase1');
     const hasGitRules = gitRules.length > 0;
+    const fallbackNotice = this.context.fallbackContext
+      ? renderFallbackNotice(this.context.fallbackContext, language)
+      : '';
+    const hasFallbackNotice = fallbackNotice.length > 0;
 
     // Workflow structure (loop expansion done in code)
     const workflowStructure = this.buildWorkflowStructure(language);
@@ -168,6 +173,8 @@ export class InstructionBuilder {
       hasGitRules,
       gitRules,
       editRule,
+      hasFallbackNotice,
+      fallbackNotice,
       workflowName,
       workflowDescription,
       hasWorkflowDescription,

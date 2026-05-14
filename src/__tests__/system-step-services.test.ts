@@ -1630,9 +1630,10 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       issue: {
         create: true,
+        title: 'Implement follow-up effect with issue title',
         labels: ['bug', '', 'enhancement'],
       },
       base_branch: 'improve',
@@ -1649,6 +1650,7 @@ describe('DefaultSystemStepServices', () => {
       task: 'Implement follow-up effect',
       issue: {
         create: true,
+        title: 'Implement follow-up effect with issue title',
         labels: ['bug', '', 'enhancement'],
       },
       base_branch: 'improve',
@@ -1664,6 +1666,7 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockCreateIssueFromTask).toHaveBeenCalledWith('Implement follow-up effect', {
       cwd: '/repo',
+      title: 'Implement follow-up effect with issue title',
       labels: ['bug', 'enhancement'],
     });
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
@@ -1696,7 +1699,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       issue: { create: true },
     }, {
       mode: 'new',
@@ -1736,7 +1739,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'from_pr',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       pr: '{context:route.pr.number}',
     }, {
       mode: 'from_pr',
@@ -1775,7 +1778,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'from_pr',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       pr: '{context:route.pr.number}',
     }, {
       mode: 'from_pr',
@@ -1796,7 +1799,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       issue: '{structured:plan.issue}',
     }, {
       mode: 'new',
@@ -1804,6 +1807,27 @@ describe('DefaultSystemStepServices', () => {
       task: 'Implement follow-up effect',
       issue: { create: 'yes', labels: ['bug'] },
     }, {} as never)).rejects.toThrow('System effect requires boolean field "issue.create"');
+  });
+
+  it('rejects non-string enqueue_task issue title at the effect boundary', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    await expect(services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      issue: '{structured:plan.issue}',
+    }, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      issue: { create: true, title: 42, labels: ['bug'] },
+    }, {} as never)).rejects.toThrow('System effect requires string field "issue.title"');
   });
 
   it('rejects malformed enqueue_task worktree payloads at the effect boundary', async () => {
@@ -1817,7 +1841,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       worktree: {
         enabled: true,
       },
@@ -1842,7 +1866,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       worktree: {
         enabled: true,
       },
@@ -1870,7 +1894,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       worktree: {
         auto_pr: true,
         managed_pr: true,
@@ -1903,7 +1927,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'new',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       base_branch: 'origin/improve',
     }, {
       mode: 'new',
@@ -1926,7 +1950,7 @@ describe('DefaultSystemStepServices', () => {
       type: 'enqueue_task',
       mode: 'from_pr',
       workflow: 'takt-default',
-      task: '{structured:plan.task_markdown}',
+      task: '{structured:plan.dummy_field}',
       pr: '{context:route.pr.number}',
       issue: '{structured:plan.issue}',
     }, {

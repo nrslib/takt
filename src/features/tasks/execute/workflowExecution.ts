@@ -3,6 +3,7 @@ import type { WorkflowConfig, WorkflowResumePointEntry } from '../../../core/mod
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
 import { detectRuleIndex } from '../../../shared/utils/ruleIndex.js';
 import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
+import { createDefaultStructuredOutputNormalizers } from '../../../infra/workflow/structured-output/followup-task-normalizer.js';
 import { AbortHandler } from './abortHandler.js';
 import { createIterationLimitHandler, createUserInputHandler } from './iterationLimitHandler.js';
 import { createWorkflowExecutionBootstrap } from './workflowExecutionBootstrap.js';
@@ -143,6 +144,7 @@ async function executeWorkflowInternal(
       providerSource: bootstrap.currentProviderSource,
       model: bootstrap.configuredModel,
       modelSource: bootstrap.configuredModelSource,
+      rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
       providerOptions: options.providerOptions,
       providerOptionsSource: options.providerOptionsSource,
       providerOptionsOriginResolver: options.providerOptionsOriginResolver,
@@ -151,6 +153,7 @@ async function executeWorkflowInternal(
       interactive: bootstrap.interactiveUserInput,
       detectRuleIndex,
       structuredCaller: bootstrap.structuredCaller,
+      structuredOutputNormalizers: createDefaultStructuredOutputNormalizers(),
       startStep: options.startStep,
       retryNote: options.retryNote,
       resumePoint: options.resumePoint,

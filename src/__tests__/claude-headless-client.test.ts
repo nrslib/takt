@@ -36,6 +36,7 @@ import { callClaudeHeadless } from '../infra/claude-headless/client.js';
 describe('callClaudeHeadless', () => {
   let lastArgv: string[] = [];
   let lastSpawnEnv: NodeJS.ProcessEnv | undefined;
+  let lastKill: ReturnType<typeof vi.fn> | undefined;
   let capturedMcpConfigContent: string | undefined;
   let capturedMcpConfigMode: number | undefined;
   let capturedMcpConfigPath: string | undefined;
@@ -66,6 +67,7 @@ describe('callClaudeHeadless', () => {
     });
     lastArgv = [];
     lastSpawnEnv = undefined;
+    lastKill = undefined;
     capturedMcpConfigContent = undefined;
     capturedMcpConfigMode = undefined;
     capturedMcpConfigPath = undefined;
@@ -77,6 +79,7 @@ describe('callClaudeHeadless', () => {
     closeCode?: number | null;
     closeSignal?: NodeJS.Signals | null;
     error?: NodeJS.ErrnoException;
+    keepOpen?: boolean;
   }): void {
     vi.mocked(spawn).mockImplementation((_cmd, _args, spawnOptions) => {
       lastArgv = [...(_args as string[])];
@@ -92,7 +95,8 @@ describe('callClaudeHeadless', () => {
       const proc = new EventEmitter() as EventEmitter & Partial<ChildProcess>;
       proc.stdout = stdout as NodeJS.ReadableStream;
       proc.stderr = stderr as NodeJS.ReadableStream;
-      proc.kill = vi.fn() as unknown as ChildProcess['kill'];
+      lastKill = vi.fn();
+      proc.kill = lastKill as unknown as ChildProcess['kill'];
 
       queueMicrotask(() => {
         if (opts.error) {
@@ -104,6 +108,9 @@ describe('callClaudeHeadless', () => {
         }
         for (const c of opts.stderrChunks ?? []) {
           stderr.emit('data', Buffer.from(c, 'utf-8'));
+        }
+        if (opts.keepOpen) {
+          return;
         }
         const code = opts.closeCode === undefined ? 0 : opts.closeCode;
         proc.emit('close', code, opts.closeSignal ?? null);
@@ -233,6 +240,78 @@ describe('callClaudeHeadless', () => {
     expect(res.status).toBe('error');
     expect(res.error).toBe('explicit failure');
     expect(res.content).toBe('partial answer');
+  });
+
+  it('CLI stderr が rate limit を示す場合は rate_limited を返す', async () => {
+    stubSpawn({
+      stderrChunks: ["You're out of extra usage · resets 2:30pm (Asia/Tokyo)"],
+      closeCode: 1,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('rate_limited');
+    expect(res.errorKind).toBe('rate_limit');
+    expect(res.content).toBe('');
+  });
+
+  it('成功 result 本文が rate limit を示す場合は rate_limited を返す', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: "You're out of extra usage · resets 2:30pm (Asia/Tokyo)",
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('rate_limited');
+    expect(res.errorKind).toBe('rate_limit');
+    expect(res.content).toBe('');
+    expect(res.rateLimitInfo?.source).toBe('stream_marker');
+  });
+
+  it('ストリーム中の rate limit marker を検出した時点で child process を停止して返す', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: "You're out of extra usage · resets 2:30pm (Asia/Tokyo)" }],
+          },
+        })}\n`,
+      ],
+      keepOpen: true,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('rate_limited');
+    expect(res.errorKind).toBe('rate_limit');
+    expect(res.rateLimitInfo?.source).toBe('stream_marker');
+    expect(lastKill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('成功 result 本文の一般的な rate limit / 429 記述は done のまま返す', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'Documented rate limit fallback behavior for issue 429.',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.content).toBe('Documented rate limit fallback behavior for issue 429.');
   });
 
   it('uses the final result error when a success result is followed by an error result', async () => {

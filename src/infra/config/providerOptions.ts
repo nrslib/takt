@@ -21,6 +21,7 @@ type RawProviderOptions = {
   };
   opencode?: {
     network_access?: boolean;
+    variant?: string;
   };
   claude?: {
     allowed_tools?: string[];
@@ -55,8 +56,15 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  if (options.opencode?.network_access !== undefined) {
-    result.opencode = { networkAccess: options.opencode.network_access };
+  if (options.opencode?.network_access !== undefined || options.opencode?.variant !== undefined) {
+    result.opencode = {
+      ...(options.opencode.network_access !== undefined
+        ? { networkAccess: options.opencode.network_access }
+        : {}),
+      ...(options.opencode.variant !== undefined
+        ? { variant: options.opencode.variant }
+        : {}),
+    };
   }
   if (
     options.claude?.allowed_tools !== undefined
@@ -255,6 +263,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.opencode?.networkAccess,
     resolveProviderOptionOrigin(originResolver, 'opencode.networkAccess', source),
   );
+  const opencodeVariant = selectProviderValue(
+    resolvedConfigOptions.opencode?.variant,
+    personaOptions?.opencode?.variant,
+    stepOptions?.opencode?.variant,
+    resolveProviderOptionOrigin(originResolver, 'opencode.variant', source),
+  );
   const copilotEffort = selectProviderValue(
     resolvedConfigOptions.copilot?.effort,
     personaOptions?.copilot?.effort,
@@ -270,7 +284,13 @@ export function resolveEffectiveProviderOptions(
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
           }
         : undefined,
-    opencode: opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : undefined,
+    opencode:
+      opencodeNetworkAccess !== undefined || opencodeVariant !== undefined
+        ? {
+            ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
+            ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
+          }
+        : undefined,
     claude:
       claude.sandbox !== undefined || claude.allowedTools !== undefined || claude.effort !== undefined
         ? claude
@@ -356,6 +376,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.networkAccess',
   'codex.reasoningEffort',
   'opencode.networkAccess',
+  'opencode.variant',
   'copilot.effort',
 ] as const;
 

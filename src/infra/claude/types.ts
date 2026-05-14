@@ -8,7 +8,7 @@
 import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
-import type { AgentErrorKind, ProviderUsageSnapshot } from '../../core/models/response.js';
+import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
 import type {
   StreamEvent as SharedStreamEvent,
   StreamCallback as SharedStreamCallback,
@@ -82,6 +82,7 @@ export interface ClaudeResult {
   sessionId?: string;
   error?: string;
   errorKind?: AgentErrorKind;
+  rateLimitInfo?: RateLimitInfo;
   interrupted?: boolean;
   /** All assistant text accumulated during execution (for status detection) */
   fullContent?: string;

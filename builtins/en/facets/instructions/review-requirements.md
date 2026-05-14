@@ -1,25 +1,11 @@
-Review the changes from a requirements fulfillment perspective.
+Focus on reviewing **requirements fulfillment**.
 
-**Review criteria:**
-- Whether each requested requirement has been implemented
-- Whether implicit requirements (naturally expected behaviors) are satisfied
-- Whether changes outside the scope (scope creep) have crept in
-- Whether there are any partial or missing implementations
+Procedure:
+1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
+2. List every `##` section in each of them (do not cherry-pick)
+3. Match the criteria in each listed section against the diff and detect any issues
 
-
-**Design decisions reference:**
-Review {report:coder-decisions.md} to understand the recorded design decisions.
-- Do not flag intentionally documented decisions as FP
-- However, also evaluate whether the design decisions themselves are sound, and flag any problems
-
-**Previous finding tracking (required):**
-- First, inspect the review result previously produced by this step and its timestamped history in the Report Directory, treating the unversioned file as the latest result and the most recent timestamped file as the previous result
-- If "Previous Response" is available, use it only as supporting context; use report history as the source of truth for finding state transitions
-- Assign `finding_id` to each finding and classify current status as `new / persists / resolved / reopened`
-- If status is `persists`, provide concrete unresolved evidence (file/line)
-- Do not drop open findings from the prior report when producing the current report
-
-## Judgment Procedure
+## Step-Specific Additional Procedure
 
 1. Read `order.md`, the task body, `plan.md`, and `coder-decisions.md`, then extract the requirements one by one
 2. If a sentence contains multiple conditions or paths, split it into the smallest independently verifiable units
@@ -29,7 +15,3 @@ Review {report:coder-decisions.md} to understand the recorded design decisions.
    - Do not mark a row `satisfied` without concrete code evidence
    - Do not mark a row `satisfied` when only part of the cases is covered
 5. List out-of-scope changes and judge whether they are justified or unnecessary
-6. Reclassify prior findings into `new / persists / resolved / reopened`
-7. When citing build, test, or functional verification as evidence, record the verified target, what was checked, and the observed result in the report
-8. For each detected issue, classify it as blocking/non-blocking based on the Policy's scope table and judgment rules
-9. If there is even one blocking issue in `new`, `persists`, or `reopened`, judge as REJECT

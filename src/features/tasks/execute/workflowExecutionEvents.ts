@@ -7,6 +7,7 @@ import type { ProviderType } from '../../../shared/types/provider.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
+import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
 import type { ExceededInfo, WorkflowExecutionOptions } from './types.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
 import {
@@ -74,7 +75,7 @@ function sourceSuffix(
   return source ? ` (source: ${source})` : '';
 }
 
-function emitEffortLines(
+function emitProviderOptionLines(
   out: OutInfo,
   stepProvider: ProviderType,
   providerInfo: StepProviderInfo,
@@ -93,6 +94,11 @@ function emitEffortLines(
     const effort = options.codex?.reasoningEffort;
     if (effort !== undefined) {
       out.info(`Reasoning effort: ${effort}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);
+    }
+  } else if (stepProvider === 'opencode') {
+    const variant = options.opencode?.variant;
+    if (variant !== undefined) {
+      out.info(`Variant: ${variant}${sourceSuffix('opencode.variant', sources, showSource)}`);
     }
   } else if (stepProvider === 'copilot') {
     const effort = options.copilot?.effort;
@@ -201,7 +207,7 @@ export function bindWorkflowExecutionEvents(
       : '';
     deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
     deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
-    emitEffortLines(deps.out, stepProvider, providerInfo, showSource);
+    emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
     deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel);
 
     if (!deps.prefixWriter) {
@@ -249,6 +255,16 @@ export function bindWorkflowExecutionEvents(
     deps.sessionLogger.onStepComplete(step, response, instruction, deps.getCurrentWorkflowStack());
     deps.analyticsEmitter.onStepComplete(step, response);
     state.sessionLog = { ...state.sessionLog, iterations: state.sessionLog.iterations + 1 };
+  });
+
+  deps.engine.on('step:rate_limited', (step, response) => {
+    if (deps.displayRef.current) {
+      deps.displayRef.current.flush();
+    }
+    deps.prefixWriter?.flush();
+    const message = response.error ?? `Step "${step.name}" hit a rate limit`;
+    playWarningSound();
+    notifyWarning('TAKT', message);
   });
 
   deps.engine.on('step:report', (_step, filePath, fileName) => {

@@ -69,7 +69,7 @@ describe('ClaudeClient status normalization', () => {
     expect(response.content).toBe('Interrupted by signal');
   });
 
-  it('should preserve provider-normalized errorKind on error responses', async () => {
+  it('should convert provider-normalized rate_limit to rate_limited status', async () => {
     mockExecuteClaudeCli.mockResolvedValue({
       success: false,
       content: '',
@@ -82,12 +82,12 @@ describe('ClaudeClient status normalization', () => {
 
     const response = await client.call('coder', 'Implement feature', options);
 
-    expect(response.status).toBe('error');
+    expect(response.status).toBe('rate_limited');
     expect(response.errorKind).toBe('rate_limit');
     expect(response.error).toBe('Rate limit exceeded. Please try again later.');
   });
 
-  it('should preserve provider-normalized errorKind on callCustom() error responses', async () => {
+  it('should convert provider-normalized rate_limit to rate_limited status on callCustom()', async () => {
     mockExecuteClaudeCli.mockResolvedValue({
       success: false,
       content: 'Claude Code process exited with code 1',
@@ -105,7 +105,7 @@ describe('ClaudeClient status normalization', () => {
       options,
     );
 
-    expect(response.status).toBe('error');
+    expect(response.status).toBe('rate_limited');
     expect(response.errorKind).toBe('rate_limit');
     expect(response.error).toBe('Claude Code process exited with code 1');
   });

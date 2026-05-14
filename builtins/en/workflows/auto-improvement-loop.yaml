@@ -85,10 +85,17 @@ steps:
       Treat the current issue itself as in-scope, not as a duplicate.
       Avoid tasks that materially duplicate or overlap with an open PR or the other open issues listed above.
 
-      Do not implement anything. Output only the next task instruction in task_markdown.
+      Do not implement anything. Output only the next task metadata as structured output.
       Output the next action in action.
-      Always output task_markdown and issue.
-      For wait_before_next_scan, set task_markdown to an empty string and issue to { create: false, labels: [] }.
+      Always output title, type, scope, summary, goals, acceptance_criteria, and issue.
+      Output labels only when needed.
+      In title, output a concise GitHub Issue title.
+      Do not use generic headings such as "# Task Order" or "Task Order" in title.
+      Set type to one of feature / bug / chore / docs.
+      TAKT renders summary, goals, and acceptance_criteria into this Markdown template:
+      ## Summary / ## Goals / ## Acceptance Criteria
+      For enqueue_new_task, set at least one goal and at least two acceptance criteria.
+      For wait_before_next_scan, set title, scope, and summary to empty strings, type to "chore", goals and acceptance_criteria to empty arrays, labels to an empty array, and issue to { create: false }.
       For an existing issue task, set issue.create to false unless a new GitHub Issue is explicitly needed.
 
       Allowed action values:
@@ -148,10 +155,17 @@ steps:
       Avoid tasks that materially duplicate or overlap with an open PR or tracked open issue.
       If you cannot identify a clearly distinct, high-value task, choose wait_before_next_scan.
 
-      Do not implement anything. Output only the next task instruction in task_markdown.
+      Do not implement anything. Output only the next task metadata as structured output.
       Output the next action in action.
-      Always output task_markdown and issue.
-      For wait_before_next_scan, set task_markdown to an empty string and issue to { create: false, labels: [] }.
+      Always output title, type, scope, summary, goals, acceptance_criteria, and issue.
+      Output labels only when needed.
+      In title, output a concise GitHub Issue title.
+      Do not use generic headings such as "# Task Order" or "Task Order" in title.
+      Set type to one of feature / bug / chore / docs.
+      TAKT renders summary, goals, and acceptance_criteria into this Markdown template:
+      ## Summary / ## Goals / ## Acceptance Criteria
+      For enqueue_new_task, set at least one goal and at least two acceptance criteria.
+      For wait_before_next_scan, set title, scope, and summary to empty strings, type to "chore", goals and acceptance_criteria to empty arrays, labels to an empty array, and issue to { create: false }.
       For a fresh improvement task, set issue.create to true so the task is backed by a GitHub Issue.
 
       Allowed action values:

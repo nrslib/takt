@@ -262,6 +262,28 @@ describe('OpenCodeProvider — structured output', () => {
     expect(result.structuredOutput).toEqual({ step: 2 });
   });
 
+  it('provider_options.opencode.variant を callOpenCode に渡す', async () => {
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new OpenCodeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      model: 'openai/gpt-5',
+      providerOptions: {
+        opencode: {
+          networkAccess: true,
+          variant: 'high',
+        },
+      },
+    });
+
+    const opts = mockCallOpenCode.mock.calls[0]?.[2];
+    expect(opts).toMatchObject({
+      networkAccess: true,
+      variant: 'high',
+    });
+  });
+
   it('systemPrompt 指定時も outputSchema が callOpenCodeCustom に渡される', async () => {
     mockCallOpenCodeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
 

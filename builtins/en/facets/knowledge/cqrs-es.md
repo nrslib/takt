@@ -101,6 +101,24 @@ Good Command Handler:
 4. Save emitted events
 ```
 
+### Aggregate Decision Boundary
+
+Aggregates make decisions only from state that can be restored from their event history and facts explicitly carried by commands. They are not the place to interpret, normalize, or authorize boundary-originated inputs.
+
+Validation inside an Aggregate should be limited to facts reproducible by event replay. Other validation should be resolved before command dispatch, and the Aggregate should receive already-resolved facts.
+
+| Decision target | Place |
+|-----------------|-------|
+| Whether the current state allows the operation | Aggregate |
+| Whether the command requester matches the Aggregate owner | Aggregate |
+| Whether HTTP/API input shape is valid | API layer |
+| Parsing external identifiers such as object keys, URLs, or paths | UseCase layer or boundary-side Policy/Verifier |
+| Whether an external identifier belongs to the current user/tenant | UseCase layer or boundary-side Policy/Verifier |
+| Checking Read Models or other Aggregate state | UseCase layer |
+| Checking that an external resource exists | Application-layer integration with the external service |
+
+Example: for an upload-completed command, the Aggregate decides whether the session owner matches the requester and whether the current state can be completed. The storage object key format and whether the key belongs to the current user/tenant are validated in the UseCase layer before sending the command.
+
 ## Projection Design
 
 | Criteria | Judgment |

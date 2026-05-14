@@ -21,6 +21,7 @@ const {
   mockLoadGlobalConfig,
   mockNotifySuccess,
   mockNotifyError,
+  mockNotifyWarning,
   mockPlayWarningSound,
   mockSelectOption,
 } = vi.hoisted(() => {
@@ -31,6 +32,7 @@ const {
   const mockLoadGlobalConfig = vi.fn().mockReturnValue({ provider: 'claude' });
   const mockNotifySuccess = vi.fn();
   const mockNotifyError = vi.fn();
+  const mockNotifyWarning = vi.fn();
   const mockPlayWarningSound = vi.fn();
   const mockSelectOption = vi.fn().mockResolvedValue('stop');
 
@@ -80,6 +82,25 @@ const {
       }
     }
 
+    triggerRateLimited(): void {
+      this.emit(
+        'step:rate_limited',
+        { name: 'step1', personaDisplayName: 'step1', instruction: 'Run step1' },
+        {
+          persona: 'step1',
+          status: 'rate_limited',
+          content: '',
+          error: 'Rate limit exceeded. Please try again later.',
+          timestamp: new Date(),
+        },
+        {
+          provider: 'claude',
+          detectedAt: new Date('2026-05-13T03:00:00.000Z'),
+          source: 'stream_marker',
+        },
+      );
+    }
+
     async run(): Promise<{ status: string; iteration: number }> {
       return new Promise((resolve) => {
         this.runResolve = resolve;
@@ -93,6 +114,7 @@ const {
     mockLoadGlobalConfig,
     mockNotifySuccess,
     mockNotifyError,
+    mockNotifyWarning,
     mockPlayWarningSound,
     mockSelectOption,
   };
@@ -181,6 +203,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => {
     }),
     notifySuccess: mockNotifySuccess,
     notifyError: mockNotifyError,
+    notifyWarning: mockNotifyWarning,
     playWarningSound: mockPlayWarningSound,
     preventSleep: vi.fn(),
     isDebugEnabled: vi.fn().mockReturnValue(false),
@@ -421,6 +444,22 @@ describe('executeWorkflow: notification sound behavior', () => {
       await resultPromise;
 
       expect(mockPlayWarningSound).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('warning notification on rate limit', () => {
+    it('should call playWarningSound and notifyWarning when step:rate_limited is emitted', async () => {
+      mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
+
+      const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      MockWorkflowEngine.latestInstance!.triggerRateLimited();
+      MockWorkflowEngine.latestInstance!.abort();
+      await resultPromise;
+
+      expect(mockPlayWarningSound).toHaveBeenCalledOnce();
+      expect(mockNotifyWarning).toHaveBeenCalledOnce();
     });
   });
 

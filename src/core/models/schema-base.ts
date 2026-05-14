@@ -62,6 +62,7 @@ export const StepProviderOptionsSchema = z.object({
   }).optional(),
   opencode: z.object({
     network_access: z.boolean().optional(),
+    variant: z.string().min(1).optional(),
   }).optional(),
   claude: z.object({
     allowed_tools: z.array(z.string()).optional(),
@@ -136,6 +137,13 @@ export const ProviderBlockSchema = z.object({
 });
 
 export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBlockSchema]);
+
+export const RateLimitFallbackSchema = z.object({
+  switch_chain: z.array(z.object({
+    provider: ProviderTypeSchema,
+    model: z.string().optional(),
+  }).strict()).optional(),
+}).strict();
 
 /** Provider permission profile schema */
 export const ProviderPermissionProfileSchema = z.object({
