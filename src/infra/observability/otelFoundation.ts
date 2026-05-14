@@ -25,7 +25,7 @@ let stoppingSdk: Promise<void> | undefined;
 export async function initializeOtelFoundation(
   config: ResolvedObservabilityConfig,
 ): Promise<OtelFoundationHandle> {
-  if (config.enabled !== true) {
+  if (!config.enabled) {
     return createNoopHandle();
   }
 

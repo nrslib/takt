@@ -183,4 +183,20 @@ describe('otel foundation', () => {
 
     expect(foundation.shutdownMock).toHaveBeenCalledTimes(2);
   });
+
+  it('should reset pending SDK startup after a start failure so a later call can retry', async () => {
+    const foundation = await loadFoundationWithMockedSdk();
+    foundation.startMock.mockImplementationOnce(() => {
+      throw new Error('sdk start failed');
+    });
+
+    await expect(foundation.initializeOtelFoundation(enabledObservability)).rejects.toThrow('sdk start failed');
+
+    const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    await handle.shutdown();
+
+    expect(foundation.startMock).toHaveBeenCalledTimes(2);
+    expect(foundation.constructedOptions).toHaveLength(2);
+    expect(foundation.shutdownMock).toHaveBeenCalledOnce();
+  });
 });

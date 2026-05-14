@@ -202,6 +202,7 @@ export class DebugLogger {
       },
       debug: (message: string, data?: unknown) => this.writeLog('DEBUG', component, message, data),
       info: (message: string, data?: unknown) => this.writeLog('INFO', component, message, data),
+      warn: (message: string, data?: unknown) => this.writeLog('WARN', component, message, data),
       error: (message: string, data?: unknown) => this.writeLog('ERROR', component, message, data),
       enter: (funcName: string, args?: Record<string, unknown>) => this.writeLog('DEBUG', component, `>> ${funcName}()`, args),
       exit: (funcName: string, result?: unknown) => this.writeLog('DEBUG', component, `<< ${funcName}()`, result),

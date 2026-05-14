@@ -165,6 +165,7 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 | `workflowArpeggio` | object | all `false` | Arpeggio custom code policy (`customDataSourceModules`, `customMergeInlineJs`, `customMergeFiles`) |
 | `workflowRuntimePrepare` | object | `{ customScripts: false }` | Runtime prepare policy (builtin presets always allowed) |
 | `syncConflictResolver` | object | `{ autoApproveTools: false }` | Sync conflict resolver policy |
+| `observability` | object | disabled | Opt-in OpenTelemetry foundation. Only `enabled` initializes the SDK today; `monitor`, `session_log_exporter`, and `usage_events_phase` are reserved no-op flags for later changes. |
 
 ## Project Configuration
 
@@ -212,6 +213,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 | `workflowArpeggio` | object | - | Arpeggio custom code policy (overrides global) |
 | `workflowRuntimePrepare` | object | - | Runtime prepare policy (overrides global) |
 | `syncConflictResolver` | object | - | Sync conflict resolver policy (overrides global) |
+| `observability` | object | - | Project-level OpenTelemetry opt-in override. Only `enabled` initializes the SDK today; `monitor`, `session_log_exporter`, and `usage_events_phase` are reserved no-op flags for later changes. |
 
 Project config values override global config when both are set.
 

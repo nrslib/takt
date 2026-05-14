@@ -8,8 +8,11 @@ import { createIterationLimitHandler, createUserInputHandler } from './iteration
 import { createWorkflowExecutionBootstrap } from './workflowExecutionBootstrap.js';
 import { createWorkflowExecutionContext, createWorkflowCallResolver } from './workflowExecutionContext.js';
 import { bindWorkflowExecutionEvents, type WorkflowExecutionEventBridge } from './workflowExecutionEvents.js';
+import { createLogger } from '../../../shared/utils/index.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
+
+const log = createLogger('workflow-execution');
 
 type WorkflowRunContext = {
   ignoreIterationLimit?: boolean;
@@ -208,6 +211,12 @@ async function executeWorkflowInternal(
   } finally {
     bootstrap.prefixWriter?.flush();
     abortHandler.cleanup();
-    await bootstrap.observabilityHandle.shutdown();
+    try {
+      await bootstrap.observabilityHandle.shutdown();
+    } catch (error) {
+      log.warn('Observability shutdown failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

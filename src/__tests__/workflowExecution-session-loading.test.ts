@@ -464,6 +464,30 @@ describe('executeWorkflow session loading', () => {
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 
+  it('should preserve the workflow error when observability shutdown rejects', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runError = new Error('workflow engine failed');
+    mockObservabilityShutdown.mockRejectedValueOnce(new Error('shutdown failed'));
+
+    await expect(
+      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+      }),
+    ).rejects.toThrow('workflow engine failed');
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
+  });
+
   it('should log configured model from global/project settings when step model is unresolved', async () => {
     vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
       ...defaultResolvedConfigValues,
