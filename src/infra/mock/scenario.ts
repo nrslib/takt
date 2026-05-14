@@ -9,8 +9,11 @@
 import { readFileSync, existsSync } from 'node:fs';
 import type { ScenarioEntry } from './types.js';
 import { STATUS_VALUES } from '../../core/models/status.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 
 export type { ScenarioEntry };
+
+const AGENT_FAILURE_CATEGORY_VALUES = new Set<string>(Object.values(AGENT_FAILURE_CATEGORIES));
 
 /**
  * Queue that dispenses scenario entries.
@@ -152,12 +155,23 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   if (obj.delay_ms !== undefined && typeof obj.delay_ms !== 'number') {
     throw new Error(`Scenario entry [${index}] "delay_ms" must be a number if provided`);
   }
+  if (obj.error !== undefined && typeof obj.error !== 'string') {
+    throw new Error(`Scenario entry [${index}] "error" must be a string if provided`);
+  }
+  if (
+    obj.failure_category !== undefined
+    && (typeof obj.failure_category !== 'string' || !AGENT_FAILURE_CATEGORY_VALUES.has(obj.failure_category))
+  ) {
+    throw new Error(`Scenario entry [${index}] "failure_category" is invalid`);
+  }
 
   return {
     persona: obj.persona as string | undefined,
     status: status as ScenarioEntry['status'],
     content: obj.content as string,
     structuredOutput: obj.structured_output as Record<string, unknown> | undefined,
+    error: obj.error as string | undefined,
+    failureCategory: obj.failure_category as ScenarioEntry['failureCategory'],
     delayMs: obj.delay_ms as number | undefined,
   };
 }

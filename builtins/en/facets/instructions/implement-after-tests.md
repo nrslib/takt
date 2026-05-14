@@ -42,13 +42,12 @@ Small / Medium / Large
 ```
 
 **Pre-completion self-check (required):**
-Before running build and tests, verify the following:
-- If new parameters/fields were added, grep to confirm they are actually passed from call sites
-- For any `??`, `||`, `= defaultValue` usage, confirm fallback is truly necessary
-- Verify no replaced code/exports remain after refactoring
-- Verify no features outside the task specification were added
-- Verify no if/else blocks call the same function with only argument differences
-- Verify new code matches existing implementation patterns (API call style, type definition style, etc.)
+
+Before running build and tests, audit your work against Policy with the following procedure.
+
+1. Open the Policy Source path with the Read tool and obtain the full content
+2. List every `##` section (do not cherry-pick)
+3. Match the REJECT criteria in each listed section against your implementation
 
 **Required output (include headings)**
 ## Work results

@@ -33,6 +33,10 @@ import {
   ensureRunDirsExist,
   type WorkflowEngineServices,
 } from './WorkflowEngineSetup.js';
+import {
+  createStructuredOutputNormalizerRegistry,
+  type StructuredOutputNormalizerRegistry,
+} from './structured-output-normalizer.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -61,7 +65,7 @@ export class WorkflowEngine extends EventEmitter {
   private projectCwd: string;
   private cwd: string;
   private task: string;
-  private options: WorkflowEngineOptions;
+  private options: WorkflowEngineOptions & { structuredOutputNormalizers: StructuredOutputNormalizerRegistry };
   private maxSteps: WorkflowMaxSteps;
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
@@ -92,6 +96,7 @@ export class WorkflowEngine extends EventEmitter {
       ...options,
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
+      structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
     };
     this.projectCwd = this.options.projectCwd;
     this.cwd = cwd;
@@ -112,7 +117,7 @@ export class WorkflowEngine extends EventEmitter {
     this.reportDir = this.runPaths.reportsRel;
     ensureRunDirsExist(this.runPaths);
     applyRuntimeEnvironment(this.cwd, this.config, 'init');
-    validateWorkflowConfig(this.config, this.options);
+    validateWorkflowConfig(this.config, options);
 
     this.state = createInitialState(config, this.options);
     this.detectRuleIndex = this.options.detectRuleIndex ?? (() => {

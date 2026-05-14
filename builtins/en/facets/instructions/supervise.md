@@ -1,52 +1,34 @@
 Verify existing evidence for tests, builds, and functional checks, then perform final approval.
 
-**Overall workflow verification:**
-1. Check all reports in the report directory and verify overall workflow consistency
-   - Does implementation match the plan?
-   - Were all review step findings properly addressed?
-   - Was the original task objective achieved?
-   - Are prior review findings themselves valid against the task spec, plan, and actual code?
-2. Verify the task spec, plan, and decision history as primary sources
-   - Read `order.md` and extract required behavior and prohibitions
-   - Read `plan.md` and confirm intended approach and scope
-   - Read `coder-decisions.md` and confirm why the implementation moved in that direction
-   - Do not treat prior review conclusions or requirements-review conclusions as authoritative unless they align with all three and the code
-3. Whether each task spec requirement has been achieved
-   - Extract requirements one by one from the task spec
+Procedure:
+1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
+2. List every `##` section in each of them (do not cherry-pick)
+3. Match the criteria in each listed section against the diff, execution evidence, and reports
+
+## Step-Specific Additional Procedure
+
+1. Extract each requirement from the task spec one by one
    - If a single sentence contains multiple conditions or paths, split it into the smallest independently verifiable units
      - Example: treat `global/project` as separate requirements
      - Example: treat `JSON override / leaf override` as separate requirements
      - Example: split parallel expressions such as `A and B`, `A/B`, `allow/deny`, or `read/write`
-   - For each requirement, identify the implementing code (file:line)
-   - Verify the code actually fulfills the requirement (read the file, check existing test/build evidence)
+2. For each requirement, identify the implementing code (file:line)
+3. Verify the code actually fulfills the requirement (read the file, check existing test/build evidence)
    - Do not mark a composite requirement as ✅ based on only one side of the cases
-   - Evidence must cover the full content of the requirement row
-   - Do not rely on the plan report's judgment; independently verify each requirement
+   - Do not rely on the plan report or requirements-review judgment; independently verify each requirement
    - If any requirement is unfulfilled, REJECT
 4. Re-evaluate prior review findings
-   - Re-check each `new / persists / resolved` finding against the task spec, `plan.md`, `coder-decisions.md`, and actual code
    - If a finding does not hold in code, classify it as `false_positive`
    - If a finding holds technically but pushes work beyond the task objective or justified scope, classify it as `overreach`
    - Do not leave `false_positive` / `overreach` reasoning implicit
-5. Handling tests, builds, and functional checks
-   - Do not assume this step will rerun commands
-   - Use only evidence available in this run, such as execution logs, reports, or CI results
-   - If evidence is missing, mark the item as unverified rather than successful
-   - If report text conflicts with execution evidence, call out the inconsistency explicitly
 
-**How to read reports:**
-- For reports with the same base name, treat the unversioned file as the latest result and `{report}.{timestamp}` files as history
-- When re-evaluating prior findings, compare the unversioned file with the most recent timestamped history file and verify that the meaning of `new / persists / resolved / reopened` is preserved
-- Treat summary reports as summaries, not as primary evidence. Prefer reports that record execution results, reviewer reports with concrete verification details, and then actual code
-- You may treat `Build Results` / `Test Results` sections in reports that record execution results as primary evidence
-- For `architecture-review`, `qa-review`, `testing-review`, `security-review`, and `requirements-review`, prioritize each report's `Verification Evidence` section when checking evidence
+## Report Priority (supervise-specific)
+
+- Do not treat summary reports as primary evidence. Use execution-result reports, reviewer reports with concrete verification details, and actual code in that order
+- You may treat `Build Results` / `Test Results` sections in execution-result reports as primary evidence
+- For `architecture-review`, `qa-review`, `testing-review`, `security-review`, and `requirements-review`, prioritize each report's `Verification Evidence` section
 - Treat each `Verification Evidence` item as supporting evidence only when it states the verified target, what was checked, and observed result. If any part is missing, mark that item as `unverified`
-- Treat reviewer claims such as "confirmed success" as supporting evidence only when they state the verified target, what was checked, and the observed result
 - If items of evidence conflict, prioritize them in this order: `execution-result report > reviewer report with concrete verification details > summary report`
-- If a later report reclassifies an earlier finding as `resolved`, `false_positive`, or `overreach`, decide whether to accept that reclassification by checking it against the task, plan, and code
-
-**Report verification:** Read all reports in the Report Directory and
-check whether any blocking finding remains unresolved and whether those findings are themselves valid.
 
 **Validation output contract:**
 ```markdown

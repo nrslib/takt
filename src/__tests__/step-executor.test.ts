@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
+import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { WorkflowState } from '../core/models/types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { makeStep } from './test-helpers.js';
@@ -115,6 +116,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart,
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
@@ -195,6 +197,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
@@ -260,6 +263,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
@@ -332,6 +336,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
@@ -411,6 +416,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
@@ -485,6 +491,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
@@ -558,6 +565,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),
@@ -634,6 +642,7 @@ describe('StepExecutor', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       onPhaseStart: vi.fn(),
       onPhaseComplete: vi.fn(),
       onJudgeStage: vi.fn(),

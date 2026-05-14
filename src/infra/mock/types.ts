@@ -3,6 +3,7 @@
  */
 
 import type { Status } from '../../core/models/status.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Options for mock calls */
@@ -18,6 +19,10 @@ export interface MockCallOptions {
   mockStatus?: Status;
   /** Structured output payload returned as-is */
   structuredOutput?: Record<string, unknown>;
+  /** Error message returned with an error response */
+  error?: string;
+  /** Machine-readable failure category returned with an error response */
+  failureCategory?: AgentFailureCategory;
 }
 
 /** A single entry in a mock scenario */
@@ -30,6 +35,10 @@ export interface ScenarioEntry {
   content: string;
   /** Optional structured output payload (for outputSchema-driven flows) */
   structuredOutput?: Record<string, unknown>;
+  /** Optional error message */
+  error?: string;
+  /** Optional machine-readable failure category */
+  failureCategory?: AgentFailureCategory;
   /** Artificial delay in ms before returning (respects abortSignal) */
   delayMs?: number;
 }

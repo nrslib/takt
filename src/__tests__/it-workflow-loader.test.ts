@@ -193,6 +193,44 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
     'enqueue_new_task',
     'wait_before_next_scan',
   ]);
+  expect(planFromIssueStructuredOutput?.schema).toEqual(expect.objectContaining({
+      required: expect.arrayContaining([
+        'action',
+        'title',
+        'type',
+        'scope',
+        'summary',
+      'goals',
+      'acceptance_criteria',
+      'issue',
+    ]),
+      properties: expect.objectContaining({
+        title: { type: 'string' },
+        type: expect.objectContaining({
+          enum: ['feature', 'bug', 'chore', 'docs'],
+        }),
+        summary: { type: 'string' },
+        goals: expect.objectContaining({ type: 'array' }),
+        acceptance_criteria: expect.objectContaining({ type: 'array' }),
+        labels: expect.objectContaining({ type: 'array' }),
+        issue: expect.objectContaining({
+          properties: expect.objectContaining({
+            create: { type: 'boolean' },
+          }),
+          required: ['create'],
+        }),
+    }),
+    allOf: expect.arrayContaining([
+      expect.objectContaining({
+        then: expect.objectContaining({
+          properties: expect.objectContaining({
+            goals: expect.objectContaining({ minItems: 1 }),
+            acceptance_criteria: expect.objectContaining({ minItems: 2 }),
+          }),
+        }),
+      }),
+    ]),
+  }));
   expect(planFreshImprovement?.rules).toEqual(expect.arrayContaining([
     expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' }),
     expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
@@ -223,6 +261,10 @@ function expectAutoImprovementLoopPlanningGuidance(
         prSnapshot: '{context:route_context.prs}',
         issueSnapshot: '{context:route_context.tracked_issues}',
         issueCount: '{context:route_context.tracked_issues.length}',
+        issueTitle: 'title',
+        issueType: 'type',
+        taskTemplate: 'TAKT renders summary',
+        titleGuard: 'Task Order',
       }
     : {
         oneTask: '改善 task を 1 件だけ計画してください',
@@ -235,6 +277,10 @@ function expectAutoImprovementLoopPlanningGuidance(
         prSnapshot: '{context:route_context.prs}',
         issueSnapshot: '{context:route_context.tracked_issues}',
         issueCount: '{context:route_context.tracked_issues.length}',
+        issueTitle: 'title',
+        issueType: 'type',
+        taskTemplate: 'TAKT が summary',
+        titleGuard: 'タスク指示書',
       };
 
   for (const instruction of [String(planFromIssue?.instruction), String(planFreshImprovement?.instruction)]) {
@@ -247,6 +293,10 @@ function expectAutoImprovementLoopPlanningGuidance(
     expect(instruction).toContain(expectations.prSnapshot);
     expect(instruction).toContain(expectations.issueSnapshot);
     expect(instruction).toContain(expectations.issueCount);
+    expect(instruction).toContain(expectations.issueTitle);
+    expect(instruction).toContain(expectations.issueType);
+    expect(instruction).toContain(expectations.taskTemplate);
+    expect(instruction).toContain(expectations.titleGuard);
     expect(instruction).toMatch(expectations.duplicate);
     expect(instruction).not.toContain('- noop');
   }
