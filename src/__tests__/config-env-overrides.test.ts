@@ -125,6 +125,32 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は opencode.variant の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-opencode-variant-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  opencode:',
+        '    network_access: false',
+        '    variant: low',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT = 'high';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      opencode: {
+        networkAccess: false,
+        variant: 'high',
+      },
+    });
+  });
+
   it('project config は root JSON env で subtree 全体を置き換える', () => {
     const projectDir = join(testRoot, 'project-root-json');
     const configDir = getProjectConfigDir(projectDir);

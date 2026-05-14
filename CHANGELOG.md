@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `takt list` failed-task action `Requeue` added (#435). Previously the only options were `Retry` (always conversation-driven) and `Delete`. `Requeue` directly returns the task to the pending queue without entering a conversation, useful for quickly resending a failed task while working on something else. The `retry_note` is auto-generated from the failure context (failed step name + error excerpt + a hint that the user has acknowledged the issue), so the next run still receives `## Requeue Notes` context. Existing `retry_note` values are accumulated rather than overwritten
 - AI antipattern review now runs on every reviewers cycle. Added `ai-antipattern-review-2nd` to the parallel reviewers step in `default` / `default-mini` / `default-high` / `backend` / `backend-cqrs` / `dual` / `dual-cqrs` / `frontend` / `terraform` / `takt-default`, so over-defensive code or ghost comments introduced by a `fix` pass are caught on every review pass instead of only the initial one. Split workflows (`backend` / `dual` / `frontend` series) place it on `reviewers_1` only, since `fix` always returns to `reviewers_1`
+- OpenCode provider now supports `provider_options.opencode.variant` (#694). Model variants can be set from workflow steps, workflow_config, persona_providers, project config, global config, or `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT`, and are passed through to the OpenCode SDK prompt payload
 
 ### Changed
 

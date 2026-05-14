@@ -189,6 +189,7 @@ export interface OpenCodeCallOptions {
   allowedTools?: string[];
   permissionMode?: PermissionMode;
   networkAccess?: boolean;
+  variant?: string;
   onStream?: StreamCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
   opencodeApiKey?: string;

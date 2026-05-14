@@ -88,14 +88,17 @@ describe('IT: runAllTasks provider_options reflection', () => {
   let env: TestEnv;
   let originalConfigDir: string | undefined;
   let originalEnvCodex: string | undefined;
+  let originalEnvOpencodeVariant: string | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     env = createEnv();
     originalConfigDir = process.env.TAKT_CONFIG_DIR;
     originalEnvCodex = process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+    originalEnvOpencodeVariant = process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
     process.env.TAKT_CONFIG_DIR = env.globalDir;
     delete process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS;
+    delete process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
     invalidateGlobalConfigCache();
 
     vi.mocked(runAgent).mockResolvedValue(mockDoneResponse());
@@ -115,8 +118,43 @@ describe('IT: runAllTasks provider_options reflection', () => {
     } else {
       process.env.TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS = originalEnvCodex;
     }
+    if (originalEnvOpencodeVariant === undefined) {
+      delete process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
+    } else {
+      process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT = originalEnvOpencodeVariant;
+    }
     invalidateGlobalConfigCache();
     rmSync(env.root, { recursive: true, force: true });
+  });
+
+  it('global opencode variant should be passed in runAllTasks flow', async () => {
+    setGlobalConfig(env.globalDir, [
+      'provider_options:',
+      '  opencode:',
+      '    variant: high',
+    ].join('\n'));
+
+    await runAllTasksNoWorkflow(env.projectDir);
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toEqual({
+      opencode: { variant: 'high' },
+    });
+  });
+
+  it('project opencode variant should be passed in runAllTasks flow', async () => {
+    setProjectConfig(env.projectDir, [
+      'provider_options:',
+      '  opencode:',
+      '    variant: high',
+    ].join('\n'));
+
+    await runAllTasksNoWorkflow(env.projectDir);
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toEqual({
+      opencode: { variant: 'high' },
+    });
   });
 
   it('project provider_options should override global in runAllTasks flow', async () => {
@@ -162,6 +200,31 @@ describe('IT: runAllTasks provider_options reflection', () => {
       claude: { allowedTools: ['Read', 'Edit'] },
     });
     expect(options?.allowedTools).toEqual(['Read', 'Edit']);
+  });
+
+  it('project persona_providers opencode variant should override project provider_options in runAllTasks flow', async () => {
+    setProjectConfig(env.projectDir, [
+      'provider: opencode',
+      'provider_options:',
+      '  opencode:',
+      '    network_access: true',
+      '    variant: low',
+      'persona_providers:',
+      '  planner:',
+      '    provider_options:',
+      '      opencode:',
+      '        variant: high',
+    ].join('\n'));
+
+    await runAllTasksNoWorkflow(env.projectDir);
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toEqual({
+      opencode: {
+        networkAccess: true,
+        variant: 'high',
+      },
+    });
   });
 
   it('env provider_options should override yaml in runAllTasks flow', async () => {

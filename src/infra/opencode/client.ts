@@ -423,6 +423,7 @@ export class OpenCodeClient {
           sessionID: sessionId,
           directory: options.cwd,
           model: parsedModel,
+          ...(options.variant !== undefined ? { variant: options.variant } : {}),
           ...(tools ? { tools } : {}),
           parts: [{ type: 'text' as const, text: fullPrompt }],
         };

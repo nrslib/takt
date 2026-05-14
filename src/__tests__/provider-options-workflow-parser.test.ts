@@ -209,6 +209,58 @@ describe('normalizeWorkflowConfig provider_options', () => {
     });
   });
 
+  it('opencode variant を workflow-level で設定し step で上書きできる', () => {
+    const raw = {
+      name: 'opencode-variant',
+      workflow_config: {
+        provider_options: {
+          opencode: {
+            network_access: true,
+            variant: 'low',
+          },
+        },
+      },
+      steps: [
+        {
+          name: 'inherit',
+          provider: 'opencode',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider: 'opencode',
+          provider_options: {
+            opencode: {
+              variant: 'high',
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      opencode: {
+        networkAccess: true,
+        variant: 'low',
+      },
+    });
+    expect(config.steps[0]?.providerOptions).toEqual({
+      opencode: {
+        networkAccess: true,
+        variant: 'low',
+      },
+    });
+    expect(config.steps[1]?.providerOptions).toEqual({
+      opencode: {
+        networkAccess: true,
+        variant: 'high',
+      },
+    });
+  });
+
   it('workflow-level runtime.prepare を正規化し重複を除去する', () => {
     const raw = {
       name: 'runtime-prepare',

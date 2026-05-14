@@ -12,6 +12,7 @@
 
 - `takt list` の failed タスクに `Requeue` アクションを追加 (#435)。これまで failed タスクの選択肢は会話モード必須の `Retry` と `Delete` のみで、別タスクに集中している間にサクッと再実行キューへ戻す手段がなかった。`Requeue` は会話を経由せず直接 pending に戻すため、原因分析が不要なケースを最短で再投入できる。`retry_note` は失敗 step 名 / エラー要約 / 「ユーザーが対処済みと判断したため再投入」というコンテキストから自動生成し、再実行時のエージェントが `## 再投入メモ` で読み取れる。既存の `retry_note` は上書きせず累積追記する
 - AI アンチパターンレビューを reviewers サイクル毎に実行するように追加。`default` / `default-mini` / `default-high` / `backend` / `backend-cqrs` / `dual` / `dual-cqrs` / `frontend` / `terraform` / `takt-default` の reviewers parallel ステップに `ai-antipattern-review-2nd` を追加し、`fix` 後に混入した過剰防御や幽霊コメントを毎サイクルで検出するようになった。split 構成（`backend` / `dual` / `frontend` 系）では `reviewers_1` のみに配置している（`fix` は常に `reviewers_1` に戻るため）
+- OpenCode provider で `provider_options.opencode.variant` を追加 (#694)。workflow step / workflow_config / persona_providers / project config / global config / `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT` から model variant を指定でき、OpenCode SDK の prompt payload へそのまま渡される
 
 ### Changed
 

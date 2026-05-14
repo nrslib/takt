@@ -99,6 +99,19 @@ describe('resolveProviderOptionSource', () => {
     );
     expect(source).toBe('project');
   });
+
+  it('Given opencode variant has env origin, When resolve, Then source is env', () => {
+    const source = resolveProviderOptionSource(
+      'opencode.variant',
+      { opencode: { variant: 'step-low' } },
+      undefined,
+      { opencode: { variant: 'env-high' } },
+      (path) => (path === 'opencode.variant' ? 'env' : 'local'),
+      'project',
+    );
+
+    expect(source).toBe('env');
+  });
 });
 
 describe('resolveProviderOptionsSources (all paths)', () => {
@@ -120,6 +133,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
   it('exposes the full list of tracked paths', () => {
     expect(PROVIDER_OPTION_PATHS).toContain('claude.effort');
     expect(PROVIDER_OPTION_PATHS).toContain('codex.reasoningEffort');
+    expect(PROVIDER_OPTION_PATHS).toContain('opencode.variant');
     expect(PROVIDER_OPTION_PATHS).toContain('copilot.effort');
   });
 });

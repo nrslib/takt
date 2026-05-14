@@ -69,6 +69,32 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('env origin は opencode.variant の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'opencode.variant' ? 'env' : 'local'),
+      {
+        opencode: {
+          networkAccess: true,
+          variant: 'env-high',
+        },
+      },
+      {
+        opencode: {
+          networkAccess: false,
+          variant: 'step-low',
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      opencode: {
+        networkAccess: false,
+        variant: 'env-high',
+      },
+    });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',

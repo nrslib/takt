@@ -196,6 +196,34 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('claude.effort')).toBe('env');
   });
 
+  it('opencode.variant の env override を source=env として返す', () => {
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  opencode:',
+        '    network_access: true',
+        '    variant: low',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT = 'high';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.source).toBe('env');
+    expect(result.value).toEqual({
+      opencode: {
+        networkAccess: true,
+        variant: 'high',
+      },
+    });
+    expect(result.originResolver('opencode.networkAccess')).toBe('local');
+    expect(result.originResolver('opencode.variant')).toBe('env');
+  });
+
   it('codex.reasoning_effort の env override を traced-config 実経路で返す', () => {
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });

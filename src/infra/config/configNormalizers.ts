@@ -330,8 +330,15 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
-  if (providerOptions.opencode?.networkAccess !== undefined) {
-    raw.opencode = { network_access: providerOptions.opencode.networkAccess };
+  if (providerOptions.opencode?.networkAccess !== undefined || providerOptions.opencode?.variant !== undefined) {
+    raw.opencode = {
+      ...(providerOptions.opencode.networkAccess !== undefined
+        ? { network_access: providerOptions.opencode.networkAccess }
+        : {}),
+      ...(providerOptions.opencode.variant !== undefined
+        ? { variant: providerOptions.opencode.variant }
+        : {}),
+    };
   }
   if (providerOptions.claude) {
     const claude: Record<string, unknown> = {};

@@ -30,6 +30,32 @@ describe('Schemas accept opencode provider', () => {
     expect(result.opencode_api_key).toBe('test-key-123');
   });
 
+  it('should accept arbitrary non-empty opencode variant in provider_options', () => {
+    const result = GlobalConfigSchema.parse({
+      provider_options: {
+        opencode: {
+          variant: 'provider-specific-high',
+        },
+      },
+    });
+
+    expect(result.provider_options?.opencode).toEqual({
+      variant: 'provider-specific-high',
+    });
+  });
+
+  it('should reject empty opencode variant in provider_options', () => {
+    expect(() =>
+      GlobalConfigSchema.parse({
+        provider_options: {
+          opencode: {
+            variant: '',
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it('should accept cursor_api_key in GlobalConfigSchema', () => {
     const result = GlobalConfigSchema.parse({
       cursor_api_key: 'cursor-key-123',

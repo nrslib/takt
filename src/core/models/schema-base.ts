@@ -62,6 +62,7 @@ export const StepProviderOptionsSchema = z.object({
   }).optional(),
   opencode: z.object({
     network_access: z.boolean().optional(),
+    variant: z.string().min(1).optional(),
   }).optional(),
   claude: z.object({
     allowed_tools: z.array(z.string()).optional(),

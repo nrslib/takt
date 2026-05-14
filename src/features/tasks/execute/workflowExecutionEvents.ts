@@ -74,7 +74,7 @@ function sourceSuffix(
   return source ? ` (source: ${source})` : '';
 }
 
-function emitEffortLines(
+function emitProviderOptionLines(
   out: OutInfo,
   stepProvider: ProviderType,
   providerInfo: StepProviderInfo,
@@ -93,6 +93,11 @@ function emitEffortLines(
     const effort = options.codex?.reasoningEffort;
     if (effort !== undefined) {
       out.info(`Reasoning effort: ${effort}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);
+    }
+  } else if (stepProvider === 'opencode') {
+    const variant = options.opencode?.variant;
+    if (variant !== undefined) {
+      out.info(`Variant: ${variant}${sourceSuffix('opencode.variant', sources, showSource)}`);
     }
   } else if (stepProvider === 'copilot') {
     const effort = options.copilot?.effort;
@@ -201,7 +206,7 @@ export function bindWorkflowExecutionEvents(
       : '';
     deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
     deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
-    emitEffortLines(deps.out, stepProvider, providerInfo, showSource);
+    emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
     deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel);
 
     if (!deps.prefixWriter) {

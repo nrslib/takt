@@ -206,6 +206,7 @@ output_contracts:
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` requires Opus 4.7) |
+| `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
 | `provider` | - | Override provider for this step (`claude`, `codex`, `opencode`, `cursor`, or `copilot`) |
 | `model` | - | Override model for this step |
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |

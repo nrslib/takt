@@ -184,6 +184,8 @@ concurrency: 2                # Parallel task count for takt run in this project
 # provider_options:
 #   codex:
 #     network_access: true
+#   opencode:
+#     variant: high
 
 # Provider-specific permission profiles (project-level override)
 # provider_profiles:
@@ -402,6 +404,8 @@ persona_providers:
 `provider`, `model`, and `provider_options` are individually optional, but each persona entry must include at least one of them. Empty `provider_options` objects are rejected. In workflow step resolution, `model` priority is `persona_providers[persona].model` > step YAML `model` > resolved input `model`. That input `model` is resolved before workflow execution from CLI `--model`, then config `model`, then the provider default.
 
 `provider_options` priority is resolved per leaf. An env-resolved config leaf overrides all other sources. Otherwise the order is: step `provider_options` > workflow `workflow_config.provider_options` > `persona_providers[persona].provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
+
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`.
 
 This allows mixing providers and models within a single workflow. The persona name is matched against the `persona` key in the step definition.
 
