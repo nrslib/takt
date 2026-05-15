@@ -1,23 +1,52 @@
 name: TAKT PR Review
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
 
 concurrency:
-  group: takt-review-${{ github.event.pull_request.number }}
+  group: takt-review-${{ github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   review:
+    if: |
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/takt-review') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     environment: takt-review
     permissions:
       contents: read
       pull-requests: write
     steps:
+      - name: 受付リアクション
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      - name: PR の head SHA を取得
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            return pr.head.sha;
+
       - uses: actions/checkout@v4
         with:
+          ref: ${{ steps.pr.outputs.result }}
           fetch-depth: 0
 
       - name: API キー確認
@@ -39,7 +68,7 @@ jobs:
           npm install -g takt
 
       - name: TAKT Review 実行
-        run: takt --pipeline --skip-git --pr ${{ github.event.pull_request.number }} -w review-takt-default
+        run: takt --pipeline --skip-git --pr ${{ github.event.issue.number }} -w review-takt-default
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,7 +81,7 @@ jobs:
           if [ -n "$REPORT_DIR" ]; then
             SUMMARY=$(find "$REPORT_DIR" -name "*review-summary*" -type f | head -1)
             if [ -n "$SUMMARY" ]; then
-              gh pr comment ${{ github.event.pull_request.number }} --body-file "$SUMMARY"
+              gh pr comment ${{ github.event.issue.number }} --body-file "$SUMMARY"
             else
               echo "レビューサマリーが見つかりません"
             fi
