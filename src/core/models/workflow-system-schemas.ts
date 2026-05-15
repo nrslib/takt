@@ -108,6 +108,19 @@ const EnqueueWorktreeRawSchema = z.object({
   }
 });
 
+const EnqueueBaseBranchCreateIfMissingRawSchema = z.object({
+  from: z.string().min(1),
+  push: z.boolean().optional(),
+}).strict();
+
+const EnqueueBaseBranchRawSchema = z.union([
+  z.string().min(1),
+  z.object({
+    name: z.string().min(1),
+    create_if_missing: EnqueueBaseBranchCreateIfMissingRawSchema,
+  }).strict(),
+]);
+
 const EnqueueTaskEffectBaseSchema = z.object({
   type: z.literal('enqueue_task'),
   mode: z.enum(['new', 'from_pr']),
@@ -115,7 +128,7 @@ const EnqueueTaskEffectBaseSchema = z.object({
   task: z.string().min(1),
   pr: EffectReferenceScalarSchema.optional(),
   issue: z.union([EnqueueIssueRawSchema, TemplateReferenceSchema]).optional(),
-  base_branch: z.string().min(1).optional(),
+  base_branch: EnqueueBaseBranchRawSchema.optional(),
   worktree: EnqueueWorktreeRawSchema.optional(),
 }).strict();
 

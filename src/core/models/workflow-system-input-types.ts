@@ -122,6 +122,14 @@ export interface WorkflowEnqueueWorktreeConfig {
   managed_pr?: boolean;
 }
 
+export interface WorkflowEnqueueBaseBranchConfig {
+  name: string;
+  create_if_missing: {
+    from: string;
+    push?: boolean;
+  };
+}
+
 type WorkflowContextTemplateReference = `{context:${string}}`;
 type WorkflowStructuredTemplateReference = `{structured:${string}}`;
 type WorkflowEffectTemplateReference = `{effect:${string}}`;
@@ -141,7 +149,7 @@ export type WorkflowEffect =
     task: string;
     pr?: WorkflowEffectScalarReference;
     issue?: WorkflowEnqueueIssueConfig | WorkflowTemplateReference;
-    base_branch?: string;
+    base_branch?: string | WorkflowEnqueueBaseBranchConfig;
     worktree?: WorkflowEnqueueWorktreeConfig;
   }
   | {

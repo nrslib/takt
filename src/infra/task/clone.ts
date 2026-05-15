@@ -16,7 +16,13 @@ import { cloneAndIsolate, cloneAndIsolateAbortable, resolveCloneSubmoduleOptions
 import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
 
 export type { WorktreeOptions, WorktreeResult };
-export { branchExists, localBranchExists, remoteBranchExists } from './clone-base-branch.js';
+export {
+  branchExists,
+  createBaseBranchIfMissing,
+  localBranchExists,
+  remoteBranchExists,
+  type CreateBaseBranchIfMissingConfig,
+} from './clone-base-branch.js';
 
 const log = createLogger('clone');
 

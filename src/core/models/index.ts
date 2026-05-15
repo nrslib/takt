@@ -8,6 +8,7 @@ export type {
   WorkflowMaxSteps,
   WorkflowSystemInput,
   WorkflowEffect,
+  WorkflowEnqueueBaseBranchConfig,
   WorkflowEnqueueIssueConfig,
   WorkflowEnqueueWorktreeConfig,
   WorkflowTemplateReference,

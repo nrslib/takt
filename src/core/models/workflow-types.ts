@@ -19,6 +19,7 @@ export type {
   WorkflowPrListWhere,
   WorkflowSystemInput,
   WorkflowEffect,
+  WorkflowEnqueueBaseBranchConfig,
   WorkflowEnqueueIssueConfig,
   WorkflowEnqueueWorktreeConfig,
   WorkflowTemplateReference,

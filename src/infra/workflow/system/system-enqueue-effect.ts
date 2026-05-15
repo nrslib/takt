@@ -1,7 +1,11 @@
 import { saveTaskFile, createIssueFromTask } from '../../../features/tasks/add/index.js';
-import type { WorkflowEnqueueIssueConfig, WorkflowEnqueueWorktreeConfig } from '../../../core/models/types.js';
+import type {
+  WorkflowEnqueueBaseBranchConfig,
+  WorkflowEnqueueIssueConfig,
+  WorkflowEnqueueWorktreeConfig,
+} from '../../../core/models/types.js';
 import type { SystemStepServicesOptions } from '../../../core/workflow/system/system-step-services.js';
-import { resolveBaseBranch } from '../../task/index.js';
+import { createBaseBranchIfMissing, resolveBaseBranch } from '../../task/index.js';
 import { fetchPrContext } from './system-git-context.js';
 
 function filterIssueLabels(issue: WorkflowEnqueueIssueConfig): string[] | undefined {
@@ -9,9 +13,15 @@ function filterIssueLabels(issue: WorkflowEnqueueIssueConfig): string[] | undefi
   return labels && labels.length > 0 ? labels : undefined;
 }
 
-function resolveValidatedBaseBranch(projectCwd: string, baseBranch?: string): string | undefined {
+function resolveValidatedBaseBranch(
+  projectCwd: string,
+  baseBranch?: string | WorkflowEnqueueBaseBranchConfig,
+): string | undefined {
   if (baseBranch === undefined) {
     return undefined;
+  }
+  if (typeof baseBranch !== 'string') {
+    return createBaseBranchIfMissing(projectCwd, baseBranch).branch;
   }
   return resolveBaseBranch(projectCwd, baseBranch).branch;
 }
@@ -24,7 +34,7 @@ export async function enqueueTaskEffect(
     task: string;
     pr?: number;
     issue?: WorkflowEnqueueIssueConfig;
-    base_branch?: string;
+    base_branch?: string | WorkflowEnqueueBaseBranchConfig;
     worktree?: WorkflowEnqueueWorktreeConfig;
   },
 ): Promise<Record<string, unknown>> {
@@ -64,7 +74,7 @@ export async function enqueueTaskEffect(
   if (!requestedBaseBranch) {
     return { success: false, failed: true, error: 'PR base branch is not available' };
   }
-  const prBaseBranch = resolveBaseBranch(options.projectCwd, requestedBaseBranch).branch;
+  const prBaseBranch = baseBranch ?? resolveBaseBranch(options.projectCwd, requestedBaseBranch).branch;
   const created = await saveTaskFile(options.projectCwd, payload.task, {
     workflow: payload.workflow,
     worktree: true,

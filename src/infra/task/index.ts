@@ -53,11 +53,13 @@ export {
   saveCloneMeta,
   removeCloneMeta,
   cleanupOrphanedClone,
+  createBaseBranchIfMissing,
   resolveBaseBranch,
   resolveCloneBaseDir,
   branchExists,
   localBranchExists,
   remoteBranchExists,
+  type CreateBaseBranchIfMissingConfig,
 } from './clone.js';
 export {
   detectDefaultBranch,

@@ -904,6 +904,103 @@ describe('system workflow schema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('enqueue_task base_branch の opt-in 作成設定を受け付ける', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_issue',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'new',
+          workflow: 'takt-default',
+          task: '{structured:plan.dummy_field}',
+          base_branch: {
+            name: 'improve',
+            create_if_missing: {
+              from: 'main',
+              push: true,
+            },
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.effects?.[0]).toEqual(expect.objectContaining({
+        base_branch: {
+          name: 'improve',
+          create_if_missing: {
+            from: 'main',
+            push: true,
+          },
+        },
+      }));
+    }
+  });
+
+  it('enqueue_task base_branch object は create_if_missing を必須にする', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_issue',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'new',
+          workflow: 'takt-default',
+          task: '{structured:plan.dummy_field}',
+          base_branch: {
+            name: 'improve',
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('enqueue_task base_branch object の別名キーを reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'enqueue_from_issue',
+      mode: 'system',
+      effects: [
+        {
+          type: 'enqueue_task',
+          mode: 'new',
+          workflow: 'takt-default',
+          task: '{structured:plan.dummy_field}',
+          base_branch: {
+            name: 'improve',
+            ensure_exists: {
+              from: 'main',
+              publish: true,
+            },
+          },
+        },
+      ],
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('同じ type の effect 重複を reject する', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'prepare_merge',

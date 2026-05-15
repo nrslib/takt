@@ -53,6 +53,13 @@ const taktManagedPrRouteFilter = {
   same_repository: true,
   draft: false,
 };
+const autoImprovementLoopBaseBranch = {
+  name: 'improve',
+  create_if_missing: {
+    from: 'main',
+    push: true,
+  },
+};
 
 // --- Test helpers ---
 
@@ -155,7 +162,7 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
       mode: 'from_pr',
       pr: '{context:route_context.selected_pr.number}',
       workflow: 'takt-default',
-      base_branch: 'improve',
+      base_branch: autoImprovementLoopBaseBranch,
     }),
   ]);
   expect(prepareMerge?.effects).toEqual([
@@ -176,7 +183,7 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
       mode: 'from_pr',
       pr: '{context:route_context.selected_pr.number}',
       workflow: 'takt-default',
-      base_branch: 'improve',
+      base_branch: autoImprovementLoopBaseBranch,
     }),
   ]);
   expect(mergePr?.effects).toEqual([
@@ -415,6 +422,31 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     }
   });
 
+  it('should opt in base branch creation for improve-based enqueue effects in builtin auto-improvement-loop workflows', () => {
+    for (const language of ['en', 'ja'] as const) {
+      const config = loadWorkflowFromFile(
+        join(process.cwd(), 'builtins', language, 'workflows', 'auto-improvement-loop.yaml'),
+        testDir,
+      );
+
+      for (const stepName of [
+        'enqueue_from_issue',
+        'enqueue_fresh',
+        'enqueue_from_pr',
+        'enqueue_conflict_resolution_task',
+      ]) {
+        const step = config.steps.find((workflowStep) => workflowStep.name === stepName) as Record<string, unknown> | undefined;
+
+        expect(step?.effects).toEqual([
+          expect.objectContaining({
+            type: 'enqueue_task',
+            base_branch: autoImprovementLoopBaseBranch,
+          }),
+        ]);
+      }
+    }
+  });
+
   it('should preserve the legacy issue_context comment in both builtin auto-improvement-loop YAML files', () => {
     for (const language of ['en', 'ja'] as const) {
       const workflowSource = readFileSync(
@@ -470,7 +502,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
         type: 'enqueue_task',
         mode: 'new',
         workflow: 'takt-default',
-        base_branch: 'improve',
+        base_branch: autoImprovementLoopBaseBranch,
         issue: '{structured:plan_from_issue.issue}',
       }),
     ]);

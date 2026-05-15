@@ -45,6 +45,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
 
 vi.mock('../infra/task/clone-base-branch.js', () => ({
   branchExists: vi.fn(),
+  createBaseBranchIfMissing: vi.fn().mockReturnValue({ branch: 'main', created: false }),
   localBranchExists: vi.fn(),
   remoteBranchExists: vi.fn(),
   localBranchExistsAbortable: vi.fn(),

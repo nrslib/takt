@@ -71,6 +71,24 @@ function validateWorktreePayload(value: unknown): void {
   }
 }
 
+function validateBaseBranchPayload(value: unknown): void {
+  if (typeof value === 'string') {
+    requireString(value, 'base_branch');
+    return;
+  }
+
+  const baseBranch = requireObject(value, 'base_branch');
+  validateAllowedKeys(baseBranch, 'base_branch', ['name', 'create_if_missing']);
+  requireString(baseBranch.name, 'base_branch.name');
+
+  const createIfMissing = requireObject(baseBranch.create_if_missing, 'base_branch.create_if_missing');
+  validateAllowedKeys(createIfMissing, 'base_branch.create_if_missing', ['from', 'push']);
+  requireString(createIfMissing.from, 'base_branch.create_if_missing.from');
+  if (createIfMissing.push !== undefined && typeof createIfMissing.push !== 'boolean') {
+    throw new Error('System effect requires boolean field "base_branch.create_if_missing.push"');
+  }
+}
+
 export function validateSystemEffectPayload(
   effect: WorkflowEffect,
   payload: Record<string, unknown>,
@@ -80,7 +98,7 @@ export function validateSystemEffectPayload(
     if (payload.workflow !== undefined) requireString(payload.workflow, 'workflow');
     if (payload.task !== undefined) requireString(payload.task, 'task');
     if (payload.pr !== undefined) requireNumber(payload.pr, 'pr');
-    if (payload.base_branch !== undefined) requireString(payload.base_branch, 'base_branch');
+    if (payload.base_branch !== undefined) validateBaseBranchPayload(payload.base_branch);
     if (payload.issue !== undefined) validateIssuePayload(payload.issue);
     if (payload.worktree !== undefined) validateWorktreePayload(payload.worktree);
     if (payload.mode === 'new' && payload.pr !== undefined) {

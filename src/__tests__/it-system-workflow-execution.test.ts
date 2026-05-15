@@ -15,6 +15,7 @@ const {
   mockMergePr,
   mockSaveTaskFile,
   mockCreateIssueFromTask,
+  mockCreateBaseBranchIfMissing,
   mockResolveBaseBranch,
   mockFindExistingPr,
   mockFetchPrReviewComments,
@@ -28,6 +29,7 @@ const {
   mockMergePr: vi.fn(),
   mockSaveTaskFile: vi.fn(),
   mockCreateIssueFromTask: vi.fn(),
+  mockCreateBaseBranchIfMissing: vi.fn(),
   mockResolveBaseBranch: vi.fn(),
   mockFindExistingPr: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
@@ -67,6 +69,7 @@ vi.mock('../features/tasks/add/index.js', () => ({
 
 vi.mock('../infra/task/index.js', () => ({
   getCurrentBranch: vi.fn(() => 'task/test-branch'),
+  createBaseBranchIfMissing: (...args: unknown[]) => mockCreateBaseBranchIfMissing(...args),
   materializeCloneHeadToRootBranch: vi.fn(),
   relayPushCloneToOrigin: vi.fn(),
   resolveBaseBranch: (...args: unknown[]) => mockResolveBaseBranch(...args),
@@ -223,6 +226,10 @@ describe('system workflow execution integration', () => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-system-it-'));
     mockSaveTaskFile.mockResolvedValue({ taskName: 'task-1', tasksFile: join(projectDir, '.takt', 'tasks.yaml') });
     mockCreateIssueFromTask.mockReturnValue(586);
+    mockCreateBaseBranchIfMissing.mockImplementation((_cwd: string, config: { name: string }) => ({
+      branch: config.name,
+      created: true,
+    }));
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
     mockClosePr.mockReturnValue({ success: true });
     mockMergePr.mockReturnValue({ success: true });

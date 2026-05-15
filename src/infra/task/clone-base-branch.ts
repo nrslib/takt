@@ -34,6 +34,14 @@ export function branchExists(projectDir: string, branch: string): boolean {
   return localBranchExists(projectDir, branch) || remoteBranchExists(projectDir, branch);
 }
 
+export interface CreateBaseBranchIfMissingConfig {
+  name: string;
+  create_if_missing: {
+    from: string;
+    push?: boolean;
+  };
+}
+
 export async function localBranchExistsAbortable(
   projectDir: string,
   branch: string,
@@ -102,6 +110,49 @@ function assertNotRemoteTrackingRef(ref: string): void {
   }
 }
 
+function assertExplicitBaseBranch(projectDir: string, branch: string): void {
+  assertNotRemoteTrackingRef(branch);
+  assertValidBranchRef(projectDir, branch);
+}
+
+function resolveBaseBranchStartPoint(projectDir: string, branch: string): string {
+  if (localBranchExists(projectDir, branch)) {
+    return branch;
+  }
+  if (remoteBranchExists(projectDir, branch)) {
+    return `origin/${branch}`;
+  }
+  throw new Error(`Base branch source does not exist: ${branch}`);
+}
+
+export function createBaseBranchIfMissing(
+  projectDir: string,
+  config: CreateBaseBranchIfMissingConfig,
+): { branch: string; created: boolean } {
+  assertExplicitBaseBranch(projectDir, config.name);
+  assertExplicitBaseBranch(projectDir, config.create_if_missing.from);
+
+  if (branchExists(projectDir, config.name)) {
+    return { branch: config.name, created: false };
+  }
+
+  const startPoint = resolveBaseBranchStartPoint(projectDir, config.create_if_missing.from);
+
+  execFileSync('git', ['branch', config.name, startPoint], {
+    cwd: projectDir,
+    stdio: 'pipe',
+  });
+
+  if (config.create_if_missing.push === true) {
+    execFileSync('git', ['push', 'origin', config.name], {
+      cwd: projectDir,
+      stdio: 'pipe',
+    });
+  }
+
+  return { branch: config.name, created: true };
+}
+
 export function resolveBaseBranch(
   projectDir: string,
   explicitBaseBranch?: string,
@@ -112,8 +163,7 @@ export function resolveBaseBranch(
   const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
 
   if (explicitBaseBranch !== undefined) {
-    assertNotRemoteTrackingRef(baseBranch);
-    assertValidBranchRef(projectDir, baseBranch);
+    assertExplicitBaseBranch(projectDir, baseBranch);
   }
 
   if (explicitBaseBranch !== undefined && !branchExists(projectDir, baseBranch)) {
@@ -154,8 +204,7 @@ export async function resolveBaseBranchAbortable(
   const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
 
   if (explicitBaseBranch !== undefined) {
-    assertNotRemoteTrackingRef(baseBranch);
-    assertValidBranchRef(projectDir, baseBranch);
+    assertExplicitBaseBranch(projectDir, baseBranch);
   }
 
   if (explicitBaseBranch !== undefined && !await branchExistsAbortable(projectDir, baseBranch, abortSignal)) {

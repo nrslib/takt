@@ -16,6 +16,7 @@ const {
   mockCreateIssueFromTask,
   mockTaskRunnerListAllTaskItems,
   mockResolveBaseBranch,
+  mockCreateBaseBranchIfMissing,
   mockResolveCloneBaseDir,
   mockCloneAndIsolate,
   mockRemoveClone,
@@ -36,6 +37,7 @@ const {
   mockCreateIssueFromTask: vi.fn(),
   mockTaskRunnerListAllTaskItems: vi.fn(),
   mockResolveBaseBranch: vi.fn(),
+  mockCreateBaseBranchIfMissing: vi.fn(),
   mockResolveCloneBaseDir: vi.fn(),
   mockCloneAndIsolate: vi.fn(),
   mockRemoveClone: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock('../infra/task/index.js', () => ({
   },
   getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
   materializeCloneHeadToRootBranch: (...args: unknown[]) => mockMaterializeCloneHeadToRootBranch(...args),
+  createBaseBranchIfMissing: (...args: unknown[]) => mockCreateBaseBranchIfMissing(...args),
   relayPushCloneToOrigin: (...args: unknown[]) => mockRelayPushCloneToOrigin(...args),
   resolveBaseBranch: (...args: unknown[]) => mockResolveBaseBranch(...args),
   resolveCloneBaseDir: (...args: unknown[]) => mockResolveCloneBaseDir(...args),
@@ -163,6 +166,7 @@ describe('DefaultSystemStepServices', () => {
     mockCreateIssueFromTask.mockReset();
     mockTaskRunnerListAllTaskItems.mockReset();
     mockResolveBaseBranch.mockReset();
+    mockCreateBaseBranchIfMissing.mockReset();
     mockResolveCloneBaseDir.mockReset();
     mockCloneAndIsolate.mockReset();
     mockRemoveClone.mockReset();
@@ -184,6 +188,10 @@ describe('DefaultSystemStepServices', () => {
     mockCreateIssueFromTask.mockReturnValue(undefined);
     mockTaskRunnerListAllTaskItems.mockReturnValue([]);
     mockResolveBaseBranch.mockImplementation((_cwd: string, branch?: string) => ({ branch: branch ?? 'main' }));
+    mockCreateBaseBranchIfMissing.mockImplementation((_cwd: string, config: { name: string }) => ({
+      branch: config.name,
+      created: true,
+    }));
     mockResolveCloneBaseDir.mockReturnValue('/repo/.takt');
   });
 
@@ -1688,6 +1696,47 @@ describe('DefaultSystemStepServices', () => {
     });
   });
 
+  it('creates a new follow-up task with opt-in base branch creation', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+    const baseBranch = {
+      name: 'improve',
+      create_if_missing: {
+        from: 'main',
+        push: true,
+      },
+    };
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      base_branch: baseBranch,
+    } as never, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      base_branch: baseBranch,
+    }, {} as never);
+
+    expect(mockCreateBaseBranchIfMissing).toHaveBeenCalledWith('/repo', baseBranch);
+    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
+      workflow: 'takt-default',
+      baseBranch: 'improve',
+    });
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+  });
+
   it('returns failed result when issue creation for enqueue_task fails', async () => {
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',
@@ -1758,6 +1807,66 @@ describe('DefaultSystemStepServices', () => {
       prNumber: 42,
     });
     expect(mockResolveBaseBranch).toHaveBeenCalledWith('/repo', 'main');
+    expect(result).toEqual({
+      success: true,
+      failed: false,
+      taskName: 'task-1',
+      tasksFile: '/repo/.takt/tasks.yaml',
+      prNumber: 42,
+    });
+  });
+
+  it('creates a PR follow-up task with opt-in base branch creation', async () => {
+    mockFetchPrReviewComments.mockReturnValue({
+      number: 42,
+      title: 'Follow-up PR',
+      body: 'Body',
+      url: 'https://example.test/pr/42',
+      headRefName: 'task/test-branch',
+      baseRefName: 'main',
+      comments: [],
+      reviews: [],
+      files: [],
+    });
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+    const baseBranch = {
+      name: 'improve',
+      create_if_missing: {
+        from: 'main',
+        push: true,
+      },
+    };
+
+    const result = await services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'from_pr',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      pr: '{context:route.pr.number}',
+      base_branch: baseBranch,
+    } as never, {
+      mode: 'from_pr',
+      workflow: 'takt-default',
+      task: 'Address review comments',
+      pr: 42,
+      base_branch: baseBranch,
+    }, {} as never);
+
+    expect(mockCreateBaseBranchIfMissing).toHaveBeenCalledWith('/repo', baseBranch);
+    expect(mockResolveBaseBranch).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Address review comments', {
+      workflow: 'takt-default',
+      worktree: true,
+      branch: 'task/test-branch',
+      baseBranch: 'improve',
+      autoPr: false,
+      shouldPublishBranchToOrigin: true,
+      prNumber: 42,
+    });
     expect(result).toEqual({
       success: true,
       failed: false,
@@ -1910,6 +2019,67 @@ describe('DefaultSystemStepServices', () => {
     }, {} as never)).rejects.toThrow(
       'System effect requires "worktree.enabled" when auto_pr, draft_pr, or managed_pr is true',
     );
+  });
+
+  it('rejects malformed enqueue_task base_branch object at the effect boundary', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    await expect(services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      base_branch: {
+        name: 'improve',
+        create_if_missing: {
+          from: 'main',
+        },
+      },
+    } as never, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      base_branch: {
+        name: 'improve',
+      },
+    }, {} as never)).rejects.toThrow('System effect requires object field "base_branch.create_if_missing"');
+  });
+
+  it('rejects non-boolean enqueue_task base_branch create_if_missing.push at the effect boundary', async () => {
+    const services = new DefaultSystemStepServices({
+      cwd: '/repo/worktree',
+      projectCwd: '/repo',
+      task: 'Plan follow-up',
+    });
+
+    await expect(services.executeEffect({
+      type: 'enqueue_task',
+      mode: 'new',
+      workflow: 'takt-default',
+      task: '{structured:plan.dummy_field}',
+      base_branch: {
+        name: 'improve',
+        create_if_missing: {
+          from: 'main',
+          push: true,
+        },
+      },
+    } as never, {
+      mode: 'new',
+      workflow: 'takt-default',
+      task: 'Implement follow-up effect',
+      base_branch: {
+        name: 'improve',
+        create_if_missing: {
+          from: 'main',
+          push: 'true',
+        },
+      },
+    }, {} as never)).rejects.toThrow('System effect requires boolean field "base_branch.create_if_missing.push"');
   });
 
   it('fails enqueue_task when base_branch is rejected by resolveBaseBranch', async () => {
