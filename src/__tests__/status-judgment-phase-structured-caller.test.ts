@@ -40,7 +40,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       buildResumeOptions: vi.fn(),
       buildNewSessionReportOptions: vi.fn(),
       updatePersonaSession: vi.fn(),
-      resolveProvider: vi.fn().mockReturnValue('cursor'),
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       structuredCaller,
     } as Parameters<typeof runStatusJudgmentPhase>[1] & {
       structuredCaller: { judgeStatus: typeof structuredCaller.judgeStatus };
@@ -100,7 +100,6 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       buildResumeOptions: vi.fn(),
       buildNewSessionReportOptions: vi.fn(),
       updatePersonaSession: vi.fn(),
-      resolveProvider: vi.fn().mockReturnValue('codex'),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
       structuredCaller,
     } as PhaseCtx);

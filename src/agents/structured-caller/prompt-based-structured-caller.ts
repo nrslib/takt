@@ -23,6 +23,7 @@ import {
 } from './shared.js';
 import { parseParts } from '../../core/workflow/engine/task-decomposer.js';
 import { createLogger, delay, getErrorMessage } from '../../shared/utils/index.js';
+import { buildMaxTurnsOption } from '../provider-call-options.js';
 
 const log = createLogger('prompt-based-structured-caller');
 
@@ -50,7 +51,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
-      maxTurns: 3,
+      ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 3),
       permissionMode: 'readonly',
       language: options.language,
       onStream: options.onStream,
@@ -144,7 +145,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
-      maxTurns: 1,
+      ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
       permissionMode: 'readonly',
     });
 
@@ -179,7 +180,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         resolvedProvider: options.resolvedProvider,
         allowedTools: [],
         permissionMode: 'readonly',
-        maxTurns: TEAM_LEADER_MAX_TURNS,
+        ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
         onPromptResolved: options.onPromptResolved,
@@ -220,7 +221,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         resolvedProvider: options.resolvedProvider,
         allowedTools: [],
         permissionMode: 'readonly',
-        maxTurns: TEAM_LEADER_MAX_TURNS,
+        ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
       });

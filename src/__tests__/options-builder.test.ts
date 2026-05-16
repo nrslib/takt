@@ -469,6 +469,16 @@ describe('OptionsBuilder.buildResumeOptions', () => {
 
     expect(options.workflowMeta?.processSafety).toBeUndefined();
   });
+
+  it('removes report/status phase maxTurns when provider does not support it', () => {
+    const step = createStep({ provider: 'claude-terminal' });
+    const builder = createBuilder(step);
+
+    const options = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+
+    expect(options.resolvedProvider).toBe('claude-terminal');
+    expect(options.maxTurns).toBeUndefined();
+  });
 });
 
 describe('OptionsBuilder.buildNewSessionReportOptions', () => {
@@ -489,6 +499,20 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     });
 
     expect(options.workflowMeta?.processSafety).toBeUndefined();
+  });
+
+  it('removes new-session report phase maxTurns when provider does not support it', () => {
+    const step = createStep({ provider: 'claude-terminal' });
+    const builder = createBuilder(step);
+
+    const options = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    expect(options.resolvedProvider).toBe('claude-terminal');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.maxTurns).toBeUndefined();
   });
 });
 

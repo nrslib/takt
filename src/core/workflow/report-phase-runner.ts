@@ -10,6 +10,7 @@ import { getReportFiles } from './evaluation/rule-utils.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
 
 const log = createLogger('phase-runner');
+const REPORT_PHASE_MAX_TURNS = 3;
 
 /** Result when Phase 2 encounters a blocked status */
 export type ReportPhaseBlockedResult = { blocked: true; response: AgentResponse };
@@ -107,7 +108,7 @@ export async function runReportPhase(
     }).build();
     const firstAttemptOptions = currentSessionId
       ? ctx.buildResumeOptions(step, currentSessionId, {
-        maxTurns: 3,
+        maxTurns: REPORT_PHASE_MAX_TURNS,
       })
       : buildNewSessionRetryOptions(step, ctx);
 
@@ -178,7 +179,7 @@ export async function runReportPhase(
 function buildNewSessionRetryOptions(step: WorkflowStep, ctx: PhaseRunnerContext): RunAgentOptions {
   return ctx.buildNewSessionReportOptions(step, {
     allowedTools: [],
-    maxTurns: 3,
+    maxTurns: REPORT_PHASE_MAX_TURNS,
   });
 }
 

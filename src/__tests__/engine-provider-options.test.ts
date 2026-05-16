@@ -317,6 +317,79 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(options?.outputSchema).toEqual(schema);
   });
 
+  it('Given claude-terminal step options, When engine runs, Then capability-dependent fields reach runAgent', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        decision: { type: 'string' },
+      },
+      required: ['decision'],
+      additionalProperties: false,
+    } as const;
+    const provider = 'claude-terminal' as WorkflowConfig['steps'][number]['provider'];
+    const step = makeStep('implement', {
+      provider,
+      providerOptions: {
+        claude: {
+          effort: 'high',
+          allowedTools: ['Read', 'Edit', 'Bash'],
+        },
+        claudeTerminal: {
+          backend: 'tmux',
+          timeoutMs: 900000,
+          keepSession: false,
+          transcriptPollIntervalMs: 500,
+        },
+      } as never,
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
+      },
+      structuredOutput: { schema },
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-claude-terminal',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      model: 'sonnet',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude-terminal');
+    expect(options?.resolvedModel).toBe('sonnet');
+    expect(options?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+    expect(options?.mcpServers).toEqual({
+      docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
+    });
+    expect(options?.outputSchema).toEqual(schema);
+    expect(options?.providerOptions).toEqual({
+      claude: {
+        effort: 'high',
+        allowedTools: ['Read', 'Edit', 'Bash'],
+      },
+      claudeTerminal: {
+        backend: 'tmux',
+        timeoutMs: 900000,
+        keepSession: false,
+        transcriptPollIntervalMs: 500,
+      },
+    });
+  });
+
   it('should switch structured_output to prompt fallback when the resolved provider is cursor', async () => {
     const step = makeStep('implement', {
       structuredOutput: {

@@ -13,7 +13,7 @@ Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatic
 language: en                  # UI language: 'en' or 'ja'
 logging:
   level: info                 # Log level: debug, info, warn, error
-provider: claude              # Default provider: claude, codex, opencode, cursor, or copilot
+provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, or copilot
 model: sonnet                 # Default model (optional, passed to provider as-is)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
@@ -125,7 +125,7 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | Default AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | Default AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
@@ -187,6 +187,11 @@ concurrency: 2                # Parallel task count for takt run in this project
 #     network_access: true
 #   opencode:
 #     variant: high
+#   claude_terminal:
+#     backend: tmux
+#     timeout_ms: 900000
+#     keep_session: false
+#     transcript_poll_interval_ms: 500
 
 # Provider-specific permission profiles (project-level override)
 # provider_profiles:
@@ -200,7 +205,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | `"claude"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"mock"` | - | Override provider |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"mock"` | - | Override provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
@@ -407,7 +412,7 @@ persona_providers:
 
 `provider_options` priority is resolved per leaf. An env-resolved config leaf overrides all other sources. Otherwise the order is: step `provider_options` > workflow `workflow_config.provider_options` > `persona_providers[persona].provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`.
 
 This allows mixing providers and models within a single workflow. The persona name is matched against the `persona` key in the step definition.
 

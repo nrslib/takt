@@ -101,6 +101,31 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
+  it('should omit maxTurns for prompt-based evaluateCondition when resolved provider does not support it', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'default',
+      status: 'done',
+      content: '[JUDGE:1]',
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.evaluateCondition(
+      'agent output',
+      [{ index: 0, text: 'approved' }],
+      {
+        cwd: '/tmp/project',
+        resolvedProvider: 'claude-terminal',
+      },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.stringContaining('[JUDGE:N]'),
+      expect.not.objectContaining({ maxTurns: expect.anything() }),
+    );
+  });
+
   it('should parse decomposed parts from fenced JSON without outputSchema', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -178,6 +203,34 @@ describe('PromptBasedStructuredCaller', () => {
         model: 'sonnet',
         resolvedModel: 'cursor-fast',
       }),
+    );
+  });
+
+  it('should omit maxTurns for prompt-based decomposeTask when resolved provider does not support it', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify([
+          { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+        ]),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      resolvedProvider: 'claude-terminal',
+      persona: 'team-leader',
+    });
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json'),
+      expect.not.objectContaining({ maxTurns: expect.anything() }),
     );
   });
 
@@ -540,6 +593,37 @@ describe('PromptBasedStructuredCaller', () => {
         model: 'sonnet',
         resolvedModel: 'cursor-fast',
       }),
+    );
+  });
+
+  it('should omit maxTurns for prompt-based requestMoreParts when resolved provider does not support it', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        resolvedProvider: 'claude-terminal',
+      },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.stringContaining('```json ... ```'),
+      expect.not.objectContaining({ maxTurns: expect.anything() }),
     );
   });
 
@@ -959,6 +1043,45 @@ describe('PromptBasedStructuredCaller', () => {
 
     expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should omit maxTurns for prompt-based judgeStatus internal stages when resolved provider does not support it', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'conductor',
+        status: 'done',
+        content: 'no json block here',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'conductor',
+        status: 'done',
+        content: 'no matching tag',
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'default',
+        status: 'done',
+        content: '[JUDGE:2]',
+        timestamp: new Date(),
+      });
+
+    const caller = new PromptBasedStructuredCaller();
+    const result = await caller.judgeStatus(
+      'structured instruction',
+      'tag instruction',
+      [
+        { condition: 'approved', next: 'done' },
+        { condition: 'rejected', next: 'failed' },
+      ],
+      { cwd: '/tmp/project', stepName: 'review', resolvedProvider: 'claude-terminal' },
+    );
+
+    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+    for (const call of mockRunAgent.mock.calls) {
+      expect(call[2]).not.toHaveProperty('maxTurns');
+    }
   });
 
   it('should exclude interactiveOnly rules from Stage 3 conditions when interactive is false', async () => {

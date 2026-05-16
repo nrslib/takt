@@ -8,6 +8,7 @@ import type { PermissionMode } from './status.js';
 export type ProviderProfileName =
   | 'claude'
   | 'claude-sdk'
+  | 'claude-terminal'
   | 'codex'
   | 'opencode'
   | 'cursor'

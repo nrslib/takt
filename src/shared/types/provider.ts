@@ -3,6 +3,7 @@ import type { AgentFailureCategory } from './agent-failure.js';
 export type ProviderType =
   | 'claude'
   | 'claude-sdk'
+  | 'claude-terminal'
   | 'codex'
   | 'opencode'
   | 'cursor'

@@ -58,7 +58,7 @@ describe('runStatusJudgmentPhase', () => {
       buildResumeOptions: vi.fn(),
       buildNewSessionReportOptions: vi.fn(),
       updatePersonaSession: vi.fn(),
-      resolveProvider: vi.fn().mockReturnValue('cursor'),
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       structuredCaller,
       onPhaseStart,
       onPhaseComplete,
@@ -119,7 +119,7 @@ describe('runStatusJudgmentPhase', () => {
       buildResumeOptions: vi.fn(),
       buildNewSessionReportOptions: vi.fn(),
       updatePersonaSession: vi.fn(),
-      resolveProvider: vi.fn().mockReturnValue('cursor'),
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       structuredCaller,
     })).rejects.toThrow('Status judgment requires iteration for step "review"');
   });

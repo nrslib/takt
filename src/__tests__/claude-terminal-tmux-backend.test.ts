@@ -1,0 +1,225 @@
+import { EventEmitter } from 'node:events';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const {
+  mockExecFile,
+  mockSpawn,
+} = vi.hoisted(() => ({
+  mockExecFile: vi.fn(),
+  mockSpawn: vi.fn(),
+}));
+
+vi.mock('node:child_process', () => ({
+  execFile: mockExecFile,
+  spawn: mockSpawn,
+}));
+
+import { TmuxTerminalBackend } from '../infra/claude-terminal/tmux-backend.js';
+
+function mockExecFileSuccess(): void {
+  mockExecFile.mockImplementation((_file, _args, _options, callback) => {
+    callback(null, { stdout: '', stderr: '' });
+  });
+}
+
+function createExecFileError(message: string, code: number, stderr: string): Error & { code: number; stderr: string } {
+  return Object.assign(new Error(message), { code, stderr });
+}
+
+function createSpawnChild(stdinWrites: string[], exitCode: number, stderrText: string) {
+  const child = new EventEmitter() as EventEmitter & {
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stdin: { end: ReturnType<typeof vi.fn> };
+  };
+  const stderr = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+  stderr.setEncoding = vi.fn();
+  child.stderr = stderr;
+  child.stdin = {
+    end: vi.fn((text: string) => {
+      stdinWrites.push(text);
+      if (stderrText.length > 0) {
+        stderr.emit('data', stderrText);
+      }
+      queueMicrotask(() => child.emit('close', exitCode));
+    }),
+  };
+  return child;
+}
+
+describe('TmuxTerminalBackend', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecFileSuccess();
+    mockSpawn.mockImplementation(() => createSpawnChild([], 0, ''));
+  });
+
+  it('Given terminal start options, When start is called, Then tmux new-session receives cwd and Claude command', async () => {
+    const backend = new TmuxTerminalBackend();
+
+    const session = await backend.start({
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      command: {
+        executable: 'claude',
+        args: ['--model', 'opus'],
+      },
+    });
+
+    expect(session.name).toMatch(/^takt-claude-terminal-/);
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'tmux',
+      [
+        'new-session',
+        '-d',
+        '-s',
+        session.name,
+        '-c',
+        '/tmp/worktree',
+        'claude',
+        '--model',
+        'opus',
+      ],
+      {
+        cwd: '/tmp/worktree',
+        encoding: 'utf-8',
+        maxBuffer: 1024 * 1024 * 4,
+      },
+      expect.any(Function),
+    );
+  });
+
+  it('Given prompt text, When pasteText is called, Then tmux buffer operations run in order with trailing newline', async () => {
+    const backend = new TmuxTerminalBackend();
+    const stdinWrites: string[] = [];
+    mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
+
+    await backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'implement task');
+
+    expect(mockSpawn).toHaveBeenCalledWith('tmux', ['load-buffer', '-b', 'takt-session-prompt', '-'], {
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    expect(stdinWrites).toEqual(['implement task\n']);
+    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([
+      ['paste-buffer', '-b', 'takt-session-prompt', '-t', 'takt-session'],
+      ['send-keys', '-t', 'takt-session', 'Enter'],
+      ['delete-buffer', '-b', 'takt-session-prompt'],
+    ]);
+  });
+
+  it('Given tmux paste-buffer fails after loading prompt, When pasteText rejects, Then tmux buffer is deleted', async () => {
+    const backend = new TmuxTerminalBackend();
+    const stdinWrites: string[] = [];
+    mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
+    mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      if (args[0] === 'paste-buffer') {
+        callback(createExecFileError('Command failed with sensitive argv', 1, 'tmux paste-buffer failed'));
+        return;
+      }
+      callback(null, { stdout: '', stderr: '' });
+    });
+
+    await expect(backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'secret prompt'))
+      .rejects.toThrow(/paste-buffer failed/i);
+
+    expect(stdinWrites).toEqual(['secret prompt\n']);
+    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([
+      ['paste-buffer', '-b', 'takt-session-prompt', '-t', 'takt-session'],
+      ['delete-buffer', '-b', 'takt-session-prompt'],
+    ]);
+  });
+
+  it('Given tmux send-keys fails after pasting prompt, When pasteText rejects, Then tmux buffer is deleted', async () => {
+    const backend = new TmuxTerminalBackend();
+    const stdinWrites: string[] = [];
+    mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
+    mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      if (args[0] === 'send-keys') {
+        callback(createExecFileError('Command failed with sensitive argv', 1, 'tmux send-keys failed'));
+        return;
+      }
+      callback(null, { stdout: '', stderr: '' });
+    });
+
+    await expect(backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'secret prompt'))
+      .rejects.toThrow(/send-keys failed/i);
+
+    expect(stdinWrites).toEqual(['secret prompt\n']);
+    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([
+      ['paste-buffer', '-b', 'takt-session-prompt', '-t', 'takt-session'],
+      ['send-keys', '-t', 'takt-session', 'Enter'],
+      ['delete-buffer', '-b', 'takt-session-prompt'],
+    ]);
+  });
+
+  it('Given terminal session, When stop is called, Then tmux kill-session targets the session', async () => {
+    const backend = new TmuxTerminalBackend();
+
+    await backend.stop({ id: 'tmux-session', name: 'takt-session' });
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'tmux',
+      ['kill-session', '-t', 'takt-session'],
+      {
+        cwd: undefined,
+        encoding: 'utf-8',
+        maxBuffer: 1024 * 1024 * 4,
+      },
+      expect.any(Function),
+    );
+  });
+
+  it('Given tmux executable is missing, When start is called, Then a clear provider error is thrown', async () => {
+    const backend = new TmuxTerminalBackend();
+    const enoent = Object.assign(new Error('spawn tmux ENOENT'), { code: 'ENOENT' });
+    mockExecFile.mockImplementation((_file, _args, _options, callback) => {
+      callback(enoent);
+    });
+
+    await expect(backend.start({
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      command: {
+        executable: 'claude',
+        args: [],
+      },
+    })).rejects.toThrow(/tmux command not found/i);
+  });
+
+  it('Given tmux start fails with sensitive Claude args in execFile error, When start rejects, Then error is sanitized', async () => {
+    const backend = new TmuxTerminalBackend();
+    const secretPrompt = 'do not leak this system prompt';
+    mockExecFile.mockImplementation((_file, _args, _options, callback) => {
+      callback(createExecFileError(
+        `Command failed: tmux new-session claude --system-prompt ${secretPrompt}`,
+        1,
+        `tmux failed for claude --system-prompt ${secretPrompt}`,
+      ));
+    });
+
+    let startError: unknown;
+    try {
+      await backend.start({
+        cwd: '/tmp/worktree',
+        backend: 'tmux',
+        command: {
+          executable: 'claude',
+          args: ['--system-prompt', secretPrompt],
+        },
+      });
+    } catch (error) {
+      startError = error;
+    }
+
+    expect(startError).toBeInstanceOf(Error);
+    const message = (startError as Error).message;
+    expect(message).toMatch(/tmux command failed with code 1: tmux failed for claude --system-prompt \[redacted\]/i);
+    expect(message).not.toContain(secretPrompt);
+    expect(message).not.toContain('Command failed: tmux new-session');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'tmux',
+      expect.arrayContaining(['--system-prompt', secretPrompt]),
+      expect.any(Object),
+      expect.any(Function),
+    );
+  });
+});

@@ -69,6 +69,12 @@ export const StepProviderOptionsSchema = z.object({
     effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
     sandbox: ClaudeSandboxSchema,
   }).optional(),
+  claude_terminal: z.object({
+    backend: z.enum(['tmux']).optional(),
+    timeout_ms: z.number().int().positive().optional(),
+    keep_session: z.boolean().optional(),
+    transcript_poll_interval_ms: z.number().int().positive().optional(),
+  }).strict().optional(),
   copilot: z.object({
     effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
   }).optional(),
@@ -78,6 +84,7 @@ export const StepProviderOptionsSchema = z.object({
 export const ProviderProfileNameSchema = z.enum([
   'claude',
   'claude-sdk',
+  'claude-terminal',
   'codex',
   'opencode',
   'cursor',
@@ -112,6 +119,24 @@ export const ProviderBlockSchema = z.object({
         code: 'custom',
         path: ['network_access'],
         message: "provider.type 'claude' does not support 'network_access'.",
+      });
+    }
+    return;
+  }
+
+  if (provider.type === 'claude-terminal') {
+    if (hasNetworkAccess) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['network_access'],
+        message: "provider.type 'claude-terminal' does not support 'network_access'.",
+      });
+    }
+    if (hasSandbox) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sandbox'],
+        message: "provider.type 'claude-terminal' does not support 'sandbox'.",
       });
     }
     return;
@@ -155,6 +180,7 @@ export const ProviderPermissionProfileSchema = z.object({
 export const ProviderPermissionProfilesSchema = z.object({
   claude: ProviderPermissionProfileSchema.optional(),
   'claude-sdk': ProviderPermissionProfileSchema.optional(),
+  'claude-terminal': ProviderPermissionProfileSchema.optional(),
   codex: ProviderPermissionProfileSchema.optional(),
   opencode: ProviderPermissionProfileSchema.optional(),
   cursor: ProviderPermissionProfileSchema.optional(),

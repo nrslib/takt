@@ -57,14 +57,15 @@ export async function promptLanguageSelection(): Promise<Language> {
  * Exits process if cancelled (initial setup is required).
  */
 export async function promptProviderSelection(): Promise<
-  'claude' | 'claude-sdk' | 'codex' | 'opencode' | 'cursor' | 'copilot'
+  'claude' | 'claude-sdk' | 'claude-terminal' | 'codex' | 'opencode' | 'cursor' | 'copilot'
 > {
   const options: {
     label: string;
-    value: 'claude' | 'claude-sdk' | 'codex' | 'opencode' | 'cursor' | 'copilot';
+    value: 'claude' | 'claude-sdk' | 'claude-terminal' | 'codex' | 'opencode' | 'cursor' | 'copilot';
   }[] = [
     { label: 'Claude Code (headless CLI)', value: 'claude' },
     { label: 'Claude Agent SDK', value: 'claude-sdk' },
+    { label: 'Claude Code terminal (experimental)', value: 'claude-terminal' },
     { label: 'Codex', value: 'codex' },
     { label: 'OpenCode', value: 'opencode' },
     { label: 'Cursor Agent', value: 'cursor' },

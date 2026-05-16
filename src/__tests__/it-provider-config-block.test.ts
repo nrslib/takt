@@ -280,4 +280,59 @@ describe('IT: provider block reflection', () => {
       },
     });
   });
+
+  it('workflow step claude_terminal provider_options should reach runAgent from YAML', async () => {
+    env = createEnv([
+      'name: provider-block-it',
+      'description: claude terminal provider options integration test',
+      'max_steps: 3',
+      'initial_step: plan',
+      'steps:',
+      '  - name: plan',
+      '    persona: ./personas/planner.md',
+      '    provider: claude-terminal',
+      '    provider_options:',
+      '      claude:',
+      '        effort: high',
+      '        allowed_tools:',
+      '          - Read',
+      '          - Edit',
+      '      claude_terminal:',
+      '        backend: tmux',
+      '        timeout_ms: 900000',
+      '        keep_session: false',
+      '        transcript_poll_interval_ms: 500',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+    process.env.TAKT_CONFIG_DIR = env.globalDir;
+    setGlobalConfig(env.globalDir, 'provider: claude');
+    invalidateGlobalConfigCache();
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: env.projectDir,
+      projectCwd: env.projectDir,
+      workflowIdentifier: 'provider-block-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude-terminal');
+    expect(options?.allowedTools).toEqual(['Read', 'Edit']);
+    expect(options?.providerOptions).toEqual({
+      claude: {
+        effort: 'high',
+        allowedTools: ['Read', 'Edit'],
+      },
+      claudeTerminal: {
+        backend: 'tmux',
+        timeoutMs: 900000,
+        keepSession: false,
+        transcriptPollIntervalMs: 500,
+      },
+    });
+  });
 });

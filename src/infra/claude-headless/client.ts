@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -51,46 +49,6 @@ function resolveSessionArgs(options: ClaudeHeadlessCallOptions): { args: string[
   };
 }
 
-type PreparedSpawnResources = {
-  mcpConfigArg?: string;
-  cleanup: () => Promise<void>;
-};
-
-async function prepareMcpConfig(options: ClaudeHeadlessCallOptions): Promise<PreparedSpawnResources> {
-  if (!options.mcpServers || Object.keys(options.mcpServers).length === 0) {
-    return { cleanup: async () => {} };
-  }
-
-  const tempDir = await mkdtemp(join(tmpdir(), 'takt-claude-mcp-'));
-  const configPath = join(tempDir, 'mcp-config.json');
-
-  try {
-    await chmod(tempDir, 0o700);
-    await writeFile(configPath, JSON.stringify({ mcpServers: options.mcpServers }), {
-      encoding: 'utf-8',
-      mode: 0o600,
-    });
-    await chmod(configPath, 0o600);
-  } catch (raw) {
-    try {
-      await rm(tempDir, { recursive: true, force: true });
-    } catch (cleanupRaw) {
-      log.error('Failed to clean up Claude MCP temp directory after prepare failure', {
-        error: getErrorMessage(cleanupRaw),
-        tempDir,
-      });
-    }
-    throw raw;
-  }
-
-  return {
-    mcpConfigArg: configPath,
-    cleanup: async () => {
-      await rm(tempDir, { recursive: true, force: true });
-    },
-  };
-}
-
 function buildSettingsArg(options: ClaudeHeadlessCallOptions): string | undefined {
   const sandbox = options.sandbox;
   if (!sandbox) {
@@ -118,7 +76,7 @@ async function buildSpawnArgs(
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const session = resolveSessionArgs(options);
-  const preparedResources = await prepareMcpConfig(options);
+  const preparedMcpConfig = await prepareClaudeMcpConfig(options.mcpServers);
   const args: string[] = [
     '-p',
     '--verbose',
@@ -149,8 +107,8 @@ async function buildSpawnArgs(
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
 
-  if (preparedResources.mcpConfigArg) {
-    args.push('--mcp-config', preparedResources.mcpConfigArg);
+  if (preparedMcpConfig.path) {
+    args.push('--mcp-config', preparedMcpConfig.path);
   }
 
   const settings = buildSettingsArg(options);
@@ -163,7 +121,7 @@ async function buildSpawnArgs(
   return {
     args,
     expectedSessionId: session.sessionId,
-    cleanup: preparedResources.cleanup,
+    cleanup: preparedMcpConfig.cleanup,
   };
 }
 

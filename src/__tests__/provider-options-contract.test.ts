@@ -19,12 +19,17 @@ describe('providerOptionsContract', () => {
       'provider_options.claude.effort',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
+      'provider_options.claude_terminal.backend',
+      'provider_options.claude_terminal.timeout_ms',
+      'provider_options.claude_terminal.keep_session',
+      'provider_options.claude_terminal.transcript_poll_interval_ms',
       'provider_options.copilot.effort',
     ]));
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
   });
 
   it('maps internal provider option paths to traced-config paths', () => {
@@ -36,6 +41,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.codex.reasoning_effort');
     expect(toProviderOptionsTracePath('opencode.variant'))
       .toBe('provider_options.opencode.variant');
+    expect(toProviderOptionsTracePath('claudeTerminal.transcriptPollIntervalMs'))
+      .toBe('provider_options.claude_terminal.transcript_poll_interval_ms');
   });
 
   it('enumerates only present provider option leaves', () => {
@@ -43,6 +50,7 @@ describe('providerOptionsContract', () => {
       codex: { networkAccess: true, reasoningEffort: 'high' },
       opencode: { variant: 'high' },
       claude: { effort: 'medium', sandbox: { excludedCommands: ['rm -rf'] } },
+      claudeTerminal: { backend: 'tmux', keepSession: false },
       copilot: { effort: 'high' },
     })).toEqual([
       'codex.networkAccess',
@@ -50,6 +58,8 @@ describe('providerOptionsContract', () => {
       'opencode.variant',
       'claude.effort',
       'claude.sandbox.excludedCommands',
+      'claudeTerminal.backend',
+      'claudeTerminal.keepSession',
       'copilot.effort',
     ]);
   });

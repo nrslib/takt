@@ -119,6 +119,21 @@ describe('agent-usecases', () => {
     expect(detectJudgeIndex).not.toHaveBeenCalled();
   });
 
+  it('evaluateCondition は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 1 }));
+
+    await evaluateCondition('agent output', [
+      { index: 0, text: 'first' },
+    ], {
+      cwd: '/repo',
+      resolvedProvider: 'claude-terminal',
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(undefined, 'judge prompt', expect.not.objectContaining({
+      maxTurns: expect.anything(),
+    }));
+  });
+
   // --- judgeStatus: 3-stage fallback ---
 
   it('judgeStatus は単一ルール時に auto_select を返す', async () => {
@@ -184,6 +199,26 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('judgeStatus は maxTurns 非対応 provider では全内部ステージで maxTurns を渡さない', async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2 }));
+
+    const result = await judgeStatus('structured', 'tag', [
+      { condition: 'done', next: 'complete' },
+      { condition: 'fix', next: 'fix' },
+    ], {
+      ...judgeOptions,
+      resolvedProvider: 'claude-terminal',
+    });
+
+    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(runAgent).toHaveBeenCalledTimes(3);
+    for (const call of vi.mocked(runAgent).mock.calls) {
+      expect(call[2]).not.toHaveProperty('maxTurns');
+    }
   });
 
   it('judgeStatus は Phase 3 の内部ステージログを順序どおりに通知する', async () => {
@@ -431,6 +466,26 @@ describe('agent-usecases', () => {
     );
   });
 
+  it('decomposeTask は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+
+    await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      resolvedProvider: 'claude-terminal',
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.any(String),
+      expect.not.objectContaining({ maxTurns: expect.anything() }),
+    );
+  });
+
   it('requestMoreParts は構造化出力をパースして返す', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       done: false,
@@ -514,6 +569,32 @@ describe('agent-usecases', () => {
     );
   });
 
+  it('requestMoreParts は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'enough',
+      parts: [],
+    }));
+
+    await requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      1,
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+        resolvedProvider: 'claude-terminal',
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.any(String),
+      expect.not.objectContaining({ maxTurns: expect.anything() }),
+    );
+  });
+
   // --- runTagJudgeStage (ARCH-NEW-DRY-Stage2-judgeStatus 再発防止) ---
 
   it('runTagJudgeStage はタグ検出成功時に JudgeStatusResult を返す', async () => {
@@ -532,6 +613,22 @@ describe('agent-usecases', () => {
       provider: 'cursor',
       maxTurns: 3,
       permissionMode: 'readonly',
+    }));
+  });
+
+  it('runTagJudgeStage は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('[REVIEW:1]'));
+
+    const result = await runTagJudgeStage(
+      'tag instruction',
+      [{ condition: 'done', next: 'COMPLETE' }, { condition: 'fix', next: 'fix' }],
+      false,
+      { cwd: '/repo', stepName: 'review', resolvedProvider: 'claude-terminal' },
+    );
+
+    expect(result).toEqual({ ruleIndex: 0, method: 'phase3_tag' });
+    expect(runAgent).toHaveBeenCalledWith('conductor', 'tag instruction', expect.not.objectContaining({
+      maxTurns: expect.anything(),
     }));
   });
 

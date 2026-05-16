@@ -12,6 +12,7 @@ export interface ResolvePermissionModeInput {
 export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = {
   claude: { defaultPermissionMode: 'edit' },
   'claude-sdk': { defaultPermissionMode: 'edit' },
+  'claude-terminal': { defaultPermissionMode: 'edit' },
   codex: { defaultPermissionMode: 'edit' },
   opencode: { defaultPermissionMode: 'edit' },
   cursor: { defaultPermissionMode: 'edit' },

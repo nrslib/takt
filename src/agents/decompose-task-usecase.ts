@@ -3,6 +3,7 @@ import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
 import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 import { loadDecompositionSchema, loadMorePartsSchema } from '../infra/resources/schema-loader.js';
+import { buildMaxTurnsOption } from './provider-call-options.js';
 import {
   buildDecomposePrompt,
   buildMorePartsPrompt,
@@ -50,7 +51,7 @@ export async function decomposeTask(
     resolvedProvider: options.resolvedProvider,
     allowedTools: [],
     permissionMode: 'readonly',
-    maxTurns: TEAM_LEADER_MAX_TURNS,
+    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
     outputSchema: loadDecompositionSchema(maxParts),
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,
@@ -95,7 +96,7 @@ export async function requestMoreParts(
     resolvedProvider: options.resolvedProvider,
     allowedTools: [],
     permissionMode: 'readonly',
-    maxTurns: TEAM_LEADER_MAX_TURNS,
+    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
     outputSchema: loadMorePartsSchema(maxAdditionalParts),
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,

@@ -1,5 +1,6 @@
 import type {
   ClaudeEffort,
+  ClaudeTerminalProviderOptions,
   CodexReasoningEffort,
   CopilotEffort,
   StepProviderOptions,
@@ -30,6 +31,12 @@ type RawProviderOptions = {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
     };
+  };
+  claude_terminal?: {
+    backend?: ClaudeTerminalProviderOptions['backend'];
+    timeout_ms?: number;
+    keep_session?: boolean;
+    transcript_poll_interval_ms?: number;
   };
   copilot?: {
     effort?: CopilotEffort;
@@ -98,6 +105,27 @@ export function normalizeProviderOptions(
   if (options.copilot?.effort !== undefined) {
     result.copilot = { effort: options.copilot.effort };
   }
+  if (
+    options.claude_terminal?.backend !== undefined
+    || options.claude_terminal?.timeout_ms !== undefined
+    || options.claude_terminal?.keep_session !== undefined
+    || options.claude_terminal?.transcript_poll_interval_ms !== undefined
+  ) {
+    result.claudeTerminal = {
+      ...(options.claude_terminal.backend !== undefined
+        ? { backend: options.claude_terminal.backend }
+        : {}),
+      ...(options.claude_terminal.timeout_ms !== undefined
+        ? { timeoutMs: options.claude_terminal.timeout_ms }
+        : {}),
+      ...(options.claude_terminal.keep_session !== undefined
+        ? { keepSession: options.claude_terminal.keep_session }
+        : {}),
+      ...(options.claude_terminal.transcript_poll_interval_ms !== undefined
+        ? { transcriptPollIntervalMs: options.claude_terminal.transcript_poll_interval_ms }
+        : {}),
+    };
+  }
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
@@ -136,6 +164,9 @@ export function mergeProviderOptions(
           ? { effort: layer.copilot.effort }
           : {}),
       };
+    }
+    if (layer.claudeTerminal) {
+      result.claudeTerminal = { ...result.claudeTerminal, ...layer.claudeTerminal };
     }
   }
 
@@ -275,6 +306,30 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.copilot?.effort,
     resolveProviderOptionOrigin(originResolver, 'copilot.effort', source),
   );
+  const claudeTerminalBackend = selectProviderValue(
+    resolvedConfigOptions.claudeTerminal?.backend,
+    personaOptions?.claudeTerminal?.backend,
+    stepOptions?.claudeTerminal?.backend,
+    resolveProviderOptionOrigin(originResolver, 'claudeTerminal.backend', source),
+  );
+  const claudeTerminalTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.claudeTerminal?.timeoutMs,
+    personaOptions?.claudeTerminal?.timeoutMs,
+    stepOptions?.claudeTerminal?.timeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'claudeTerminal.timeoutMs', source),
+  );
+  const claudeTerminalKeepSession = selectProviderValue(
+    resolvedConfigOptions.claudeTerminal?.keepSession,
+    personaOptions?.claudeTerminal?.keepSession,
+    stepOptions?.claudeTerminal?.keepSession,
+    resolveProviderOptionOrigin(originResolver, 'claudeTerminal.keepSession', source),
+  );
+  const claudeTerminalTranscriptPollIntervalMs = selectProviderValue(
+    resolvedConfigOptions.claudeTerminal?.transcriptPollIntervalMs,
+    personaOptions?.claudeTerminal?.transcriptPollIntervalMs,
+    stepOptions?.claudeTerminal?.transcriptPollIntervalMs,
+    resolveProviderOptionOrigin(originResolver, 'claudeTerminal.transcriptPollIntervalMs', source),
+  );
 
   const result: StepProviderOptions = {
     codex:
@@ -296,9 +351,25 @@ export function resolveEffectiveProviderOptions(
         ? claude
         : undefined,
     copilot: copilotEffort !== undefined ? { effort: copilotEffort } : undefined,
+    claudeTerminal:
+      claudeTerminalBackend !== undefined
+      || claudeTerminalTimeoutMs !== undefined
+      || claudeTerminalKeepSession !== undefined
+      || claudeTerminalTranscriptPollIntervalMs !== undefined
+        ? {
+            ...(claudeTerminalBackend !== undefined ? { backend: claudeTerminalBackend } : {}),
+            ...(claudeTerminalTimeoutMs !== undefined ? { timeoutMs: claudeTerminalTimeoutMs } : {}),
+            ...(claudeTerminalKeepSession !== undefined ? { keepSession: claudeTerminalKeepSession } : {}),
+            ...(claudeTerminalTranscriptPollIntervalMs !== undefined
+              ? { transcriptPollIntervalMs: claudeTerminalTranscriptPollIntervalMs }
+              : {}),
+          }
+        : undefined,
   };
 
-  return result.codex || result.opencode || result.claude || result.copilot ? result : undefined;
+  return result.codex || result.opencode || result.claude || result.copilot || result.claudeTerminal
+    ? result
+    : undefined;
 }
 
 function stripClaudeAllowedTools(
@@ -331,6 +402,9 @@ function stripClaudeAllowedTools(
       : {}),
     ...(providerOptions.copilot !== undefined
       ? { copilot: { ...providerOptions.copilot } }
+      : {}),
+    ...(providerOptions.claudeTerminal !== undefined
+      ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
       : {}),
   };
 
@@ -378,6 +452,10 @@ export const PROVIDER_OPTION_PATHS = [
   'opencode.networkAccess',
   'opencode.variant',
   'copilot.effort',
+  'claudeTerminal.backend',
+  'claudeTerminal.timeoutMs',
+  'claudeTerminal.keepSession',
+  'claudeTerminal.transcriptPollIntervalMs',
 ] as const;
 
 export type ProviderOptionPath = (typeof PROVIDER_OPTION_PATHS)[number];

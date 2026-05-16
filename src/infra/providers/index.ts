@@ -1,5 +1,6 @@
 import { ClaudeProvider } from './claude.js';
 import { ClaudeHeadlessProvider } from './claude-headless.js';
+import { ClaudeTerminalProvider } from './claude-terminal.js';
 import { CodexProvider } from './codex.js';
 import { OpenCodeProvider } from './opencode.js';
 import { CursorProvider } from './cursor.js';
@@ -17,6 +18,7 @@ export class ProviderRegistry {
     this.providers = {
       'claude-sdk': new ClaudeProvider(),
       claude: new ClaudeHeadlessProvider(),
+      'claude-terminal': new ClaudeTerminalProvider(),
       codex: new CodexProvider(),
       opencode: new OpenCodeProvider(),
       cursor: new CursorProvider(),

@@ -10,6 +10,10 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.claude.effort', type: 'string' },
   { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
+  { path: 'provider_options.claude_terminal.backend', type: 'string' },
+  { path: 'provider_options.claude_terminal.timeout_ms', type: 'number' },
+  { path: 'provider_options.claude_terminal.keep_session', type: 'boolean' },
+  { path: 'provider_options.claude_terminal.transcript_poll_interval_ms', type: 'number' },
   { path: 'provider_options.copilot.effort', type: 'string' },
 ] as const satisfies readonly EnvSpec[];
 
@@ -27,6 +31,11 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.claude.sandbox',
   'provider_options.claude.sandbox.allow_unsandboxed_commands',
   'provider_options.claude.sandbox.excluded_commands',
+  'provider_options.claude_terminal',
+  'provider_options.claude_terminal.backend',
+  'provider_options.claude_terminal.timeout_ms',
+  'provider_options.claude_terminal.keep_session',
+  'provider_options.claude_terminal.transcript_poll_interval_ms',
   'provider_options.copilot',
   'provider_options.copilot.effort',
 ] as const;
@@ -40,6 +49,10 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'claude.effort',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'claudeTerminal.backend',
+  'claudeTerminal.timeoutMs',
+  'claudeTerminal.keepSession',
+  'claudeTerminal.transcriptPollIntervalMs',
   'copilot.effort',
 ] as const;
 
@@ -54,6 +67,7 @@ export const PROVIDER_OPTIONS_TRACKED_KEYS = [
   'provider_options.opencode',
   'provider_options.claude',
   'provider_options.claude.sandbox',
+  'provider_options.claude_terminal',
   'provider_options.copilot',
   ...PROVIDER_OPTIONS_ENV_SPEC_ENTRIES.map((spec) => spec.path).filter((path) => path !== 'provider_options'),
   'provider_options.claude.allowed_tools',

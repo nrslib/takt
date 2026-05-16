@@ -4,11 +4,13 @@ import { getProvider } from './index.js';
 const MCP_SERVER_PROVIDERS = new Set<ProviderType>([
   'claude',
   'claude-sdk',
+  'claude-terminal',
 ]);
 
 const ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
   'claude',
   'claude-sdk',
+  'claude-terminal',
   'opencode',
   'mock',
 ]);
@@ -16,6 +18,17 @@ const ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
 const CLAUDE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
   'claude',
   'claude-sdk',
+  'claude-terminal',
+  'mock',
+]);
+
+const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
+  'claude',
+  'claude-sdk',
+  'codex',
+  'opencode',
+  'cursor',
+  'copilot',
   'mock',
 ]);
 
@@ -24,6 +37,7 @@ interface ProviderCapabilities {
   supportsMcpServers: boolean;
   supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
+  supportsMaxTurns: boolean;
 }
 
 function resolveProviderCapabilities(
@@ -38,6 +52,7 @@ function resolveProviderCapabilities(
     supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
+    supportsMaxTurns: MAX_TURNS_PROVIDERS.has(provider),
   };
 }
 
@@ -63,4 +78,10 @@ export function providerSupportsClaudeAllowedTools(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsClaudeAllowedTools;
+}
+
+export function providerSupportsMaxTurns(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsMaxTurns;
 }

@@ -6,7 +6,7 @@
 
 import type { WorkflowStep, Language } from '../models/types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
-import type { PhaseName, PhasePromptParts, JudgeStageEntry, ProviderType, StepProviderInfo } from './types.js';
+import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { hasTagBasedRules } from './evaluation/rule-utils.js';
 export { runReportPhase, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
@@ -39,8 +39,6 @@ export interface PhaseRunnerContext {
   onStream?: import('../../agents/types.js').StreamCallback;
   /** Structured caller for phase 3 status judgment */
   structuredCaller: StructuredCaller;
-  /** Resolve effective provider for the current step */
-  resolveProvider: (step: WorkflowStep) => ProviderType | undefined;
   resolveStepProviderModel?: (step: WorkflowStep) => StepProviderInfo;
   /** Callback for phase lifecycle logging */
   onPhaseStart?: (

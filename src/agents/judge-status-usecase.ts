@@ -4,6 +4,7 @@ import { runAgent, type StreamCallback } from './runner.js';
 import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditions } from './judge-utils.js';
 import { loadJudgmentSchema, loadEvaluationSchema } from '../infra/resources/schema-loader.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
+import { buildMaxTurnsOption } from './provider-call-options.js';
 
 export interface JudgeStatusOptions {
   cwd: string;
@@ -49,7 +50,7 @@ export async function runTagJudgeStage(
     provider: runOptions.provider,
     resolvedProvider: runOptions.resolvedProvider,
     resolvedModel: runOptions.resolvedModel,
-    maxTurns: 3,
+    ...buildMaxTurnsOption(runOptions.provider, runOptions.resolvedProvider, 3),
     permissionMode: 'readonly',
     language: runOptions.language,
     onStream: runOptions.onStream,
@@ -101,7 +102,7 @@ export async function evaluateCondition(
     provider: options.provider,
     resolvedProvider: options.resolvedProvider,
     resolvedModel: options.resolvedModel,
-    maxTurns: 1,
+    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
     permissionMode: 'readonly',
     outputSchema: loadEvaluationSchema(),
   });
@@ -145,7 +146,7 @@ export async function judgeStatus(
 
   const agentOptions = {
     cwd: options.cwd,
-    maxTurns: 3,
+    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 3),
     permissionMode: 'readonly' as const,
     language: options.language,
     onStream: options.onStream,

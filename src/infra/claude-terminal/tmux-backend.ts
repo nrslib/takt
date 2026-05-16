@@ -1,0 +1,146 @@
+import * as childProcess from 'node:child_process';
+import type { ExecFileException } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { createClaudeTerminalSessionName } from './command.js';
+import type { TerminalBackend, TerminalSession, TerminalStartOptions } from './types.js';
+
+const log = createLogger('claude-terminal-tmux');
+
+function getProperty(error: object, property: string): unknown {
+  return (error as Record<string, unknown>)[property];
+}
+
+function getFailureCode(error: ExecFileException): string | undefined {
+  const code = getProperty(error, 'code');
+  if (typeof code === 'string' || typeof code === 'number') {
+    return String(code);
+  }
+  return undefined;
+}
+
+function getFailureStderr(error: ExecFileException): string | undefined {
+  const stderr = getProperty(error, 'stderr');
+  if (typeof stderr !== 'string') {
+    return undefined;
+  }
+  const trimmed = stderr.trim();
+  return trimmed.length > 0 ? redactSensitiveClaudeArgs(trimmed) : undefined;
+}
+
+function redactSensitiveClaudeArgs(text: string): string {
+  return text
+    .replace(/(--system-prompt(?:=|\s+)).*/g, '$1[redacted]')
+    .replace(/(--json-schema(?:=|\s+)).*/g, '$1[redacted]');
+}
+
+function formatTmuxError(error: unknown): Error {
+  if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+    return new Error('tmux command not found. Install tmux to use provider: claude-terminal.');
+  }
+  if (error && typeof error === 'object') {
+    const execError = error as ExecFileException;
+    const code = getFailureCode(execError);
+    const stderr = getFailureStderr(execError);
+    const codeText = code ? ` with code ${code}` : '';
+    const stderrText = stderr ? `: ${stderr}` : '.';
+    return new Error(`tmux command failed${codeText}${stderrText}`);
+  }
+  return new Error('tmux command failed.');
+}
+
+async function runTmux(args: string[], options?: { cwd?: string }): Promise<string> {
+  if (!childProcess.execFile) {
+    throw new Error('node:child_process.execFile is required to run tmux.');
+  }
+  const execFileAsync = promisify(childProcess.execFile) as (
+    file: string,
+    args: string[],
+    options: { cwd?: string; encoding: BufferEncoding; maxBuffer: number },
+  ) => Promise<{ stdout: string; stderr: string }>;
+  try {
+    const result = await execFileAsync('tmux', args, {
+      cwd: options?.cwd,
+      encoding: 'utf-8',
+      maxBuffer: 1024 * 1024 * 4,
+    });
+    return result.stdout;
+  } catch (error) {
+    throw formatTmuxError(error as ExecFileException);
+  }
+}
+
+async function loadBuffer(bufferName: string, text: string): Promise<void> {
+  if (!childProcess.spawn) {
+    throw new Error('node:child_process.spawn is required to run tmux.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = childProcess.spawn('tmux', ['load-buffer', '-b', bufferName, '-'], {
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+
+    child.stderr?.setEncoding('utf-8');
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', (error) => reject(formatTmuxError(error)));
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`tmux load-buffer failed (${code}): ${stderr.trim()}`));
+    });
+    child.stdin.end(text);
+  });
+}
+
+export class TmuxTerminalBackend implements TerminalBackend {
+  async start(options: TerminalStartOptions): Promise<TerminalSession> {
+    const name = createClaudeTerminalSessionName();
+    await runTmux([
+      'new-session',
+      '-d',
+      '-s',
+      name,
+      '-c',
+      options.cwd,
+      options.command.executable,
+      ...options.command.args,
+    ], { cwd: options.cwd });
+    return { id: name, name };
+  }
+
+  async pasteText(session: TerminalSession, text: string): Promise<void> {
+    const bufferName = `${session.name}-prompt`;
+    await loadBuffer(bufferName, `${text}\n`);
+    let pasteError: unknown;
+    try {
+      await runTmux(['paste-buffer', '-b', bufferName, '-t', session.name]);
+      await runTmux(['send-keys', '-t', session.name, 'Enter']);
+    } catch (error) {
+      pasteError = error;
+    }
+
+    try {
+      await runTmux(['delete-buffer', '-b', bufferName]);
+    } catch (deleteError) {
+      if (!pasteError) {
+        throw deleteError;
+      }
+      log.error('Failed to delete Claude terminal tmux buffer after paste failure', {
+        buffer: bufferName,
+        error: getErrorMessage(deleteError),
+      });
+    }
+
+    if (pasteError) {
+      throw pasteError;
+    }
+  }
+
+  async stop(session: TerminalSession): Promise<void> {
+    await runTmux(['kill-session', '-t', session.name]);
+  }
+}

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   providerSupportsAllowedTools,
   providerSupportsClaudeAllowedTools,
+  providerSupportsMaxTurns,
   providerSupportsMcpServers,
 } from '../infra/providers/provider-capabilities.js';
 
@@ -18,6 +19,7 @@ describe('provider capabilities module boundary', () => {
     expect(source).toContain('export function providerSupportsStructuredOutput');
     expect(source).toContain('export function providerSupportsMcpServers');
     expect(source).toContain('export function providerSupportsClaudeAllowedTools');
+    expect(source).toContain('export function providerSupportsMaxTurns');
     expect(source).not.toContain('export interface ProviderCapabilities');
     expect(source).not.toContain('export function resolveProviderCapabilities');
   });
@@ -45,5 +47,10 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsMcpServers('cursor')).toBe(false);
     expect(providerSupportsAllowedTools('codex')).toBe(false);
     expect(providerSupportsMcpServers('codex')).toBe(false);
+  });
+
+  it('maxTurns capability は claude-terminal を明示的に拒否する', () => {
+    expect(providerSupportsMaxTurns('claude')).toBe(true);
+    expect(providerSupportsMaxTurns('claude-terminal')).toBe(false);
   });
 });

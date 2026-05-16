@@ -25,9 +25,10 @@ vi.mock('../shared/prompt/index.js', () => ({
 }));
 
 // Import after mocks are set up
-const { needsLanguageSetup } = await import('../infra/config/global/initialization.js');
+const { needsLanguageSetup, promptProviderSelection } = await import('../infra/config/global/initialization.js');
 const { getGlobalConfigPath } = await import('../infra/config/paths.js');
 const { copyProjectResourcesToDir, getLanguageResourcesDir, getProjectResourcesDir } = await import('../infra/resources/index.js');
+const { selectOptionWithDefault } = await import('../shared/prompt/index.js');
 
 describe('initialization', () => {
   beforeEach(() => {
@@ -51,6 +52,23 @@ describe('initialization', () => {
       mkdirSync(testTaktDir, { recursive: true });
       writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
       expect(needsLanguageSetup()).toBe(false);
+    });
+  });
+
+  describe('promptProviderSelection', () => {
+    it('should include claude-terminal in provider choices and return the selected provider', async () => {
+      vi.mocked(selectOptionWithDefault).mockResolvedValueOnce('claude-terminal');
+
+      const result = await promptProviderSelection();
+
+      expect(result).toBe('claude-terminal');
+      expect(selectOptionWithDefault).toHaveBeenCalledWith(
+        'Select provider / プロバイダーを選択してください:',
+        expect.arrayContaining([
+          { label: 'Claude Code terminal (experimental)', value: 'claude-terminal' },
+        ]),
+        'claude',
+      );
     });
   });
 

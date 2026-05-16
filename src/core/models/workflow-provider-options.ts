@@ -62,6 +62,13 @@ export interface ClaudeProviderOptions {
   sandbox?: ClaudeSandboxSettings;
 }
 
+export interface ClaudeTerminalProviderOptions {
+  backend?: 'tmux';
+  timeoutMs?: number;
+  keepSession?: boolean;
+  transcriptPollIntervalMs?: number;
+}
+
 export interface CopilotProviderOptions {
   effort?: CopilotEffort;
 }
@@ -70,6 +77,7 @@ export interface StepProviderOptions {
   codex?: CodexProviderOptions;
   opencode?: OpenCodeProviderOptions;
   claude?: ClaudeProviderOptions;
+  claudeTerminal?: ClaudeTerminalProviderOptions;
   copilot?: CopilotProviderOptions;
 }
 

@@ -399,6 +399,24 @@ export function denormalizeProviderOptions(
   if (providerOptions.copilot?.effort !== undefined) {
     raw.copilot = { effort: providerOptions.copilot.effort };
   }
+  if (providerOptions.claudeTerminal) {
+    const claudeTerminal: Record<string, unknown> = {};
+    if (providerOptions.claudeTerminal.backend !== undefined) {
+      claudeTerminal.backend = providerOptions.claudeTerminal.backend;
+    }
+    if (providerOptions.claudeTerminal.timeoutMs !== undefined) {
+      claudeTerminal.timeout_ms = providerOptions.claudeTerminal.timeoutMs;
+    }
+    if (providerOptions.claudeTerminal.keepSession !== undefined) {
+      claudeTerminal.keep_session = providerOptions.claudeTerminal.keepSession;
+    }
+    if (providerOptions.claudeTerminal.transcriptPollIntervalMs !== undefined) {
+      claudeTerminal.transcript_poll_interval_ms = providerOptions.claudeTerminal.transcriptPollIntervalMs;
+    }
+    if (Object.keys(claudeTerminal).length > 0) {
+      raw.claude_terminal = claudeTerminal;
+    }
+  }
 
   return Object.keys(raw).length > 0 ? raw : undefined;
 }

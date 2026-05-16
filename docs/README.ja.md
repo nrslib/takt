@@ -167,7 +167,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: claude    # claude, claude-sdk, codex, opencode, cursor, or copilot
+provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, or copilot
 model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```

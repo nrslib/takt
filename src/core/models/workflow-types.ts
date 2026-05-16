@@ -42,6 +42,7 @@ export type {
   CodexProviderOptions,
   OpenCodeProviderOptions,
   ClaudeProviderOptions,
+  ClaudeTerminalProviderOptions,
   CopilotProviderOptions,
   StepProviderOptions,
   WorkflowStepKind,
