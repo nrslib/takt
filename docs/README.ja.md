@@ -20,17 +20,26 @@ TAKT は TAKT 自身で開発しています（ドッグフーディング）。
 
 ## 必要なもの
 
-次のいずれかが必要です。
+利用するプロバイダーに応じて、外部 CLI のインストール要否が変わります。
 
-- **プロバイダー CLI**: [Claude Code](https://claude.ai/code)（デフォルトの `claude` プロバイダ）、[Codex](https://github.com/openai/codex)、[OpenCode](https://opencode.ai)、[Cursor Agent](https://docs.cursor.com/)、[GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) のいずれか
-- **API Key 直接利用**: OpenAI / OpenCode の API Key があれば CLI は不要です
+次のプロバイダーを使う場合は CLI 不要です（SDK 経由、Node.js のみで動作）:
+
+- `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
+- `codex` — `@openai/codex-sdk`
+- `opencode` — `@opencode-ai/sdk`
+
+次のプロバイダーを使う場合は外部 CLI のインストールが必要です:
+
+- `claude` — [Claude Code](https://claude.ai/code)
+- `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
+- `cursor` — [Cursor Agent](https://docs.cursor.com/)
 
 任意:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — `takt #N` で GitHub Issue を使う場合に必要です
 - [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) — GitLab Issue/MR 連携に使います（リモート URL から自動検出）
 
-> **OAuth・API キーの利用について:** OAuth や API キーが利用可能かどうかはプロバイダーや用途によって異なります。TAKT を利用する際には、各プロバイダーの利用規約をご確認ください。
+> **OAuth の利用について:** OAuth が利用可能かどうかはプロバイダーや用途によって異なります。TAKT を利用する際には、各プロバイダーの利用規約をご確認ください。
 
 ## クイックスタート
 
@@ -95,7 +104,7 @@ takt list
 
 ## 仕組み
 
-TAKT は音楽のメタファーを使っています。TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。TAKT はユーザー向けにも実装名にも **workflow** と **step** を使います。
+TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。TAKT はユーザー向けにも実装名にも **workflow** と **step** を使います。
 
 workflow は step の並びで構成されます。YAML では `steps`、`initial_step`、`max_steps` を使います。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
 
@@ -130,7 +139,7 @@ steps:
         next: implement    # <- 修正ループ
 ```
 
-ルールが次の step を決めます。`COMPLETE` でワークフロー成功終了、`ABORT` で失敗終了です。並列 step やルール条件の詳細は [Workflow Guide](./workflows.md) を参照してください。
+ルールが次の step を決めます。`COMPLETE` でワークフロー成功終了、`ABORT` で失敗終了です。並列 step やルール条件の詳細は [Workflow Guide](./workflows.ja.md) を参照してください。
 
 workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
@@ -140,10 +149,12 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 | Workflow | 用途 |
 |-------|------|
-| `default` | 標準の開発 workflow です。テスト先行＋AIアンチパターンレビュー＋並列レビュー（アーキテクチャ＋スーパーバイザー）の構成です。 |
-| `frontend-mini` | フロントエンド向けの mini 構成です。 |
-| `backend-mini` | バックエンド向けの mini 構成です。 |
-| `dual-mini` | フロントエンド＋バックエンド向けの mini 構成です。 |
+| `default` | 標準の開発 workflow。テスト先行＋AI アンチパターンレビュー＋並列レビュー（アーキテクチャ＋スーパーバイザー）の構成。 |
+| `frontend` | フロントエンド開発向けの workflow。 |
+| `backend` | バックエンド開発向けの workflow。 |
+| `dual` | フロントエンド＋バックエンドを同時に進める workflow。 |
+| `takt-default` | TAKT 自体の開発で実際に使われている workflow。CLI ツールの開発にそのまま活用できます。 |
+| `*-mini` シリーズ | 各 workflow の軽量版（`default-mini` / `frontend-mini` / `backend-mini` / `dual-mini`）。`write_tests` を省いた構成。 |
 
 全ワークフロー・ペルソナの一覧は [Builtin Catalog](./builtin-catalog.ja.md) を参照してください。
 
@@ -167,8 +178,8 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: claude    # claude, claude-sdk, codex, opencode, cursor, or copilot
-model: sonnet       # プロバイダーにそのまま渡されます
+provider: codex    # claude, claude-sdk, codex, opencode, cursor, or copilot
+model: gpt-5.5       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
 
@@ -205,7 +216,7 @@ You are a code reviewer specialized in security.
 
 workflow から `persona: my-reviewer` で参照できます。
 
-詳細は [Workflow Guide](./workflows.md) と [Agent Guide](./agents.md) を参照してください。
+詳細は [Workflow Guide](./workflows.ja.md) を参照してください。ビルトインの persona 一覧は [Builtin Catalog](./builtin-catalog.ja.md) にあります。
 
 ## CI/CD
 
@@ -246,17 +257,17 @@ takt --pipeline --task "バグを修正して" --auto-pr
 
 workflow 定義は `workflows/` 配下に配置します。
 
-## API
+## Spec-Driven Development を採用する場合
 
-```typescript
-import { WorkflowEngine, loadWorkflow } from 'takt';
+TAKT は、フェーズ遷移を YAML の状態機械として宣言的に縛り、output contract で各フェーズの成果物を形式化し、並列レビューと fix ループで逸脱を戻します。この構造は、仕様駆動 (Spec-Driven Development, SDD) のように「spec を中心に置く」進め方を採るユーザーにとって特に活きやすい設計になっています。spec をしっかり定義しておけば、AI が勝手にフェーズを飛ばす / 受け入れ条件を落とす / 検証を通さず「完了」を宣言する、といった崩れ方が構造的に起きにくくなります。
 
-const config = loadWorkflow('default', process.cwd());
-if (!config) throw new Error('Workflow not found');
+SDD で進めたい場合の実装例として、コミュニティから [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) が提供されています。要件 → ギャップ分析 → 設計 → タスク → 実装 → 検証 の各フェーズをピースとして整備し、OpenSpec 形式の変更提案フローも同梱されています。1 コマンドで導入できます。
 
-const engine = new WorkflowEngine(config, process.cwd(), 'My task');
-await engine.run();
+```bash
+npx create-takt-sdd
 ```
+
+コミュニティの他の統合は [External Integrations](./external-integrations.ja.md) を参照してください。
 
 ## ドキュメント
 
@@ -264,18 +275,14 @@ await engine.run();
 |-------------|------|
 | [CLI Reference](./cli-reference.ja.md) | 全コマンド・オプション |
 | [Configuration](./configuration.ja.md) | グローバル設定・プロジェクト設定 |
-| [Workflow Guide](./workflows.md) | workflow の作成・カスタマイズ |
-| [Agent Guide](./agents.md) | カスタムエージェントの設定 |
+| [Workflow Guide](./workflows.ja.md) | workflow の作成・カスタマイズ |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン workflow・persona の一覧 |
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |
 | [Repertoire Packages](./repertoire.ja.md) | パッケージのインストール・共有 |
 | [Task Management](./task-management.ja.md) | タスクの追加・実行・隔離 |
-| [データフロー](./data-flow.md) | 内部データフローとアーキテクチャ図 |
 | [CI/CD Integration](./ci-cd.ja.md) | GitHub Actions・パイプラインモード |
-| [Provider Sandbox & Permissions](./provider-sandbox.md) | Codex / OpenCode / Claude のサンドボックス、パーミッション、ネットワーク設定 |
 | [External Integrations](./external-integrations.ja.md) | TAKT コアを変更せずに機能を拡張するコミュニティサンプル（監査ログ等） |
 | [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) | バージョン履歴 |
-| [Security Policy](../SECURITY.md) | 脆弱性の報告 |
 
 ## コミュニティ
 
