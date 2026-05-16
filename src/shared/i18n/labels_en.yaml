@@ -11,7 +11,7 @@ interactive:
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
-    intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /resume (load session), /cancel (exit)"
+    intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /resume (load session), /cancel (exit)"
     introQuiet: "Quiet mode - describe your task. Instructions will be generated without further questions."
     introPassthrough: "Passthrough mode - describe your task. Your input will be passed directly as the task."
     resume: "Resuming previous session"
@@ -28,6 +28,7 @@ interactive:
       saveTask: "Save as Task"
       continue: "Continue editing"
     cancelled: "Cancelled"
+    acceptNoAssistant: "No assistant response found. Please describe your task first."
     playNoTask: "Please specify task content: /play <task>"
     retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
     retryUnavailable: "/retry is only available in Retry mode from `takt list`."
@@ -62,6 +63,7 @@ interactive:
     workflow: "Workflow: {workflowName}"
     timestamp: "Executed: {timestamp}"
   commands:
+    accept: "Accept latest assistant response"
     play: "Run a task immediately"
     go: "Create instruction & run"
     retry: "Review & rerun with previous instructions"

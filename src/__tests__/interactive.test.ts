@@ -53,9 +53,12 @@ vi.mock('../shared/prompt/index.js', () => ({
 import { getProvider } from '../infra/providers/index.js';
 import { interactiveMode } from '../features/interactive/index.js';
 import { selectOption } from '../shared/prompt/index.js';
+import { info } from '../shared/ui/index.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
+const mockInfo = vi.mocked(info);
 
 function setupMockProvider(responses: string[]): void {
   const { provider } = createMockProvider(responses);
@@ -491,6 +494,42 @@ describe('interactiveMode', () => {
       expect(mockProvider._call).not.toHaveBeenCalled();
       expect(result.action).toBe('execute');
       expect(result.task).toBe('quick task');
+    });
+  });
+
+  describe('/accept command', () => {
+    it('should return action=execute with the latest assistant response unchanged', async () => {
+      // Given
+      const latestAssistantResponse = '  Implement the second request exactly.\nKeep this newline.\n';
+      setupRawStdin(toRawInputs(['first request', 'second request', '/accept', '/cancel']));
+      setupMockProvider(['Implement the first request.', latestAssistantResponse]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result).toEqual({
+        action: 'execute',
+        task: latestAssistantResponse,
+      });
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      expect(mockProvider._call).toHaveBeenCalledTimes(2);
+      expect(mockSelectOption).not.toHaveBeenCalled();
+    });
+
+    it('should show an error and continue when there is no assistant response', async () => {
+      // Given
+      setupRawStdin(toRawInputs(['/accept', '/cancel']));
+      setupMockProvider([]);
+
+      // When
+      const result = await interactiveMode('/project');
+
+      // Then
+      expect(result).toEqual({ action: 'cancel', task: '' });
+      expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.acceptNoAssistant', 'en'));
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      expect(mockProvider._call).not.toHaveBeenCalled();
     });
   });
 

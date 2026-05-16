@@ -51,6 +51,11 @@ describe('start-of-line detection', () => {
     const result = matchSlashCommand('/resume');
     expect(result).toEqual({ command: '/resume', text: '' });
   });
+
+  it('should detect /accept', () => {
+    const result = matchSlashCommand('/accept');
+    expect(result).toEqual({ command: '/accept', text: '' });
+  });
 });
 
 // =================================================================
@@ -91,6 +96,11 @@ describe('end-of-line detection', () => {
     const result = matchSlashCommand('セッション復元 /resume');
     expect(result).toEqual({ command: '/resume', text: 'セッション復元' });
   });
+
+  it('should detect /accept at the end', () => {
+    const result = matchSlashCommand('この内容で採用 /accept');
+    expect(result).toEqual({ command: '/accept', text: 'この内容で採用' });
+  });
 });
 
 // =================================================================
@@ -123,6 +133,10 @@ describe('middle-of-text (not recognized)', () => {
 
   it('should not detect /resume in the middle of text', () => {
     expect(matchSlashCommand('I want to /resume the work now')).toBeNull();
+  });
+
+  it('should not detect /accept in the middle of text', () => {
+    expect(matchSlashCommand('I will /accept that once it is ready')).toBeNull();
   });
 });
 
@@ -181,6 +195,7 @@ describe('edge cases', () => {
     expect(matchSlashCommand('/Go')).toBeNull();
     expect(matchSlashCommand('/PLAY')).toBeNull();
     expect(matchSlashCommand('/Cancel')).toBeNull();
+    expect(matchSlashCommand('/Accept')).toBeNull();
   });
 
   it('should not match slash only', () => {

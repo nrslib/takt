@@ -9,6 +9,7 @@ import { SlashCommand } from '../../shared/constants.js';
 
 /** i18n label key for each slash command description */
 const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
+  '/accept': 'interactive.commands.accept',
   '/play': 'interactive.commands.play',
   '/go': 'interactive.commands.go',
   '/retry': 'interactive.commands.retry',

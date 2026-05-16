@@ -61,6 +61,16 @@ function resolveGoSummaryInput(
   };
 }
 
+function findLatestAssistantMessage(history: ConversationMessage[]): ConversationMessage | undefined {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const message = history[i];
+    if (message?.role === 'assistant') {
+      return message;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Display and clear previous session state if present.
  */
@@ -97,7 +107,7 @@ export interface ConversationStrategy {
 /**
  * Run the shared conversation loop.
  *
- * Handles: EOF, /play, /retry, /go (summary), /cancel, regular AI messaging.
+ * Handles: EOF, /play, /accept, /retry, /go (summary), /cancel, regular AI messaging.
  * The Strategy object controls system prompt, tool access, and prompt transformation.
  */
 export async function runConversationLoop(
@@ -199,6 +209,15 @@ export async function runConversationLoop(
     }
 
     switch (match.command) {
+      case SlashCommand.Accept: {
+        const assistantMessage = findLatestAssistantMessage(history);
+        if (!assistantMessage) {
+          info(ui.acceptNoAssistant);
+          continue;
+        }
+        return { action: 'execute', task: assistantMessage.content };
+      }
+
       case SlashCommand.Play: {
         if (!match.text) {
           info(ui.playNoTask);

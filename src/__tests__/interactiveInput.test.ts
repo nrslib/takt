@@ -42,6 +42,18 @@ describe('interactiveInput', () => {
         },
       ]);
     });
+
+    it('should return localized /accept descriptions with apply values', () => {
+      const result = getSlashCommandCompletions('/accept', 'en');
+
+      expect(result).toEqual([
+        {
+          value: '/accept',
+          applyValue: '/accept ',
+          description: 'Accept latest assistant response',
+        },
+      ]);
+    });
   });
 
   describe('createSlashCommandCompletionProvider', () => {
@@ -120,6 +132,19 @@ describe('interactiveInput', () => {
           value: 'fix /go later',
           applyValue: 'fix /go later',
           description: 'Create instruction & run',
+        },
+      ]);
+    });
+
+    it('should complete /accept from suffix command prefix', () => {
+      const provider = createSlashCommandCompletionProvider('en');
+      const results = provider({ buffer: 'use that /a', cursorPos: 11 });
+
+      expect(results).toEqual([
+        {
+          value: 'use that /accept',
+          applyValue: 'use that /accept ',
+          description: 'Accept latest assistant response',
         },
       ]);
     });

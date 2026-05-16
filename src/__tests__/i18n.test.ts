@@ -121,6 +121,7 @@ describe('label integrity', () => {
     expect(ui).toHaveProperty('actionPrompt');
     expect(ui).toHaveProperty('actions');
     expect(ui).toHaveProperty('cancelled');
+    expect(ui).toHaveProperty('acceptNoAssistant');
   });
 
   it('contains all expected workflow keys in en', () => {
@@ -146,6 +147,8 @@ describe('label integrity', () => {
       'interactive.ui.introQuiet',
       'interactive.ui.introPassthrough',
       'interactive.ui.cancelled',
+      'interactive.ui.acceptNoAssistant',
+      'interactive.commands.accept',
       'workflow.iterationLimit.maxReached',
       'workflow.notifyComplete',
       'workflow.sigintGraceful',
@@ -169,6 +172,7 @@ describe('label integrity', () => {
 
     expect(intro).toContain('/go');
     expect(intro).toContain('/play');
+    expect(intro).toContain('/accept');
     expect(intro).toContain('/resume');
     expect(intro).toContain('/cancel');
   });

@@ -50,6 +50,7 @@ export interface InteractiveUIText {
     continue: string;
   };
   cancelled: string;
+  acceptNoAssistant: string;
   playNoTask: string;
   retryNoOrder: string;
   retryUnavailable: string;
@@ -115,9 +116,10 @@ export {
  *
  * Starts a conversation loop where the user can discuss task requirements
  * with AI. The conversation continues until:
- *   /go     → returns the conversation as a task
- *   /cancel → exits without executing
- *   Ctrl+D  → exits without executing
+ *   /go      → returns the conversation as a task
+ *   /accept  → returns the latest assistant response as a task
+ *   /cancel  → exits without executing
+ *   Ctrl+D   → exits without executing
  */
 export interface InteractiveModeOptions {
   /** Actions to exclude from the post-summary action selector. */

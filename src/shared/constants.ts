@@ -13,6 +13,7 @@ export const DEFAULT_LANGUAGE: Language = 'en';
 
 /** Slash commands recognized in interactive mode */
 export const SlashCommand = {
+  Accept: '/accept',
   Play: '/play',
   Go: '/go',
   Retry: '/retry',

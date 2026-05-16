@@ -8,7 +8,17 @@ import { filterSlashCommands } from '../features/interactive/slashCommandRegistr
 describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
-    expect(result.length).toBe(6);
+    expect(result.length).toBe(7);
+  });
+
+  it('should filter by prefix "/a"', () => {
+    const result = filterSlashCommands('/a');
+    expect(result).toEqual([
+      {
+        command: '/accept',
+        labelKey: 'interactive.commands.accept',
+      },
+    ]);
   });
 
   it('should filter by prefix "/p"', () => {
@@ -32,7 +42,7 @@ describe('filterSlashCommands', () => {
 
   it('should return all commands for empty string prefix', () => {
     const result = filterSlashCommands('');
-    expect(result.length).toBe(6);
+    expect(result.length).toBe(7);
   });
 
   it('should not match prefix without leading slash', () => {
@@ -58,5 +68,10 @@ describe('filterSlashCommands', () => {
   it('should include labelKey for i18n lookup', () => {
     const result = filterSlashCommands('/play');
     expect(result[0]!.labelKey).toBe('interactive.commands.play');
+  });
+
+  it('should include /accept labelKey for i18n lookup', () => {
+    const result = filterSlashCommands('/accept');
+    expect(result[0]!.labelKey).toBe('interactive.commands.accept');
   });
 });
