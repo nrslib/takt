@@ -24,6 +24,11 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 - Include tests that would catch implementations that incorrectly reuse a response envelope when reading requests
 - Write tests that are expected to pass after implementation is complete (build errors and test failures are expected at this stage)
 
+**Non-executable asset constraints:**
+- Do not create tests that freeze prose, headings, or structure in explanations, guides, README files, or Markdown documentation
+- For docs-only changes, do not add tests unless an explicit executable contract exists
+- Tests are only needed when assets contain contracts tied to code behavior or machine processing, such as CLI examples, config examples, or generated artifacts
+
 **Test execution:**
 - Run tests after creating them to check results
 - Test failures and import errors are expected before implementation (including imports of not-yet-implemented modules)
