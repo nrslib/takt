@@ -149,7 +149,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it('rate_limit_event が観測された場合も exit code 1 より優先して RateLimit 文言を返す', async () => {
+  it('rate_limit_event が観測された場合は SDK event の詳細を返す', async () => {
     // Given
     queryMock.mockReturnValue(
       createMockQuery([
@@ -163,7 +163,8 @@ describe('QueryExecutor rate limit cause preservation', () => {
 
     // Then
     expect(result.success).toBe(false);
-    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.error).toContain('Claude SDK rate limit event: status=rejected');
+    expect(result.error).toContain('overageDisabledReason=out_of_credits');
     expect(result.errorKind).toBe('rate_limit');
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
@@ -218,7 +219,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it('Claude response の result 文面が rate limit を示す場合も RateLimit 文言を返す', async () => {
+  it('Claude response の result 文面が rate limit を示す場合はその文面を返す', async () => {
     // Given
     queryMock.mockReturnValue(
       createMockQuery([
@@ -235,7 +236,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
 
     // Then
     expect(result.success).toBe(false);
-    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.error).toBe("You're out of extra usage. Please retry later.");
     expect(result.errorKind).toBe('rate_limit');
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
@@ -253,13 +254,13 @@ describe('QueryExecutor rate limit cause preservation', () => {
     // Then
     expect(result.success).toBe(false);
     expect(result.content).toBe('');
-    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.error).toBe('HTTP 429: rate limit exceeded');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.rateLimitInfo?.source).toBe('sdk_error');
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it('assistant text のみで rate limit が示された場合も RateLimit 文言を返す', async () => {
+  it('assistant text のみで rate limit が示された場合はその文面を返す', async () => {
     // Given
     queryMock.mockReturnValue(
       createMockQuery([
@@ -273,7 +274,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
 
     // Then
     expect(result.success).toBe(false);
-    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.error).toBe("You're out of extra usage. Please retry later.");
     expect(result.errorKind).toBe('rate_limit');
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
@@ -314,7 +315,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
     // Then
     expect(result.success).toBe(false);
     expect(result.content).toBe('');
-    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.error).toBe("You're out of extra usage · resets 2:30pm (Asia/Tokyo)");
     expect(result.errorKind).toBe('rate_limit');
     expect(query.state.afterMarkerPulled).toBe(false);
     expect(queryMock).toHaveBeenCalledTimes(1);
@@ -358,7 +359,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
     });
 
     // Then
-    expect(result.error).toBe(RATE_LIMIT_MESSAGE);
+    expect(result.error).toContain('Claude SDK rate limit event: status=rejected');
     expect(result.errorKind).toBe('rate_limit');
     expect(queryMock).toHaveBeenCalledTimes(1);
     expect(

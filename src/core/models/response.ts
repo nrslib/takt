@@ -13,7 +13,7 @@ export function resolveAgentErrorMessage(
   errorKind: AgentErrorKind | undefined,
   fallbackMessage: string,
 ): string {
-  if (errorKind === 'rate_limit') {
+  if (errorKind === 'rate_limit' && fallbackMessage.trim().length === 0) {
     return RATE_LIMIT_ERROR_MESSAGE;
   }
 

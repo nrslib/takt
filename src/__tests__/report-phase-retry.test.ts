@@ -266,7 +266,7 @@ describe('runReportPhase retry with new session', () => {
     expect(firstCallOptions.sessionId).toBe('session-resume-1');
   });
 
-  it('should not depend on provider-specific error text when rate limit is classified', async () => {
+  it('should preserve provider-specific error text when rate limit is classified', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
@@ -290,7 +290,7 @@ describe('runReportPhase retry with new session', () => {
       response: {
         status: 'rate_limited',
         content: '',
-        error: RATE_LIMIT_MESSAGE,
+        error: 'Claude Code process exited with code 1',
         errorKind: 'rate_limit',
       },
     });
