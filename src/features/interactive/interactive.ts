@@ -23,6 +23,7 @@ import {
 } from './conversationLoop.js';
 import { buildInteractivePolicyPrompt } from './policyPrompt.js';
 import { initializeSession } from './sessionInitialization.js';
+import { loadAssistantInitContext } from './assistantInitFiles.js';
 import {
   type WorkflowContext,
   formatStepPreviews,
@@ -165,6 +166,7 @@ export async function interactiveMode(
     ...runPromptVars,
   });
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
+  const assistantInitContext = loadAssistantInitContext(cwd);
 
   const excludeActions = options?.excludeActions;
   const selectAction = excludeActions?.length
@@ -193,6 +195,8 @@ export async function interactiveMode(
       buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
     introMessage: ui.intro,
     selectAction,
+    initialPromptContext: assistantInitContext,
+    summaryPromptContext: assistantInitContext,
   }, workflowContext, initialInput);
 }
 

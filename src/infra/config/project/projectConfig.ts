@@ -16,6 +16,8 @@ import {
   normalizePersonaProviders,
   normalizeTaktProviders,
   buildRawTaktProvidersOrThrow,
+  normalizeAssistantConfig,
+  denormalizeAssistantConfig,
   normalizeWorkflowOverrides,
   denormalizeWorkflowOverrides,
   normalizeRuntime,
@@ -78,6 +80,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider_options,
     analytics,
     pipeline,
+    assistant,
     takt_providers,
     persona_providers,
     branch_name_strategy,
@@ -122,6 +125,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   return {
     language: language as ProjectConfig['language'],
     pipeline: normalizedPipeline,
+    assistant: normalizeAssistantConfig(assistant),
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
     branchNameStrategy: branch_name_strategy as ProjectConfig['branchNameStrategy'],
@@ -245,6 +249,12 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     savePayload.takt_providers = rawTaktProviders;
   } else {
     delete savePayload.takt_providers;
+  }
+  const rawAssistant = denormalizeAssistantConfig(config.assistant);
+  if (rawAssistant) {
+    savePayload.assistant = rawAssistant;
+  } else {
+    delete savePayload.assistant;
   }
   if (normalizedSubmodules !== undefined) {
     savePayload.submodules = normalizedSubmodules;

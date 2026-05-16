@@ -4,6 +4,7 @@
 
 import { z } from 'zod/v4';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
+import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import {
   AnalyticsConfigSchema,
@@ -50,6 +51,10 @@ export const WorkflowMcpServersConfigSchema = z.object({
   http: z.boolean().optional(),
 }).strict();
 
+export const AssistantConfigSchema = z.object({
+  init_files: z.array(z.string().min(1)).max(MAX_ASSISTANT_INIT_FILES).optional(),
+}).strict();
+
 /** Workflow category config schema (recursive) */
 export type WorkflowCategoryConfigNode = {
   workflows?: string[];
@@ -83,6 +88,7 @@ const ProjectConfigObjectSchema = z.object({
   draft_pr: z.boolean().optional(),
   pipeline: PipelineConfigSchema.optional(),
   takt_providers: TaktProvidersSchema.optional(),
+  assistant: AssistantConfigSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   minimal_output: z.boolean().optional(),
@@ -149,7 +155,7 @@ const GlobalOnlyConfigSchema = z.object({
 
 /** Global config schema = ProjectConfig + global-only fields. */
 export const GlobalConfigSchema = ProjectConfigObjectSchema
-  .omit({ submodules: true, with_submodules: true })
+  .omit({ submodules: true, with_submodules: true, assistant: true })
   .merge(GlobalOnlyConfigSchema)
   .extend({
     provider: ProviderReferenceSchema.optional().default('claude'),

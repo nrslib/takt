@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
 import type { ProjectLocalConfig } from '../infra/config/types.js';
+import { MAX_ASSISTANT_INIT_FILES } from '../core/models/assistant-config.js';
 import {
   unexpectedInteractivePreviewConfigKey,
   unexpectedInteractivePreviewEnvVar,
@@ -27,6 +28,12 @@ type ObservabilityConfigForTest = {
   usageEventsPhase?: boolean;
 };
 
+type ProjectConfigWithAssistant = ProjectLocalConfig & {
+  assistant?: {
+    initFiles?: string[];
+  };
+};
+
 describe('projectConfig', () => {
   let testDir: string;
 
@@ -41,6 +48,115 @@ describe('projectConfig', () => {
     }
     delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
     delete process.env[unexpectedInteractivePreviewEnvVar];
+  });
+
+  describe('assistant init files', () => {
+    it('should load assistant.init_files from project config', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'assistant:',
+          '  init_files:',
+          '    - docs/assistant-context.md',
+          '    - .takt/assistant-notes.md',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(loaded.assistant?.initFiles).toEqual([
+        'docs/assistant-context.md',
+        '.takt/assistant-notes.md',
+      ]);
+    });
+
+    it('should preserve assistant.init_files in save/load cycle', () => {
+      const config: ProjectConfigWithAssistant = {
+        assistant: {
+          initFiles: [
+            'docs/assistant-context.md',
+            '.takt/assistant-notes.md',
+          ],
+        },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const raw = readFileSync(configPath, 'utf-8');
+      expect(raw).toContain('assistant:');
+      expect(raw).toContain('init_files:');
+      expect(raw).toContain('docs/assistant-context.md');
+      expect(raw).not.toContain('initFiles');
+
+      const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+      expect(reloaded.assistant?.initFiles).toEqual(config.assistant?.initFiles);
+    });
+
+    it('should omit assistant block when init_files is empty', () => {
+      const config: ProjectConfigWithAssistant = {
+        assistant: {
+          initFiles: [],
+        },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const raw = readFileSync(configPath, 'utf-8');
+      expect(raw).not.toContain('assistant:');
+
+      const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+      expect(reloaded.assistant).toBeUndefined();
+    });
+
+    it('should reject unknown keys inside assistant config', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'assistant:',
+          '  init_files:',
+          '    - docs/assistant-context.md',
+          '  unexpected_key: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/unexpected_key/);
+    });
+
+    it('should reject too many assistant.init_files entries', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'assistant:',
+          '  init_files:',
+          ...Array.from({ length: MAX_ASSISTANT_INIT_FILES + 1 }, (_, index) => `    - docs/context-${index}.md`),
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/init_files|array/i);
+    });
+
+    it('should reject empty assistant.init_files entries', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'assistant:',
+          '  init_files:',
+          '    - ""',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/init_files|string/i);
+    });
   });
 
   describe('workflow_overrides empty array round-trip', () => {

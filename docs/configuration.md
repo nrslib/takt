@@ -84,7 +84,7 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 
 # Interactive assistant provider (optional)
 # Route the interactive planning conversation to a separate provider/model
-# taktProviders:
+# takt_providers:
 #   assistant:
 #     provider: claude
 #     model: opus
@@ -160,7 +160,7 @@ interactive_preview_steps: 3      # Step previews in interactive mode (0-10, def
 | `base_branch` | string | - | Base branch for clone creation (defaults to remote default branch) |
 | `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
-| `taktProviders` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
+| `takt_providers` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
 | `workflowMcpServers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
 | `workflowArpeggio` | object | all `false` | Arpeggio custom code policy (`customDataSourceModules`, `customMergeInlineJs`, `customMergeFiles`) |
 | `workflowRuntimePrepare` | object | `{ customScripts: false }` | Runtime prepare policy (builtin presets always allowed) |
@@ -180,6 +180,12 @@ logging:
   level: info                 # Console log level: debug | info | warn | error
 concurrency: 2                # Parallel task count for takt run in this project (1-10)
 # base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
+
+# Explicit initial context files for interactive assistant mode only (project config only)
+# assistant:
+#   init_files:
+#     - docs/assistant-context.md
+#     - .takt/assistant-notes.md
 
 # Provider-specific options (project defaults; env-resolved leaf overrides win, otherwise step > workflow > persona > project > global)
 # provider_options:
@@ -207,10 +213,11 @@ concurrency: 2                # Parallel task count for takt run in this project
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
 | `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
+| `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
-| `taktProviders` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
+| `takt_providers` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
 | `workflowMcpServers` | object | - | MCP server transport policy (overrides global) |
 | `workflowArpeggio` | object | - | Arpeggio custom code policy (overrides global) |
 | `workflowRuntimePrepare` | object | - | Runtime prepare policy (overrides global) |

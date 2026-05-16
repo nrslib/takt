@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import * as PublicSchemas from '../core/models/schemas.js';
 import {
   AgentTypeSchema,
   StatusSchema,
@@ -23,6 +24,14 @@ import {
   unexpectedStepListKey,
   unexpectedWorkflowConfigKey,
 } from '../../test/helpers/unknown-contract-test-keys.js';
+
+describe('public schema entry point', () => {
+  it('should not export assistant init runtime limit constants', () => {
+    expect('MAX_ASSISTANT_INIT_FILES' in PublicSchemas).toBe(false);
+    expect('MAX_ASSISTANT_INIT_FILE_BYTES' in PublicSchemas).toBe(false);
+    expect('MAX_ASSISTANT_INIT_CONTEXT_BYTES' in PublicSchemas).toBe(false);
+  });
+});
 
 describe('AgentTypeSchema', () => {
   it('should accept valid agent types', () => {
@@ -1046,6 +1055,16 @@ describe('GlobalConfigSchema', () => {
         model: 'haiku',
       },
     });
+  });
+
+  it('should reject assistant init files because assistant config is project-local only', () => {
+    expect(() => GlobalConfigSchema.parse({
+      assistant: {
+        init_files: [
+          'docs/assistant-context.md',
+        ],
+      },
+    } as unknown)).toThrow(/assistant|unrecognized/i);
   });
 
   it('should reject persona_providers because it is project-local only', () => {

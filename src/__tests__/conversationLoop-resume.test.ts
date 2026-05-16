@@ -352,6 +352,114 @@ describe('/go command', () => {
     expect(capture.sessionIds[1]).toBeUndefined();
     expect(result.action).toBe('execute');
   });
+
+  it('should include assistant init context only in the first regular AI prompt', async () => {
+    setupRawStdin(toRawInputs(['hello', 'follow up', '/cancel']));
+
+    const { provider, capture } = createScenarioProvider([
+      { content: 'AI response' },
+      { content: 'Second AI response' },
+    ]);
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop(
+      '/test',
+      ctx,
+      {
+        ...defaultStrategy,
+        initialPromptContext: '## Assistant Init Context\nconfigured project context',
+      },
+      undefined,
+      undefined,
+    );
+
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[0]).toContain('## Assistant Init Context');
+    expect(capture.prompts[0]).toContain('configured project context');
+    expect(capture.prompts[0]).toContain('hello');
+    expect(capture.prompts[0]).not.toContain('Source Context');
+    expect(capture.prompts[1]).not.toContain('## Assistant Init Context');
+    expect(capture.prompts[1]).not.toContain('configured project context');
+    expect(capture.prompts[1]).toContain('follow up');
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should include assistant init context in summary prompts', async () => {
+    setupRawStdin(toRawInputs(['/go']));
+
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Summarized task.' },
+    ]);
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop(
+      '/test',
+      ctx,
+      {
+        ...defaultStrategy,
+        summaryPromptContext: '## Assistant Init Context\nconfigured project context',
+      },
+      undefined,
+      {
+        userMessage: 'Implement explicit assistant init files',
+      },
+    );
+
+    expect(capture.callCount).toBe(1);
+    expect(capture.prompts[0]).toContain('## Assistant Init Context');
+    expect(capture.prompts[0]).toContain('configured project context');
+    expect(capture.prompts[0]).toContain('User: Implement explicit assistant init files');
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Summarized task.',
+    });
+  });
+
+  it('should not allow /go with assistant init context only', async () => {
+    setupRawStdin(toRawInputs(['/go', '/cancel']));
+    const { provider, capture } = createScenarioProvider([]);
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop(
+      '/test',
+      ctx,
+      {
+        ...defaultStrategy,
+        initialPromptContext: '## Assistant Init Context\nconfigured project context',
+        summaryPromptContext: '## Assistant Init Context\nconfigured project context',
+      },
+      undefined,
+      undefined,
+    );
+
+    expect(capture.callCount).toBe(0);
+    expect(mockLogInfo).toHaveBeenCalledWith('No conversation');
+    expect(result.action).toBe('cancel');
+  });
 });
 
 describe('conversation logging', () => {

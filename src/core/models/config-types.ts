@@ -34,6 +34,10 @@ export interface TaktProvidersConfig {
   assistant: TaktProviderConfigEntry;
 }
 
+export interface AssistantConfig {
+  initFiles?: string[];
+}
+
 /** Step-specific quality gates override */
 export interface StepQualityGatesOverride {
   qualityGates?: string[];
@@ -190,6 +194,8 @@ export interface ProjectConfig {
   pipeline?: PipelineConfig;
   /** TAKT internal target provider/model overrides */
   taktProviders?: TaktProvidersConfig;
+  /** Initial context files explicitly loaded by assistant interactive mode */
+  assistant?: AssistantConfig;
   /** Per-persona provider/model overrides */
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Branch name generation strategy */
@@ -235,7 +241,7 @@ export interface ProjectConfig {
  * For overlapping keys, ProjectConfig values take priority at runtime
  * — handled by the resolution layer.
  */
-export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules'> {
+export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant'> {
   /** @globalOnly */
   language: Language;
   /** @globalOnly */

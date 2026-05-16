@@ -3,7 +3,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { setupRawStdin, restoreStdin, toRawInputs, createMockProvider } from './helpers/stdinSimulator.js';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  setupRawStdin,
+  restoreStdin,
+  toRawInputs,
+  createMockProvider,
+  createScenarioProvider,
+} from './helpers/stdinSimulator.js';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -244,6 +253,112 @@ describe('interactiveMode', () => {
     expect(prompt).toContain('Interactive Mode Policy');
     expect(prompt).toContain('Policy Reminder');
     expect(prompt).toContain('test message');
+  });
+
+  it('should include configured untracked assistant init files in the first provider prompt', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-interactive-init-files-'));
+    try {
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      mkdirSync(join(projectDir, 'docs'), { recursive: true });
+      writeFileSync(join(projectDir, 'docs', 'assistant-context.md'), 'configured assistant context', 'utf-8');
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        [
+          'assistant:',
+          '  init_files:',
+          '    - docs/assistant-context.md',
+        ].join('\n'),
+        'utf-8',
+      );
+      setupRawStdin(toRawInputs(['test message', '/cancel']));
+      setupMockProvider(['response']);
+
+      await interactiveMode(projectDir);
+
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      const prompt = mockProvider._call.mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('Assistant Init Context');
+      expect(prompt).toContain('docs/assistant-context.md');
+      expect(prompt).toContain('configured assistant context');
+      expect(prompt).toContain('test message');
+      expect(prompt).not.toMatch(/^## Source Context$/m);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should include configured untracked assistant init files in the summary provider prompt', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-interactive-summary-init-files-'));
+    try {
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      mkdirSync(join(projectDir, 'docs'), { recursive: true });
+      writeFileSync(join(projectDir, 'docs', 'assistant-context.md'), 'configured summary context', 'utf-8');
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        [
+          'assistant:',
+          '  init_files:',
+          '    - docs/assistant-context.md',
+        ].join('\n'),
+        'utf-8',
+      );
+      setupRawStdin(toRawInputs(['test message', '/go']));
+      setupMockProvider(['response', 'summarized task']);
+
+      const result = await interactiveMode(projectDir);
+
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      const summaryPrompt = mockProvider._call.mock.calls[1]?.[0] as string;
+      expect(summaryPrompt).toContain('Assistant Init Context');
+      expect(summaryPrompt).toContain('docs/assistant-context.md');
+      expect(summaryPrompt).toContain('configured summary context');
+      expect(summaryPrompt).toContain('Conversation:');
+      expect(summaryPrompt).toContain('User: test message');
+      expect(summaryPrompt).not.toMatch(/^## Source Context$/m);
+      expect(result).toEqual({
+        action: 'execute',
+        task: 'summarized task',
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should resend assistant init files on the next regular prompt after an AI call failure', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-interactive-init-retry-'));
+    try {
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      mkdirSync(join(projectDir, 'docs'), { recursive: true });
+      writeFileSync(join(projectDir, 'docs', 'assistant-context.md'), 'context after failure', 'utf-8');
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        [
+          'assistant:',
+          '  init_files:',
+          '    - docs/assistant-context.md',
+        ].join('\n'),
+        'utf-8',
+      );
+      setupRawStdin(toRawInputs(['first message', 'second message', '/cancel']));
+      const { provider } = createScenarioProvider([
+        { content: '', throws: new Error('provider failure') },
+        { content: 'response after retry' },
+      ]);
+      mockGetProvider.mockReturnValue(provider);
+
+      await interactiveMode(projectDir);
+
+      const mockProvider = mockGetProvider.mock.results[0]!.value as { _call: ReturnType<typeof vi.fn> };
+      const firstPrompt = mockProvider._call.mock.calls[0]?.[0] as string;
+      const secondPrompt = mockProvider._call.mock.calls[1]?.[0] as string;
+      expect(firstPrompt).toContain('Assistant Init Context');
+      expect(firstPrompt).toContain('context after failure');
+      expect(secondPrompt).toContain('Assistant Init Context');
+      expect(secondPrompt).toContain('context after failure');
+      expect(secondPrompt).toContain('second message');
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('should keep initialInput as source context before user interaction', async () => {

@@ -43,6 +43,8 @@ const PROJECT_TRACKED_KEYS = [
   'pipeline.default_branch_prefix',
   'pipeline.commit_message_template',
   'pipeline.pr_body_template',
+  'assistant',
+  'assistant.init_files',
   'takt_providers',
   'persona_providers',
   'branch_name_strategy',

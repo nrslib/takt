@@ -1,6 +1,7 @@
 import type { RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from '../../core/models/workflow-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type {
+  AssistantConfig,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
@@ -275,6 +276,24 @@ export function normalizePipelineConfig(raw: {
     commitMessageTemplate: commit_message_template,
     prBodyTemplate: pr_body_template,
   };
+}
+
+export function normalizeAssistantConfig(
+  raw: { init_files?: string[] } | undefined,
+): AssistantConfig | undefined {
+  if (!raw?.init_files || raw.init_files.length === 0) {
+    return undefined;
+  }
+  return { initFiles: raw.init_files };
+}
+
+export function denormalizeAssistantConfig(
+  config: AssistantConfig | undefined,
+): { init_files: string[] } | undefined {
+  if (!config?.initFiles || config.initFiles.length === 0) {
+    return undefined;
+  }
+  return { init_files: config.initFiles };
 }
 
 export function normalizeTaktProviders(raw: {
