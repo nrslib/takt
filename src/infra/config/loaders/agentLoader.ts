@@ -7,7 +7,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type { CustomAgentConfig } from '../../../core/models/index.js';
 import {
   getGlobalConfigDir,
@@ -19,33 +19,54 @@ import {
   getRepertoireDir,
   isPathSafe,
 } from '../paths.js';
+import { getProjectConfigDirIfEnabled, isProjectConfigEnabled } from '../project/projectConfigGuards.js';
 import { resolveConfigValue } from '../resolveConfigValue.js';
 
 /** Get all allowed base directories for persona prompt files */
 function getAllowedPromptBases(cwd: string): string[] {
   const lang = resolveConfigValue(cwd, 'language') ?? 'en';
-  const projectConfigDir = getProjectConfigDir(cwd);
+  const enabledProjectConfigDir = getProjectConfigDirIfEnabled(cwd);
   const globalConfigDir = getGlobalConfigDir();
-  return [
+  const bases: string[] = [
     join(cwd, 'personas'),
     join(cwd, 'agents'),
     join(cwd, 'workflows'),
-    join(projectConfigDir, 'personas'),
-    join(projectConfigDir, 'agents'),
-    join(projectConfigDir, 'workflows'),
-    getProjectFacetDir(cwd, 'personas'),
+  ];
+  if (enabledProjectConfigDir) {
+    bases.push(
+      join(enabledProjectConfigDir, 'personas'),
+      join(enabledProjectConfigDir, 'agents'),
+      join(enabledProjectConfigDir, 'workflows'),
+      getProjectFacetDir(cwd, 'personas'),
+      join(enabledProjectConfigDir, 'repertoire'),
+    );
+  }
+  bases.push(
     join(globalConfigDir, 'personas'),
     join(globalConfigDir, 'agents'),
     join(globalConfigDir, 'workflows'),
-    join(projectConfigDir, 'repertoire'),
     getRepertoireDir(),
     getGlobalPersonasDir(),
     getBuiltinPersonasDir(lang),
     getGlobalFacetDir('personas'),
-  ];
+  );
+  return bases;
 }
 
 export function validatePersonaPromptPath(personaPath: string, cwd: string): void {
+  // When the project config dir is disabled due to collision with the global
+  // config dir, reject paths that literally (without following symlinks) start
+  // with the project config dir path, so access via the colliding symlinked path
+  // is blocked even though it resolves to the same physical location as the global dir.
+  if (!isProjectConfigEnabled(cwd)) {
+    const projectConfigDir = resolve(getProjectConfigDir(cwd));
+    const normalizedPersonaPath = resolve(personaPath);
+    if (normalizedPersonaPath === projectConfigDir
+      || normalizedPersonaPath.startsWith(projectConfigDir + '/')) {
+      throw new Error(`Persona prompt file path is not allowed: ${personaPath}`);
+    }
+  }
+
   const isValid = getAllowedPromptBases(cwd).some((base) => isPathSafe(base, personaPath));
   if (!isValid) {
     throw new Error(`Persona prompt file path is not allowed: ${personaPath}`);
