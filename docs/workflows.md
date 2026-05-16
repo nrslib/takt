@@ -133,9 +133,17 @@ rules:
 
 The optional `appendix` field provides a template for additional AI output when that rule is matched. Useful for structured error reporting or requesting specific information.
 
-## Parallel Steps
+## Step Types
 
-Steps can execute sub-steps concurrently with aggregate evaluation:
+TAKT supports five step types. Pick by the structure your step needs.
+
+### Normal Step
+
+A single agent executes the step. This is the default and matches all the earlier examples.
+
+### Parallel Step
+
+Sub-steps execute concurrently, and the parent aggregates sub-step matches via `all()` / `any()`:
 
 ```yaml
   - name: reviewers
@@ -167,6 +175,74 @@ Steps can execute sub-steps concurrently with aggregate evaluation:
 - `all("X")`: true if ALL sub-steps matched condition X
 - `any("X")`: true if ANY sub-steps matched condition X
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
+- Parallel sub-steps do not support `promotion`
+
+### Arpeggio Step (data-driven batch)
+
+Iterate over a data source (CSV, JSON, etc.) and apply the same step template to each row with bounded concurrency:
+
+```yaml
+  - name: batch-process
+    persona: coder
+    arpeggio:
+      source: csv
+      source_path: ./data/items.csv
+      batch_size: 5
+      concurrency: 3
+      template: ./templates/process.txt
+      max_retries: 2
+      retry_delay_ms: 1000
+      merge:
+        strategy: concat
+        separator: "\n---\n"
+      output_path: ./output/result.txt
+    rules:
+      - condition: "Processing complete"
+        next: COMPLETE
+```
+
+Useful for batch-applying the same operation to many inputs (file lists, issue lists, generated test cases, etc.).
+
+### Team Leader Step (dynamic task decomposition)
+
+The agent acts as a leader: it decomposes the task into independent sub-parts at runtime and dispatches each part to a worker agent:
+
+```yaml
+  - name: implement
+    team_leader:
+      max_parts: 3
+      timeout_ms: 600000
+      part_persona: coder
+      part_edit: true
+      part_permission_mode: edit
+      part_allowed_tools: [Read, Glob, Grep, Edit, Write, Bash]
+    instruction: |
+      Decompose this task into independent subtasks.
+    rules:
+      - condition: "All parts completed"
+        next: review
+```
+
+Useful for breaking one large task into independent units that can run in parallel without you having to know the unit boundaries up-front.
+
+### Workflow Call Step (subworkflow)
+
+A step invokes another workflow by name. The child workflow runs in the same run; its outcome routes back via the parent's `rules`:
+
+```yaml
+  - name: peer-review
+    workflow_call:
+      workflow: peer-review
+      params:
+        impl_knowledge: cqrs-es
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+```
+
+The called workflow can declare `subworkflow.params` so the parent passes values (e.g. `impl_knowledge` or `fix_knowledge`) to customize the child without duplicating step definitions. See [Workflow-level Configuration](#workflow-level-configuration) for `subworkflow` declaration.
 
 ## Output Contracts (Report Files)
 
@@ -194,6 +270,31 @@ output_contracts:
     - Decisions: 02-decisions.md
 ```
 
+## Step-level Provider Promotion
+
+A step can escalate its `provider`, `model`, or `provider_options` based on per-step execution count or AI judgment. Each entry in `promotion` requires at least one of `at: <count>` (matches from the Nth execution of this step onward) or `condition: ai("...")`, plus one or more override targets:
+
+```yaml
+steps:
+  - name: review
+    persona: reviewer
+    promotion:
+      - at: 3
+        model: opus
+      - condition: ai("The reviewer keeps rejecting and progress has stalled")
+        provider: claude
+        model: opus
+      - at: 5
+        provider:
+          type: codex
+          model: gpt-5.5
+          network_access: true
+```
+
+Entries are evaluated in declaration order; the **last matching entry wins**. Promotion is the **highest-priority source** in provider / model / provider_options resolution (above step-level `provider` / `model`).
+
+Promotion is not supported on parallel sub-steps.
+
 ## Step Options
 
 | Option | Default | Description |
@@ -207,11 +308,97 @@ output_contracts:
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` requires Opus 4.7) |
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
-| `provider` | - | Override provider for this step (`claude`, `codex`, `opencode`, `cursor`, or `copilot`) |
+| `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
+| `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
+| `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `codex`, `opencode`, `cursor`, or `copilot`) |
 | `model` | - | Override model for this step |
+| `promotion` | - | Per-execution provider/model/options escalation (see [Step-level Provider Promotion](#step-level-provider-promotion)) |
+| `mcp_servers` | - | Per-step MCP server configuration (stdio / HTTP / SSE) |
+| `allow_git_commit` | `false` | Allow `git add` / `commit` / `push` in step instructions. Default prohibits these so each PR represents one task |
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |
 | `output_contracts` | - | Report file configuration (name, format) |
 | `quality_gates` | - | Quality criteria for step completion (AI instruction) |
+
+## Workflow-level Configuration
+
+Top-level workflow fields that control overall execution behavior.
+
+### `interactive_mode`
+
+Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `passthrough`, `quiet`, `persona`.
+
+```yaml
+interactive_mode: assistant
+```
+
+### `workflow_config.provider_options`
+
+Workflow-wide provider options. Merged with step / persona / project / global options. Step-level options take priority for the same leaf.
+
+```yaml
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    claude:
+      sandbox:
+        allow_unsandboxed_commands: true
+```
+
+### `workflow_config.runtime`
+
+Runtime prepare scripts that run before workflow execution. Builtin presets `node` / `gradle` are always allowed. Custom script paths require `workflow_runtime_prepare.customScripts: true` in config.
+
+```yaml
+workflow_config:
+  runtime:
+    prepare: [node, gradle, ./custom-script.sh]
+```
+
+### `loop_monitors`
+
+Detect cyclic patterns between steps (e.g. `review` → `fix` → `review` repeating indefinitely) and let an AI judge whether progress is being made:
+
+```yaml
+loop_monitors:
+  - cycle: [review, fix]
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: "Evaluate if the fix loop is making progress..."
+      rules:
+        - condition: "Progress is being made"
+          next: fix
+        - condition: "No progress"
+          next: ABORT
+```
+
+### `rate_limit_fallback`
+
+When a Claude / Codex / OpenCode rate limit is observed during a step, continue the run by re-executing the interrupted step on the next provider in the chain. The new session receives a fallback notice instruction so the AI can rebuild context from existing reports on disk.
+
+```yaml
+rate_limit_fallback:
+  switch_chain:
+    - provider: claude-sdk
+      model: opus
+    - provider: codex
+      model: gpt-5.5
+```
+
+Attempts within a single fallback chain are tracked on workflow state and reset on a successful step completion. The same field is also accepted in `~/.takt/config.yaml` and `.takt/config.yaml` for project-wide / user-wide defaults.
+
+### `subworkflow`
+
+Declare a workflow as a subworkflow that accepts parameters from a parent's `workflow_call`. Subworkflows are not selectable from the workflow UI.
+
+```yaml
+subworkflow:
+  visibility: internal
+  params:
+    - name: impl_knowledge
+      required: true
+```
 
 ## Examples
 

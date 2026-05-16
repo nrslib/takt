@@ -411,6 +411,43 @@ Provider option leaves can also be overridden from env. For OpenCode model varia
 
 This allows mixing providers and models within a single workflow. The persona name is matched against the `persona` key in the step definition.
 
+### Provider-specific options in practice
+
+#### Network access (`network_access`)
+
+When an implementation step runs network-dependent commands such as `npm install` / `pip install` / `gradle` / `mvn`, provider sandboxes block network by default and the command fails. Configure each provider as follows.
+
+Codex blocks network by default. Enable it with:
+
+```yaml
+provider_options:
+  codex:
+    network_access: true
+```
+
+OpenCode does not have a native sandbox. TAKT controls `webfetch` / `websearch` tool permissions as an abstraction layer behind the same key:
+
+```yaml
+provider_options:
+  opencode:
+    network_access: true
+```
+
+`network_access` can be set at step / `workflow_config` / `persona_providers` / project / global levels, with step having the highest priority. The environment variable `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
+
+#### Claude Code sandbox control (`allow_unsandboxed_commands`)
+
+With `permission_mode: edit`, the Claude SDK runs Bash commands inside a macOS Seatbelt sandbox. This can cause `~/.gradle` writes and JVM-based build tools to fail with `Operation not permitted`. To run Bash commands outside the sandbox while keeping file-edit permissions controlled, use:
+
+```yaml
+provider_options:
+  claude:
+    sandbox:
+      allow_unsandboxed_commands: true
+```
+
+File-edit permissions continue to be governed by `permission_mode`.
+
 <a id="workflow-categories"></a>
 
 ## Workflow categories
