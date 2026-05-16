@@ -12,7 +12,12 @@ jobs:
   review:
     if: |
       github.event.issue.pull_request != null &&
-      contains(github.event.comment.body, '/takt-review') &&
+      (
+        github.event.comment.body == '/review' ||
+        startsWith(github.event.comment.body, '/review ') ||
+        startsWith(github.event.comment.body, '/review
+')
+      ) &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     environment: takt-review
