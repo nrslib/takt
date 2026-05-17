@@ -1,14 +1,122 @@
-name: CC Resolve
+name: PR Comment Commands
 
+# Issue comment 経由で発火するコマンド群を 1 ワークフローに集約。
+# 1 コメントごとに作られる workflow run の数を 4 -> 1 に減らし、
+# Actions ダッシュボードに大量の Skipped run が並ぶ現象を抑える。
+#
+# 各 job は独自の `if` で対象コマンドと著者条件を判定し、
+# 該当しないコメントでは即座に Skipped になる。
 on:
   issue_comment:
     types: [created]
 
 jobs:
+  # =====================================================================
+  # /review — TAKT PR Review (formerly takt-review.yml)
+  # =====================================================================
+  review:
+    if: |
+      github.event.issue.pull_request != null &&
+      (
+        github.event.comment.body == '/review' ||
+        startsWith(github.event.comment.body, '/review ') ||
+        startsWith(github.event.comment.body, '/review
+')
+      ) &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    concurrency:
+      group: comment-cmd-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    environment: takt-review
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: 受付リアクション
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      - name: PR の head SHA を取得
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            return pr.head.sha;
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.result }}
+          fetch-depth: 0
+
+      - name: API キー確認
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY is not set"
+            exit 1
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Claude Code & TAKT インストール
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          npm install -g takt
+
+      - name: TAKT Review 実行
+        run: takt --pipeline --skip-git --pr ${{ github.event.issue.number }} -w review-takt-default
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: レビュー結果をPRコメントに投稿
+        if: always()
+        run: |
+          REPORT_DIR=$(ls -td .takt/runs/*/reports 2>/dev/null | head -1)
+          if [ -n "$REPORT_DIR" ]; then
+            SUMMARY=$(find "$REPORT_DIR" -name "*review-summary*" -type f | head -1)
+            if [ -n "$SUMMARY" ]; then
+              gh pr comment ${{ github.event.issue.number }} --body-file "$SUMMARY"
+            else
+              echo "レビューサマリーが見つかりません"
+            fi
+          else
+            echo "レポートディレクトリが見つかりません"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: レビューレポートをアーティファクトに保存
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: takt-review-reports
+          path: .takt/runs/*/reports/
+          if-no-files-found: ignore
+
+  # =====================================================================
+  # /resolve — CC Resolve (formerly cc-resolve.yml)
+  # =====================================================================
   resolve:
-    # Uncomment to allow organization members or collaborators:
-    # || github.event.comment.author_association == 'MEMBER'
-    # || github.event.comment.author_association == 'COLLABORATOR'
     if: |
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '/resolve') &&
@@ -161,7 +269,7 @@ jobs:
           - HEAD 側: {具体的な内容を書く}
           - theirs 側: {具体的な内容を書く}
           - 分析: {差分が何を意味するか}
-          - 判断: {HEAD / theirs / 両方統合} を採用（{理由}）
+          - 判断: {HEAD / theirs / 両方統合} を採用({理由})
           ```
 
           **疑うべきポイント:**
@@ -186,8 +294,8 @@ jobs:
 
           **コンフリクトを解決しただけでは終わらない。** 対象外ファイルにも影響が出ていないか検証する。
 
-          - ビルド確認（`npm run build`、`./gradlew build` 等、プロジェクトに応じて）
-          - テスト確認（`npm test`、`./gradlew test` 等）
+          - ビルド確認(`npm run build`、`./gradlew build` 等、プロジェクトに応じて)
+          - テスト確認(`npm test`、`./gradlew test` 等)
           - 対象外ファイルが、変更と矛盾していないか確認する
             - 例: 関数シグネチャを変更したのに、テストが旧シグネチャを期待している
             - 例: import パスを変更したのに、別ファイルが旧パスを参照している
@@ -236,6 +344,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Commit and push
+        id: push
         run: |
           git add -A
           # MERGE_HEAD があればマージコミット、なければ通常コミット
@@ -253,7 +362,6 @@ jobs:
             echo "Nothing to push"
             echo "pushed=false" >> "$GITHUB_OUTPUT"
           fi
-        id: push
 
       - name: Trigger CI
         if: steps.push.outputs.pushed == 'true'
@@ -274,3 +382,141 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # =====================================================================
+  # /ci — CI Trigger (formerly ci-trigger.yml)
+  # =====================================================================
+  ci:
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/ci') &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Get PR ref
+        id: pr
+        run: |
+          PR=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} \
+            --jq '{head_ref: .head.ref, head_sha: .head.sha}')
+          echo "ref=$(echo "$PR" | jq -r .head_ref)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(echo "$PR" | jq -r .head_sha)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set pending status
+        run: |
+          for context in "CI / lint" "CI / test" "CI / e2e-mock"; do
+            gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+              -f state=pending -f context="$context" \
+              -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Lint
+        id: lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Test
+        id: test
+        run: npm run test
+        continue-on-error: true
+
+      - name: E2E Mock
+        id: e2e
+        run: npm run test:e2e:mock
+        continue-on-error: true
+
+      - name: Report statuses
+        if: always()
+        run: |
+          report_status() {
+            local context="$1" result="$2"
+            local state="success"
+            if [ "$result" != "success" ]; then state="failure"; fi
+            gh api repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.sha }} \
+              -f state="$state" -f context="$context" \
+              -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          }
+          report_status "CI / lint" "${{ steps.lint.outcome }}"
+          report_status "CI / test" "${{ steps.test.outcome }}"
+          report_status "CI / e2e-mock" "${{ steps.e2e.outcome }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fail if any step failed
+        if: always()
+        run: |
+          if [ "${{ steps.lint.outcome }}" != "success" ] || \
+             [ "${{ steps.test.outcome }}" != "success" ] || \
+             [ "${{ steps.e2e.outcome }}" != "success" ]; then
+            exit 1
+          fi
+
+  # =====================================================================
+  # @takt — TAKT Action (formerly takt-action.yml)
+  # =====================================================================
+  takt:
+    if: |
+      contains(github.event.comment.body, '@takt') &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nrslib/takt-action@main
+        with:
+          anthropic_api_key: ${{ secrets.TAKT_ANTHROPIC_API_KEY }}
+          model: ${{ vars.TAKT_MODEL }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          log_output: ${{ vars.TAKT_LOG_OUTPUT || 'false' }}
+
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook-type: incoming-webhook
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '⚠️' }} TAKT Action ${{ job.status }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*${{ job.status == 'success' && '✅' || '⚠️' }} TAKT Action ${{ job.status }}*\n<${{ github.event.issue.html_url }}|Issue #${{ github.event.issue.number }}>: ${{ github.event.issue.title }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "Triggered by @${{ github.event.comment.user.login }}"
+                    }
+                  ]
+                }
+              ]
+            }
