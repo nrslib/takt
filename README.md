@@ -20,17 +20,26 @@ TAKT is built with TAKT itself (dogfooding).
 
 ## Requirements
 
-Choose one:
+The provider you choose determines whether you need to install an external CLI or can run on Node.js alone via a TypeScript SDK.
 
-- **Provider CLIs**: [Claude Code](https://claude.ai/code) (default `claude` provider), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), [Cursor Agent](https://docs.cursor.com/), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) installed
-- **Direct API**: OpenAI / OpenCode API Key (no CLI required)
+These providers run via SDK (no CLI required, Node.js only):
+
+- `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
+- `codex` — `@openai/codex-sdk`
+- `opencode` — `@opencode-ai/sdk`
+
+These providers require an external CLI:
+
+- `claude` — [Claude Code](https://claude.ai/code)
+- `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
+- `cursor` — [Cursor Agent](https://docs.cursor.com/)
 
 Optional:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — for `takt #N` (GitHub Issue tasks)
 - [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) — for GitLab Issue/MR integration (auto-detected from remote URL)
 
-> **OAuth and API key usage:** Whether OAuth or API key access is permitted varies by provider and use case. Check each provider's terms of service before using TAKT.
+> **OAuth usage:** Whether OAuth is permitted varies by provider and use case. Check each provider's terms of service before using TAKT.
 
 ## Quick Start
 
@@ -92,7 +101,7 @@ takt list
 
 ## How It Works
 
-TAKT uses a music metaphor — the name itself comes from the German word for "beat" or "baton stroke," used in conducting to keep an orchestra in time. TAKT uses **workflow** and **step** consistently in both user-facing and implementation-facing terminology.
+The name TAKT comes from the German word for "beat" or "baton stroke," used in conducting to keep an orchestra in time. TAKT uses **workflow** and **step** consistently in both user-facing and implementation-facing terminology.
 
 A workflow is defined by a sequence of steps. Use `steps`, `initial_step`, and `max_steps`. Each step specifies a persona (who), permissions (what's allowed), and rules (what happens next). Here's a minimal example:
 
@@ -137,10 +146,12 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 
 | Workflow | Use Case |
 |-------|----------|
-| `default` | Standard development. Test-first with AI antipattern review and parallel review (architecture + supervisor). |
-| `frontend-mini` | Frontend-focused mini configuration. |
-| `backend-mini` | Backend-focused mini configuration. |
-| `dual-mini` | Frontend + backend mini configuration. |
+| `default` | Standard development workflow. Test-first with AI antipattern review and parallel review (architecture + supervisor). |
+| `frontend` | Frontend development workflow. |
+| `backend` | Backend development workflow. |
+| `dual` | Combined frontend + backend workflow. |
+| `takt-default` | The workflow used to develop TAKT itself. Directly applicable to other CLI tool development. |
+| `*-mini` series | Lightweight variants of each workflow (`default-mini` / `frontend-mini` / `backend-mini` / `dual-mini`). Omits `write_tests`. |
 
 See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and personas.
 
@@ -202,7 +213,7 @@ You are a code reviewer specialized in security.
 
 Reference it in your workflow: `persona: my-reviewer`
 
-See the [Workflow Guide](./docs/workflows.md) and [Agent Guide](./docs/agents.md) for details.
+See the [Workflow Guide](./docs/workflows.md) for details. The list of builtin personas is in the [Builtin Catalog](./docs/builtin-catalog.md).
 
 ## CI/CD
 
@@ -243,17 +254,17 @@ See the [CI/CD Guide](./docs/ci-cd.md) for full setup instructions.
 
 Workflow definitions are stored under `workflows/`.
 
-## API Usage
+## Adopting Spec-Driven Development
 
-```typescript
-import { WorkflowEngine, loadWorkflow } from 'takt';
+TAKT enforces phase transitions declaratively as a YAML state machine, formalizes the artifact of each phase with output contracts, and routes deviations back via parallel review and fix loops. This structure is particularly well-suited for users who follow Spec-Driven Development (SDD) and keep the spec at the center of the process. Once the spec is well-defined, the AI cannot silently skip a phase, drop an acceptance criterion, or claim "done" without passing the verification gate.
 
-const config = loadWorkflow('default', process.cwd());
-if (!config) throw new Error('Workflow not found');
+For users who want to adopt SDD, the community provides [j5ik2o/takt-sdd](https://github.com/j5ik2o/takt-sdd) as a ready-made implementation. It ships pieces for Requirements → Gap Analysis → Design → Tasks → Implementation → Validation, plus an OpenSpec-style change-proposal flow. Install in one command:
 
-const engine = new WorkflowEngine(config, process.cwd(), 'My task');
-await engine.run();
+```bash
+npx create-takt-sdd
 ```
+
+See [External Integrations](./docs/external-integrations.md) for other community integrations.
 
 ## Documentation
 
@@ -262,17 +273,13 @@ await engine.run();
 | [CLI Reference](./docs/cli-reference.md) | All commands and options |
 | [Configuration](./docs/configuration.md) | Global and project settings |
 | [Workflow Guide](./docs/workflows.md) | Creating and customizing workflows |
-| [Agent Guide](./docs/agents.md) | Custom agent configuration |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin workflows and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
 | [Repertoire Packages](./docs/repertoire.md) | Installing and sharing packages |
 | [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
-| [Data Flow](./docs/data-flow.md) | Internal data flow and architecture diagrams |
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
-| [Provider Sandbox & Permissions](./docs/provider-sandbox.md) | Sandbox, permission modes, and network access for Codex / OpenCode / Claude |
 | [External Integrations](./docs/external-integrations.md) | Community examples that extend TAKT without modifying core (audit trails, etc.) |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
-| [Security Policy](./SECURITY.md) | Vulnerability reporting |
 
 ## Community
 

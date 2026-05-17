@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { findDeprecatedTerms } from '../../test/helpers/deprecated-terminology.js';
 
 const repositoryRoot = process.cwd();
-const scanFileSuffixes = ['.ts', '.json', '.sh', '.md', '.yaml', '.yml'];
+const scanFileSuffixes = ['.ts', '.json', '.sh', '.yaml', '.yml'];
 const skipRelativePaths = new Set(['src/__tests__/test-terminology-guard.test.ts']);
 const requiredUntrackedGuardPaths = [
   'test/helpers/deprecated-terminology.ts',
@@ -75,10 +75,10 @@ function collectDeprecatedTermViolations(files: string[]): string[] {
 }
 
 describe('test terminology guard', () => {
-  it('includes changed builtin instruction assets in the recursive guard scope', () => {
+  it('includes changed builtin workflow assets in the recursive guard scope', () => {
     const files = collectTerminologyGuardTargets().map((file) => relative(repositoryRoot, file));
 
-    expect(files).toContain('builtins/en/facets/instructions/supervise.md');
+    expect(files).toContain('builtins/en/workflows/default.yaml');
   });
 
   it('includes tracked helper, source, and hidden-directory files covered by the repository-wide terminology contract', () => {
@@ -107,7 +107,7 @@ describe('test terminology guard', () => {
     }
   });
 
-  it('keeps deprecated terminology out of file paths and contents across repository-facing assets', () => {
+  it('keeps deprecated terminology out of file paths and contents across non-documentation assets', () => {
     const files = collectTerminologyGuardTargets();
     const violations = collectDeprecatedTermViolations(files);
 

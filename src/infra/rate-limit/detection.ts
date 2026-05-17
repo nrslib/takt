@@ -45,6 +45,11 @@ export function buildRateLimitInfo(
   };
 }
 
+export function resolveRateLimitErrorMessage(text?: string): string {
+  const message = text?.trim();
+  return message && message.length > 0 ? message : RATE_LIMIT_ERROR_MESSAGE;
+}
+
 export function buildRateLimitedResponseFields(
   provider: ProviderType,
   source: RateLimitInfo['source'],
@@ -59,7 +64,7 @@ export function buildRateLimitedResponseFields(
   return {
     status: 'rate_limited',
     content: '',
-    error: RATE_LIMIT_ERROR_MESSAGE,
+    error: resolveRateLimitErrorMessage(text),
     errorKind: 'rate_limit',
     rateLimitInfo: buildRateLimitInfo(provider, source, text),
   };

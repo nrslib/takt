@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import {
@@ -10,10 +9,6 @@ import {
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 const workflowDir = join(process.cwd(), 'src', '__tests__');
-
-function readText(relativePath: string): string {
-  return readFileSync(new URL(relativePath, import.meta.url), 'utf8');
-}
 
 function expectFailurePath(
   result:
@@ -194,20 +189,5 @@ describe('instruction_template removal', () => {
     } finally {
       warnSpy.mockRestore();
     }
-  });
-
-  it('keeps removed instruction_template terminology out of docs and internal comments', () => {
-    const dataFlow = readText('../../docs/data-flow.md');
-    const runner = readText('../agents/runner.ts');
-    const escape = readText('../core/workflow/instruction/escape.ts');
-    const skillReference = readText('../../builtins/skill/references/engine.md');
-    const schemaReference = readText('../../builtins/skill-codex/references/yaml-schema.md');
-
-    expect(dataFlow).not.toContain('instruction_template');
-    expect(runner).not.toContain('instruction_template');
-    expect(escape).not.toContain('instruction_template');
-    expect(skillReference).not.toContain('instruction_template');
-    expect(schemaReference).toContain('`instruction`');
-    expect(schemaReference).toContain('受理されない');
   });
 });

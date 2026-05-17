@@ -12,6 +12,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Independence | Do not depend on other tests or execution order |
 | Type safety | Code must pass the build (type check) |
 | Reproducibility | Do not depend on time or randomness. Same result every run |
+| Do not freeze non-executable assets | Do not make prose or section structure that does not define runtime behavior a CI failure condition |
 
 ## Coverage Criteria
 
@@ -32,6 +33,23 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Low | Simple CRUD |
 
 **Note:** When a design reference is provided, UI appearance verification is elevated to medium priority. Refer to the Design Fidelity Policy.
+
+## Non-Executable Asset Tests
+
+Tests that freeze prose, headings, or structure in non-executable assets such as explanations, guides, README files, or Markdown documentation are prohibited by default.
+These assets change often during wording improvements and reorganization, so making prose diffs fail CI creates high maintenance cost.
+
+| Criteria | Verdict |
+|----------|---------|
+| Exact prose, heading, or section-structure assertions for non-executable assets | REJECT |
+| Scanning all non-executable assets only to enforce wording or terminology | REJECT |
+| Tests that require explanatory files that may be deleted or consolidated | REJECT |
+| Adding tests for docs-only changes when no executable contract exists | REJECT |
+| Validating executable or machine-processed contracts such as CLI examples, config examples, or generated artifacts | OK |
+| Contract tests for schemas, configuration, code, generators, or runtime behavior | OK |
+| Not adding tests for docs-only changes that have no executable contract | OK |
+
+Verify non-executable asset changes with review, Markdown lint, link checks, or sample command execution when needed.
 
 ## Test Structure: Given-When-Then
 

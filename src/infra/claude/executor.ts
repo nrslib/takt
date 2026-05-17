@@ -15,7 +15,6 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import {
-  RATE_LIMIT_ERROR_MESSAGE,
   type RateLimitInfo,
   type ProviderUsageSnapshot,
 } from '../../core/models/response.js';
@@ -31,7 +30,12 @@ import type {
   ClaudeSpawnOptions,
   ClaudeResult,
 } from './types.js';
-import { buildRateLimitInfo, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
+import {
+  buildRateLimitInfo,
+  containsRateLimitError,
+  containsRateLimitMarker,
+  resolveRateLimitErrorMessage,
+} from '../rate-limit/detection.js';
 
 const log = createLogger('claude-sdk');
 function toNumber(value: unknown): number | undefined {
@@ -56,6 +60,25 @@ function isRateLimitSignal(message: SDKMessage): boolean {
   }
 
   return message.type === 'assistant' && message.error === 'rate_limit';
+}
+
+function describeRateLimitSignal(message: SDKMessage): string | undefined {
+  if (message.type !== 'rate_limit_event') {
+    return undefined;
+  }
+
+  const info = (message as SDKRateLimitEvent).rate_limit_info;
+  const parts = [
+    `status=${info.status}`,
+    info.rateLimitType ? `rateLimitType=${info.rateLimitType}` : undefined,
+    info.overageStatus ? `overageStatus=${info.overageStatus}` : undefined,
+    info.overageDisabledReason ? `overageDisabledReason=${info.overageDisabledReason}` : undefined,
+    info.resetsAt ? `resetsAt=${info.resetsAt}` : undefined,
+    info.overageResetsAt ? `overageResetsAt=${info.overageResetsAt}` : undefined,
+    typeof info.isUsingOverage === 'boolean' ? `isUsingOverage=${info.isUsingOverage}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+
+  return `Claude SDK rate limit event: ${parts.join(', ')}`;
 }
 
 function extractProviderUsage(resultMsg: SDKResultMessage): ProviderUsageSnapshot {
@@ -176,6 +199,7 @@ export class QueryExecutor {
     let onExternalAbort: (() => void) | undefined;
     let observedRateLimit = false;
     let rateLimitInfo: RateLimitInfo | undefined;
+    let rateLimitMessage: string | undefined;
     const applyAssistantMessage = (assistantMsg: SDKAssistantMessage): void => {
       for (const block of assistantMsg.message.content) {
         if (block.type === 'text') {
@@ -253,6 +277,7 @@ export class QueryExecutor {
         if (isRateLimitSignal(message)) {
           observedRateLimit = true;
           rateLimitInfo = buildRateLimitInfo('claude-sdk', 'sdk_error');
+          rateLimitMessage = describeRateLimitSignal(message);
         }
 
         if (options.onStream) {
@@ -265,6 +290,7 @@ export class QueryExecutor {
             if (containsRateLimitMarker(accumulatedAssistantText)) {
               observedRateLimit = true;
               rateLimitInfo = buildRateLimitInfo('claude-sdk', 'stream_marker', accumulatedAssistantText);
+              rateLimitMessage = accumulatedAssistantText;
             }
             break;
           }
@@ -291,7 +317,7 @@ export class QueryExecutor {
         return {
           success: false,
           content: '',
-          error: RATE_LIMIT_ERROR_MESSAGE,
+          error: resolveRateLimitErrorMessage(rateLimitMessage || finalContent),
           errorKind: 'rate_limit',
           rateLimitInfo: rateLimitInfo ?? buildRateLimitInfo('claude-sdk', 'stream_marker', finalContent),
         };
@@ -333,6 +359,7 @@ export class QueryExecutor {
         stderrChunks,
         observedRateLimit,
         rateLimitInfo,
+        rateLimitMessage,
       );
     }
   }
@@ -352,6 +379,7 @@ export class QueryExecutor {
     stderrChunks: string[],
     observedRateLimit: boolean,
     rateLimitInfo: RateLimitInfo | undefined,
+    rateLimitMessage: string | undefined,
   ): ClaudeResult {
     if (error instanceof AbortError) {
       log.info('Claude query was interrupted', { queryId });
@@ -387,10 +415,13 @@ export class QueryExecutor {
       || containsRateLimitMarker(resultContent)
       || containsRateLimitMarker(assistantText)
     ) {
+      const detectedMessage = sdkRateLimitError
+        ? rateLimitMessage || errorMessage || resultContent || assistantText
+        : rateLimitMessage || resultContent || assistantText || errorMessage;
       return {
         success: false,
         content: '',
-        error: RATE_LIMIT_ERROR_MESSAGE,
+        error: resolveRateLimitErrorMessage(detectedMessage),
         errorKind: 'rate_limit',
         rateLimitInfo: rateLimitInfo ?? buildRateLimitInfo('claude-sdk', sdkRateLimitError ? 'sdk_error' : 'stream_marker', errorMessage || resultContent || assistantText),
       };
