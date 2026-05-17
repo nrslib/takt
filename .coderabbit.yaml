@@ -1,0 +1,80 @@
+# CodeRabbit configuration for TAKT
+# Reference: https://docs.coderabbit.ai/reference/configuration
+
+language: ja-JP
+
+reviews:
+  # chill: 重要な問題（バグ・セキュリティ・即時可読性問題）に絞る。
+  # TAKT 自身の /review が詳細なレビューを行うため、CodeRabbit は早期発見・
+  # 補完的な役割に留める。
+  profile: chill
+
+  high_level_summary: true
+  poem: false
+  review_status: true
+  request_changes_workflow: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # リリース PR / WIP PR は自動レビューしない
+    ignore_title_keywords:
+      - "Release v"
+      - "release/v"
+      - "WIP"
+      - "DO NOT MERGE"
+    # 自動 PR / Bot は対象外
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "github-actions[bot]"
+      - "renovate[bot]"
+
+  # 自動生成物・依存物・ローカル成果物はレビュー対象から外す
+  path_filters:
+    - "!dist/**"
+    - "!node_modules/**"
+    - "!package-lock.json"
+    - "!.takt/**"
+    - "!coverage/**"
+
+  tools:
+    # JavaScript / TypeScript
+    eslint:
+      enabled: true
+    # Markdown ドキュメント
+    markdownlint:
+      enabled: true
+    # シェルスクリプト (e2e helpers 等)
+    shellcheck:
+      enabled: true
+    # GitHub Actions / builtins/**/*.yaml
+    yamllint:
+      enabled: true
+    # セキュリティ
+    gitleaks:
+      enabled: true
+    semgrep:
+      enabled: true
+    # 不要言語系は明示的に無効化（走査を軽くする）
+    ruff:
+      enabled: false
+    rubocop:
+      enabled: false
+    phpstan:
+      enabled: false
+    phpmd:
+      enabled: false
+    phpcs:
+      enabled: false
+
+chat:
+  art: false
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
+  pull_requests:
+    scope: auto
