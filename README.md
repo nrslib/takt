@@ -270,6 +270,7 @@ See [External Integrations](./docs/external-integrations.md) for other community
 
 | Document | Description |
 |----------|-------------|
+| [Tutorial](./docs/tutorial.md) | Improve one example over three phases while queuing, running, and inspecting tasks |
 | [CLI Reference](./docs/cli-reference.md) | All commands and options |
 | [Configuration](./docs/configuration.md) | Global and project settings |
 | [Workflow Guide](./docs/workflows.md) | Creating and customizing workflows |
