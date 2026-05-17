@@ -219,20 +219,55 @@ function withSessionIdFallback(
   return transcript.sessionId ? transcript : { ...transcript, sessionId };
 }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+  if (typeof signal.reason === 'string' && signal.reason.length > 0) {
+    throw new Error(signal.reason);
+  }
+  throw new Error('Claude terminal transcript polling aborted.');
+}
+
+async function sleepWithAbort(pollIntervalMs: number, signal: AbortSignal | undefined): Promise<void> {
+  throwIfAborted(signal);
+  try {
+    if (signal) {
+      await sleep(pollIntervalMs, undefined, { signal });
+      return;
+    }
+    await sleep(pollIntervalMs);
+  } catch (error) {
+    if (signal?.aborted) {
+      throwIfAborted(signal);
+    }
+    throw error;
+  }
+}
+
 async function pollUntil<T>(
   timeoutMs: number,
   pollIntervalMs: number,
+  abortSignal: AbortSignal | undefined,
   attempt: () => Promise<T | undefined>,
   timeoutMessage: string,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+  throwIfAborted(abortSignal);
   while (Date.now() <= deadline) {
+    throwIfAborted(abortSignal);
     const value = await attempt();
+    throwIfAborted(abortSignal);
     if (value !== undefined) {
       return value;
     }
-    await sleep(pollIntervalMs);
+    await sleepWithAbort(pollIntervalMs, abortSignal);
+    throwIfAborted(abortSignal);
   }
+  throwIfAborted(abortSignal);
   throw new Error(timeoutMessage);
 }
 
@@ -292,6 +327,7 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
     return pollUntil(
       options.timeoutMs,
       options.pollIntervalMs,
+      options.abortSignal,
       async () => {
         const transcript = await readTranscript(options.cwd, options.sessionId);
         if (transcript === undefined || transcript.trim().length === 0) {
@@ -308,6 +344,7 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
     return pollUntil(
       options.timeoutMs,
       options.pollIntervalMs,
+      options.abortSignal,
       async () => {
         const transcript = await readTranscript(options.cwd, options.session.sessionId);
         if (transcript === undefined || transcript.trim().length === 0) {

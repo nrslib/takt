@@ -204,10 +204,10 @@ export async function callClaudeTerminal(
     return createErrorResponse(agentName, unsupportedMessage, AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR, responseSessionId);
   }
 
-  function withAbort<T>(operation: Promise<T>): Promise<T> {
+  function withAbort<T>(operation: () => Promise<T>): Promise<T> {
     const signal = options.abortSignal;
     if (!signal) {
-      return operation;
+      return operation();
     }
     if (signal.aborted) {
       aborted = true;
@@ -219,7 +219,15 @@ export async function callClaudeTerminal(
         reject(new ClaudeTerminalAbortError(signal.reason));
       };
       signal.addEventListener('abort', onAbort, { once: true });
-      operation.then(resolve, reject).finally(() => {
+      let operationPromise: Promise<T>;
+      try {
+        operationPromise = operation();
+      } catch (error) {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+        return;
+      }
+      operationPromise.then(resolve, reject).finally(() => {
         signal.removeEventListener('abort', onAbort);
       });
     });
@@ -252,27 +260,32 @@ export async function callClaudeTerminal(
       outputSchema: options.outputSchema,
     });
 
-    pendingStart = terminalBackend.start({
-      cwd: options.cwd,
-      backend: backendName,
-      command,
+    const startedSession = await withAbort(() => {
+      const startPromise = terminalBackend.start({
+        cwd: options.cwd,
+        backend: backendName,
+        command,
+      });
+      pendingStart = startPromise;
+      return startPromise;
     });
-    terminalSession = await withAbort(pendingStart);
+    terminalSession = startedSession;
     responseSessionId = claudeSessionId;
     if (options.abortSignal?.aborted) {
       return createAbortResponse(agentName, options.abortSignal.reason, responseSessionId);
     }
-    let baseline: ClaudeTranscriptBaseline = await withAbort(transcriptReader.readBaseline({
+    let baseline: ClaudeTranscriptBaseline = await withAbort(() => transcriptReader.readBaseline({
       cwd: options.cwd,
       sessionId: claudeSessionId,
     }));
-    await withAbort(terminalBackend.pasteText(terminalSession, prompt));
+    await withAbort(() => terminalBackend.pasteText(startedSession, prompt));
 
-    const session = await withAbort(transcriptReader.findSession({
+    const session = await withAbort(() => transcriptReader.findSession({
       cwd: options.cwd,
       sessionId: claudeSessionId,
       timeoutMs,
       pollIntervalMs,
+      abortSignal: options.abortSignal,
     }));
     responseSessionId = session.sessionId;
     emitInit(options, session.sessionId);
@@ -280,12 +293,13 @@ export async function callClaudeTerminal(
     const handledEvents: ClaudeTerminalEvent[] = [];
     let response: ClaudeTerminalTranscript;
     while (true) {
-      response = await withAbort(transcriptReader.waitForAssistantResponse({
+      response = await withAbort(() => transcriptReader.waitForAssistantResponse({
         session,
         baseline,
         cwd: options.cwd,
         timeoutMs,
         pollIntervalMs,
+        abortSignal: options.abortSignal,
       }));
 
       handledEvents.push(...response.events);
@@ -294,13 +308,13 @@ export async function callClaudeTerminal(
         break;
       }
 
-      baseline = await withAbort(transcriptReader.readBaseline({
+      baseline = await withAbort(() => transcriptReader.readBaseline({
         cwd: options.cwd,
         sessionId: session.sessionId,
       }));
       for (const event of interactiveEvents) {
-        const reply = await withAbort(buildInteractiveEventReply(event, options));
-        await withAbort(terminalBackend.pasteText(terminalSession, reply));
+        const reply = await withAbort(() => buildInteractiveEventReply(event, options));
+        await withAbort(() => terminalBackend.pasteText(startedSession, reply));
       }
     }
 

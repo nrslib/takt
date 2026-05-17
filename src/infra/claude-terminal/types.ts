@@ -64,6 +64,7 @@ export interface FindClaudeSessionOptions {
   sessionId: string;
   timeoutMs: number;
   pollIntervalMs: number;
+  abortSignal?: AbortSignal;
 }
 
 export interface WaitForClaudeResponseOptions {
@@ -72,6 +73,7 @@ export interface WaitForClaudeResponseOptions {
   cwd: string;
   timeoutMs: number;
   pollIntervalMs: number;
+  abortSignal?: AbortSignal;
 }
 
 export interface ClaudeTranscriptReader {

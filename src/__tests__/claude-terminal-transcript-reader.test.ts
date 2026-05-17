@@ -1,14 +1,86 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getClaudeProjectSessionsDir } from '../infra/config/project/sessionStore.js';
 import {
   parseClaudeTerminalTranscript,
   ProjectClaudeTranscriptReader,
 } from '../infra/claude-terminal/transcript-reader.js';
 
+const fsMockState = vi.hoisted(() => ({
+  readFileCount: 0,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: vi.fn(async (...args: Parameters<typeof actual.readFile>) => {
+      fsMockState.readFileCount += 1;
+      return await actual.readFile(...args);
+    }),
+  };
+});
+
+async function withTemporaryClaudeHome<T>(run: (projectDir: string) => Promise<T>): Promise<T> {
+  const originalHome = process.env.HOME;
+  const homeDir = await mkdtemp(join(tmpdir(), 'takt-claude-terminal-home-'));
+  const projectDir = await mkdtemp(join(tmpdir(), 'takt-claude-terminal-project-'));
+  process.env.HOME = homeDir;
+
+  try {
+    return await run(projectDir);
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    await rm(homeDir, { recursive: true, force: true });
+    await rm(projectDir, { recursive: true, force: true });
+  }
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+type PromiseSettlement =
+  | { status: 'resolved' }
+  | { status: 'rejected'; error: unknown }
+  | { status: 'timeout' };
+
+const LONG_POLL_INTERVAL_MS = 60_000;
+const ABORT_SETTLE_TIMEOUT_MS = 50;
+
+function observeSettlement(promise: Promise<unknown>): Promise<PromiseSettlement> {
+  return promise.then(
+    () => ({ status: 'resolved' as const }),
+    (error: unknown) => ({ status: 'rejected' as const, error }),
+  );
+}
+
+async function expectRejectedBeforePollingInterval(settlementPromise: Promise<PromiseSettlement>): Promise<unknown> {
+  const settlement = await Promise.race<PromiseSettlement>([
+    settlementPromise,
+    wait(ABORT_SETTLE_TIMEOUT_MS).then(() => ({ status: 'timeout' as const })),
+  ]);
+
+  expect(settlement.status).toBe('rejected');
+  if (settlement.status !== 'rejected') {
+    throw new Error(`Expected polling to reject before the ${LONG_POLL_INTERVAL_MS}ms interval elapsed.`);
+  }
+  return settlement.error;
+}
+
 describe('Claude terminal transcript reader', () => {
+  beforeEach(() => {
+    fsMockState.readFileCount = 0;
+  });
+
   it('Given Claude transcript JSONL, When parsing, Then session id, assistant text, and tool events are extracted', () => {
     const transcript = [
       JSON.stringify({
@@ -319,5 +391,131 @@ describe('Claude terminal transcript reader', () => {
       await rm(homeDir, { recursive: true, force: true });
       await rm(projectDir, { recursive: true, force: true });
     }
+  });
+
+  it('Given findSession is polling, When abortSignal fires, Then polling stops before the next session read', async () => {
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const reader = new ProjectClaudeTranscriptReader();
+      const controller = new AbortController();
+      const sessionId = 'claude-session-1';
+
+      const sessionPromise = reader.findSession({
+        cwd: projectDir,
+        sessionId,
+        timeoutMs: LONG_POLL_INTERVAL_MS * 2,
+        pollIntervalMs: LONG_POLL_INTERVAL_MS,
+        abortSignal: controller.signal,
+      });
+      const sessionSettlement = observeSettlement(sessionPromise);
+
+      try {
+        await wait(20);
+        expect(fsMockState.readFileCount).toBeGreaterThan(0);
+
+        controller.abort(new Error('manual findSession abort'));
+        const readCountAtAbort = fsMockState.readFileCount;
+
+        const sessionsDir = getClaudeProjectSessionsDir(projectDir);
+        await mkdir(sessionsDir, { recursive: true });
+        await writeFile(join(sessionsDir, `${sessionId}.jsonl`), JSON.stringify({
+          type: 'user',
+          session_id: sessionId,
+          message: { role: 'user', content: [{ type: 'text', text: 'late prompt' }] },
+        }), 'utf-8');
+
+        const error = await expectRejectedBeforePollingInterval(sessionSettlement);
+        expect(String(error)).not.toMatch(/timed out waiting/i);
+        expect(fsMockState.readFileCount).toBe(readCountAtAbort);
+      } finally {
+        await sessionPromise.catch(() => undefined);
+      }
+    });
+  });
+
+  it('Given findSession starts with an aborted signal, When polling would begin, Then no transcript is read', async () => {
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const reader = new ProjectClaudeTranscriptReader();
+      const controller = new AbortController();
+      controller.abort(new Error('manual findSession abort before polling'));
+
+      await expect(reader.findSession({
+        cwd: projectDir,
+        sessionId: 'claude-session-1',
+        timeoutMs: 200,
+        pollIntervalMs: 10,
+        abortSignal: controller.signal,
+      })).rejects.toThrow(/manual findSession abort before polling/i);
+      expect(fsMockState.readFileCount).toBe(0);
+    });
+  });
+
+  it('Given waitForAssistantResponse is polling, When abortSignal fires, Then polling stops before completion appears', async () => {
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const reader = new ProjectClaudeTranscriptReader();
+      const controller = new AbortController();
+      const sessionId = 'claude-session-1';
+      const sessionsDir = getClaudeProjectSessionsDir(projectDir);
+      const transcriptPath = join(sessionsDir, `${sessionId}.jsonl`);
+      const assistantLine = JSON.stringify({
+        type: 'assistant',
+        session_id: sessionId,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'partial response' }],
+        },
+      });
+      const completionLine = JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        session_id: sessionId,
+        result: 'final response',
+      });
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(transcriptPath, assistantLine, 'utf-8');
+
+      const responsePromise = reader.waitForAssistantResponse({
+        cwd: projectDir,
+        session: { sessionId },
+        baseline: { byteOffset: 0, lineNumberOffset: 0 },
+        timeoutMs: LONG_POLL_INTERVAL_MS * 2,
+        pollIntervalMs: LONG_POLL_INTERVAL_MS,
+        abortSignal: controller.signal,
+      });
+      const responseSettlement = observeSettlement(responsePromise);
+
+      try {
+        await wait(20);
+        expect(fsMockState.readFileCount).toBeGreaterThan(0);
+
+        controller.abort(new Error('manual response abort'));
+        const readCountAtAbort = fsMockState.readFileCount;
+
+        await writeFile(transcriptPath, `${assistantLine}\n${completionLine}`, 'utf-8');
+
+        const error = await expectRejectedBeforePollingInterval(responseSettlement);
+        expect(String(error)).not.toMatch(/timed out waiting/i);
+        expect(fsMockState.readFileCount).toBe(readCountAtAbort);
+      } finally {
+        await responsePromise.catch(() => undefined);
+      }
+    });
+  });
+
+  it('Given waitForAssistantResponse starts with an aborted signal, When polling would begin, Then no transcript is read', async () => {
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const reader = new ProjectClaudeTranscriptReader();
+      const controller = new AbortController();
+      controller.abort(new Error('manual response abort before polling'));
+
+      await expect(reader.waitForAssistantResponse({
+        cwd: projectDir,
+        session: { sessionId: 'claude-session-1' },
+        baseline: { byteOffset: 0, lineNumberOffset: 0 },
+        timeoutMs: 200,
+        pollIntervalMs: 10,
+        abortSignal: controller.signal,
+      })).rejects.toThrow(/manual response abort before polling/i);
+      expect(fsMockState.readFileCount).toBe(0);
+    });
   });
 });
