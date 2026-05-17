@@ -8,7 +8,7 @@ TAKT runs AI agents (Claude Code, Codex, OpenCode, Cursor, GitHub Copilot CLI) t
 
 TAKT is built with TAKT itself (dogfooding).
 
-## Why TAKT
+## Why TAKT?
 
 **Batteries included** — Architecture, security, and AI antipattern review criteria are built in. Ship code that meets a quality bar from day one.
 
