@@ -45,14 +45,15 @@ function toProjectRelativePath(projectRoot: string, targetPath: string): string 
 
 function isSensitiveAssistantInitPath(relativePath: string): boolean {
   const segments = relativePath.split('/');
-  const fileName = segments[segments.length - 1];
+  const lowerSegments = segments.map((segment) => segment.toLowerCase());
+  const lowerFileName = lowerSegments[lowerSegments.length - 1];
 
-  return segments.includes('.git')
-    || fileName === undefined
-    || fileName.startsWith('.env')
-    || fileName.endsWith('.pem')
-    || fileName.endsWith('.key')
-    || SENSITIVE_ASSISTANT_INIT_FILE_NAMES.has(fileName);
+  return lowerSegments.includes('.git')
+    || lowerFileName === undefined
+    || lowerFileName.startsWith('.env')
+    || lowerFileName.endsWith('.pem')
+    || lowerFileName.endsWith('.key')
+    || SENSITIVE_ASSISTANT_INIT_FILE_NAMES.has(lowerFileName);
 }
 
 function assertAssistantInitFileAllowed(relativePath: string): void {

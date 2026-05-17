@@ -130,11 +130,15 @@ describe('loadAssistantInitContext', () => {
 
   it.each([
     { path: '.env.local', content: 'TOKEN=secret', error: /\.env\.local|sensitive/i },
+    { path: '.ENV.local', content: 'TOKEN=secret', error: /\.ENV\.local|sensitive/i },
     { path: '.npmrc', content: '//registry.example/:_authToken=secret', error: /\.npmrc|sensitive/i },
+    { path: '.NPMRC', content: '//registry.example/:_authToken=secret', error: /\.NPMRC|sensitive/i },
     { path: '.pypirc', content: 'password = secret', error: /\.pypirc|sensitive/i },
     { path: '.netrc', content: 'machine example login user password secret', error: /\.netrc|sensitive/i },
     { path: 'docs/private.pem', content: 'private key', error: /docs\/private\.pem|sensitive/i },
+    { path: 'docs/PRIVATE.PEM', content: 'private key', error: /docs\/PRIVATE\.PEM|sensitive/i },
     { path: 'docs/private.key', content: 'private key', error: /docs\/private\.key|sensitive/i },
+    { path: 'docs/PRIVATE.KEY', content: 'private key', error: /docs\/PRIVATE\.KEY|sensitive/i },
   ])('should reject configured file $path when it matches a sensitive file pattern', ({ path, content, error }) => {
     writeConfiguredFile(path, content);
     writeProjectConfig([path]);
@@ -143,9 +147,17 @@ describe('loadAssistantInitContext', () => {
   });
 
   it('should reject configured files inside .git as sensitive paths', () => {
+    writeConfiguredFile('.git/config', 'repository config');
     writeProjectConfig(['.git/config']);
 
     expect(() => loadAssistantInitContext(projectDir)).toThrow(/\.git\/config|sensitive/i);
+  });
+
+  it('should reject configured files inside case-varied .git directories as sensitive paths', () => {
+    writeConfiguredFile('metadata/.GIT/config', 'repository config');
+    writeProjectConfig(['metadata/.GIT/config']);
+
+    expect(() => loadAssistantInitContext(projectDir)).toThrow(/metadata\/\.GIT\/config|sensitive/i);
   });
 
   it('should load a configured symlink when the target stays inside the project root', () => {
