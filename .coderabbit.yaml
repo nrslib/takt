@@ -72,6 +72,19 @@ chat:
   auto_reply: true
 
 knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "builtins/ja/facets/policies/ai-antipattern.md"
+      - "builtins/ja/facets/policies/coding.md"
+      - "builtins/ja/facets/policies/review.md"
+      - "builtins/ja/facets/policies/task-decomposition.md"
+      - "builtins/ja/facets/policies/testing.md"
+      - "builtins/ja/facets/knowledge/architecture.md"
+      - "builtins/ja/facets/knowledge/e2e-testing.md"
+      - "builtins/ja/facets/knowledge/security.md"
+      - "builtins/ja/facets/knowledge/takt.md"
+      - "builtins/ja/facets/knowledge/unit-testing.md"
   learnings:
     scope: auto
   issues:
