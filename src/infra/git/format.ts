@@ -5,7 +5,7 @@
  * from git/types.ts and contain no provider-specific logic.
  */
 
-import type { CreatePrOptions, Issue, PrReviewData } from './types.js';
+import type { CreatePrOptions, Issue, PrReviewComment, PrReviewData } from './types.js';
 
 export const TAKT_MANAGED_PR_MARKER = '<!-- takt:managed -->';
 
@@ -113,6 +113,59 @@ export function isIssueReference(task: string): boolean {
   return ISSUE_NUMBER_REGEX.test(task.trim());
 }
 
+const REVIEW_THREAD_POLICY = [
+  '以下のレビューコメントは review thread state ごとに分類されています。',
+  'Active Review Threads を主な修正対象にしてください。',
+  'Resolved / Outdated のコメントは原則として修正対象にせず、現在のコードに同じ問題が明確に残っている場合のみ報告してください。',
+  '各コメントについて、対応したか、スキップしたか、理由を最後に要約してください。',
+];
+
+function formatPrReviewComment(review: PrReviewComment): string {
+  const lines = [`**${review.author}**: ${review.body}`];
+
+  if (review.path) {
+    const location = review.line !== undefined
+      ? `  File: ${review.path}, Line: ${review.line}`
+      : `  File: ${review.path}`;
+    lines.push(location);
+  }
+  if (review.url) {
+    lines.push(`  URL: ${review.url}`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatResolvedPrReviewComment(review: PrReviewComment): string {
+  const lines = [formatPrReviewComment(review)];
+
+  if (review.resolvedBy) {
+    lines.push(`  Resolved by: ${review.resolvedBy}`);
+  }
+  if (review.isOutdated !== undefined) {
+    lines.push(`  Outdated: ${review.isOutdated ? 'yes' : 'no'}`);
+  }
+
+  return lines.join('\n');
+}
+
+function appendReviewSection(
+  parts: string[],
+  title: string,
+  reviews: PrReviewComment[],
+  formatReview: (review: PrReviewComment) => string,
+): void {
+  if (reviews.length === 0) {
+    return;
+  }
+
+  parts.push('');
+  parts.push(title);
+  for (const review of reviews) {
+    parts.push(formatReview(review));
+  }
+}
+
 /**
  * Format PR review data into task text for workflow execution.
  */
@@ -127,16 +180,45 @@ export function formatPrReviewAsTask(prReview: PrReviewData): string {
     parts.push(prReview.body);
   }
 
-  if (prReview.reviews.length > 0) {
-    parts.push('');
-    parts.push('### Review Comments');
-    for (const review of prReview.reviews) {
-      const location = review.path
-        ? `\n  File: ${review.path}${review.line ? `, Line: ${review.line}` : ''}`
-        : '';
-      parts.push(`**${review.author}**: ${review.body}${location}`);
+  const summaries: PrReviewComment[] = [];
+  const active: PrReviewComment[] = [];
+  const outdatedUnresolved: PrReviewComment[] = [];
+  const resolved: PrReviewComment[] = [];
+  const legacyInlineComments: PrReviewComment[] = [];
+
+  for (const review of prReview.reviews) {
+    switch (review.threadState) {
+      case 'active':
+        active.push(review);
+        break;
+      case 'outdated-unresolved':
+        outdatedUnresolved.push(review);
+        break;
+      case 'resolved':
+        resolved.push(review);
+        break;
+      case undefined:
+        if (review.path === undefined) {
+          summaries.push(review);
+        } else {
+          legacyInlineComments.push(review);
+        }
+        break;
     }
   }
+
+  const hasThreadState = active.length > 0 || outdatedUnresolved.length > 0 || resolved.length > 0;
+  if (hasThreadState) {
+    parts.push('');
+    parts.push('### Review Policy');
+    parts.push(...REVIEW_THREAD_POLICY);
+  }
+
+  appendReviewSection(parts, '### Review Summaries', summaries, formatPrReviewComment);
+  appendReviewSection(parts, '### Active Review Threads', active, formatPrReviewComment);
+  appendReviewSection(parts, '### Outdated But Unresolved Review Threads', outdatedUnresolved, formatPrReviewComment);
+  appendReviewSection(parts, '### Resolved / Outdated Review Threads', resolved, formatResolvedPrReviewComment);
+  appendReviewSection(parts, '### Review Comments', legacyInlineComments, formatPrReviewComment);
 
   if (prReview.comments.length > 0) {
     parts.push('');

@@ -15,6 +15,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   createLogger: () => ({
     info: vi.fn(),
     debug: vi.fn(),
+    warn: vi.fn(),
     error: vi.fn(),
   }),
   getErrorMessage: (e: unknown) => String(e),
@@ -38,6 +39,68 @@ function withGhApiResponse(body: unknown, nextPath?: string): string {
     ...(nextPath ? [`link: <https://api.github.com${nextPath}>; rel="next"`] : []),
   ];
   return `${headers.join('\n')}\n\n${JSON.stringify(body)}`;
+}
+
+function withReviewThreadsResponse(
+  nodes: unknown[],
+  pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
+): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo,
+            nodes,
+          },
+        },
+      },
+    },
+  });
+}
+
+function withReviewThreadCommentsResponse(
+  nodes: unknown[],
+  pageInfo: { hasNextPage: boolean; endCursor: string | null } = { hasNextPage: false, endCursor: null },
+): string {
+  return JSON.stringify({
+    data: {
+      node: {
+        comments: {
+          pageInfo,
+          nodes,
+        },
+      },
+    },
+  });
+}
+
+function createReviewThread(overrides: {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  resolvedBy?: { login: string } | null;
+  comments: unknown[];
+  commentsPageInfo?: { hasNextPage: boolean; endCursor: string | null };
+}): unknown {
+  return {
+    id: overrides.id,
+    isResolved: overrides.isResolved,
+    isOutdated: overrides.isOutdated,
+    resolvedBy: overrides.resolvedBy ?? null,
+    comments: {
+      pageInfo: overrides.commentsPageInfo ?? { hasNextPage: false, endCursor: null },
+      nodes: overrides.comments,
+    },
+  };
+}
+
+function expectGraphqlField(args: unknown, flag: '-f' | '-F', value: string): void {
+  expect(args).toEqual(expect.any(Array));
+  const commandArgs = args as string[];
+  const valueIndex = commandArgs.indexOf(value);
+  expect(valueIndex).toBeGreaterThan(0);
+  expect(commandArgs[valueIndex - 1]).toBe(flag);
 }
 
 describe('findExistingPr', () => {
@@ -588,10 +651,10 @@ describe('buildPrBody', () => {
 describe('fetchPrReviewComments', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecFileSync.mockReset();
   });
 
   it('should return PrReviewData when gh pr view JSON is valid', () => {
-    // Given
     const ghResponse = {
       number: 456,
       title: 'Fix auth bug',
@@ -617,27 +680,56 @@ describe('fetchPrReviewComments', () => {
         { path: 'src/auth.test.ts' },
       ],
     };
-    const inlineCommentsResponse = [
-      { body: 'Fix null check here', path: 'src/auth.ts', line: 42, user: { login: 'reviewer1' } },
-    ];
+    const activeThread = createReviewThread({
+      id: 'thread-active-456',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          body: 'Fix null check here',
+          path: 'src/auth.ts',
+          line: 42,
+          originalLine: 40,
+          url: 'https://github.com/org/repo/pull/456#discussion_r1',
+          author: { login: 'reviewer1' },
+        },
+      ],
+    });
+    const resolvedThread = createReviewThread({
+      id: 'thread-resolved-456',
+      isResolved: true,
+      isOutdated: true,
+      resolvedBy: { login: 'coderabbitai[bot]' },
+      comments: [
+        {
+          body: 'Already addressed in a later commit',
+          path: 'src/auth.ts',
+          line: null,
+          originalLine: 12,
+          url: 'https://github.com/org/repo/pull/456#discussion_r2',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
-
-    // When
+      .mockReturnValueOnce(withReviewThreadsResponse([activeThread, resolvedThread]));
     const result = fetchPrReviewComments(456, '/project');
-
-    // Then
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
       ['pr', 'view', '456', '--json', 'number,title,body,url,headRefName,baseRefName,comments,reviews,files'],
       expect.objectContaining({ encoding: 'utf-8' }),
     );
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['api', '--include', '/repos/org/repo/pulls/456/comments?per_page=100&page=1'],
-      expect.objectContaining({ encoding: 'utf-8' }),
-    );
+    expect(mockExecFileSync.mock.calls[1]?.[1]).toEqual(expect.arrayContaining([
+      'api',
+      'graphql',
+      'owner=org',
+      'repo=repo',
+      'number=456',
+    ]));
+    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'owner=org');
+    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'repo=repo');
+    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-F', 'number=456');
     expect(result.number).toBe(456);
     expect(result.title).toBe('Fix auth bug');
     expect((result as { baseRefName?: string }).baseRefName).toBe('release/main');
@@ -645,13 +737,30 @@ describe('fetchPrReviewComments', () => {
     expect(result.comments).toEqual([{ author: 'commenter1', body: 'Please update tests' }]);
     expect(result.reviews).toEqual([
       { author: 'reviewer1', body: 'Looks mostly good' },
-      { author: 'reviewer1', body: 'Fix null check here', path: 'src/auth.ts', line: 42 },
+      {
+        author: 'reviewer1',
+        body: 'Fix null check here',
+        path: 'src/auth.ts',
+        line: 42,
+        url: 'https://github.com/org/repo/pull/456#discussion_r1',
+        threadState: 'active',
+        isOutdated: false,
+      },
+      {
+        author: 'coderabbitai[bot]',
+        body: 'Already addressed in a later commit',
+        path: 'src/auth.ts',
+        line: 12,
+        url: 'https://github.com/org/repo/pull/456#discussion_r2',
+        threadState: 'resolved',
+        resolvedBy: 'coderabbitai[bot]',
+        isOutdated: true,
+      },
     ]);
     expect(result.files).toEqual(['src/auth.ts', 'src/auth.test.ts']);
   });
 
   it('should skip reviews with empty body', () => {
-    // Given
     const ghResponse = {
       number: 10,
       title: 'Approved PR',
@@ -666,17 +775,12 @@ describe('fetchPrReviewComments', () => {
     };
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(JSON.stringify([]));
-
-    // When
+      .mockReturnValueOnce(withReviewThreadsResponse([]));
     const result = fetchPrReviewComments(10, '/project');
-
-    // Then
     expect(result.reviews).toEqual([]);
   });
 
-  it('should include inline comments from pulls comments API even when review bodies are empty', () => {
-    // Given
+  it('should include review thread comments even when review bodies are empty', () => {
     const ghResponse = {
       number: 11,
       title: 'Inline only',
@@ -689,122 +793,164 @@ describe('fetchPrReviewComments', () => {
       ],
       files: [],
     };
-    const inlineCommentsResponse = [
-      { body: 'Address this edge case', path: 'src/index.ts', line: 7, user: { login: 'reviewer3' } },
-    ];
+    const thread = createReviewThread({
+      id: 'thread-11',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          body: 'Address this edge case',
+          path: 'src/index.ts',
+          line: 7,
+          originalLine: 7,
+          url: 'https://github.com/org/repo/pull/11#discussion_r1',
+          author: { login: 'reviewer3' },
+        },
+      ],
+    });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
-
-    // When
+      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
     const result = fetchPrReviewComments(11, '/project');
-
-    // Then
     expect(result.reviews).toEqual([
-      { author: 'reviewer3', body: 'Address this edge case', path: 'src/index.ts', line: 7 },
+      {
+        author: 'reviewer3',
+        body: 'Address this edge case',
+        path: 'src/index.ts',
+        line: 7,
+        url: 'https://github.com/org/repo/pull/11#discussion_r1',
+        threadState: 'active',
+        isOutdated: false,
+      },
     ]);
   });
 
-  it('should fetch all inline review comments when total comments exceed one default page', () => {
-    // Given
+  it('should classify unresolved outdated review threads separately from active threads', () => {
     const ghResponse = {
       number: 12,
-      title: 'Many inline comments',
+      title: 'Outdated unresolved thread',
       body: '',
       url: 'https://github.com/org/repo/pull/12',
-      headRefName: 'fix/many-inline-comments',
+      headRefName: 'fix/outdated-thread',
       comments: [],
       reviews: [],
       files: [],
     };
-    const inlineCommentsResponse = Array.from({ length: 31 }, (_, i) => ({
-      body: `Inline comment ${i + 1}`,
-      path: 'src/index.ts',
-      line: i + 1,
-      user: { login: 'reviewer-pagination' },
-    }));
+    const thread = createReviewThread({
+      id: 'thread-12',
+      isResolved: false,
+      isOutdated: true,
+      comments: [
+        {
+          body: 'Confirm whether this stale diff still applies',
+          path: 'src/index.ts',
+          line: null,
+          originalLine: 31,
+          url: 'https://github.com/org/repo/pull/12#discussion_r1',
+          author: { login: 'reviewer-outdated' },
+        },
+      ],
+    });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
-
-    // When
+      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
     const result = fetchPrReviewComments(12, '/project');
-
-    // Then
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['api', '--include', '/repos/org/repo/pulls/12/comments?per_page=100&page=1'],
-      expect.objectContaining({ encoding: 'utf-8' }),
-    );
-    expect(result.reviews).toHaveLength(31);
-    expect(result.reviews[0]).toEqual({
-      author: 'reviewer-pagination',
-      body: 'Inline comment 1',
-      path: 'src/index.ts',
-      line: 1,
-    });
-    expect(result.reviews[30]).toEqual({
-      author: 'reviewer-pagination',
-      body: 'Inline comment 31',
-      path: 'src/index.ts',
-      line: 31,
-    });
+    expect(result.reviews).toEqual([
+      {
+        author: 'reviewer-outdated',
+        body: 'Confirm whether this stale diff still applies',
+        path: 'src/index.ts',
+        line: 31,
+        url: 'https://github.com/org/repo/pull/12#discussion_r1',
+        threadState: 'outdated-unresolved',
+        isOutdated: true,
+      },
+    ]);
   });
 
-  it('should request additional pages when inline review comments exceed per_page', () => {
-    // Given
+  it('should request additional GraphQL pages when reviewThreads has a next page', () => {
     const ghResponse = {
       number: 13,
-      title: 'Paginated inline comments',
+      title: 'Paginated review threads',
       body: '',
       url: 'https://github.com/org/repo/pull/13',
-      headRefName: 'fix/paginated-inline-comments',
+      headRefName: 'fix/paginated-review-threads',
       comments: [],
       reviews: [],
       files: [],
     };
-    const firstPageInlineComments = Array.from({ length: 100 }, (_, i) => ({
-      body: `Inline comment ${i + 1}`,
-      path: 'src/index.ts',
-      line: i + 1,
-      user: { login: 'reviewer-pagination' },
-    }));
-    const secondPageInlineComments = [
-      { body: 'Inline comment 101', path: 'src/index.ts', line: 101, user: { login: 'reviewer-pagination' } },
-    ];
+    const firstThread = createReviewThread({
+      id: 'thread-13-first',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          body: 'First page comment',
+          path: 'src/index.ts',
+          line: 1,
+          originalLine: 1,
+          url: 'https://github.com/org/repo/pull/13#discussion_r1',
+          author: { login: 'reviewer-pagination' },
+        },
+      ],
+    });
+    const secondThread = createReviewThread({
+      id: 'thread-13-second',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          body: 'Second page comment',
+          path: 'src/index.ts',
+          line: 101,
+          originalLine: 101,
+          url: 'https://github.com/org/repo/pull/13#discussion_r2',
+          author: { login: 'reviewer-pagination' },
+        },
+      ],
+    });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withGhApiResponse(
-        firstPageInlineComments,
-        '/repos/org/repo/pulls/13/comments?per_page=100&page=2',
+      .mockReturnValueOnce(withReviewThreadsResponse(
+        [firstThread],
+        { hasNextPage: true, endCursor: 'cursor-1' },
       ))
-      .mockReturnValueOnce(withGhApiResponse(secondPageInlineComments));
-
-    // When
+      .mockReturnValueOnce(withReviewThreadsResponse([secondThread]));
     const result = fetchPrReviewComments(13, '/project');
-
-    // Then
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['api', '--include', '/repos/org/repo/pulls/13/comments?per_page=100&page=1'],
-      expect.objectContaining({ encoding: 'utf-8' }),
-    );
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['api', '--include', '/repos/org/repo/pulls/13/comments?per_page=100&page=2'],
-      expect.objectContaining({ encoding: 'utf-8' }),
-    );
-    expect(result.reviews).toHaveLength(101);
-    expect(result.reviews[100]).toEqual({
+    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
+    expect(mockExecFileSync.mock.calls[1]?.[1]).toEqual(expect.arrayContaining([
+      'api',
+      'graphql',
+      'number=13',
+    ]));
+    expect(mockExecFileSync.mock.calls[2]?.[1]).toEqual(expect.arrayContaining([
+      'api',
+      'graphql',
+      'endCursor=cursor-1',
+    ]));
+    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'endCursor=cursor-1');
+    expect(result.reviews).toHaveLength(2);
+    expect(result.reviews[0]).toEqual({
       author: 'reviewer-pagination',
-      body: 'Inline comment 101',
+      body: 'First page comment',
+      path: 'src/index.ts',
+      line: 1,
+      url: 'https://github.com/org/repo/pull/13#discussion_r1',
+      threadState: 'active',
+      isOutdated: false,
+    });
+    expect(result.reviews[1]).toEqual({
+      author: 'reviewer-pagination',
+      body: 'Second page comment',
       path: 'src/index.ts',
       line: 101,
+      url: 'https://github.com/org/repo/pull/13#discussion_r2',
+      threadState: 'active',
+      isOutdated: false,
     });
   });
 
-  it('should fallback to original_line when line is null', () => {
-    // Given
+  it('should fallback to originalLine when line is null', () => {
     const ghResponse = {
       number: 14,
       title: 'Keep original line',
@@ -815,76 +961,214 @@ describe('fetchPrReviewComments', () => {
       reviews: [],
       files: [],
     };
-    const inlineCommentsResponse = [
-      {
-        body: 'Line moved after suggestion',
-        path: 'src/index.ts',
-        line: null,
-        original_line: 27,
-        user: { login: 'reviewer-original-line' },
-      },
-    ];
+    const thread = createReviewThread({
+      id: 'thread-14',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          body: 'Line moved after suggestion',
+          path: 'src/index.ts',
+          line: null,
+          originalLine: 27,
+          url: 'https://github.com/org/repo/pull/14#discussion_r1',
+          author: { login: 'reviewer-original-line' },
+        },
+      ],
+    });
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(JSON.stringify(inlineCommentsResponse));
-
-    // When
+      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
     const result = fetchPrReviewComments(14, '/project');
-
-    // Then
     expect(result.reviews).toEqual([
       {
         author: 'reviewer-original-line',
         body: 'Line moved after suggestion',
         path: 'src/index.ts',
         line: 27,
+        url: 'https://github.com/org/repo/pull/14#discussion_r1',
+        threadState: 'active',
+        isOutdated: false,
       },
     ]);
   });
 
-  it('should request one more page when inline comments fill the page exactly and stop on empty page', () => {
-    // Given
+  it('should preserve review thread comments from deleted GitHub users', () => {
     const ghResponse = {
-      number: 15,
-      title: 'Exact page boundary',
+      number: 16,
+      title: 'Deleted author',
       body: '',
-      url: 'https://github.com/org/repo/pull/15',
-      headRefName: 'fix/page-boundary',
+      url: 'https://github.com/org/repo/pull/16',
+      headRefName: 'fix/deleted-author',
       comments: [],
       reviews: [],
       files: [],
     };
-    const fullPage = Array.from({ length: 100 }, (_, i) => ({
-      body: `Comment ${i + 1}`,
+    const thread = createReviewThread({
+      id: 'thread-16',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          body: 'Comment from an unavailable account',
+          path: 'src/index.ts',
+          line: 19,
+          originalLine: 19,
+          url: 'https://github.com/org/repo/pull/16#discussion_r1',
+          author: null,
+        },
+      ],
+    });
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(withReviewThreadsResponse([thread]));
+    const result = fetchPrReviewComments(16, '/project');
+    expect(result.reviews).toEqual([
+      {
+        author: 'deleted GitHub user',
+        body: 'Comment from an unavailable account',
+        path: 'src/index.ts',
+        line: 19,
+        url: 'https://github.com/org/repo/pull/16#discussion_r1',
+        threadState: 'active',
+        isOutdated: false,
+      },
+    ]);
+  });
+
+  it('should fetch additional GraphQL pages when a review thread has more comments', () => {
+    const ghResponse = {
+      number: 15,
+      title: 'Large review thread',
+      body: '',
+      url: 'https://github.com/org/repo/pull/15',
+      headRefName: 'fix/large-thread',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    const thread = {
+      id: 'thread-15-large',
+      isResolved: false,
+      isOutdated: false,
+      resolvedBy: null,
+      comments: {
+        pageInfo: { hasNextPage: true, endCursor: 'comment-cursor-1' },
+        nodes: [
+          {
+            body: 'First fetched thread comment',
+            path: 'src/index.ts',
+            line: 1,
+            originalLine: 1,
+            url: 'https://github.com/org/repo/pull/15#discussion_r1',
+            author: { login: 'reviewer-large-thread' },
+          },
+        ],
+      },
+    };
+    const secondPageComment = {
+      body: 'Second fetched thread comment',
       path: 'src/index.ts',
-      line: i + 1,
-      user: { login: 'reviewer-page-boundary' },
-    }));
+      line: 2,
+      originalLine: 2,
+      url: 'https://github.com/org/repo/pull/15#discussion_r2',
+      author: { login: 'reviewer-large-thread' },
+    };
 
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(withGhApiResponse(
-        fullPage,
-        '/repos/org/repo/pulls/15/comments?per_page=100&page=2',
-      ))
-      .mockReturnValueOnce(withGhApiResponse([]));
+      .mockReturnValueOnce(withReviewThreadsResponse([thread]))
+      .mockReturnValueOnce(withReviewThreadCommentsResponse([secondPageComment]));
 
-    // When
     const result = fetchPrReviewComments(15, '/project');
 
-    // Then
     expect(mockExecFileSync).toHaveBeenCalledTimes(3);
-    expect(mockExecFileSync).toHaveBeenNthCalledWith(
-      3,
-      'gh',
-      ['api', '--include', '/repos/org/repo/pulls/15/comments?per_page=100&page=2'],
-      expect.objectContaining({ encoding: 'utf-8' }),
-    );
-    expect(result.reviews).toHaveLength(100);
+    expect(mockExecFileSync.mock.calls[2]?.[1]).toEqual(expect.arrayContaining([
+      'api',
+      'graphql',
+      'threadId=thread-15-large',
+      'commentsEndCursor=comment-cursor-1',
+    ]));
+    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'threadId=thread-15-large');
+    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'commentsEndCursor=comment-cursor-1');
+    expect(result.reviews).toEqual([
+      {
+        author: 'reviewer-large-thread',
+        body: 'First fetched thread comment',
+        path: 'src/index.ts',
+        line: 1,
+        url: 'https://github.com/org/repo/pull/15#discussion_r1',
+        threadState: 'active',
+        isOutdated: false,
+      },
+      {
+        author: 'reviewer-large-thread',
+        body: 'Second fetched thread comment',
+        path: 'src/index.ts',
+        line: 2,
+        url: 'https://github.com/org/repo/pull/15#discussion_r2',
+        threadState: 'active',
+        isOutdated: false,
+      },
+    ]);
+  });
+
+  it('should pass GraphQL string variables as raw fields', () => {
+    const ghResponse = {
+      number: 17,
+      title: 'Raw GraphQL fields',
+      body: '',
+      url: 'https://github.com/@org/@repo/pull/17',
+      headRefName: 'fix/raw-graphql-fields',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    const thread = createReviewThread({
+      id: '@/tmp/thread-id',
+      isResolved: false,
+      isOutdated: false,
+      commentsPageInfo: { hasNextPage: true, endCursor: '@/tmp/comment-cursor' },
+      comments: [
+        {
+          body: 'First page comment',
+          path: 'src/index.ts',
+          line: 1,
+          originalLine: 1,
+          url: 'https://github.com/org/repo/pull/17#discussion_r1',
+          author: { login: 'reviewer-raw-field' },
+        },
+      ],
+    });
+    const nextComment = {
+      body: 'Second page comment',
+      path: 'src/index.ts',
+      line: 2,
+      originalLine: 2,
+      url: 'https://github.com/org/repo/pull/17#discussion_r2',
+      author: { login: 'reviewer-raw-field' },
+    };
+
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(withReviewThreadsResponse(
+        [thread],
+        { hasNextPage: true, endCursor: '@/tmp/thread-cursor' },
+      ))
+      .mockReturnValueOnce(withReviewThreadCommentsResponse([nextComment]))
+      .mockReturnValueOnce(withReviewThreadsResponse([]));
+
+    fetchPrReviewComments(17, '/project');
+
+    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'owner=@org');
+    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-f', 'repo=@repo');
+    expectGraphqlField(mockExecFileSync.mock.calls[1]?.[1], '-F', 'number=17');
+    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'threadId=@/tmp/thread-id');
+    expectGraphqlField(mockExecFileSync.mock.calls[2]?.[1], '-f', 'commentsEndCursor=@/tmp/comment-cursor');
+    expectGraphqlField(mockExecFileSync.mock.calls[3]?.[1], '-f', 'endCursor=@/tmp/thread-cursor');
   });
 
   it('should pass cwd to all execFileSync calls', () => {
-    // Given
     const ghResponse = {
       number: 50,
       title: 'cwd test',
@@ -897,29 +1181,95 @@ describe('fetchPrReviewComments', () => {
     };
     mockExecFileSync
       .mockReturnValueOnce(JSON.stringify(ghResponse))
-      .mockReturnValueOnce(JSON.stringify([]));
-
-    // When
+      .mockReturnValueOnce(withReviewThreadsResponse([]));
     fetchPrReviewComments(50, '/worktree/clone');
-
-    // Then: all execFileSync calls should include cwd
     for (const call of mockExecFileSync.mock.calls) {
       expect(call[2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
     }
   });
 
-  it('should throw when gh CLI fails', () => {
-    // Given
-    mockExecFileSync.mockImplementation(() => { throw new Error('gh: PR not found'); });
+  it('should preserve fetched thread state through task formatting', () => {
+    const ghResponse = {
+      number: 51,
+      title: 'Formatter handoff',
+      body: '',
+      url: 'https://github.com/org/repo/pull/51',
+      headRefName: 'fix/formatter-handoff',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    const activeThread = createReviewThread({
+      id: 'thread-51-active',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          body: 'Active comment',
+          path: 'src/active.ts',
+          line: 10,
+          originalLine: 10,
+          url: 'https://github.com/org/repo/pull/51#discussion_r1',
+          author: { login: 'active-reviewer' },
+        },
+      ],
+    });
+    const resolvedThread = createReviewThread({
+      id: 'thread-51-resolved',
+      isResolved: true,
+      isOutdated: true,
+      resolvedBy: { login: 'maintainer' },
+      comments: [
+        {
+          body: 'Resolved comment',
+          path: 'src/resolved.ts',
+          line: 20,
+          originalLine: 20,
+          url: 'https://github.com/org/repo/pull/51#discussion_r2',
+          author: { login: 'resolved-reviewer' },
+        },
+      ],
+    });
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockReturnValueOnce(withReviewThreadsResponse([activeThread, resolvedThread]));
+    const prReview = fetchPrReviewComments(51, '/project');
+    const task = formatPrReviewAsTask(prReview);
+    expect(task).toContain('### Active Review Threads');
+    expect(task).toContain('**active-reviewer**: Active comment');
+    expect(task).toContain('### Resolved / Outdated Review Threads');
+    expect(task).toContain('**resolved-reviewer**: Resolved comment');
+    expect(task).toContain('Resolved by: maintainer');
+    expect(task).not.toContain('### Review Comments');
+  });
 
-    // When/Then
+  it('should throw a clear error when GraphQL reviewThreads cannot be fetched', () => {
+    const ghResponse = {
+      number: 52,
+      title: 'GraphQL failure',
+      body: '',
+      url: 'https://github.com/org/repo/pull/52',
+      headRefName: 'fix/graphql-failure',
+      comments: [],
+      reviews: [],
+      files: [],
+    };
+    mockExecFileSync
+      .mockReturnValueOnce(JSON.stringify(ghResponse))
+      .mockImplementationOnce(() => {
+        throw new Error('gh api graphql failed');
+      });
+    expect(() => fetchPrReviewComments(52, '/project')).toThrow('GraphQL reviewThreads failed');
+  });
+
+  it('should throw when gh CLI fails', () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error('gh: PR not found'); });
     expect(() => fetchPrReviewComments(999, '/project')).toThrow('gh: PR not found');
   });
 });
 
 describe('formatPrReviewAsTask', () => {
   it('should format PR review data with all sections', () => {
-    // Given
     const prReview: PrReviewData = {
       number: 456,
       title: 'Fix auth bug',
@@ -930,20 +1280,25 @@ describe('formatPrReviewAsTask', () => {
         { author: 'commenter1', body: 'Can you also update the tests?' },
       ],
       reviews: [
-        { author: 'reviewer1', body: 'Fix the null check in auth.ts', path: 'src/auth.ts', line: 42 },
+        {
+          author: 'reviewer1',
+          body: 'Fix the null check in auth.ts',
+          path: 'src/auth.ts',
+          line: 42,
+          threadState: 'active',
+          isOutdated: false,
+        },
         { author: 'reviewer2', body: 'This function should handle edge cases' },
       ],
       files: ['src/auth.ts', 'src/auth.test.ts'],
     };
-
-    // When
     const result = formatPrReviewAsTask(prReview);
-
-    // Then
     expect(result).toContain('## PR #456 Review Comments: Fix auth bug');
     expect(result).toContain('### PR Description');
     expect(result).toContain('PR description text');
-    expect(result).toContain('### Review Comments');
+    expect(result).toContain('### Review Policy');
+    expect(result).toContain('### Review Summaries');
+    expect(result).toContain('### Active Review Threads');
     expect(result).toContain('**reviewer1**: Fix the null check in auth.ts');
     expect(result).toContain('File: src/auth.ts, Line: 42');
     expect(result).toContain('**reviewer2**: This function should handle edge cases');
@@ -955,7 +1310,6 @@ describe('formatPrReviewAsTask', () => {
   });
 
   it('should omit PR Description when body is empty', () => {
-    // Given
     const prReview: PrReviewData = {
       number: 10,
       title: 'Quick fix',
@@ -966,17 +1320,12 @@ describe('formatPrReviewAsTask', () => {
       reviews: [{ author: 'reviewer', body: 'Fix this' }],
       files: [],
     };
-
-    // When
     const result = formatPrReviewAsTask(prReview);
-
-    // Then
     expect(result).not.toContain('### PR Description');
-    expect(result).toContain('### Review Comments');
+    expect(result).toContain('### Review Summaries');
   });
 
   it('should omit empty sections', () => {
-    // Given
     const prReview: PrReviewData = {
       number: 20,
       title: 'Empty review',
@@ -987,18 +1336,13 @@ describe('formatPrReviewAsTask', () => {
       reviews: [{ author: 'reviewer', body: 'Add tests' }],
       files: [],
     };
-
-    // When
     const result = formatPrReviewAsTask(prReview);
-
-    // Then
     expect(result).not.toContain('### Conversation Comments');
     expect(result).not.toContain('### Changed Files');
-    expect(result).toContain('### Review Comments');
+    expect(result).toContain('### Review Summaries');
   });
 
   it('should format inline comment with path but no line', () => {
-    // Given
     const prReview: PrReviewData = {
       number: 30,
       title: 'Path only',
@@ -1009,11 +1353,7 @@ describe('formatPrReviewAsTask', () => {
       reviews: [{ author: 'reviewer', body: 'Fix this', path: 'src/index.ts' }],
       files: [],
     };
-
-    // When
     const result = formatPrReviewAsTask(prReview);
-
-    // Then
     expect(result).toContain('File: src/index.ts');
     expect(result).not.toContain('Line:');
   });
