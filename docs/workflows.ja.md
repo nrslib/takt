@@ -346,7 +346,7 @@ workflow_config:
 
 ### `workflow_config.runtime`
 
-workflow 実行前に走る prepare スクリプト。ビルトインプリセットの `node` / `gradle` は常に許可されます。カスタムスクリプトパスを使うには config 側で `workflow_runtime_prepare.customScripts: true` を有効にする必要があります。
+workflow 実行前に走る prepare スクリプト。ビルトインプリセットの `node` / `gradle` は常に許可されます。カスタムスクリプトパスを使うには config 側で `workflow_runtime_prepare.custom_scripts: true` を有効にする必要があります。
 
 ```yaml
 workflow_config:

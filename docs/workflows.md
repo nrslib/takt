@@ -347,7 +347,7 @@ workflow_config:
 
 ### `workflow_config.runtime`
 
-Runtime prepare scripts that run before workflow execution. Builtin presets `node` / `gradle` are always allowed. Custom script paths require `workflow_runtime_prepare.customScripts: true` in config.
+Runtime prepare scripts that run before workflow execution. Builtin presets `node` / `gradle` are always allowed. Custom script paths require `workflow_runtime_prepare.custom_scripts: true` in config.
 
 ```yaml
 workflow_config:

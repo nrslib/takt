@@ -353,7 +353,7 @@ export function buildRawTaktProvidersOrThrow(
     return undefined;
   }
   if (taktProviders.assistant === undefined) {
-    throw new Error("Configuration error: 'taktProviders.assistant' is required when taktProviders is set.");
+    throw new Error("Configuration error: 'takt_providers.assistant' is required when takt_providers is set.");
   }
   const assistant = normalizeTaktAssistantProvider(taktProviders.assistant);
   if (!assistant) {

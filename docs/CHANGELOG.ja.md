@@ -366,14 +366,14 @@
 ### Added
 
 - GitLab VCS プロバイダーを追加: `glab` CLI を使った Issue 取得・マージリクエスト作成・レビューコメント取得に対応。git リモート URL からの自動検出をサポートし、`vcs_provider: gitlab` による明示的な設定も可能 (#512)
-- インタラクティブモード用プロバイダー設定 (`taktProviders.assistant`) を追加: ピース実行とは独立したプロバイダー/モデルをインタラクティブモードに指定可能 (#483)
+- インタラクティブモード用プロバイダー設定 (`takt_providers.assistant`) を追加: ピース実行とは独立したプロバイダー/モデルをインタラクティブモードに指定可能 (#483)
 
 ### Changed
 
-- BREAKING: ピース YAML の MCP サーバー設定をデフォルト拒否に変更。使用するには `pieceMcpServers` でトランスポート別に明示的に許可が必要 (#524)
-- BREAKING: ピース YAML の Arpeggio カスタムコード（カスタムデータソース、インライン JS、外部マージファイル）をデフォルト拒否に変更。使用するには `pieceArpeggio` で明示的に許可が必要 (#521)
-- BREAKING: ピース YAML の runtime prepare カスタムスクリプトをデフォルト拒否に変更（ビルトインプリセットは常に許可）。使用するには `pieceRuntimePrepare.customScripts: true` が必要 (#520)
-- BREAKING: sync conflict resolver の自動ツール承認をデフォルト拒否に変更。使用するには `syncConflictResolver.autoApproveTools: true` が必要 (#522)
+- BREAKING: ピース YAML の MCP サーバー設定をデフォルト拒否に変更。使用するには `piece_mcp_servers` でトランスポート別に明示的に許可が必要 (#524)
+- BREAKING: ピース YAML の Arpeggio カスタムコード（カスタムデータソース、インライン JS、外部マージファイル）をデフォルト拒否に変更。使用するには `piece_arpeggio` で明示的に許可が必要 (#521)
+- BREAKING: ピース YAML の runtime prepare カスタムスクリプトをデフォルト拒否に変更（ビルトインプリセットは常に許可）。使用するには `piece_runtime_prepare.custom_scripts: true` が必要 (#520)
+- BREAKING: sync conflict resolver の自動ツール承認をデフォルト拒否に変更。使用するには `sync_conflict_resolver.auto_approve_tools: true` が必要 (#522)
 - team leader のタスク分解における最大ターン数を 4 → 5 に引き上げ (#511)
 - supervisor ファセットを強化: 要件カバレッジのエビデンスベース検証を追加
 - ペルソナファセットからクロスエージェント参照を除去し、ピース横断での再利用性を向上

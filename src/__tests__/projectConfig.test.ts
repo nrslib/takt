@@ -965,16 +965,16 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).not.toThrow();
     });
 
-    it('should throw on save when taktProviders is set without assistant', () => {
+    it('should throw on save when takt_providers is set without assistant', () => {
       const invalidConfig = {
         provider: 'codex',
         taktProviders: {},
       } as unknown as ProjectLocalConfig;
 
-      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/taktProviders\.assistant/);
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers\.assistant' is required when takt_providers is set\./);
     });
 
-    it('should throw on save when taktProviders.assistant has incompatible provider/model', () => {
+    it('should throw on save when takt_providers.assistant has incompatible provider/model', () => {
       const invalidConfig = {
         provider: 'codex',
         taktProviders: {
@@ -988,7 +988,7 @@ unexpected_overrides:
       expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Claude model alias/);
     });
 
-    it('should throw on save when taktProviders.assistant is empty object', () => {
+    it('should throw on save when takt_providers.assistant is empty object', () => {
       const invalidConfig = {
         provider: 'codex',
         taktProviders: {
@@ -996,7 +996,7 @@ unexpected_overrides:
         },
       } as unknown as ProjectLocalConfig;
 
-      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/takt_providers\.assistant/);
+      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
     });
   });
 
