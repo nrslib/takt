@@ -4,10 +4,9 @@
 language: ja-JP
 
 reviews:
-  # chill: 重要な問題（バグ・セキュリティ・即時可読性問題）に絞る。
-  # TAKT 自身の /review が詳細なレビューを行うため、CodeRabbit は早期発見・
-  # 補完的な役割に留める。
-  profile: chill
+  # NOTE(probe): 通常 main では `chill` だが、ガイドライン参照度のテスト用に
+  # 一時的に assertive へ変更している。マージしないこと。
+  profile: assertive
 
   high_level_summary: true
   poem: false
