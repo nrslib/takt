@@ -303,7 +303,7 @@ describe('loadGlobalConfig', () => {
     expect(() => loadGlobalConfig()).toThrow(/Claude model alias/);
   });
 
-  it('should fail fast on save when taktProviders is set without assistant', () => {
+  it('should fail fast on save when takt_providers is set without assistant', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
@@ -311,10 +311,10 @@ describe('loadGlobalConfig', () => {
     const config = loadGlobalConfig();
     config.taktProviders = {} as unknown as NonNullable<typeof config.taktProviders>;
 
-    expect(() => saveGlobalConfig(config)).toThrow(/taktProviders\.assistant/);
+    expect(() => saveGlobalConfig(config)).toThrow(/Configuration error: 'takt_providers\.assistant' is required when takt_providers is set\./);
   });
 
-  it('should fail fast on save when taktProviders.assistant has incompatible provider/model', () => {
+  it('should fail fast on save when takt_providers.assistant has incompatible provider/model', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
@@ -330,7 +330,7 @@ describe('loadGlobalConfig', () => {
     expect(() => saveGlobalConfig(config)).toThrow(/Claude model alias/);
   });
 
-  it('should fail fast on save when taktProviders.assistant is empty object', () => {
+  it('should fail fast on save when takt_providers.assistant is empty object', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
@@ -340,7 +340,7 @@ describe('loadGlobalConfig', () => {
       assistant: {} as NonNullable<typeof config.taktProviders>['assistant'],
     };
 
-    expect(() => saveGlobalConfig(config)).toThrow(/takt_providers\.assistant/);
+    expect(() => saveGlobalConfig(config)).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
   });
 
   it('should return the same cached object on subsequent calls', () => {
