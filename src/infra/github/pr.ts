@@ -10,7 +10,17 @@ import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
 import { checkGhCli } from './issue.js';
 import { resolveRepositoryNameWithOwner } from './repository.js';
-import type { CreatePrOptions, CreatePrResult, ExistingPr, CommentResult, MergeResult, PrListItem, PrReviewData, PrReviewComment } from '../git/types.js';
+import type {
+  CreatePrOptions,
+  CreatePrResult,
+  ExistingPr,
+  CommentResult,
+  MergeResult,
+  PrListItem,
+  PrReviewData,
+  PrReviewComment,
+  PrReviewThreadState,
+} from '../git/types.js';
 
 const log = createLogger('github-pr');
 
@@ -47,7 +57,10 @@ interface GhPrListResponseItem {
 }
 
 const OPEN_PRS_PER_PAGE = 100;
-const INLINE_REVIEW_COMMENTS_PER_PAGE = 100;
+const REVIEW_THREADS_PER_PAGE = 100;
+const REVIEW_THREAD_COMMENTS_PER_PAGE = 100;
+const GRAPHQL_PAGINATION_HARD_CAP = 100;
+const DELETED_GITHUB_USER_AUTHOR = 'deleted GitHub user';
 
 export function listOpenPrs(cwd: string): PrListItem[] {
   const repo = resolveRepositoryNameWithOwner(cwd);
@@ -111,45 +124,278 @@ interface GhPrViewReviewResponse {
   files: Array<{ path: string }>;
 }
 
-/** Raw shape from GitHub Pull Request Review Comments API (null fields normalized on parse) */
-interface GhPrApiReviewComment {
-  body: string;
-  path: string;
-  line?: number;
-  original_line?: number;
-  user: { login: string };
+const REVIEW_THREADS_QUERY = `
+query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$number) {
+      reviewThreads(first:${REVIEW_THREADS_PER_PAGE}, after:$endCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          resolvedBy { login }
+          comments(first:${REVIEW_THREAD_COMMENTS_PER_PAGE}) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              path
+              line
+              originalLine
+              body
+              url
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+
+const REVIEW_THREAD_COMMENTS_QUERY = `
+query($threadId:ID!, $commentsEndCursor:String) {
+  node(id:$threadId) {
+    ... on PullRequestReviewThread {
+      comments(first:${REVIEW_THREAD_COMMENTS_PER_PAGE}, after:$commentsEndCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          path
+          line
+          originalLine
+          body
+          url
+          author { login }
+        }
+      }
+    }
+  }
+}
+`;
+
+interface GhGraphqlReviewThreadsResponse {
+  data?: {
+    repository: {
+      pullRequest: {
+        reviewThreads: GhGraphqlReviewThreadsConnection;
+      } | null;
+    } | null;
+  };
+  errors?: Array<{ message: string }>;
 }
 
-/** Raw JSON shape from GitHub API (line/original_line are nullable) */
-interface GhPrApiRawReviewComment {
-  body: string;
+interface GhGraphqlReviewThreadsConnection {
+  pageInfo: {
+    hasNextPage: boolean;
+    endCursor: string | null;
+  };
+  nodes: GhGraphqlReviewThread[];
+}
+
+interface GhGraphqlReviewThreadCommentsResponse {
+  data?: {
+    node: GhGraphqlReviewThreadCommentsNode | null;
+  };
+  errors?: Array<{ message: string }>;
+}
+
+interface GhGraphqlReviewThreadCommentsNode {
+  comments?: GhGraphqlReviewThreadCommentsConnection;
+}
+
+interface GhGraphqlReviewThreadCommentsConnection {
+  pageInfo: {
+    hasNextPage: boolean;
+    endCursor: string | null;
+  };
+  nodes: GhGraphqlReviewThreadComment[];
+}
+
+interface GhGraphqlReviewThread {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  resolvedBy: { login: string } | null;
+  comments: GhGraphqlReviewThreadCommentsConnection;
+}
+
+interface GhGraphqlReviewThreadComment {
   path: string;
   line: number | null;
-  original_line?: number | null;
-  user: { login: string };
+  originalLine: number | null;
+  body: string;
+  url: string;
+  author: { login: string } | null;
 }
 
-function normalizeReviewComment(raw: GhPrApiRawReviewComment): GhPrApiReviewComment {
-  return {
-    body: raw.body,
-    path: raw.path,
-    line: raw.line ?? undefined,
-    original_line: raw.original_line ?? undefined,
-    user: raw.user,
-  };
+function buildReviewThreadsGraphqlArgs(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  endCursor: string | undefined,
+): string[] {
+  const args = [
+    'api',
+    'graphql',
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${prNumber}`,
+  ];
+
+  if (endCursor !== undefined) {
+    args.push('-f', `endCursor=${endCursor}`);
+  }
+
+  args.push('-f', `query=${REVIEW_THREADS_QUERY}`);
+  return args;
 }
 
-function fetchInlineReviewComments(owner: string, repo: string, prNumber: number, cwd: string): GhPrApiReviewComment[] {
-  return fetchPaginatedApi<GhPrApiReviewComment>({
-    command: 'gh',
-    cwd,
-    context: `pull request #${prNumber} inline review comments`,
-    initialEndpoint: `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=${INLINE_REVIEW_COMMENTS_PER_PAGE}&page=1`,
-    parsePage: (body) => {
-      const parsed = JSON.parse(body) as GhPrApiRawReviewComment[];
-      return parsed.map(normalizeReviewComment);
-    },
+function buildReviewThreadCommentsGraphqlArgs(threadId: string, commentsEndCursor: string): string[] {
+  return [
+    'api',
+    'graphql',
+    '-f',
+    `threadId=${threadId}`,
+    '-f',
+    `commentsEndCursor=${commentsEndCursor}`,
+    '-f',
+    `query=${REVIEW_THREAD_COMMENTS_QUERY}`,
+  ];
+}
+
+function parseReviewThreadsResponse(raw: string): GhGraphqlReviewThreadsConnection {
+  const parsed = JSON.parse(raw) as GhGraphqlReviewThreadsResponse;
+  if (parsed.errors && parsed.errors.length > 0) {
+    throw new Error(parsed.errors.map((error) => error.message).join('; '));
+  }
+
+  const pullRequest = parsed.data?.repository?.pullRequest;
+  if (!pullRequest) {
+    throw new Error('Missing pull request reviewThreads in GraphQL response');
+  }
+
+  return pullRequest.reviewThreads;
+}
+
+function parseReviewThreadCommentsResponse(raw: string): GhGraphqlReviewThreadCommentsConnection {
+  const parsed = JSON.parse(raw) as GhGraphqlReviewThreadCommentsResponse;
+  if (parsed.errors && parsed.errors.length > 0) {
+    throw new Error(parsed.errors.map((error) => error.message).join('; '));
+  }
+
+  const thread = parsed.data?.node;
+  if (!thread?.comments) {
+    throw new Error('Missing pull request review thread comments in GraphQL response');
+  }
+
+  return thread.comments;
+}
+
+function resolveThreadState(thread: GhGraphqlReviewThread): PrReviewThreadState {
+  if (thread.isResolved) {
+    return 'resolved';
+  }
+  if (thread.isOutdated) {
+    return 'outdated-unresolved';
+  }
+  return 'active';
+}
+
+function resolveReviewThreadCommentAuthor(comment: GhGraphqlReviewThreadComment): string {
+  if (comment.author) {
+    return comment.author.login;
+  }
+  return DELETED_GITHUB_USER_AUTHOR;
+}
+
+function fetchReviewThreadComments(
+  thread: GhGraphqlReviewThread,
+  prNumber: number,
+  cwd: string,
+): GhGraphqlReviewThreadComment[] {
+  const comments = [...thread.comments.nodes];
+  let pageInfo = thread.comments.pageInfo;
+
+  for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP && pageInfo.hasNextPage; page += 1) {
+    if (!pageInfo.endCursor) {
+      throw new Error(`Missing review thread comments endCursor for next page in pull request #${prNumber}`);
+    }
+
+    const raw = execFileSync(
+      'gh',
+      buildReviewThreadCommentsGraphqlArgs(thread.id, pageInfo.endCursor),
+      { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    const nextComments = parseReviewThreadCommentsResponse(raw);
+    comments.push(...nextComments.nodes);
+    pageInfo = nextComments.pageInfo;
+  }
+
+  if (pageInfo.hasNextPage) {
+    throw new Error(
+      `Pagination limit exceeded while fetching pull request #${prNumber} review thread comments (>${GRAPHQL_PAGINATION_HARD_CAP} pages)`,
+    );
+  }
+
+  return comments;
+}
+
+function mapReviewThreadComments(
+  thread: GhGraphqlReviewThread,
+  comments: GhGraphqlReviewThreadComment[],
+): PrReviewComment[] {
+  const threadState = resolveThreadState(thread);
+  return comments.map((comment) => {
+    const line = comment.line ?? comment.originalLine ?? undefined;
+    return {
+      author: resolveReviewThreadCommentAuthor(comment),
+      body: comment.body,
+      path: comment.path,
+      ...(line !== undefined ? { line } : {}),
+      url: comment.url,
+      threadState,
+      ...(thread.resolvedBy ? { resolvedBy: thread.resolvedBy.login } : {}),
+      isOutdated: thread.isOutdated,
+    };
   });
+}
+
+function fetchPrReviewThreads(owner: string, repo: string, prNumber: number, cwd: string): PrReviewComment[] {
+  try {
+    const comments: PrReviewComment[] = [];
+    let endCursor: string | undefined;
+
+    for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
+      const raw = execFileSync(
+        'gh',
+        buildReviewThreadsGraphqlArgs(owner, repo, prNumber, endCursor),
+        { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
+      );
+      const reviewThreads = parseReviewThreadsResponse(raw);
+
+      for (const thread of reviewThreads.nodes) {
+        const threadComments = fetchReviewThreadComments(thread, prNumber, cwd);
+        comments.push(...mapReviewThreadComments(thread, threadComments));
+      }
+
+      if (!reviewThreads.pageInfo.hasNextPage) {
+        return comments;
+      }
+      if (!reviewThreads.pageInfo.endCursor) {
+        throw new Error('Missing reviewThreads endCursor for next page');
+      }
+      endCursor = reviewThreads.pageInfo.endCursor;
+    }
+
+    throw new Error(
+      `Pagination limit exceeded while fetching pull request #${prNumber} review threads (>${GRAPHQL_PAGINATION_HARD_CAP} pages)`,
+    );
+  } catch (err) {
+    throw new Error(`GraphQL reviewThreads failed: ${getErrorMessage(err)}`);
+  }
 }
 
 function parseRepositoryFromPrUrl(prUrl: string): { owner: string; repo: string } {
@@ -183,8 +429,7 @@ export function fetchPrReviewComments(prNumber: number, cwd: string): PrReviewDa
 
   const data = JSON.parse(raw) as GhPrViewReviewResponse;
   const { owner, repo } = parseRepositoryFromPrUrl(data.url);
-
-  const inlineReviewComments = fetchInlineReviewComments(owner, repo, prNumber, cwd);
+  const threadReviewComments = fetchPrReviewThreads(owner, repo, prNumber, cwd);
 
   const comments: PrReviewComment[] = data.comments.map((c) => ({
     author: c.author.login,
@@ -197,14 +442,7 @@ export function fetchPrReviewComments(prNumber: number, cwd: string): PrReviewDa
       reviews.push({ author: review.author.login, body: review.body });
     }
   }
-  for (const comment of inlineReviewComments) {
-    reviews.push({
-      author: comment.user.login,
-      body: comment.body,
-      path: comment.path,
-      line: comment.line ?? comment.original_line,
-    });
-  }
+  reviews.push(...threadReviewComments);
 
   return {
     number: data.number,

@@ -72,11 +72,17 @@ export interface CreateIssueResult {
   error?: string;
 }
 
+export type PrReviewThreadState = 'active' | 'outdated-unresolved' | 'resolved';
+
 export interface PrReviewComment {
   author: string;
   body: string;
   path?: string;
   line?: number;
+  url?: string;
+  threadState?: PrReviewThreadState;
+  resolvedBy?: string;
+  isOutdated?: boolean;
 }
 
 export interface PrReviewData {

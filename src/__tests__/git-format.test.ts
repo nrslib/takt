@@ -59,7 +59,7 @@ describe('formatIssueAsTask', () => {
 });
 
 describe('formatPrReviewAsTask', () => {
-  it('should format PR review data without provider-specific strings', () => {
+  it('should format legacy PR review data without provider-specific strings', () => {
     const prReview: PrReviewData = {
       number: 10,
       title: 'Feature PR',
@@ -71,9 +71,7 @@ describe('formatPrReviewAsTask', () => {
       reviews: [{ author: 'reviewer', body: 'Approved', path: 'src/app.ts', line: 5 }],
       files: ['src/app.ts'],
     };
-
     const result = formatPrReviewAsTask(prReview);
-
     expect(result).not.toContain('GitHub');
     expect(result).not.toContain('GitLab');
     expect(result).toContain('## PR #10 Review Comments: Feature PR');
@@ -82,6 +80,170 @@ describe('formatPrReviewAsTask', () => {
     expect(result).toContain('File: src/app.ts, Line: 5');
     expect(result).toContain('**dev**: LGTM');
     expect(result).toContain('- src/app.ts');
+  });
+
+  it('should put active review threads in the Active section', () => {
+    const prReview: PrReviewData = {
+      number: 11,
+      title: 'Threaded PR',
+      body: '',
+      url: 'https://example.com/pr/11',
+      headRefName: 'feature-branch',
+      comments: [],
+      reviews: [
+        {
+          author: 'reviewer',
+          body: 'Fix this current diff issue',
+          path: 'src/app.ts',
+          line: 12,
+          url: 'https://example.com/pr/11#discussion_r1',
+          threadState: 'active',
+          isOutdated: false,
+        },
+      ],
+      files: [],
+    };
+    const result = formatPrReviewAsTask(prReview);
+    expect(result).toContain('### Review Policy');
+    expect(result).toContain('### Active Review Threads');
+    expect(result).toContain('**reviewer**: Fix this current diff issue');
+    expect(result).toContain('File: src/app.ts, Line: 12');
+    expect(result).toContain('URL: https://example.com/pr/11#discussion_r1');
+    expect(result).not.toContain('### Review Comments');
+  });
+
+  it('should put unresolved outdated review threads in the outdated section', () => {
+    const prReview: PrReviewData = {
+      number: 12,
+      title: 'Outdated PR',
+      body: '',
+      url: 'https://example.com/pr/12',
+      headRefName: 'feature-branch',
+      comments: [],
+      reviews: [
+        {
+          author: 'reviewer',
+          body: 'Check whether this stale comment still applies',
+          path: 'src/old.ts',
+          line: 4,
+          threadState: 'outdated-unresolved',
+          isOutdated: true,
+        },
+      ],
+      files: [],
+    };
+    const result = formatPrReviewAsTask(prReview);
+    expect(result).toContain('### Outdated But Unresolved Review Threads');
+    expect(result).toContain('**reviewer**: Check whether this stale comment still applies');
+    expect(result).not.toContain('### Active Review Threads');
+    expect(result).not.toContain('### Review Comments');
+  });
+
+  it('should put resolved review threads in the reference section with resolution metadata', () => {
+    const prReview: PrReviewData = {
+      number: 13,
+      title: 'Resolved PR',
+      body: '',
+      url: 'https://example.com/pr/13',
+      headRefName: 'feature-branch',
+      comments: [],
+      reviews: [
+        {
+          author: 'coderabbitai[bot]',
+          body: 'Addressed in commit abc123',
+          path: 'src/app.ts',
+          line: 8,
+          threadState: 'resolved',
+          resolvedBy: 'coderabbitai[bot]',
+          isOutdated: true,
+        },
+      ],
+      files: [],
+    };
+    const result = formatPrReviewAsTask(prReview);
+    expect(result).toContain('### Resolved / Outdated Review Threads');
+    expect(result).toContain('**coderabbitai[bot]**: Addressed in commit abc123');
+    expect(result).toContain('Resolved by: coderabbitai[bot]');
+    expect(result).toContain('Outdated: yes');
+    expect(result).not.toContain('### Active Review Threads');
+    expect(result).not.toContain('### Review Comments');
+  });
+
+  it('should include policy instructions and preserve existing PR sections when thread states are present', () => {
+    const prReview: PrReviewData = {
+      number: 14,
+      title: 'Mixed PR',
+      body: 'PR description',
+      url: 'https://example.com/pr/14',
+      headRefName: 'feature-branch',
+      comments: [{ author: 'dev', body: 'Conversation comment' }],
+      reviews: [
+        { author: 'summary-reviewer', body: 'Overall review summary' },
+        {
+          author: 'active-reviewer',
+          body: 'Active issue',
+          path: 'src/active.ts',
+          line: 3,
+          threadState: 'active',
+          isOutdated: false,
+        },
+        {
+          author: 'outdated-reviewer',
+          body: 'Outdated issue',
+          path: 'src/outdated.ts',
+          line: 5,
+          threadState: 'outdated-unresolved',
+          isOutdated: true,
+        },
+        {
+          author: 'resolved-reviewer',
+          body: 'Resolved issue',
+          path: 'src/resolved.ts',
+          line: 7,
+          threadState: 'resolved',
+          resolvedBy: 'maintainer',
+          isOutdated: false,
+        },
+      ],
+      files: ['src/active.ts'],
+    };
+    const result = formatPrReviewAsTask(prReview);
+    expect(result).toContain('以下のレビューコメントは review thread state ごとに分類されています。');
+    expect(result).not.toContain('GitHub review thread');
+    expect(result).toContain('Active Review Threads を主な修正対象にしてください。');
+    expect(result).toContain('Resolved / Outdated のコメントは原則として修正対象にせず');
+    expect(result).toContain('各コメントについて、対応したか、スキップしたか、理由を最後に要約してください。');
+    expect(result).toContain('### PR Description');
+    expect(result).toContain('PR description');
+    expect(result).toContain('### Review Summaries');
+    expect(result).toContain('**summary-reviewer**: Overall review summary');
+    expect(result).toContain('### Conversation Comments');
+    expect(result).toContain('**dev**: Conversation comment');
+    expect(result).toContain('### Changed Files');
+    expect(result).toContain('- src/active.ts');
+
+    const activeIndex = result.indexOf('### Active Review Threads');
+    const outdatedIndex = result.indexOf('### Outdated But Unresolved Review Threads');
+    const resolvedIndex = result.indexOf('### Resolved / Outdated Review Threads');
+    expect(activeIndex).toBeLessThan(outdatedIndex);
+    expect(outdatedIndex).toBeLessThan(resolvedIndex);
+  });
+
+  it('should not include review policy when review comments have no thread state', () => {
+    const prReview: PrReviewData = {
+      number: 15,
+      title: 'Legacy PR',
+      body: '',
+      url: 'https://example.com/pr/15',
+      headRefName: 'feature-branch',
+      comments: [],
+      reviews: [{ author: 'reviewer', body: 'Legacy inline comment', path: 'src/app.ts' }],
+      files: [],
+    };
+    const result = formatPrReviewAsTask(prReview);
+    expect(result).not.toContain('### Review Policy');
+    expect(result).toContain('### Review Comments');
+    expect(result).toContain('**reviewer**: Legacy inline comment');
   });
 });
 
