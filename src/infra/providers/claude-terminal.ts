@@ -5,9 +5,10 @@ import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
+import { getErrorMessage } from '../../shared/utils/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
-function createUnsupportedProviderOptionResponse(
+function createProviderErrorResponse(
   agentName: string,
   options: ProviderCallOptions,
   message: string,
@@ -25,6 +26,18 @@ function createUnsupportedProviderOptionResponse(
       reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
     },
   };
+}
+
+function createCaughtProviderErrorResponse(
+  agentName: string,
+  options: ProviderCallOptions,
+  error: unknown,
+): AgentResponse {
+  return createProviderErrorResponse(
+    agentName,
+    options,
+    `Claude terminal provider failed: ${getErrorMessage(error)}`,
+  );
 }
 
 function getUnsupportedProviderOptionMessage(options: ProviderCallOptions): string | undefined {
@@ -68,16 +81,20 @@ export class ClaudeTerminalProvider implements Provider {
     const { name, systemPrompt } = config;
 
     return {
-      call: (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
         const unsupportedMessage = getUnsupportedProviderOptionMessage(options);
         if (unsupportedMessage) {
-          return Promise.resolve(createUnsupportedProviderOptionResponse(name, options, unsupportedMessage));
+          return createProviderErrorResponse(name, options, unsupportedMessage);
         }
 
-        return callClaudeTerminal(name, prompt, {
-          ...toTerminalOptions(options),
-          systemPrompt: systemPrompt ?? undefined,
-        });
+        try {
+          return await callClaudeTerminal(name, prompt, {
+            ...toTerminalOptions(options),
+            systemPrompt: systemPrompt ?? undefined,
+          });
+        } catch (error) {
+          return createCaughtProviderErrorResponse(name, options, error);
+        }
       },
     };
   }

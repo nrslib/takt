@@ -156,6 +156,58 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(result.error).toMatch(/provider_options\.claude\.sandbox/i);
   });
 
+  it('Given incompatible claude effort, When call is invoked, Then provider error is returned before terminal client call', async () => {
+    const provider = new ClaudeTerminalProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement this', {
+      cwd: '/tmp/worktree',
+      sessionId: 'session-123',
+      model: 'claude-sonnet-4-5',
+      providerOptions: {
+        claude: {
+          effort: 'xhigh',
+        },
+      } as never,
+    });
+
+    expect(mockCallClaudeTerminal).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'error',
+      sessionId: 'session-123',
+      failureCategory: 'provider_error',
+      providerUsage: {
+        usageMissing: true,
+        reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
+      },
+    });
+    expect(result.error).toContain('Claude terminal provider failed:');
+    expect(result.error).toContain("provider_options.claude.effort 'xhigh' is not supported");
+  });
+
+  it('Given terminal client rejects, When call is invoked, Then provider error response is returned', async () => {
+    mockCallClaudeTerminal.mockRejectedValueOnce(new Error('terminal failed'));
+    const provider = new ClaudeTerminalProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement this', {
+      cwd: '/tmp/worktree',
+      sessionId: 'session-123',
+      model: 'opus',
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'error',
+      sessionId: 'session-123',
+      content: 'Claude terminal provider failed: terminal failed',
+      error: 'Claude terminal provider failed: terminal failed',
+      failureCategory: 'provider_error',
+    });
+  });
+
   it('Given systemPrompt setup, When call is invoked, Then systemPrompt is passed to terminal client', async () => {
     const provider = new ClaudeTerminalProvider();
     const agent = provider.setup({ name: 'judge', systemPrompt: 'You are a judge.' });
