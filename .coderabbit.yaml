@@ -1,35 +1,35 @@
-# CodeRabbit configuration for TAKT
-# Reference: https://docs.coderabbit.ai/reference/configuration
-
 language: ja-JP
 
 reviews:
-  # chill: 重要な問題（バグ・セキュリティ・即時可読性問題）に絞る。
-  # TAKT 自身の /review が詳細なレビューを行うため、CodeRabbit は早期発見・
-  # 補完的な役割に留める。
-  profile: chill
-
-  high_level_summary: true
+  profile: assertive
   poem: false
-  review_status: true
-  request_changes_workflow: false
+
+  path_instructions:
+    - path: "**"
+      instructions: |
+        レビュー時は以下の手順で進めること。
+
+        Step 1: knowledge_base に登録された TAKT のコーディングガイドライン
+                （policies/ および knowledge/ 配下のファイル群）を網羅的に参照する。
+        Step 2: 各ガイドラインに含まれるルール・REJECT 例・判定基準を、
+                今回の差分に対して 1 つずつ照合する。
+        Step 3: 該当する違反が見つかった場合、どのガイドラインのどのルールに
+                基づく指摘かを明示して指摘を作成する。
+        Step 4: 一般的なベストプラクティスより、TAKT のガイドラインに
+                書かれた基準を優先せよ。広く使われているパターンであっても、
+                ガイドライン上 REJECT であれば指摘する。
 
   auto_review:
-    enabled: true
-    drafts: false
-    # リリース PR / WIP PR は自動レビューしない
     ignore_title_keywords:
       - "Release v"
       - "release/v"
       - "WIP"
       - "DO NOT MERGE"
-    # 自動 PR / Bot は対象外
     ignore_usernames:
       - "dependabot[bot]"
       - "github-actions[bot]"
       - "renovate[bot]"
 
-  # 自動生成物・依存物・ローカル成果物はレビュー対象から外す
   path_filters:
     - "!dist/**"
     - "!node_modules/**"
@@ -38,24 +38,6 @@ reviews:
     - "!coverage/**"
 
   tools:
-    # JavaScript / TypeScript
-    eslint:
-      enabled: true
-    # Markdown ドキュメント
-    markdownlint:
-      enabled: true
-    # シェルスクリプト (e2e helpers 等)
-    shellcheck:
-      enabled: true
-    # GitHub Actions / builtins/**/*.yaml
-    yamllint:
-      enabled: true
-    # セキュリティ
-    gitleaks:
-      enabled: true
-    semgrep:
-      enabled: true
-    # 不要言語系は明示的に無効化（走査を軽くする）
     ruff:
       enabled: false
     rubocop:
@@ -69,11 +51,9 @@ reviews:
 
 chat:
   art: false
-  auto_reply: true
 
 knowledge_base:
   code_guidelines:
-    enabled: true
     filePatterns:
       - "builtins/ja/facets/policies/ai-antipattern.md"
       - "builtins/ja/facets/policies/coding.md"
@@ -85,9 +65,3 @@ knowledge_base:
       - "builtins/ja/facets/knowledge/security.md"
       - "builtins/ja/facets/knowledge/takt.md"
       - "builtins/ja/facets/knowledge/unit-testing.md"
-  learnings:
-    scope: auto
-  issues:
-    scope: auto
-  pull_requests:
-    scope: auto
