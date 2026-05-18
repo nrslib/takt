@@ -237,13 +237,14 @@ export class OptionsBuilder {
     overrides: Pick<RunAgentOptions, 'maxTurns'>,
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
+    const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildBaseOptions(step, undefined, runtime),
       // Report/status phases are read-only regardless of step settings.
       permissionMode: 'readonly',
       sessionId,
       allowedTools: [],
-      maxTurns: this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime),
+      ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
 
@@ -253,11 +254,12 @@ export class OptionsBuilder {
     overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
+    const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildBaseOptions(step, undefined, runtime),
       permissionMode: 'readonly',
       allowedTools: overrides.allowedTools,
-      maxTurns: this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime),
+      ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
 

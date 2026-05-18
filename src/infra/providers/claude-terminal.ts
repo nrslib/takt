@@ -46,7 +46,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     effort: claudeOptions?.effort,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
-    maxTurns: options.maxTurns,
+    ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     backend: terminalOptions?.backend,

@@ -488,6 +488,18 @@ describe('option resolution order', () => {
     );
   });
 
+  it('should omit maxTurns from provider call options when not provided by the handoff', async () => {
+    loadProjectConfigMock.mockReturnValue({ provider: 'opencode' });
+
+    await runAgent('coder', 'task', {
+      cwd: '/repo',
+      resolvedProvider: 'opencode',
+    });
+
+    const providerOptions = providerCallMock.mock.calls[0]?.[1];
+    expect(Object.prototype.hasOwnProperty.call(providerOptions, 'maxTurns')).toBe(false);
+  });
+
   it('should ignore custom agent provider/model overrides', async () => {
     loadProjectConfigMock.mockReturnValue({ provider: 'claude', model: 'project-model' });
     loadGlobalConfigMock.mockReturnValue({

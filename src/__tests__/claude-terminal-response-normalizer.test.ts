@@ -118,6 +118,26 @@ describe('Claude terminal response normalizer', () => {
     });
   });
 
+  it('Given assistant text contains a rate limit error, When normalizing, Then source is error_text', () => {
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText: 'HTTP 429: Too many requests',
+    });
+
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'rate_limited',
+      content: '',
+      errorKind: 'rate_limit',
+      sessionId: 'claude-session-1',
+    });
+    expect(result.rateLimitInfo).toMatchObject({
+      provider: 'claude-terminal',
+      source: 'error_text',
+    });
+  });
+
   it('Given bridged permission request event, When normalizing final response, Then event does not force provider error', () => {
     const result = normalizeClaudeTerminalResponse({
       agentName: 'coder',

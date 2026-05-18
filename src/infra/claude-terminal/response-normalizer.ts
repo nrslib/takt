@@ -4,7 +4,7 @@ import { validateStructuredOutputAgainstSchema } from '../../core/workflow/engin
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { parseStructuredOutput } from '../../shared/utils/index.js';
-import { buildRateLimitedResponseFields, containsRateLimitError, containsRateLimitMarker } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, resolveRateLimitTextSource } from '../rate-limit/detection.js';
 import type { ClaudeTerminalEvent } from './types.js';
 
 interface NormalizeClaudeTerminalResponseInput {
@@ -77,7 +77,10 @@ function createProviderErrorResponse(
   };
 }
 
-function createRateLimitedResponse(input: NormalizeClaudeTerminalResponseInput): AgentResponse {
+function createRateLimitedResponse(
+  input: NormalizeClaudeTerminalResponseInput,
+  source: 'stream_marker' | 'error_text',
+): AgentResponse {
   emitResult(input.onStream, {
     result: '',
     sessionId: input.sessionId,
@@ -92,7 +95,7 @@ function createRateLimitedResponse(input: NormalizeClaudeTerminalResponseInput):
       usageMissing: true,
       reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
     },
-    ...buildRateLimitedResponseFields('claude-terminal', 'stream_marker', input.assistantText),
+    ...buildRateLimitedResponseFields('claude-terminal', source, input.assistantText),
   };
 }
 
@@ -111,8 +114,9 @@ function normalizeStructuredOutput(
 export function normalizeClaudeTerminalResponse(input: NormalizeClaudeTerminalResponseInput): AgentResponse {
   emitToolUseEvents(input.onStream, input.events);
 
-  if (containsRateLimitMarker(input.assistantText) || containsRateLimitError(input.assistantText)) {
-    return createRateLimitedResponse(input);
+  const rateLimitSource = resolveRateLimitTextSource(input.assistantText);
+  if (rateLimitSource) {
+    return createRateLimitedResponse(input, rateLimitSource);
   }
 
   let structuredOutput: Record<string, unknown> | undefined;

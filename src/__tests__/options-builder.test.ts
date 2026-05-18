@@ -454,6 +454,7 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     // Then
     expect(options.permissionMode).toBe('readonly');
     expect(options.allowedTools).toEqual([]);
+    expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(true);
     expect(options.maxTurns).toBe(3);
     expect(options.sessionId).toBe('session-123');
   });
@@ -477,6 +478,7 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     const options = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
 
     expect(options.resolvedProvider).toBe('claude-terminal');
+    expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();
   });
 });
@@ -512,6 +514,7 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
 
     expect(options.resolvedProvider).toBe('claude-terminal');
     expect(options.allowedTools).toEqual([]);
+    expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();
   });
 });

@@ -159,8 +159,10 @@ describe('Claude terminal transcript reader', () => {
     const transcript = `${existingTranscript}\n${currentTranscript}`;
 
     const parsed = parseClaudeTerminalTranscript(transcript, {
-      byteOffset: Buffer.byteLength(`${existingTranscript}\n`, 'utf-8'),
-      lineNumberOffset: 2,
+      baseline: {
+        byteOffset: Buffer.byteLength(`${existingTranscript}\n`, 'utf-8'),
+        lineNumberOffset: 2,
+      },
     });
 
     expect(parsed).toEqual({
@@ -262,6 +264,78 @@ describe('Claude terminal transcript reader', () => {
     ].join('\n');
 
     expect(() => parseClaudeTerminalTranscript(transcript)).toThrow(/malformed claude terminal transcript json/i);
+  });
+
+  it('Given incomplete final JSONL, When polling parse is enabled, Then the final line is ignored temporarily', () => {
+    const completeLine = JSON.stringify({
+      type: 'assistant',
+      session_id: 'claude-session-1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'parsed response' }],
+      },
+    });
+    const transcript = `${completeLine}\n{"type":"assistant"`;
+
+    const parsed = parseClaudeTerminalTranscript(transcript, {
+      allowIncompleteFinalLine: true,
+    });
+
+    expect(parsed).toEqual({
+      sessionId: 'claude-session-1',
+      assistantText: 'parsed response',
+      events: [],
+    });
+  });
+
+  it('Given incomplete final JSONL, When strict parsing is used, Then transcript corruption is reported', () => {
+    const transcript = [
+      JSON.stringify({ type: 'user', session_id: 'claude-session-1' }),
+      '{"type":"assistant"',
+    ].join('\n');
+
+    expect(() => parseClaudeTerminalTranscript(transcript)).toThrow(/malformed claude terminal transcript json/i);
+  });
+
+  it('Given malformed middle JSONL, When polling parse is enabled, Then transcript corruption is still reported', () => {
+    const transcript = [
+      JSON.stringify({ type: 'user', session_id: 'claude-session-1' }),
+      '{not-json',
+      JSON.stringify({
+        type: 'assistant',
+        session_id: 'claude-session-1',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'parsed response' }],
+        },
+      }),
+    ].join('\n');
+
+    expect(() => parseClaudeTerminalTranscript(transcript, {
+      allowIncompleteFinalLine: true,
+    })).toThrow(/malformed claude terminal transcript json/i);
+  });
+
+  it('Given an incomplete final JSONL becomes complete, When parsing again, Then the same line is parsed', () => {
+    const firstLine = JSON.stringify({ type: 'user', session_id: 'claude-session-1' });
+    const completeAssistantLine = JSON.stringify({
+      type: 'assistant',
+      session_id: 'claude-session-1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'completed response' }],
+      },
+    });
+
+    const partial = parseClaudeTerminalTranscript(`${firstLine}\n{"type":"assistant"`, {
+      allowIncompleteFinalLine: true,
+    });
+    const completed = parseClaudeTerminalTranscript(`${firstLine}\n${completeAssistantLine}`, {
+      allowIncompleteFinalLine: true,
+    });
+
+    expect(partial.assistantText).toBe('');
+    expect(completed.assistantText).toBe('completed response');
   });
 
   it('Given permission event without tool, When parsing, Then missing required fields are reported', () => {
@@ -391,6 +465,71 @@ describe('Claude terminal transcript reader', () => {
       await rm(homeDir, { recursive: true, force: true });
       await rm(projectDir, { recursive: true, force: true });
     }
+  });
+
+  it('Given findSession sees an incomplete final JSONL line, When polling, Then it returns the parsed session state', async () => {
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const sessionId = 'claude-session-1';
+      const sessionsDir = getClaudeProjectSessionsDir(projectDir);
+      const transcriptPath = join(sessionsDir, `${sessionId}.jsonl`);
+      const userLine = JSON.stringify({
+        type: 'user',
+        session_id: sessionId,
+        message: { role: 'user', content: [{ type: 'text', text: 'implement task' }] },
+      });
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(transcriptPath, `${userLine}\n{"type":"assistant"`, 'utf-8');
+
+      const reader = new ProjectClaudeTranscriptReader();
+
+      await expect(reader.findSession({
+        cwd: projectDir,
+        sessionId,
+        timeoutMs: 30,
+        pollIntervalMs: 5,
+      })).resolves.toEqual({ sessionId });
+    });
+  });
+
+  it('Given waitForAssistantResponse sees an incomplete final completion line, When polling, Then it retries until the line is complete', async () => {
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const sessionId = 'claude-session-1';
+      const sessionsDir = getClaudeProjectSessionsDir(projectDir);
+      const transcriptPath = join(sessionsDir, `${sessionId}.jsonl`);
+      const assistantLine = JSON.stringify({
+        type: 'assistant',
+        session_id: sessionId,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'final response' }],
+        },
+      });
+      const completionLine = JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        session_id: sessionId,
+        result: 'final response',
+      });
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(transcriptPath, `${assistantLine}\n{"type":"result"`, 'utf-8');
+
+      const reader = new ProjectClaudeTranscriptReader();
+      const responsePromise = reader.waitForAssistantResponse({
+        cwd: projectDir,
+        session: { sessionId },
+        baseline: { byteOffset: 0, lineNumberOffset: 0 },
+        timeoutMs: 200,
+        pollIntervalMs: 5,
+      });
+      setTimeout(() => {
+        void writeFile(transcriptPath, `${assistantLine}\n${completionLine}`, 'utf-8');
+      }, 20);
+
+      await expect(responsePromise).resolves.toMatchObject({
+        sessionId,
+        assistantText: 'final response',
+      });
+    });
   });
 
   it('Given findSession is polling, When abortSignal fires, Then polling stops before the next session read', async () => {

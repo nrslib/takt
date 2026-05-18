@@ -35,7 +35,7 @@ export interface RateLimitInfo {
   provider: ProviderType;
   detectedAt: Date;
   resetAtRaw?: string;
-  source: 'sdk_error' | 'stream_marker';
+  source: 'sdk_error' | 'stream_marker' | 'error_text';
 }
 
 /** Response from an agent execution */

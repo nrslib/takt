@@ -116,9 +116,8 @@ export async function runStatusJudgmentPhase(
     });
   }
 
-  const stepProvider = resolveStepProviderInfo(step, ctx);
-
   try {
+    const stepProvider = resolveStepProviderInfo(step, ctx);
     const result = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, step.rules, {
       cwd: ctx.cwd,
       stepName: step.name,

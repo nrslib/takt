@@ -31,6 +31,16 @@ export function containsRateLimitError(text: string | undefined): boolean {
   return RATE_LIMIT_ERROR_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+export function resolveRateLimitTextSource(text: string | undefined): 'stream_marker' | 'error_text' | undefined {
+  if (containsRateLimitMarker(text)) {
+    return 'stream_marker';
+  }
+  if (containsRateLimitError(text)) {
+    return 'error_text';
+  }
+  return undefined;
+}
+
 export function buildRateLimitInfo(
   provider: ProviderType,
   source: RateLimitInfo['source'],

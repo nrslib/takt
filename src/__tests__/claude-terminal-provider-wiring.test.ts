@@ -113,6 +113,19 @@ describe('ClaudeTerminalProvider wiring', () => {
     }));
   });
 
+  it('Given maxTurns is omitted, When call is invoked, Then terminal call options omit maxTurns property', async () => {
+    const provider = new ClaudeTerminalProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement this', {
+      cwd: '/tmp/worktree',
+      model: 'opus',
+    });
+
+    const terminalOptions = mockCallClaudeTerminal.mock.calls[0]?.[2];
+    expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'maxTurns')).toBe(false);
+  });
+
   it('Given claude sandbox provider option, When call is invoked, Then provider error is returned before terminal client call', async () => {
     const provider = new ClaudeTerminalProvider();
     const agent = provider.setup({ name: 'coder' });

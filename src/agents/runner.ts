@@ -132,7 +132,7 @@ export class AgentRunner {
       sessionId: options.sessionId,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
-      maxTurns: options.maxTurns,
+      ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
       model: resolvedModel,
       permissionMode,
       providerOptions: resolvedProviderOptions,

@@ -151,10 +151,17 @@ function appendTranscriptEntry(
   return { ...parsed, sessionId };
 }
 
-function parseTranscriptLine(line: string, lineNumber: number): Record<string, unknown> {
+function parseTranscriptLineForPolling(
+  line: string,
+  lineNumber: number,
+  allowIncomplete: boolean,
+): Record<string, unknown> | undefined {
   try {
     return requireRecord(JSON.parse(line), `line ${lineNumber}`);
   } catch (error) {
+    if (error instanceof SyntaxError && allowIncomplete) {
+      return undefined;
+    }
     if (error instanceof SyntaxError) {
       throw new Error(`Malformed Claude terminal transcript JSON at line ${lineNumber}: ${error.message}`);
     }
@@ -177,33 +184,67 @@ function transcriptSinceBaseline(transcript: string, baseline: ClaudeTranscriptB
   return transcriptBytes.subarray(baseline.byteOffset).toString('utf-8');
 }
 
-function hasCompletionEntry(transcript: string, baseline: ClaudeTranscriptBaseline): boolean {
+interface ParseClaudeTerminalTranscriptOptions {
+  baseline?: ClaudeTranscriptBaseline;
+  allowIncompleteFinalLine?: boolean;
+}
+
+function hasFinalNewline(transcript: string): boolean {
+  return transcript.endsWith('\n') || transcript.endsWith('\r');
+}
+
+function canIgnoreLineParseError(
+  index: number,
+  lines: string[],
+  transcript: string,
+  allowIncompleteFinalLine: boolean | undefined,
+): boolean {
+  return allowIncompleteFinalLine === true
+    && !hasFinalNewline(transcript)
+    && index === lines.length - 1;
+}
+
+function hasCompletionEntry(
+  transcript: string,
+  options: Required<Pick<ParseClaudeTerminalTranscriptOptions, 'baseline' | 'allowIncompleteFinalLine'>>,
+): boolean {
+  const { baseline, allowIncompleteFinalLine } = options;
   const lineNumberOffset = baseline.lineNumberOffset;
-  return transcriptSinceBaseline(transcript, baseline)
-    .split(/\r?\n/)
-    .some((rawLine, index) => {
-      const line = rawLine.trim();
-      if (line.length === 0) {
-        return false;
-      }
-      return parseTranscriptLine(line, index + 1 + lineNumberOffset).type === 'result';
-    });
+  const transcriptBody = transcriptSinceBaseline(transcript, baseline);
+  const lines = transcriptBody.split(/\r?\n/);
+  return lines.some((rawLine, index) => {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      return false;
+    }
+    const entry = parseTranscriptLineForPolling(
+      line,
+      index + 1 + lineNumberOffset,
+      canIgnoreLineParseError(index, lines, transcriptBody, allowIncompleteFinalLine),
+    );
+    return entry?.type === 'result';
+  });
 }
 
 export function parseClaudeTerminalTranscript(
   transcript: string,
-  baseline?: ClaudeTranscriptBaseline,
+  options: ParseClaudeTerminalTranscriptOptions = {},
 ): ClaudeTerminalTranscript {
-  const lineNumberOffset = baseline?.lineNumberOffset ?? 0;
-  return transcriptSinceBaseline(transcript, baseline)
-    .split(/\r?\n/)
-    .reduce<ClaudeTerminalTranscript>((parsed, rawLine, index) => {
-      const line = rawLine.trim();
-      if (line.length === 0) {
-        return parsed;
-      }
-      return appendTranscriptEntry(parsed, parseTranscriptLine(line, index + 1 + lineNumberOffset));
-    }, { sessionId: '', assistantText: '', events: [] });
+  const lineNumberOffset = options.baseline?.lineNumberOffset ?? 0;
+  const transcriptBody = transcriptSinceBaseline(transcript, options.baseline);
+  const lines = transcriptBody.split(/\r?\n/);
+  return lines.reduce<ClaudeTerminalTranscript>((parsed, rawLine, index) => {
+    const line = rawLine.trim();
+    if (line.length === 0) {
+      return parsed;
+    }
+    const entry = parseTranscriptLineForPolling(
+      line,
+      index + 1 + lineNumberOffset,
+      canIgnoreLineParseError(index, lines, transcriptBody, options.allowIncompleteFinalLine),
+    );
+    return entry ? appendTranscriptEntry(parsed, entry) : parsed;
+  }, { sessionId: '', assistantText: '', events: [] });
 }
 
 function hasBlockingInteractiveEvent(transcript: ClaudeTerminalTranscript): boolean {
@@ -333,7 +374,12 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
         if (transcript === undefined || transcript.trim().length === 0) {
           return undefined;
         }
-        const parsed = parseClaudeTerminalTranscript(transcript);
+        const parsed = parseClaudeTerminalTranscript(transcript, {
+          allowIncompleteFinalLine: true,
+        });
+        if (!parsed.sessionId && !parsed.assistantText && parsed.events.length === 0) {
+          return undefined;
+        }
         return { sessionId: parsed.sessionId || options.sessionId };
       },
       'Timed out waiting for Claude terminal session id.',
@@ -350,14 +396,20 @@ export class ProjectClaudeTranscriptReader implements ClaudeTranscriptReader {
         if (transcript === undefined || transcript.trim().length === 0) {
           return undefined;
         }
-        const parsed = parseClaudeTerminalTranscript(transcript, options.baseline);
+        const parsed = parseClaudeTerminalTranscript(transcript, {
+          baseline: options.baseline,
+          allowIncompleteFinalLine: true,
+        });
         if (hasBlockingInteractiveEvent(parsed)) {
           return withSessionIdFallback(parsed, options.session.sessionId);
         }
         if (!parsed.assistantText) {
           return undefined;
         }
-        if (!hasCompletionEntry(transcript, options.baseline)) {
+        if (!hasCompletionEntry(transcript, {
+          baseline: options.baseline,
+          allowIncompleteFinalLine: true,
+        })) {
           return undefined;
         }
         return withSessionIdFallback(parsed, options.session.sessionId);

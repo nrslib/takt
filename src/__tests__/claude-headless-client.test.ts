@@ -296,6 +296,27 @@ describe('callClaudeHeadless', () => {
     expect(lastKill).toHaveBeenCalledWith('SIGTERM');
   });
 
+  it('失敗 result の一般的な rate limit / 429 記述は error_text source で返す', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'error',
+          errors: ['HTTP 429: Too many requests'],
+          result: 'partial answer',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('rate_limited');
+    expect(res.errorKind).toBe('rate_limit');
+    expect(res.content).toBe('');
+    expect(res.rateLimitInfo?.source).toBe('error_text');
+  });
+
   it('成功 result 本文の一般的な rate limit / 429 記述は done のまま返す', async () => {
     stubSpawn({
       stdoutChunks: [

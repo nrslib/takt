@@ -123,4 +123,54 @@ describe('runStatusJudgmentPhase', () => {
       structuredCaller,
     })).rejects.toThrow('Status judgment requires iteration for step "review"');
   });
+
+  it('should emit error phase completion when provider resolution fails', async () => {
+    const structuredCaller = {
+      judgeStatus: vi.fn().mockResolvedValue({ ruleIndex: 0, method: 'structured_output' }),
+    };
+    const providerError = new Error('provider resolution failed');
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      passPreviousResponse: true,
+      rules: [
+        { condition: 'needs_fix', next: 'fix' },
+        { condition: 'approved', next: 'COMPLETE' },
+      ],
+    };
+    const onPhaseComplete = vi.fn();
+    const resolveStepProviderModel = vi.fn(() => {
+      throw providerError;
+    });
+
+    await expect(runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/reports',
+      lastResponse: 'response body',
+      iteration: 4,
+      getSessionId: vi.fn(),
+      resolveSessionKey: vi.fn(),
+      buildResumeOptions: vi.fn(),
+      buildNewSessionReportOptions: vi.fn(),
+      updatePersonaSession: vi.fn(),
+      resolveStepProviderModel,
+      structuredCaller,
+      onPhaseComplete,
+    })).rejects.toThrow(providerError);
+
+    expect(resolveStepProviderModel).toHaveBeenCalledWith(step);
+    expect(structuredCaller.judgeStatus).not.toHaveBeenCalled();
+    expect(onPhaseComplete).toHaveBeenCalledWith(
+      step,
+      3,
+      'judge',
+      '',
+      'error',
+      'provider resolution failed',
+      'review:4:3:1',
+      4,
+    );
+  });
 });

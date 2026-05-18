@@ -97,7 +97,7 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
         persona: agentName,
         timestamp: new Date(),
         sessionId,
-        ...buildRateLimitedResponseFields('claude', 'stream_marker', message || content),
+        ...buildRateLimitedResponseFields('claude', 'error_text', message || content),
       };
     }
     emitResultEvent(onStream, {
