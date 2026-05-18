@@ -290,6 +290,18 @@ See [External Integrations](./docs/external-integrations.md) for other community
 | [External Integrations](./docs/external-integrations.md) | Community examples that extend TAKT without modifying core (audit trails, etc.) |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |
 
+## Sponsors
+
+TAKT is supported by [CodeRabbit](https://coderabbit.link/nrslib) through its Open Source Support Program.
+
+<a href="https://coderabbit.link/nrslib">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://victorious-bubble-f69a016683.media.strapiapp.com/White_Typemark_79b9189d19.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://victorious-bubble-f69a016683.media.strapiapp.com/Orange_Typemark_43bf516c9d.svg">
+    <img alt="CodeRabbit" src="https://victorious-bubble-f69a016683.media.strapiapp.com/Orange_Typemark_43bf516c9d.svg" height="40">
+  </picture>
+</a>
+
 ## Community
 
 Join the [TAKT Discord](https://discord.gg/R2Xz3uYWxD) for questions, discussions, and updates.
