@@ -142,6 +142,7 @@ async function executeWorkflowInternal(
       onAskUserQuestion: createDenyAskUserQuestionHandler(),
       ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
       projectCwd: options.projectCwd,
+      observability: bootstrap.observability,
       language: options.language,
       provider: bootstrap.currentProvider,
       providerSource: bootstrap.currentProviderSource,

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
@@ -64,6 +65,7 @@ export interface WorkflowExecutionBootstrap {
   effectiveWorkflowConfig: WorkflowConfig;
   providerEventLogger: ReturnType<typeof createProviderEventLogger>;
   usageEventLogger: ReturnType<typeof createUsageEventLogger>;
+  observability: ResolvedObservabilityConfig;
   observabilityHandle: OtelFoundationHandle;
   analyticsEmitter: AnalyticsEmitter;
   structuredCaller: CapabilityAwareStructuredCaller;
@@ -251,6 +253,7 @@ export async function createWorkflowExecutionBootstrap(
     effectiveWorkflowConfig,
     providerEventLogger,
     usageEventLogger,
+    observability: globalConfig.observability,
     observabilityHandle,
     analyticsEmitter,
     structuredCaller,

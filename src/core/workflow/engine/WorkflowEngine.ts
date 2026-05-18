@@ -24,6 +24,7 @@ import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowR
 import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
+import { runWithWorkflowSpan, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
 import {
   applyRuntimeEnvironment,
@@ -180,40 +181,48 @@ export class WorkflowEngine extends EventEmitter {
       emitReport: (step, filePath, fileName) => this.emit('step:report', step, filePath, fileName),
     });
     workflowRunExecutors.set(this, () => this.runWithSystemCleanup(
-      () => runWorkflowToCompletion({
-        state: this.state,
-        options: this.options,
-        getCwd: () => this.cwd,
-        getMaxSteps: () => this.maxSteps,
-        getReportDir: () => this.runPaths.reportsAbs,
-        abortRequested: () => this.abortRequested,
-        getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
-        applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
-        loopDetectorCheck: (stepName) => {
-          const result = this.loopDetector.check(stepName);
-          return {
-            shouldWarn: result.shouldWarn ?? false,
-            shouldAbort: result.shouldAbort ?? false,
-            count: result.count,
-            isLoop: result.isLoop,
-          };
-        },
-        cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
-        resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
-        runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
-        runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
-        buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
-        buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
-        resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
-        resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
-        setActiveStep: this.setActiveResumePoint.bind(this),
-        addUserInput: this.addUserInput.bind(this),
-        emit: (event, ...args) => this.emit(event as never, ...args as []),
-        updateMaxSteps: (maxSteps) => {
-          this.maxSteps = maxSteps;
-          this.sharedRuntime.maxSteps = maxSteps;
-        },
-      }),
+      () => runWithWorkflowSpan(
+        this.buildWorkflowSpanParams('full'),
+        () => runWorkflowToCompletion({
+          state: this.state,
+          options: this.options,
+          getWorkflowName: () => this.config.name,
+          getCwd: () => this.cwd,
+          getMaxSteps: () => this.maxSteps,
+          getReportDir: () => this.runPaths.reportsAbs,
+          abortRequested: () => this.abortRequested,
+          getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+          applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
+          loopDetectorCheck: (stepName) => {
+            const result = this.loopDetector.check(stepName);
+            return {
+              shouldWarn: result.shouldWarn ?? false,
+              shouldAbort: result.shouldAbort ?? false,
+              count: result.count,
+              isLoop: result.isLoop,
+            };
+          },
+          cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
+          resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
+          runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
+          runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+          buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
+          buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
+          resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+          resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
+          setActiveStep: this.setActiveResumePoint.bind(this),
+          addUserInput: this.addUserInput.bind(this),
+          emit: (event, ...args) => this.emit(event as never, ...args as []),
+          updateMaxSteps: (maxSteps) => {
+            this.maxSteps = maxSteps;
+            this.sharedRuntime.maxSteps = maxSteps;
+          },
+        }),
+        (result) => ({
+          status: result.state.status,
+          abortKind: result.abort?.kind,
+        }),
+      ),
       () => true,
     ));
 
@@ -285,6 +294,18 @@ export class WorkflowEngine extends EventEmitter {
     this.systemStepExecutor.cleanup();
   }
 
+  private buildWorkflowSpanParams(runMode: WorkflowSpanParams['runMode']): WorkflowSpanParams {
+    return {
+      enabled: this.options.observability?.enabled === true,
+      workflowName: this.config.name,
+      initialStep: this.config.initialStep,
+      stepCount: this.config.steps.length,
+      maxSteps: this.maxSteps,
+      runMode,
+      resumeDepth: this.resumeStackPrefix.length,
+    };
+  }
+
   private async runWithSystemCleanup<T>(
     execute: () => Promise<T>,
     shouldCleanup: (result: T | undefined, error: unknown | undefined) => boolean,
@@ -317,37 +338,45 @@ export class WorkflowEngine extends EventEmitter {
     loopDetected?: boolean;
   }> {
     return this.runWithSystemCleanup(
-      () => runSingleWorkflowIteration({
-        state: this.state,
-        options: this.options,
-        getCwd: () => this.cwd,
-        getMaxSteps: () => this.maxSteps,
-        getReportDir: () => this.runPaths.reportsAbs,
-        abortRequested: () => this.abortRequested,
-        getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
-        applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
-        loopDetectorCheck: (stepName) => {
-          const loopResult = this.loopDetector.check(stepName);
-          return {
-            shouldWarn: loopResult.shouldWarn ?? false,
-            shouldAbort: loopResult.shouldAbort ?? false,
-            count: loopResult.count,
-            isLoop: loopResult.isLoop,
-          };
-        },
-        cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
-        resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
-        runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
-        runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
-        buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
-        buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
-        resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
-        resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
-        setActiveStep: this.setActiveResumePoint.bind(this),
-        addUserInput: this.addUserInput.bind(this),
-        emit: (event, ...args) => this.emit(event as never, ...args as []),
-        updateMaxSteps: () => {},
-      }),
+      () => runWithWorkflowSpan(
+        this.buildWorkflowSpanParams('single_iteration'),
+        () => runSingleWorkflowIteration({
+          state: this.state,
+          options: this.options,
+          getWorkflowName: () => this.config.name,
+          getCwd: () => this.cwd,
+          getMaxSteps: () => this.maxSteps,
+          getReportDir: () => this.runPaths.reportsAbs,
+          abortRequested: () => this.abortRequested,
+          getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+          applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
+          loopDetectorCheck: (stepName) => {
+            const loopResult = this.loopDetector.check(stepName);
+            return {
+              shouldWarn: loopResult.shouldWarn ?? false,
+              shouldAbort: loopResult.shouldAbort ?? false,
+              count: loopResult.count,
+              isLoop: loopResult.isLoop,
+            };
+          },
+          cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
+          resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
+          runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
+          runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+          buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
+          buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
+          resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+          resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
+          setActiveStep: this.setActiveResumePoint.bind(this),
+          addUserInput: this.addUserInput.bind(this),
+          emit: (event, ...args) => this.emit(event as never, ...args as []),
+          updateMaxSteps: () => {},
+        }),
+        (result) => ({
+          status: result.isComplete ? this.state.status : 'running',
+          nextStep: result.nextStep,
+        }),
+      ),
       (result, error) => error !== undefined || result?.isComplete === true || this.state.status !== 'running',
     );
   }
