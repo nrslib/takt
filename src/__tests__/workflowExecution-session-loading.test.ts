@@ -438,6 +438,7 @@ describe('executeWorkflow session loading', () => {
     });
 
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toBe(observability);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 

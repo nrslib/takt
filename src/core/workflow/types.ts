@@ -12,7 +12,7 @@ import type {
   RateLimitFallbackConfig,
   FallbackContext,
 } from '../models/types.js';
-import type { PersonaProviderEntry } from '../models/config-types.js';
+import type { PersonaProviderEntry, ResolvedObservabilityConfig } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
@@ -246,6 +246,8 @@ export interface WorkflowEngineOptions {
   bypassPermissions?: boolean;
   /** Project root directory (where .takt/ lives). */
   projectCwd: string;
+  /** Resolved observability opt-in config for workflow instrumentation. */
+  observability?: ResolvedObservabilityConfig;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;

@@ -15,12 +15,14 @@ import { decrementStepIteration, incrementStepIteration } from './state-manager.
 import { handleBlocked } from './blocked-handler.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
+import { runWithStepSpan } from '../observability/workflowSpans.js';
 
 const log = createLogger('workflow-run-loop');
 
 interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
+  getWorkflowName: () => string;
   getCwd: () => string;
   getMaxSteps: () => WorkflowMaxSteps;
   getReportDir: () => string;
@@ -280,18 +282,27 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '';
     deps.setActiveStep(step, activeIteration);
-    deps.emit('step:start', step, activeIteration, stepInstruction, deps.resolveStepProviderModel(step, stepRuntime));
+    const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
+    deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo);
 
     try {
-      const result = await deps.runStep(step, prebuiltInstruction, stepRuntime);
-      const { response, instruction, providerInfo } = result;
+      const result = await runWithStepSpan({
+        enabled: deps.options.observability?.enabled === true,
+        workflowName: deps.getWorkflowName(),
+        step,
+        iteration: activeIteration,
+        stepIteration,
+        providerInfo,
+        getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+      }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
+      const { response, instruction, providerInfo: resultProviderInfo } = result;
       if (stepRuntime?.fallback) {
         deps.state.pendingFallback = undefined;
       }
       deps.emit('step:complete', step, response, instruction);
 
       if (response.status === 'rate_limited') {
-        const currentProvider = providerInfo ?? deps.resolveStepProviderModel(step, stepRuntime);
+        const currentProvider = resultProviderInfo ?? providerInfo;
         const consumedStepIterations = result.consumedStepIterations ?? [step.name];
         const fallbackResult = prepareRateLimitFallback(
           deps,
@@ -448,8 +459,17 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   if (!isDelegated && stepIteration !== undefined) {
     prebuiltInstruction = deps.buildInstruction(step, stepIteration);
   }
-  const result = await deps.runStep(step, prebuiltInstruction, stepRuntime);
-  const { response, providerInfo } = result;
+  const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
+  const result = await runWithStepSpan({
+    enabled: deps.options.observability?.enabled === true,
+    workflowName: deps.getWorkflowName(),
+    step,
+    iteration: activeIteration,
+    stepIteration,
+    providerInfo,
+    getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+  }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
+  const { response, providerInfo: resultProviderInfo } = result;
   if (stepRuntime?.fallback) {
     deps.state.pendingFallback = undefined;
   }
@@ -460,7 +480,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
   }
   if (response.status === 'rate_limited') {
-    const currentProvider = providerInfo ?? deps.resolveStepProviderModel(step, stepRuntime);
+    const currentProvider = resultProviderInfo ?? providerInfo;
     const consumedStepIterations = result.consumedStepIterations ?? [step.name];
     const fallbackResult = prepareRateLimitFallback(
       deps,
