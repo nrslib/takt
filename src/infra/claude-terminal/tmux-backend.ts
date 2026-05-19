@@ -1,11 +1,16 @@
 import * as childProcess from 'node:child_process';
 import type { ExecFileException } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { stripAnsi } from '../../shared/utils/text.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { createClaudeTerminalSessionName } from './command.js';
 import type { TerminalBackend, TerminalSession, TerminalStartOptions } from './types.js';
 
 const log = createLogger('claude-terminal-tmux');
+const CLAUDE_READY_TIMEOUT_MS = 60000;
+const PANE_CHANGE_TIMEOUT_MS = 5000;
+const PANE_POLL_INTERVAL_MS = 100;
 
 function getProperty(error: object, property: string): unknown {
   return (error as Record<string, unknown>)[property];
@@ -96,6 +101,42 @@ async function loadBuffer(bufferName: string, text: string): Promise<void> {
   });
 }
 
+async function capturePane(session: TerminalSession, lines: number): Promise<string> {
+  return runTmux(['capture-pane', '-p', '-t', session.name, '-S', `-${lines}`]);
+}
+
+function isClaudeInputReady(capturedPane: string): boolean {
+  const plain = stripAnsi(capturedPane);
+  if (/(Running|thinking|Searching|Reading|Writing|Editing|Crunched)/i.test(plain)) {
+    return false;
+  }
+  return /^\s*[❯❱>]\s*$/m.test(plain);
+}
+
+async function waitForClaudeInputReady(session: TerminalSession): Promise<void> {
+  const deadline = Date.now() + CLAUDE_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const captured = await capturePane(session, 20);
+    if (isClaudeInputReady(captured)) {
+      return;
+    }
+    await sleep(PANE_POLL_INTERVAL_MS);
+  }
+  throw new Error('Timed out waiting for Claude terminal input prompt.');
+}
+
+async function waitForPaneChange(session: TerminalSession, before: string): Promise<void> {
+  const deadline = Date.now() + PANE_CHANGE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const captured = await capturePane(session, 40);
+    if (captured !== before) {
+      return;
+    }
+    await sleep(PANE_POLL_INTERVAL_MS);
+  }
+  throw new Error('Timed out waiting for Claude terminal paste to appear in pane.');
+}
+
 export class TmuxTerminalBackend implements TerminalBackend {
   async start(options: TerminalStartOptions): Promise<TerminalSession> {
     const name = createClaudeTerminalSessionName();
@@ -114,10 +155,13 @@ export class TmuxTerminalBackend implements TerminalBackend {
 
   async pasteText(session: TerminalSession, text: string): Promise<void> {
     const bufferName = `${session.name}-prompt`;
-    await loadBuffer(bufferName, `${text}\n`);
+    await waitForClaudeInputReady(session);
+    const beforePaste = await capturePane(session, 40);
+    await loadBuffer(bufferName, text);
     let pasteError: unknown;
     try {
-      await runTmux(['paste-buffer', '-b', bufferName, '-t', session.name]);
+      await runTmux(['paste-buffer', '-p', '-b', bufferName, '-t', session.name]);
+      await waitForPaneChange(session, beforePaste);
       await runTmux(['send-keys', '-t', session.name, 'Enter']);
     } catch (error) {
       pasteError = error;

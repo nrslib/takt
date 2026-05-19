@@ -40,13 +40,6 @@ function createCaughtProviderErrorResponse(
   );
 }
 
-function getUnsupportedProviderOptionMessage(options: ProviderCallOptions): string | undefined {
-  if (options.providerOptions?.claude?.sandbox !== undefined) {
-    return 'provider: claude-terminal does not support provider_options.claude.sandbox.';
-  }
-  return undefined;
-}
-
 function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOptions {
   const claudeOptions = options.providerOptions?.claude;
   const terminalOptions = options.providerOptions?.claudeTerminal;
@@ -82,11 +75,6 @@ export class ClaudeTerminalProvider implements Provider {
 
     return {
       call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        const unsupportedMessage = getUnsupportedProviderOptionMessage(options);
-        if (unsupportedMessage) {
-          return createProviderErrorResponse(name, options, unsupportedMessage);
-        }
-
         try {
           return await callClaudeTerminal(name, prompt, {
             ...toTerminalOptions(options),

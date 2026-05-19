@@ -143,6 +143,25 @@ describe('executeWorkflow claude-terminal integration', () => {
     }));
   });
 
+  it('Given global claude sandbox option, When claude-terminal runs, Then sandbox option does not abort the workflow', async () => {
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    const result = await executeWorkflow(makeConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      providerOptions: {
+        claude: {
+          sandbox: {
+            allowUnsandboxedCommands: true,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(terminalMocks.start).toHaveBeenCalledOnce();
+  });
+
   it('Given claude-terminal step with outputContracts, When report phase runs, Then internal maxTurns does not fail the provider', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     terminalMocks.waitForAssistantResponse

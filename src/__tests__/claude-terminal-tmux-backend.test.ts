@@ -17,7 +17,14 @@ vi.mock('node:child_process', () => ({
 import { TmuxTerminalBackend } from '../infra/claude-terminal/tmux-backend.js';
 
 function mockExecFileSuccess(): void {
+  let captureCount = 0;
   mockExecFile.mockImplementation((_file, _args, _options, callback) => {
+    if (_args[0] === 'capture-pane') {
+      captureCount += 1;
+      const stdout = captureCount === 1 ? '❯' : `pane-${captureCount}`;
+      callback(null, { stdout, stderr: '' });
+      return;
+    }
     callback(null, { stdout: '', stderr: '' });
   });
 }
@@ -44,6 +51,12 @@ function createSpawnChild(stdinWrites: string[], exitCode: number, stderrText: s
     }),
   };
   return child;
+}
+
+function getNonCaptureTmuxArgs(): unknown[] {
+  return mockExecFile.mock.calls
+    .map((call) => call[1])
+    .filter((args) => args[0] !== 'capture-pane');
 }
 
 describe('TmuxTerminalBackend', () => {
@@ -88,7 +101,7 @@ describe('TmuxTerminalBackend', () => {
     );
   });
 
-  it('Given prompt text, When pasteText is called, Then tmux buffer operations run in order with trailing newline', async () => {
+  it('Given prompt text, When pasteText is called, Then tmux waits for prompt and submits pasted text', async () => {
     const backend = new TmuxTerminalBackend();
     const stdinWrites: string[] = [];
     mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
@@ -98,19 +111,67 @@ describe('TmuxTerminalBackend', () => {
     expect(mockSpawn).toHaveBeenCalledWith('tmux', ['load-buffer', '-b', 'takt-session-prompt', '-'], {
       stdio: ['pipe', 'ignore', 'pipe'],
     });
-    expect(stdinWrites).toEqual(['implement task\n']);
-    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([
-      ['paste-buffer', '-b', 'takt-session-prompt', '-t', 'takt-session'],
+    expect(stdinWrites).toEqual(['implement task']);
+    expect(mockExecFile.mock.calls.map((call) => call[1][0])).toEqual([
+      'capture-pane',
+      'capture-pane',
+      'paste-buffer',
+      'capture-pane',
+      'send-keys',
+      'delete-buffer',
+    ]);
+    expect(getNonCaptureTmuxArgs()).toEqual([
+      ['paste-buffer', '-p', '-b', 'takt-session-prompt', '-t', 'takt-session'],
       ['send-keys', '-t', 'takt-session', 'Enter'],
       ['delete-buffer', '-b', 'takt-session-prompt'],
+    ]);
+  });
+
+  it('Given Claude pane is still busy, When pasteText is called, Then prompt is not pasted until input is ready', async () => {
+    const backend = new TmuxTerminalBackend();
+    const stdinWrites: string[] = [];
+    const capturedPanes = [
+      'Running tool...',
+      'Thinking...',
+      'Ready\n❯\n? for shortcuts',
+      'Ready\n❯\n? for shortcuts',
+      'prompt entered',
+    ];
+    mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
+    mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      if (args[0] === 'capture-pane') {
+        callback(null, { stdout: capturedPanes.shift() ?? 'prompt entered', stderr: '' });
+        return;
+      }
+      callback(null, { stdout: '', stderr: '' });
+    });
+
+    await backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'implement task');
+
+    expect(stdinWrites).toEqual(['implement task']);
+    expect(mockExecFile.mock.calls.map((call) => call[1][0])).toEqual([
+      'capture-pane',
+      'capture-pane',
+      'capture-pane',
+      'capture-pane',
+      'paste-buffer',
+      'capture-pane',
+      'send-keys',
+      'delete-buffer',
     ]);
   });
 
   it('Given tmux paste-buffer fails after loading prompt, When pasteText rejects, Then tmux buffer is deleted', async () => {
     const backend = new TmuxTerminalBackend();
     const stdinWrites: string[] = [];
+    let captureCount = 0;
     mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
     mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      if (args[0] === 'capture-pane') {
+        captureCount += 1;
+        callback(null, { stdout: captureCount === 1 ? '❯' : `pane-${captureCount}`, stderr: '' });
+        return;
+      }
       if (args[0] === 'paste-buffer') {
         callback(createExecFileError('Command failed with sensitive argv', 1, 'tmux paste-buffer failed'));
         return;
@@ -121,9 +182,9 @@ describe('TmuxTerminalBackend', () => {
     await expect(backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'secret prompt'))
       .rejects.toThrow(/paste-buffer failed/i);
 
-    expect(stdinWrites).toEqual(['secret prompt\n']);
-    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([
-      ['paste-buffer', '-b', 'takt-session-prompt', '-t', 'takt-session'],
+    expect(stdinWrites).toEqual(['secret prompt']);
+    expect(getNonCaptureTmuxArgs()).toEqual([
+      ['paste-buffer', '-p', '-b', 'takt-session-prompt', '-t', 'takt-session'],
       ['delete-buffer', '-b', 'takt-session-prompt'],
     ]);
   });
@@ -131,8 +192,14 @@ describe('TmuxTerminalBackend', () => {
   it('Given tmux send-keys fails after pasting prompt, When pasteText rejects, Then tmux buffer is deleted', async () => {
     const backend = new TmuxTerminalBackend();
     const stdinWrites: string[] = [];
+    let captureCount = 0;
     mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
     mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      if (args[0] === 'capture-pane') {
+        captureCount += 1;
+        callback(null, { stdout: captureCount === 1 ? '❯' : `pane-${captureCount}`, stderr: '' });
+        return;
+      }
       if (args[0] === 'send-keys') {
         callback(createExecFileError('Command failed with sensitive argv', 1, 'tmux send-keys failed'));
         return;
@@ -143,9 +210,9 @@ describe('TmuxTerminalBackend', () => {
     await expect(backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'secret prompt'))
       .rejects.toThrow(/send-keys failed/i);
 
-    expect(stdinWrites).toEqual(['secret prompt\n']);
-    expect(mockExecFile.mock.calls.map((call) => call[1])).toEqual([
-      ['paste-buffer', '-b', 'takt-session-prompt', '-t', 'takt-session'],
+    expect(stdinWrites).toEqual(['secret prompt']);
+    expect(getNonCaptureTmuxArgs()).toEqual([
+      ['paste-buffer', '-p', '-b', 'takt-session-prompt', '-t', 'takt-session'],
       ['send-keys', '-t', 'takt-session', 'Enter'],
       ['delete-buffer', '-b', 'takt-session-prompt'],
     ]);

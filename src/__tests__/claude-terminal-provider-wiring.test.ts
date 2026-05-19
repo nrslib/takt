@@ -126,7 +126,7 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'maxTurns')).toBe(false);
   });
 
-  it('Given claude sandbox provider option, When call is invoked, Then provider error is returned before terminal client call', async () => {
+  it('Given claude sandbox provider option, When call is invoked, Then terminal provider ignores sandbox and continues', async () => {
     const provider = new ClaudeTerminalProvider();
     const agent = provider.setup({ name: 'coder' });
 
@@ -142,18 +142,13 @@ describe('ClaudeTerminalProvider wiring', () => {
       } as never,
     });
 
-    expect(mockCallClaudeTerminal).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      persona: 'coder',
-      status: 'error',
+    expect(result.status).toBe('done');
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('coder', 'implement this', expect.objectContaining({
+      cwd: '/tmp/worktree',
       sessionId: 'session-123',
-      failureCategory: 'provider_error',
-      providerUsage: {
-        usageMissing: true,
-        reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
-      },
-    });
-    expect(result.error).toMatch(/provider_options\.claude\.sandbox/i);
+    }));
+    const terminalOptions = mockCallClaudeTerminal.mock.calls[0]?.[2];
+    expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'sandbox')).toBe(false);
   });
 
   it('Given incompatible claude effort, When call is invoked, Then provider error is returned before terminal client call', async () => {

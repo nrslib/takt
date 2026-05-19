@@ -222,7 +222,8 @@ function hasCompletionEntry(
       index + 1 + lineNumberOffset,
       canIgnoreLineParseError(index, lines, transcriptBody, allowIncompleteFinalLine),
     );
-    return entry?.type === 'result';
+    return entry?.type === 'result'
+      || (entry?.type === 'system' && entry.subtype === 'turn_duration');
   });
 }
 

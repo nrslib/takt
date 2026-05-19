@@ -426,6 +426,44 @@ describe('Claude terminal transcript reader', () => {
     }
   });
 
+  it('Given interactive transcript has assistant text followed by turn duration, When waiting, Then response is returned', async () => {
+    await withTemporaryClaudeHome(async (projectDir) => {
+      const sessionId = 'claude-session-1';
+      const sessionsDir = getClaudeProjectSessionsDir(projectDir);
+      const transcriptPath = join(sessionsDir, `${sessionId}.jsonl`);
+      const assistantLine = JSON.stringify({
+        type: 'assistant',
+        sessionId,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'add-review-thread-state' }],
+        },
+      });
+      const turnDurationLine = JSON.stringify({
+        type: 'system',
+        subtype: 'turn_duration',
+        sessionId,
+        durationMs: 2521,
+        messageCount: 8,
+      });
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(transcriptPath, `${assistantLine}\n${turnDurationLine}`, 'utf-8');
+
+      const reader = new ProjectClaudeTranscriptReader();
+
+      await expect(reader.waitForAssistantResponse({
+        cwd: projectDir,
+        session: { sessionId },
+        baseline: { byteOffset: 0, lineNumberOffset: 0 },
+        timeoutMs: 30,
+        pollIntervalMs: 5,
+      })).resolves.toMatchObject({
+        sessionId,
+        assistantText: 'add-review-thread-state',
+      });
+    });
+  });
+
   it('Given transcript has assistant text without completion, When waiting, Then partial response is not returned', async () => {
     const originalHome = process.env.HOME;
     const homeDir = await mkdtemp(join(tmpdir(), 'takt-claude-terminal-home-'));
