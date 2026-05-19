@@ -116,6 +116,7 @@ export function isIssueReference(task: string): boolean {
 const REVIEW_THREAD_POLICY = [
   '以下のレビューコメントは review thread state ごとに分類されています。',
   'Active Review Threads を主な修正対象にしてください。',
+  'Outdated But Unresolved Review Threads は、現在のコードにまだ当てはまるか確認し、当てはまらなければスキップ理由を明記してください。',
   'Resolved / Outdated のコメントは原則として修正対象にせず、現在のコードに同じ問題が明確に残っている場合のみ報告してください。',
   '各コメントについて、対応したか、スキップしたか、理由を最後に要約してください。',
 ];

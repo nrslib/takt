@@ -211,6 +211,7 @@ describe('formatPrReviewAsTask', () => {
     expect(result).toContain('以下のレビューコメントは review thread state ごとに分類されています。');
     expect(result).not.toContain('GitHub review thread');
     expect(result).toContain('Active Review Threads を主な修正対象にしてください。');
+    expect(result).toContain('Outdated But Unresolved Review Threads は、現在のコードにまだ当てはまるか確認し、当てはまらなければスキップ理由を明記してください。');
     expect(result).toContain('Resolved / Outdated のコメントは原則として修正対象にせず');
     expect(result).toContain('各コメントについて、対応したか、スキップしたか、理由を最後に要約してください。');
     expect(result).toContain('### PR Description');
