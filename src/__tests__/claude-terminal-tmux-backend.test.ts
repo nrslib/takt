@@ -161,6 +161,43 @@ describe('TmuxTerminalBackend', () => {
     ]);
   });
 
+  it('Given old busy output remains in pane history, When tail prompt is ready, Then prompt is pasted', async () => {
+    const backend = new TmuxTerminalBackend();
+    const stdinWrites: string[] = [];
+    const readyPaneWithHistory = [
+      'Running tool...',
+      'Tool completed',
+      'Ready',
+      '❯',
+      '? for shortcuts',
+    ].join('\n');
+    const capturedPanes = [
+      readyPaneWithHistory,
+      readyPaneWithHistory,
+      'implement task',
+    ];
+    mockSpawn.mockImplementation(() => createSpawnChild(stdinWrites, 0, ''));
+    mockExecFile.mockImplementation((_file, args, _options, callback) => {
+      if (args[0] === 'capture-pane') {
+        callback(null, { stdout: capturedPanes.shift() ?? 'implement task', stderr: '' });
+        return;
+      }
+      callback(null, { stdout: '', stderr: '' });
+    });
+
+    await backend.pasteText({ id: 'tmux-session', name: 'takt-session' }, 'implement task');
+
+    expect(stdinWrites).toEqual(['implement task']);
+    expect(mockExecFile.mock.calls.map((call) => call[1][0])).toEqual([
+      'capture-pane',
+      'capture-pane',
+      'paste-buffer',
+      'capture-pane',
+      'send-keys',
+      'delete-buffer',
+    ]);
+  });
+
   it('Given tmux paste-buffer fails after loading prompt, When pasteText rejects, Then tmux buffer is deleted', async () => {
     const backend = new TmuxTerminalBackend();
     const stdinWrites: string[] = [];

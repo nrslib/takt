@@ -11,6 +11,9 @@ const log = createLogger('claude-terminal-tmux');
 const CLAUDE_READY_TIMEOUT_MS = 60000;
 const PANE_CHANGE_TIMEOUT_MS = 5000;
 const PANE_POLL_INTERVAL_MS = 100;
+const CLAUDE_READY_TAIL_LINES = 3;
+const CLAUDE_BUSY_PATTERN = /(Running|thinking|Searching|Reading|Writing|Editing|Crunched)/i;
+const CLAUDE_PROMPT_PATTERN = /^[❯❱>]$/;
 
 function getProperty(error: object, property: string): unknown {
   return (error as Record<string, unknown>)[property];
@@ -107,10 +110,14 @@ async function capturePane(session: TerminalSession, lines: number): Promise<str
 
 function isClaudeInputReady(capturedPane: string): boolean {
   const plain = stripAnsi(capturedPane);
-  if (/(Running|thinking|Searching|Reading|Writing|Editing|Crunched)/i.test(plain)) {
-    return false;
-  }
-  return /^\s*[❯❱>]\s*$/m.test(plain);
+  const tailLines = plain
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(-CLAUDE_READY_TAIL_LINES);
+  const hasPrompt = tailLines.some((line) => CLAUDE_PROMPT_PATTERN.test(line));
+  const isBusy = CLAUDE_BUSY_PATTERN.test(tailLines.join('\n'));
+  return hasPrompt && !isBusy;
 }
 
 async function waitForClaudeInputReady(session: TerminalSession): Promise<void> {
