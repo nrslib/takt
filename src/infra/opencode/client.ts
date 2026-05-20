@@ -512,6 +512,11 @@ export class OpenCodeClient {
                 const previous = textContentParts.get(deltaProps.partID) ?? '';
                 textContentParts.set(deltaProps.partID, `${previous}${visibleDelta}`);
               }
+              // Advance the raw offset so a later full-snapshot
+              // `message.part.updated` for the same part does not re-append the
+              // text already consumed here (some providers emit both).
+              const prevOffset = textOffsets.get(deltaProps.partID) ?? 0;
+              textOffsets.set(deltaProps.partID, prevOffset + deltaProps.delta.length);
             }
             continue;
           }

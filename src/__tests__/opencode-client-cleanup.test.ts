@@ -209,6 +209,102 @@ describe('OpenCodeClient stream cleanup', () => {
     );
   });
 
+  it('should not duplicate text when part.delta is followed by a full-snapshot part.updated', async () => {
+    // Reproduces the OpenAI (codex OAuth) streaming pattern observed via opencode:
+    // an empty text part is created, content arrives as a `message.part.delta`,
+    // then the same part is re-sent as a full-snapshot `message.part.updated`.
+    // Both paths must share the offset so content is "apple", not "appleapple".
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-1', type: 'text', text: '' } },
+      },
+      {
+        type: 'message.part.delta',
+        properties: { sessionID: 'session-dup', partID: 'p-1', field: 'text', delta: 'apple' },
+      },
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-1', type: 'text', text: 'apple' } },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-dup' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-dup' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await Promise.race([
+      client.call('interactive', 'hello', { cwd: '/tmp', model: 'openai/gpt-5.5' }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), 500)),
+    ]);
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('apple');
+  });
+
+  it('should accumulate incremental part.delta chunks before a full snapshot without duplication', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-2', type: 'text', text: '' } },
+      },
+      {
+        type: 'message.part.delta',
+        properties: { sessionID: 'session-dup2', partID: 'p-2', field: 'text', delta: 'ap' },
+      },
+      {
+        type: 'message.part.delta',
+        properties: { sessionID: 'session-dup2', partID: 'p-2', field: 'text', delta: 'ple' },
+      },
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-2', type: 'text', text: 'apple' } },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-dup2' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-dup2' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await Promise.race([
+      client.call('interactive', 'hello', { cwd: '/tmp', model: 'openai/gpt-5.5' }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), 500)),
+    ]);
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('apple');
+  });
+
   it('should reject question.asked without handler and continue processing', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
