@@ -12,6 +12,8 @@ import { executeTask } from './taskExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
 import { selectWorkflow } from '../../workflowSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
+import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from '../attachments.js';
+import { stageTaskSpecForExecution } from './taskSpecContext.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
@@ -87,10 +89,33 @@ export async function selectAndExecuteTask(
   log.info('Starting task execution', { workflow: workflowIdentifier, worktree: false });
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
+  let preparedSpec: ReturnType<typeof prepareTaskSpecDirectory> | undefined;
+  let stagedSpec: ReturnType<typeof stageTaskSpecForExecution> | undefined;
+  try {
+    preparedSpec = options?.attachments && options.attachments.length > 0
+      ? prepareTaskSpecDirectory(cwd, task, options.attachments)
+      : undefined;
+    stagedSpec = preparedSpec
+      ? stageTaskSpecForExecution(cwd, execCwd, preparedSpec.taskDirRelative, preparedSpec.taskDirSlug)
+      : undefined;
+  } catch (error) {
+    if (preparedSpec) {
+      cleanupPreparedTaskSpec(preparedSpec.taskDir);
+    }
+    throw error;
+  }
   if (options?.skipTaskList !== true) {
-    taskRecord = taskRunner.addTask(task, {
-      workflow: workflowIdentifier,
-    });
+    try {
+      taskRecord = taskRunner.addTask(task, {
+        workflow: workflowIdentifier,
+        ...(preparedSpec ? { task_dir: preparedSpec.taskDirRelative } : {}),
+      });
+    } catch (error) {
+      if (preparedSpec) {
+        cleanupPreparedTaskSpec(preparedSpec.taskDir);
+      }
+      throw error;
+    }
   }
   const startedAt = new Date().toISOString();
 
@@ -98,13 +123,14 @@ export async function selectAndExecuteTask(
   let taskSuccess: boolean;
   try {
     taskSuccess = await executeTask({
-      task,
+      task: stagedSpec?.taskPrompt ?? task,
       cwd: execCwd,
       workflowIdentifier,
       projectCwd: cwd,
       agentOverrides,
       interactiveUserInput: options?.interactiveUserInput === true,
       interactiveMetadata: options?.interactiveMetadata,
+      ...(preparedSpec ? { reportDirName: preparedSpec.taskDirSlug } : {}),
     });
   } catch (err) {
     const completedAt = new Date().toISOString();

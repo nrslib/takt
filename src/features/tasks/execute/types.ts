@@ -13,6 +13,7 @@ import type {
   ProviderOptionsSource,
   ProviderResolutionSource,
 } from '../../../core/workflow/provider-options-trace.js';
+import type { TaskAttachment } from '../attachments.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -195,4 +196,6 @@ export interface SelectAndExecuteOptions {
   interactiveMetadata?: InteractiveMetadata;
   /** Skip adding task to tasks.yaml */
   skipTaskList?: boolean;
+  /** Images pasted during interactive task input. */
+  attachments?: TaskAttachment[];
 }

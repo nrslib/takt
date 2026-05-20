@@ -15,6 +15,7 @@ import { initializeSession } from '../../interactive/sessionInitialization.js';
 import {
   resolveLanguage,
   formatStepPreviews,
+  type InteractiveModeResult,
   type WorkflowContext,
 } from '../../interactive/interactive.js';
 import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
@@ -29,6 +30,7 @@ export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
 export interface InstructModeResult {
   action: InstructModeAction;
   task: string;
+  attachments?: InteractiveModeResult['attachments'];
 }
 
 export interface InstructUIText {
@@ -48,6 +50,22 @@ export interface InstructUIText {
 }
 
 const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
+
+function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
+  if (result.action === 'cancel') {
+    return {
+      action: 'cancel',
+      task: '',
+      ...(result.attachments ? { attachments: result.attachments } : {}),
+    };
+  }
+
+  return {
+    action: result.action as InstructModeAction,
+    task: result.task,
+    ...(result.attachments ? { attachments: result.attachments } : {}),
+  };
+}
 
 function buildInstructTemplateVars(
   branchContext: string,
@@ -131,9 +149,5 @@ export async function runInstructMode(
 
   const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
-  if (result.action === 'cancel') {
-    return { action: 'cancel', task: '' };
-  }
-
-  return { action: result.action as InstructModeAction, task: result.task };
+  return toInstructModeResult(result);
 }

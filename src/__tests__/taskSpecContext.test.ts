@@ -39,6 +39,31 @@ describe('stageTaskSpecForExecution', () => {
     expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(orderContent);
   });
 
+  it('run コンテキストへ task 添付画像を配置する', () => {
+    const projectCwd = createTempProjectDir();
+    const execCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const orderContent = [
+      '# Task',
+      '',
+      'Use [Image #1] as the reference.',
+      '',
+      '## 添付画像',
+      '',
+      '- [Image #1]: `attachments/image-1.png`',
+    ].join('\n');
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), orderContent, 'utf-8');
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments', 'image-1.png'), 'png-data', 'utf-8');
+
+    const result = stageTaskSpecForExecution(projectCwd, execCwd, taskDir, '20260216-spec-task');
+    const stagedAttachmentPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'attachments', 'image-1.png');
+
+    expect(result.taskPrompt).toContain('Primary spec: `.takt/runs/20260216-spec-task/context/task/order.md`.');
+    expect(fs.readFileSync(stagedAttachmentPath, 'utf-8')).toBe('png-data');
+  });
+
   it('symlink の order.md は拒否する', () => {
     const projectCwd = createTempProjectDir();
     const execCwd = createTempProjectDir();
@@ -56,6 +81,28 @@ describe('stageTaskSpecForExecution', () => {
       `Task spec file must be a regular file: ${path.join(sourceTaskDir, 'order.md')}`,
     );
     expect(fs.existsSync(stagedOrderPath)).toBe(false);
+  });
+
+  it('symlink の attachments ディレクトリは拒否する', () => {
+    const projectCwd = createTempProjectDir();
+    const execCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const externalAttachmentDir = path.join(projectCwd, 'external-attachments');
+    fs.mkdirSync(sourceTaskDir, { recursive: true });
+    fs.mkdirSync(externalAttachmentDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), '# Task\n\nUse [Image #1].', 'utf-8');
+    fs.writeFileSync(path.join(externalAttachmentDir, 'image-1.png'), 'outside-data', 'utf-8');
+    fs.symlinkSync(externalAttachmentDir, path.join(sourceTaskDir, 'attachments'));
+
+    const stagedAttachmentPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'attachments', 'image-1.png');
+    const stagedOrderPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'order.md');
+    const stagedTaskDir = path.dirname(stagedOrderPath);
+
+    expect(() => stageTaskSpecForExecution(projectCwd, execCwd, taskDir, '20260216-spec-task')).toThrow(/Task attachments/);
+    expect(fs.existsSync(stagedTaskDir)).toBe(false);
+    expect(fs.existsSync(stagedOrderPath)).toBe(false);
+    expect(fs.existsSync(stagedAttachmentPath)).toBe(false);
   });
 });
 

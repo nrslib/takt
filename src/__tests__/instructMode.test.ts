@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { setupRawStdin, restoreStdin, toRawInputs, createMockProvider } from './helpers/stdinSimulator.js';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -83,6 +85,7 @@ const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
 const mockLoadTemplate = vi.mocked(loadTemplate);
+const attachmentSessionDirs = new Set<string>();
 
 function setupMockProvider(responses: string[]): void {
   const { provider } = createMockProvider(responses);
@@ -96,7 +99,20 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
+  for (const sessionDir of attachmentSessionDirs) {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  }
+  attachmentSessionDirs.clear();
 });
+
+function createOscImagePaste(): string {
+  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
+}
+
+function trackAttachmentSession(tempPath: string): void {
+  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
+}
 
 describe('runInstructMode', () => {
   it('should return action=cancel when user types /cancel', async () => {
@@ -148,6 +164,23 @@ describe('runInstructMode', () => {
 
     expect(result.action).toBe('save_task');
     expect(result.task).toBe('Summarized task.');
+  });
+
+  it('should preserve pasted image attachments from the conversation loop', async () => {
+    setupRawStdin([
+      `use ${createOscImagePaste()}\r`,
+      '/go\r',
+    ]);
+    setupMockProvider(['response', 'Use [Image #1].']);
+
+    const result = await runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', '');
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Use [Image #1].');
+    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
+    expect(result.attachments?.[0]?.tempPath).toBeDefined();
+    trackAttachmentSession(result.attachments![0]!.tempPath);
+    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
   });
 
   it('should continue editing when user selects continue', async () => {

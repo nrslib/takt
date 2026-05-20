@@ -28,3 +28,4 @@ export { listRecentRuns, findRunForTask, loadRunSessionContext, formatRunSession
 export { runRetryMode, buildRetryTemplateVars, type RetryContext, type RetryFailureInfo, type RetryRunInfo } from './retryMode.js';
 export { dispatchConversationAction, type ConversationActionResult } from './actionDispatcher.js';
 export { findPreviousOrderContent } from './orderReader.js';
+export { type InteractiveImageAttachment } from './imageAttachments.js';

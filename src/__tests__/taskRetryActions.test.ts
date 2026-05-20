@@ -3,6 +3,7 @@ import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/conf
 
 const {
   mockExistsSync,
+  mockReadFileSync,
   mockSelectWorkflow,
   mockSelectOptionWithDefault,
   mockConfirm,
@@ -24,8 +25,11 @@ const {
   mockStatus,
   mockIsWorkflowPath,
   mockLoadAllStandaloneWorkflowsWithSources,
+  mockPrepareTaskSpecDirectory,
+  mockCleanupPreparedTaskSpec,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
+  mockReadFileSync: vi.fn(),
   mockSelectWorkflow: vi.fn(),
   mockSelectOptionWithDefault: vi.fn(),
   mockConfirm: vi.fn(),
@@ -58,11 +62,14 @@ const {
   mockStatus: vi.fn(),
   mockIsWorkflowPath: vi.fn(() => false),
   mockLoadAllStandaloneWorkflowsWithSources: vi.fn(() => new Map<string, unknown>([['default', {}]])),
+  mockPrepareTaskSpecDirectory: vi.fn(),
+  mockCleanupPreparedTaskSpec: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
 }));
 
 vi.mock('../features/workflowSelection/index.js', () => ({
@@ -132,6 +139,15 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: (...args: unknown[]) => mockExecuteAndCompleteTask(...args),
 }));
 
+vi.mock('../features/tasks/attachments.js', () => ({
+  prepareTaskSpecDirectory: (...args: unknown[]) => mockPrepareTaskSpecDirectory(...args),
+  cleanupPreparedTaskSpec: (...args: unknown[]) => mockCleanupPreparedTaskSpec(...args),
+}));
+
+vi.mock('../features/tasks/taskSpecFile.js', () => ({
+  readTaskSpecFile: (sourceOrderPath: string) => mockReadFileSync(sourceOrderPath, 'utf-8'),
+}));
+
 vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string, _lang?: string, vars?: Record<string, string>) => {
     if (vars?.workflow) {
@@ -178,9 +194,18 @@ const autoRequeueNote = [
   'ユーザーがリキューしたため、問題は対処済みと考えられます。',
 ].join('\n');
 
+const testAttachment = {
+  placeholder: '[Image #1]',
+  tempPath: '/tmp/takt/session-1/attachments/image-1.png',
+  fileName: 'image-1.png',
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockExistsSync.mockReturnValue(true);
+  mockReadFileSync.mockImplementation(() => {
+    throw new Error('readFileSync should not be called by default');
+  });
 
   mockConfirm.mockResolvedValue(true);
   mockSelectWorkflow.mockResolvedValue('default');
@@ -205,6 +230,11 @@ beforeEach(() => {
     data: { task: 'Do something', workflow: 'default' },
   });
   mockExecuteAndCompleteTask.mockResolvedValue(true);
+  mockPrepareTaskSpecDirectory.mockReturnValue({
+    taskDir: '/project/.takt/tasks/my-task',
+    taskDirRelative: '.takt/tasks/my-task',
+    taskDirSlug: 'my-task',
+  });
 });
 
 describe('requeueFailedTask', () => {
@@ -544,8 +574,102 @@ describe('retryFailedTask', () => {
       '追加指示A',
       undefined,
       undefined,
+      undefined,
     );
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
+  });
+
+  it('should promote image attachments for retry direct execution', async () => {
+    const task = makeFailedTask();
+    mockRunRetryMode.mockResolvedValue({
+      action: 'execute',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+      '/project',
+      ['Do something', '', '## 追加指示', '', 'Use [Image #1].'].join('\n'),
+      [testAttachment],
+    );
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'my-task',
+      ['failed'],
+      undefined,
+      'Use [Image #1].',
+      undefined,
+      undefined,
+      '.takt/tasks/my-task',
+    );
+  });
+
+  it('should preserve task_dir order content when retry task has image attachments', async () => {
+    const task = makeFailedTask({
+      content: 'Implement using only the files in `.takt/tasks/my-task`.',
+      taskDir: '.takt/tasks/my-task',
+      data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
+    });
+    mockReadFileSync.mockReturnValue(['Original order', 'Second line'].join('\n'));
+    mockRunRetryMode.mockResolvedValue({
+      action: 'save_task',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockReadFileSync).toHaveBeenCalledWith('/project/.takt/tasks/my-task/order.md', 'utf-8');
+    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+      '/project',
+      ['Original order', 'Second line', '', '## 追加指示', '', 'Use [Image #1].'].join('\n'),
+      [testAttachment],
+      { sourceTaskDir: '/project/.takt/tasks/my-task' },
+    );
+  });
+
+  it('should renumber retry attachments when task_dir order already references images', async () => {
+    const task = makeFailedTask({
+      content: 'Implement using only the files in `.takt/tasks/my-task`.',
+      taskDir: '.takt/tasks/my-task',
+      data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
+    });
+    mockReadFileSync.mockReturnValue([
+      'Original order with [Image #1].',
+      '',
+      '## 添付画像',
+      '',
+      '- [Image #1]: `attachments/image-1.png`',
+    ].join('\n'));
+    mockRunRetryMode.mockResolvedValue({
+      action: 'save_task',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+      '/project',
+      [
+        'Original order with [Image #1].',
+        '',
+        '## 添付画像',
+        '',
+        '- [Image #1]: `attachments/image-1.png`',
+        '',
+        '## 追加指示',
+        '',
+        'Use [Image #2].',
+      ].join('\n'),
+      [{
+        ...testAttachment,
+        placeholder: '[Image #2]',
+        fileName: 'image-2.png',
+      }],
+      { sourceTaskDir: '/project/.takt/tasks/my-task' },
+    );
   });
 
   it('should execute with selected workflow without mutating taskInfo', async () => {
@@ -568,6 +692,7 @@ describe('retryFailedTask', () => {
       '追加指示A',
       undefined,
       'selected-workflow',
+      undefined,
     );
     const executeArg = mockExecuteAndCompleteTask.mock.calls[0]?.[0];
     expect(executeArg).not.toBe(originalTaskInfo);
@@ -779,6 +904,7 @@ describe('retryFailedTask', () => {
       '追加指示A',
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -816,6 +942,7 @@ describe('retryFailedTask', () => {
       'implement',
       '追加指示A',
       resumePoint,
+      undefined,
       undefined,
     );
   });
@@ -855,6 +982,7 @@ describe('retryFailedTask', () => {
       '追加指示A',
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -870,6 +998,7 @@ describe('retryFailedTask', () => {
       '追加指示A',
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -883,6 +1012,7 @@ describe('retryFailedTask', () => {
       ['failed'],
       undefined,
       '既存ノート\n\n追加指示A',
+      undefined,
       undefined,
       undefined,
     );
@@ -1114,9 +1244,36 @@ describe('retryFailedTask', () => {
       '追加指示A',
       undefined,
       undefined,
+      undefined,
     );
     expect(mockStartReExecution).not.toHaveBeenCalled();
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
+  });
+
+  it('should promote image attachments for retry save_task requeue', async () => {
+    const task = makeFailedTask();
+    mockRunRetryMode.mockResolvedValue({
+      action: 'save_task',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockRequeueTask).toHaveBeenCalledWith(
+      'my-task',
+      ['failed'],
+      undefined,
+      'Use [Image #1].',
+      undefined,
+      undefined,
+      '.takt/tasks/my-task',
+    );
+    expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
+      '/project',
+      ['Do something', '', '## 追加指示', '', 'Use [Image #1].'].join('\n'),
+      [testAttachment],
+    );
   });
 
   it('should pass selected workflow when save_task uses a different workflow', async () => {
@@ -1134,6 +1291,7 @@ describe('retryFailedTask', () => {
       '追加指示A',
       undefined,
       'selected-workflow',
+      undefined,
     );
   });
 
@@ -1177,6 +1335,7 @@ describe('retryFailedTask', () => {
       '追加指示A',
       resumePoint,
       undefined,
+      undefined,
     );
     expect(mockStartReExecution).not.toHaveBeenCalled();
   });
@@ -1201,6 +1360,7 @@ describe('retryFailedTask', () => {
       ['failed'],
       undefined,
       '既存ノート\n\n追加指示A',
+      undefined,
       undefined,
       undefined,
     );

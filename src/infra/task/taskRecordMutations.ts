@@ -72,10 +72,16 @@ export function buildRetryTaskRecord(
   retryNote: string | undefined,
   resumePoint: WorkflowResumePoint | undefined,
   workflow: string | undefined,
+  taskDir: string | undefined,
 ): TaskRecord {
+  const taskSpecSource = taskDir
+    ? { content: undefined, content_file: undefined, task_dir: taskDir }
+    : {};
+
   return {
     ...task,
     ...(workflow ? { workflow } : {}),
+    ...taskSpecSource,
     status,
     started_at: status === 'running' ? nowIso() : null,
     completed_at: null,

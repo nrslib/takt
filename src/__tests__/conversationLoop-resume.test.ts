@@ -8,6 +8,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   setupRawStdin,
   restoreStdin,
@@ -120,6 +123,7 @@ import { initializeSession } from '../features/interactive/sessionInitialization
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogInfo = vi.mocked(logInfo);
+const attachmentSessionDirs = new Set<string>();
 
 // --- Helpers ---
 
@@ -162,7 +166,20 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
+  for (const sessionDir of attachmentSessionDirs) {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  }
+  attachmentSessionDirs.clear();
 });
+
+function createOscImagePaste(): string {
+  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
+}
+
+function trackAttachmentSession(tempPath: string): void {
+  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
+}
 
 // =================================================================
 // initializeSession: no implicit session auto-load
@@ -351,6 +368,63 @@ describe('/go command', () => {
     // Then: summary call must NOT inherit the conversation session
     expect(capture.sessionIds[1]).toBeUndefined();
     expect(result.action).toBe('execute');
+  });
+
+  it('should return pasted image attachments after image input and /go', async () => {
+    setupRawStdin([
+      `use ${createOscImagePaste()} please\r`,
+      '/go\r',
+    ]);
+
+    const { provider, capture } = createScenarioProvider([
+      { content: 'AI response using [Image #1].' },
+      { content: 'Generated task using [Image #1].' },
+    ]);
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[0]).toContain('use [Image #1] please');
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Generated task using [Image #1].');
+    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
+    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
+    expect(result.attachments?.[0]?.tempPath).toBeDefined();
+    trackAttachmentSession(result.attachments![0]!.tempPath);
+    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+  });
+
+  it('should not create formal task assets when image input is cancelled', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-cancel-image-test-'));
+    try {
+      setupRawStdin([
+        `use ${createOscImagePaste()} please\r`,
+        '/cancel\r',
+      ]);
+
+      setupProvider(['AI response using [Image #1].']);
+      const ctx = createSessionContext();
+
+      const result = await runConversationLoop(projectRoot, ctx, defaultStrategy, undefined, undefined);
+
+      expect(result.action).toBe('cancel');
+      expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
+      expect(result.attachments?.[0]?.tempPath).toBeDefined();
+      trackAttachmentSession(result.attachments![0]!.tempPath);
+      expect(fs.existsSync(path.join(projectRoot, '.takt', 'tasks'))).toBe(false);
+      expect(fs.existsSync(path.join(projectRoot, '.takt', 'runs'))).toBe(false);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('should include assistant init context only in the first regular AI prompt', async () => {

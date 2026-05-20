@@ -618,6 +618,26 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.retry_note).toBe('retry note');
   });
 
+  it('should persist task_dir as the only task spec source when requeueing task', () => {
+    runner.addTask('Task A');
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    runner.requeueTask(task.name, ['failed'], undefined, 'retry note', undefined, undefined, '.takt/tasks/retry-task');
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.task_dir).toBe('.takt/tasks/retry-task');
+    expect(file.tasks[0]?.content).toBeUndefined();
+    expect(file.tasks[0]?.content_file).toBeUndefined();
+  });
+
   it('should persist canonical workflow and start_movement keys when starting re-execution', () => {
     runner.addTask('Task A', { workflow: 'default' });
     const task = runner.claimNextTasks(1)[0]!;
@@ -643,6 +663,38 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.start_movement).toBe('implement');
     expect(file.tasks[0]?.start_step).toBeUndefined();
     expect(file.tasks[0]?.retry_note).toBe('retry note');
+  });
+
+  it('should persist task_dir as the only task spec source when starting re-execution', () => {
+    runner.addTask('Task A');
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Boom',
+      executionLog: [],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+    mkdirSync(join(testDir, '.takt', 'tasks', 'retry-task'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'tasks', 'retry-task', 'order.md'), 'Task A retry', 'utf-8');
+
+    const restarted = runner.startReExecution(
+      task.name,
+      ['failed'],
+      undefined,
+      'retry note',
+      undefined,
+      undefined,
+      '.takt/tasks/retry-task',
+    );
+
+    expect(restarted.status).toBe('running');
+    expect(restarted.taskDir).toBe('.takt/tasks/retry-task');
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.task_dir).toBe('.takt/tasks/retry-task');
+    expect(file.tasks[0]?.content).toBeUndefined();
+    expect(file.tasks[0]?.content_file).toBeUndefined();
   });
 
   it('should persist selected workflow when starting re-execution', () => {
