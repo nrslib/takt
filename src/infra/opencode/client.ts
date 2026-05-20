@@ -463,6 +463,23 @@ export class OpenCodeClient {
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
 
+        // Consume a raw text delta for a part: strip the prompt echo, stream the
+        // visible portion, accumulate it, and advance the part's raw offset in
+        // lockstep. Sharing this keeps content and offset consistent whether the
+        // text arrives via `message.part.delta` or a full-snapshot
+        // `message.part.updated` — some providers emit both for the same part.
+        const consumeTextDelta = (partId: string, rawDelta: string): void => {
+          if (!rawDelta) return;
+          const visibleDelta = stripPromptEcho(rawDelta, echoState);
+          if (visibleDelta) {
+            emitText(options.onStream, visibleDelta);
+            const previous = textContentParts.get(partId) ?? '';
+            textContentParts.set(partId, `${previous}${visibleDelta}`);
+          }
+          const prevOffset = textOffsets.get(partId) ?? 0;
+          textOffsets.set(partId, prevOffset + rawDelta.length);
+        };
+
         for await (const event of stream) {
           if (streamAbortController.signal.aborted) break;
           resetIdleTimeout();
@@ -480,17 +497,7 @@ export class OpenCodeClient {
               const prev = textOffsets.get(textPart.id) ?? 0;
               const rawDelta = delta
                 ?? (textPart.text.length > prev ? textPart.text.slice(prev) : '');
-
-              textOffsets.set(textPart.id, textPart.text.length);
-
-              if (rawDelta) {
-                const visibleDelta = stripPromptEcho(rawDelta, echoState);
-                if (visibleDelta) {
-                  emitText(options.onStream, visibleDelta);
-                  const previous = textContentParts.get(textPart.id) ?? '';
-                  textContentParts.set(textPart.id, `${previous}${visibleDelta}`);
-                }
-              }
+              consumeTextDelta(textPart.id, rawDelta);
               continue;
             }
 
@@ -506,17 +513,7 @@ export class OpenCodeClient {
               delta: string;
             };
             if (deltaProps.field === 'text' && deltaProps.delta) {
-              const visibleDelta = stripPromptEcho(deltaProps.delta, echoState);
-              if (visibleDelta) {
-                emitText(options.onStream, visibleDelta);
-                const previous = textContentParts.get(deltaProps.partID) ?? '';
-                textContentParts.set(deltaProps.partID, `${previous}${visibleDelta}`);
-              }
-              // Advance the raw offset so a later full-snapshot
-              // `message.part.updated` for the same part does not re-append the
-              // text already consumed here (some providers emit both).
-              const prevOffset = textOffsets.get(deltaProps.partID) ?? 0;
-              textOffsets.set(deltaProps.partID, prevOffset + deltaProps.delta.length);
+              consumeTextDelta(deltaProps.partID, deltaProps.delta);
             }
             continue;
           }
