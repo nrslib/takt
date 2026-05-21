@@ -8,6 +8,7 @@ import { createLogger } from '../../shared/utils/index.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { getReportFiles } from './evaluation/rule-utils.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
+import { runWithPhaseSpan } from './observability/workflowSpans.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -206,7 +207,21 @@ async function runSingleReportAttempt(
 
   let response: AgentResponse;
   try {
-    response = await executeAgent(step.persona, instruction, callOptions);
+    response = await runWithPhaseSpan({
+      enabled: ctx.observabilityEnabled === true,
+      workflowName: ctx.workflowName ?? 'unknown',
+      step,
+      iteration: ctx.iteration,
+      phase: 2,
+      phaseName: 'report',
+      instruction,
+      sanitizeText: ctx.sanitizeObservabilityText,
+      providerInfo: ctx.resolveStepProviderModel?.(step),
+    }, () => executeAgent(step.persona, instruction, callOptions), (result) => ({
+      status: result.status,
+      content: result.content,
+      error: result.error,
+    }));
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:2`);
     }

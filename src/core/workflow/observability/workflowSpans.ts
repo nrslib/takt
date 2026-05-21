@@ -1,7 +1,7 @@
 import { context, SpanStatusCode, trace, type Attributes, type Span } from '@opentelemetry/api';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import type { WorkflowMaxSteps, WorkflowResumePointEntry, WorkflowStep } from '../../models/types.js';
-import type { StepProviderInfo, StepRunResult } from '../types.js';
+import type { JudgeStageEntry, PhaseName, StepProviderInfo, StepRunResult } from '../types.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 
 const tracer = trace.getTracer('takt.workflow');
@@ -37,6 +37,37 @@ export interface StepSpanParams {
   sanitizeText?: (text: string) => string;
   providerInfo?: StepProviderInfo;
   getFinalStepIteration?: () => number | undefined;
+}
+
+export interface PhaseSpanParams {
+  enabled: boolean;
+  workflowName: string;
+  step: WorkflowStep;
+  iteration?: number;
+  phase: 1 | 2 | 3;
+  phaseName: PhaseName;
+  instruction?: string;
+  phaseExecutionId?: string;
+  sanitizeText?: (text: string) => string;
+  providerInfo?: StepProviderInfo;
+}
+
+export interface PhaseSpanOutcome {
+  status?: string;
+  content?: string;
+  error?: string;
+  matchedRuleIndex?: number;
+  matchedRuleMethod?: string;
+}
+
+export interface JudgeStageSpanParams {
+  enabled: boolean;
+  workflowName: string;
+  step: WorkflowStep;
+  iteration?: number;
+  phaseExecutionId?: string;
+  entry: JudgeStageEntry;
+  sanitizeText?: (text: string) => string;
 }
 
 export async function runWithWorkflowSpan<T>(
@@ -78,6 +109,43 @@ export async function runWithStepSpan(
   );
 }
 
+export async function runWithPhaseSpan<T>(
+  params: PhaseSpanParams,
+  execute: () => Promise<T>,
+  getOutcome: (result: T) => PhaseSpanOutcome,
+): Promise<T> {
+  if (!params.enabled) {
+    return execute();
+  }
+
+  return runInSpan(
+    buildPhaseSpanName(params),
+    buildPhaseAttributes(params),
+    async (span) => {
+      const result = await execute();
+      recordPhaseOutcome(span, params, getOutcome(result));
+      return result;
+    },
+  );
+}
+
+export function recordJudgeStageSpan(params: JudgeStageSpanParams): void {
+  if (!params.enabled) {
+    return;
+  }
+
+  const span = tracer.startSpan(buildJudgeStageSpanName(params), {
+    attributes: buildJudgeStageAttributes(params),
+  });
+  try {
+    if (params.entry.status === 'error') {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: `judge stage ${params.entry.status}` });
+    }
+  } finally {
+    span.end();
+  }
+}
+
 function buildWorkflowAttributes(params: WorkflowSpanParams): Attributes {
   return compactAttributes({
     'takt.workflow.name': params.workflowName,
@@ -98,8 +166,41 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.step.local_iteration': params.stepIteration,
-    'takt.step.instruction': sanitizeSpanText(params, params.instruction),
+    'takt.step.instruction': sanitizeSpanText(params.sanitizeText, params.instruction),
     ...providerAttributes(params.providerInfo),
+  });
+}
+
+function buildPhaseAttributes(params: PhaseSpanParams): Attributes {
+  return compactAttributes({
+    'takt.workflow.name': params.workflowName,
+    'takt.step.name': params.step.name,
+    'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.type': getWorkflowStepKind(params.step),
+    'takt.step.iteration': params.iteration,
+    'takt.phase.number': params.phase,
+    'takt.phase.name': params.phaseName,
+    'takt.phase.execution_id': params.phaseExecutionId,
+    'takt.phase.instruction': sanitizeSpanText(params.sanitizeText, params.instruction),
+    ...providerAttributes(params.providerInfo),
+  });
+}
+
+function buildJudgeStageAttributes(params: JudgeStageSpanParams): Attributes {
+  return compactAttributes({
+    'takt.workflow.name': params.workflowName,
+    'takt.step.name': params.step.name,
+    'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.type': getWorkflowStepKind(params.step),
+    'takt.step.iteration': params.iteration,
+    'takt.phase.number': 3,
+    'takt.phase.name': 'judge',
+    'takt.phase.execution_id': params.phaseExecutionId,
+    'takt.judge.stage': params.entry.stage,
+    'takt.judge.method': params.entry.method,
+    'takt.judge.status': params.entry.status,
+    'takt.judge.instruction': sanitizeSpanText(params.sanitizeText, params.entry.instruction),
+    'takt.judge.response': sanitizeSpanText(params.sanitizeText, params.entry.response),
   });
 }
 
@@ -142,8 +243,8 @@ function recordStepResult(span: Span, params: StepSpanParams, result: StepRunRes
     'takt.step.local_iteration': finalStepIteration ?? params.stepIteration,
     'takt.step.status': result.response.status,
     'takt.step.result.persona': result.response.persona,
-    'takt.step.result.content': sanitizeSpanText(params, result.response.content),
-    'takt.step.result.error': sanitizeSpanText(params, result.response.error),
+    'takt.step.result.content': sanitizeSpanText(params.sanitizeText, result.response.content),
+    'takt.step.result.error': sanitizeSpanText(params.sanitizeText, result.response.error),
     'takt.step.result.failure_category': result.response.failureCategory,
     'takt.step.result.matched_rule_index': result.response.matchedRuleIndex,
     'takt.step.result.matched_rule_method': result.response.matchedRuleMethod,
@@ -157,11 +258,25 @@ function recordStepResult(span: Span, params: StepSpanParams, result: StepRunRes
   }
 }
 
-function sanitizeSpanText(params: StepSpanParams, text: string | undefined): string | undefined {
+function recordPhaseOutcome(span: Span, params: PhaseSpanParams, outcome: PhaseSpanOutcome): void {
+  span.setAttributes(compactAttributes({
+    'takt.phase.status': outcome.status,
+    'takt.phase.result.content': sanitizeSpanText(params.sanitizeText, outcome.content),
+    'takt.phase.result.error': sanitizeSpanText(params.sanitizeText, outcome.error),
+    'takt.phase.result.matched_rule_index': outcome.matchedRuleIndex,
+    'takt.phase.result.matched_rule_method': outcome.matchedRuleMethod,
+  }));
+
+  if (outcome.status === 'error' || outcome.status === 'rate_limited') {
+    span.setStatus({ code: SpanStatusCode.ERROR, message: `phase ${outcome.status}` });
+  }
+}
+
+function sanitizeSpanText(sanitizeText: ((text: string) => string) | undefined, text: string | undefined): string | undefined {
   if (text === undefined) {
     return undefined;
   }
-  return params.sanitizeText ? params.sanitizeText(text) : text;
+  return sanitizeText ? sanitizeText(text) : text;
 }
 
 function workflowStackAttributes(stack: WorkflowResumePointEntry[] | undefined): AttributeInput {
@@ -214,6 +329,14 @@ function recordSpanError(span: Span, error: unknown): void {
 
 function buildSpanName(prefix: 'workflow' | 'step', name: string): string {
   return `${prefix}.${name || 'unknown'}`;
+}
+
+function buildPhaseSpanName(params: PhaseSpanParams): string {
+  return `phase.${params.step.name || 'unknown'}.${params.phaseName}`;
+}
+
+function buildJudgeStageSpanName(params: JudgeStageSpanParams): string {
+  return `judge_stage.${params.step.name || 'unknown'}.${params.entry.stage}.${params.entry.method}`;
 }
 
 function compactAttributes(attributes: AttributeInput): Attributes {

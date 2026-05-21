@@ -40,6 +40,7 @@ import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 
 const log = createLogger('step-executor');
 
@@ -56,6 +57,8 @@ export interface StepExecutorDeps {
   readonly getWorkflowName: () => string;
   readonly getWorkflowDescription: () => string | undefined;
   readonly getRetryNote: () => string | undefined;
+  readonly observabilityEnabled?: () => boolean;
+  readonly sanitizeObservabilityText?: (text: string) => string;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
@@ -540,7 +543,21 @@ export class StepExecutor {
         didEmitPhaseStart = true;
       },
     };
-    let response = await executeAgent(step.persona, phase1Instruction, agentOptions);
+    let response = await runWithPhaseSpan({
+      enabled: this.deps.observabilityEnabled?.() === true,
+      workflowName: this.deps.getWorkflowName(),
+      step,
+      iteration: state.iteration,
+      phase: 1,
+      phaseName: 'execute',
+      instruction: phase1Instruction,
+      sanitizeText: this.deps.sanitizeObservabilityText,
+      providerInfo,
+    }, () => executeAgent(step.persona, phase1Instruction, agentOptions), (result) => ({
+      status: result.status,
+      content: result.content,
+      error: result.error,
+    }));
     response = this.normalizeStructuredOutput(step, response, runtime);
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
