@@ -704,6 +704,9 @@ export function readMultilineInput(
       const pending = pendingInlineImage;
       pendingInlineImage = '';
       escParser.feed(pending);
+      if (pending === '\x1B') {
+        escParser.flush();
+      }
     }
 
     function holdPendingInlineImage(pending: string): void {

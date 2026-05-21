@@ -94,9 +94,7 @@ export function prepareRetryTaskSpecWithAttachments(
   }
 
   const taskSpecBaseContent = resolveRetryTaskSpecBaseContent(projectDir, taskContent, taskDir);
-  const adjusted = taskDir
-    ? renumberRetryAttachments(taskSpecBaseContent, retryNote, attachments)
-    : { retryNote, attachments };
+  const adjusted = renumberRetryAttachments(taskSpecBaseContent, retryNote, attachments);
   const taskSpecContent = buildRetryTaskSpecContent(taskSpecBaseContent, adjusted.retryNote);
   const prepareArgs: Parameters<typeof prepareTaskSpecDirectory> = taskDir
     ? [

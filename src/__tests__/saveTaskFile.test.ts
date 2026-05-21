@@ -294,6 +294,38 @@ describe('saveTaskFile', () => {
 
     expectNoTaskArtifacts(testDir);
   });
+
+  it('should reject symlink attachment tempPath and clean up task artifacts', async () => {
+    const sourcePath = path.join(testDir, 'source-image.png');
+    const symlinkPath = path.join(testDir, 'linked-image.png');
+    fs.writeFileSync(sourcePath, 'png-data', 'utf-8');
+    fs.symlinkSync(sourcePath, symlinkPath);
+
+    await expect(saveTaskFile(testDir, 'Use [Image #1].', {
+      attachments: [{
+        placeholder: '[Image #1]',
+        tempPath: symlinkPath,
+        fileName: 'image-1.png',
+      }],
+    })).rejects.toThrow(`Task attachment source must be a regular file: ${symlinkPath}`);
+
+    expectNoTaskArtifacts(testDir);
+  });
+
+  it('should reject directory attachment tempPath and clean up task artifacts', async () => {
+    const directoryPath = path.join(testDir, 'image-directory');
+    fs.mkdirSync(directoryPath);
+
+    await expect(saveTaskFile(testDir, 'Use [Image #1].', {
+      attachments: [{
+        placeholder: '[Image #1]',
+        tempPath: directoryPath,
+        fileName: 'image-1.png',
+      }],
+    })).rejects.toThrow(`Task attachment source must be a regular file: ${directoryPath}`);
+
+    expectNoTaskArtifacts(testDir);
+  });
 });
 
 describe('saveTaskFromInteractive', () => {

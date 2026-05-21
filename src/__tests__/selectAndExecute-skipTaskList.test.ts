@@ -167,6 +167,16 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     fs.mkdirSync(tempAttachmentDir, { recursive: true });
     const tempPath = path.join(tempAttachmentDir, 'image-1.png');
     fs.writeFileSync(tempPath, 'png-data', 'utf-8');
+    mockExecuteTask.mockImplementationOnce(async (arg: {
+      reportDirName: string;
+    }) => {
+      const runContextTaskDir = path.join(projectCwd, '.takt', 'runs', arg.reportDirName, 'context', 'task');
+      expect(fs.readFileSync(path.join(runContextTaskDir, 'order.md'), 'utf-8')).toContain(
+        '- [Image #1]: `attachments/image-1.png`',
+      );
+      expect(fs.readFileSync(path.join(runContextTaskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+      return true;
+    });
 
     await selectAndExecuteTask(projectCwd, 'Use [Image #1] as reference.', {
       workflow: 'default',
@@ -188,10 +198,132 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     expect(executeArg.reportDirName).toBeDefined();
 
     const runContextTaskDir = path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName, 'context', 'task');
-    expect(fs.readFileSync(path.join(runContextTaskDir, 'order.md'), 'utf-8')).toContain(
+    expect(fs.existsSync(runContextTaskDir)).toBe(false);
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks', executeArg.reportDirName))).toBe(false);
+  });
+
+  it('attachments 付き skipTaskList: false では task record が参照する task spec を残す', async () => {
+    const projectCwd = createTempProject();
+    const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
+    fs.mkdirSync(tempAttachmentDir, { recursive: true });
+    const tempPath = path.join(tempAttachmentDir, 'image-1.png');
+    fs.writeFileSync(tempPath, 'png-data', 'utf-8');
+
+    await selectAndExecuteTask(projectCwd, 'Use [Image #1] as reference.', {
+      workflow: 'default',
+      skipTaskList: false,
+      attachments: [{
+        placeholder: '[Image #1]',
+        tempPath,
+        fileName: 'image-1.png',
+      }],
+    });
+
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+      reportDirName: string;
+    };
+    const addTaskOptions = mockAddTask.mock.calls[0]?.[1] as {
+      task_dir: string;
+    };
+    expect(addTaskOptions.task_dir).toBe(`.takt/tasks/${executeArg.reportDirName}`);
+
+    const taskSpecDir = path.join(projectCwd, addTaskOptions.task_dir);
+    expect(fs.readFileSync(path.join(taskSpecDir, 'order.md'), 'utf-8')).toContain(
       '- [Image #1]: `attachments/image-1.png`',
     );
-    expect(fs.readFileSync(path.join(runContextTaskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+    expect(fs.readFileSync(path.join(taskSpecDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+    expect(mockPersistTaskResult).toHaveBeenCalled();
+  });
+
+  it('attachments 付き skipTaskList: true で executeTask が失敗しても prepared task spec を削除する', async () => {
+    const projectCwd = createTempProject();
+    const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
+    fs.mkdirSync(tempAttachmentDir, { recursive: true });
+    const tempPath = path.join(tempAttachmentDir, 'image-1.png');
+    fs.writeFileSync(tempPath, 'png-data', 'utf-8');
+    mockExecuteTask.mockRejectedValue(new Error('Task execution failed'));
+
+    await expect(
+      selectAndExecuteTask(projectCwd, 'Use [Image #1] as reference.', {
+        workflow: 'default',
+        skipTaskList: true,
+        attachments: [{
+          placeholder: '[Image #1]',
+          tempPath,
+          fileName: 'image-1.png',
+        }],
+      }),
+    ).rejects.toThrow('Task execution failed');
+
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as { reportDirName: string };
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks', executeArg.reportDirName))).toBe(false);
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName, 'context', 'task'))).toBe(false);
+    expect(mockPersistTaskError).not.toHaveBeenCalled();
+  });
+
+  it('attachments 付き skipTaskList: true で taskSuccess が false でも prepared task spec を削除する', async () => {
+    const projectCwd = createTempProject();
+    const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
+    fs.mkdirSync(tempAttachmentDir, { recursive: true });
+    const tempPath = path.join(tempAttachmentDir, 'image-1.png');
+    fs.writeFileSync(tempPath, 'png-data', 'utf-8');
+    mockExecuteTask.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      await expect(
+        selectAndExecuteTask(projectCwd, 'Use [Image #1] as reference.', {
+          workflow: 'default',
+          skipTaskList: true,
+          attachments: [{
+            placeholder: '[Image #1]',
+            tempPath,
+            fileName: 'image-1.png',
+          }],
+        }),
+      ).rejects.toThrow('process.exit:1');
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as { reportDirName: string };
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks', executeArg.reportDirName))).toBe(false);
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName, 'context', 'task'))).toBe(false);
+    expect(mockPersistTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('attachments 付き skipTaskList: false で addTask が失敗した場合は prepared spec と staged spec を削除する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));
+
+    const projectCwd = createTempProject();
+    const task = 'Use [Image #1] as reference.';
+    const reportDirName = generateReportDir(task);
+    const tempAttachmentDir = path.join(projectCwd, 'tmp-attachments');
+    const tempPath = path.join(tempAttachmentDir, 'image-1.png');
+    fs.mkdirSync(tempAttachmentDir, { recursive: true });
+    fs.writeFileSync(tempPath, 'png-data', 'utf-8');
+    mockAddTask.mockImplementationOnce(() => {
+      throw new Error('addTask failed');
+    });
+
+    await expect(
+      selectAndExecuteTask(projectCwd, task, {
+        workflow: 'default',
+        skipTaskList: false,
+        attachments: [{
+          placeholder: '[Image #1]',
+          tempPath,
+          fileName: 'image-1.png',
+        }],
+      }),
+    ).rejects.toThrow('addTask failed');
+
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks', reportDirName))).toBe(false);
+    expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', reportDirName))).toBe(false);
+    expect(mockExecuteTask).not.toHaveBeenCalled();
   });
 
   it('attachments の staging に失敗した場合は prepared task spec を削除する', async () => {

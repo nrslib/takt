@@ -79,6 +79,36 @@ describe('prepareRetryTaskSpecWithAttachments', () => {
     cleanupPreparedRetryTaskSpec(prepared);
   });
 
+  it('should renumber newly pasted images against existing content without task_dir', () => {
+    const projectDir = createTempRoot();
+    const attachment = createAttachment(projectDir, 'new-image');
+
+    const prepared = prepareRetryTaskSpecWithAttachments(
+      projectDir,
+      [
+        'Original task with [Image #1].',
+        '',
+        '## 添付画像',
+        '',
+        '- [Image #1]: `attachments/image-1.png`',
+      ].join('\n'),
+      'Use [Image #1].',
+      [attachment],
+    );
+
+    expect(prepared).toBeDefined();
+    if (!prepared) {
+      throw new Error('Prepared retry task spec is required.');
+    }
+    const orderContent = fs.readFileSync(path.join(prepared.taskDir, 'order.md'), 'utf-8');
+    expect(orderContent).toContain('Original task with [Image #1].');
+    expect(orderContent).toContain('Use [Image #2].');
+    expect(orderContent).toContain('- [Image #2]: `attachments/image-2.png`');
+    expect(fs.readFileSync(path.join(prepared.taskDir, 'attachments', 'image-2.png'), 'utf-8')).toBe('new-image');
+
+    cleanupPreparedRetryTaskSpec(prepared);
+  });
+
   it('should reject symlinked task_dir order.md before preparing retry attachments', () => {
     const projectDir = createTempRoot();
     const sourceTaskDirRelative = '.takt/tasks/source-task';

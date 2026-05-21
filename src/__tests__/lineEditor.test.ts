@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseInputData, createEscapeParser, type InputCallbacks } from '../features/interactive/lineEditor.js';
+import {
+  parseInputData,
+  createEscapeParser,
+  readMultilineInput,
+  type InputCallbacks,
+} from '../features/interactive/lineEditor.js';
 import type { CompletionCandidate, CompletionProvider } from '../features/interactive/completionMenu.js';
 import { MAX_INLINE_IMAGE_BYTES, MAX_PENDING_INLINE_IMAGE_CHARS } from '../features/interactive/inlineImagePaste.js';
 
@@ -205,6 +210,7 @@ describe('readMultilineInput cursor navigation', () => {
   let savedColumns: number | undefined;
   let columnsOverridden = false;
   let stdoutCalls: string[];
+  let emitRawInput: ((data: string) => void) | null = null;
 
   function setupRawStdin(rawInputs: string[], termColumns?: number): void {
     savedIsTTY = process.stdin.isTTY;
@@ -243,14 +249,17 @@ describe('readMultilineInput cursor navigation', () => {
     process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
       if (event === 'data') {
         currentHandler = handler as (data: Buffer) => void;
-        while (inputIndex < rawInputs.length) {
-          const data = rawInputs[inputIndex]!;
-          inputIndex += 1;
+        emitRawInput = (data: string) => {
           queueMicrotask(() => {
             if (currentHandler) {
               currentHandler(Buffer.from(data, 'utf-8'));
             }
           });
+        };
+        while (inputIndex < rawInputs.length) {
+          const data = rawInputs[inputIndex]!;
+          inputIndex += 1;
+          emitRawInput(data);
         }
       }
       return process.stdin;
@@ -259,6 +268,7 @@ describe('readMultilineInput cursor navigation', () => {
     process.stdin.removeListener = vi.fn(((event: string) => {
       if (event === 'data') {
         currentHandler = null;
+        emitRawInput = null;
       }
       return process.stdin;
     }) as typeof process.stdin.removeListener);
@@ -289,9 +299,14 @@ describe('readMultilineInput cursor navigation', () => {
 
   afterEach(() => {
     restoreStdin();
+    vi.useRealTimers();
   });
 
-  // We need to dynamically import after mocking stdin
+  async function flushQueuedInput(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   async function callReadMultilineInput(
     prompt: string,
     options?: {
@@ -299,7 +314,6 @@ describe('readMultilineInput cursor navigation', () => {
       onImagePaste?: (image: { mimeType: string; data: Buffer }) => Promise<string>;
     },
   ): Promise<string | null> {
-    const { readMultilineInput } = await import('../features/interactive/lineEditor.js');
     return readMultilineInput(prompt, options);
   }
 
@@ -460,6 +474,31 @@ describe('readMultilineInput cursor navigation', () => {
 
       expect(result).toBe('Use [Image #1]');
       expect(onImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not keep a second Esc timeout after resolving a bare Esc with image paste enabled', async () => {
+      vi.useFakeTimers();
+      setupRawStdin([]);
+      const resultPromise = callReadMultilineInput('> ', {
+        completionProvider: testCompletionProvider,
+        onImagePaste: vi.fn(async () => '[Image #1]'),
+      });
+      await flushQueuedInput();
+
+      emitRawInput?.('/ca');
+      await flushQueuedInput();
+      emitRawInput?.('\x1B');
+      await flushQueuedInput();
+
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(vi.getTimerCount()).toBe(0);
+      emitRawInput?.('\r');
+      await flushQueuedInput();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(resultPromise).resolves.toBe('/ca');
     });
   });
 

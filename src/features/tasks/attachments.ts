@@ -52,6 +52,13 @@ function validateTaskAttachment(attachment: TaskAttachment): void {
   }
 }
 
+function validateTaskAttachmentTempFile(attachment: TaskAttachment): void {
+  const stats = fs.lstatSync(attachment.tempPath);
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new Error(`Task attachment source must be a regular file: ${attachment.tempPath}`);
+  }
+}
+
 export function promoteTaskAttachments(
   taskDir: string,
   attachments?: readonly TaskAttachment[],
@@ -65,6 +72,7 @@ export function promoteTaskAttachments(
 
   for (const attachment of attachments) {
     validateTaskAttachment(attachment);
+    validateTaskAttachmentTempFile(attachment);
     const destinationPath = path.join(taskDir, getTaskAttachmentRelativePath(attachment));
     if (fs.existsSync(destinationPath)) {
       throw new Error(`Task attachment destination already exists: ${destinationPath}`);

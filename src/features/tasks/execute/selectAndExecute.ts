@@ -13,11 +13,26 @@ import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecute
 import { selectWorkflow } from '../../workflowSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from '../attachments.js';
-import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import { cleanupStagedTaskSpec, stageTaskSpecForExecution, type StagedTaskSpec } from './taskSpecContext.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
 const log = createLogger('selectAndExecute');
+
+function cleanupTransientTaskSpecs(
+  preparedSpecTaskDir: string | undefined,
+  stagedSpec: StagedTaskSpec | undefined,
+): void {
+  try {
+    if (stagedSpec) {
+      cleanupStagedTaskSpec(stagedSpec);
+    }
+  } finally {
+    if (preparedSpecTaskDir) {
+      cleanupPreparedTaskSpec(preparedSpecTaskDir);
+    }
+  }
+}
 
 export async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
   if (override) {
@@ -90,7 +105,7 @@ export async function selectAndExecuteTask(
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   let preparedSpec: ReturnType<typeof prepareTaskSpecDirectory> | undefined;
-  let stagedSpec: ReturnType<typeof stageTaskSpecForExecution> | undefined;
+  let stagedSpec: StagedTaskSpec | undefined;
   try {
     preparedSpec = options?.attachments && options.attachments.length > 0
       ? prepareTaskSpecDirectory(cwd, task, options.attachments)
@@ -111,12 +126,12 @@ export async function selectAndExecuteTask(
         ...(preparedSpec ? { task_dir: preparedSpec.taskDirRelative } : {}),
       });
     } catch (error) {
-      if (preparedSpec) {
-        cleanupPreparedTaskSpec(preparedSpec.taskDir);
-      }
+      cleanupTransientTaskSpecs(preparedSpec?.taskDir, stagedSpec);
       throw error;
     }
   }
+  const preparedSpecTaskDirToCleanup = options?.skipTaskList === true ? preparedSpec?.taskDir : undefined;
+  const stagedSpecToCleanup = options?.skipTaskList === true ? stagedSpec : undefined;
   const startedAt = new Date().toISOString();
 
   statusLine.start('Running...');
@@ -142,6 +157,7 @@ export async function selectAndExecuteTask(
     throw err;
   } finally {
     statusLine.stop();
+    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup, stagedSpecToCleanup);
   }
 
   const completedAt = new Date().toISOString();
