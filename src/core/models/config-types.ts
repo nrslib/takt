@@ -81,9 +81,9 @@ export interface LoggingConfig {
 export interface ObservabilityConfig {
   /** Master switch for observability initialization (default: false when undefined) */
   enabled?: boolean;
-  /** Reserved flag for monitor.json output in a later change */
+  /** Enable local monitor.json metric export for workflow runs */
   monitor?: boolean;
-  /** Reserved flag for shadow session log exporter in a later change */
+  /** Enable shadow session log export from OpenTelemetry spans */
   sessionLogExporter?: boolean;
   /** Reserved flag for phase-aware usage events in a later change */
   usageEventsPhase?: boolean;

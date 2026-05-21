@@ -1,7 +1,9 @@
 import { createRequire } from 'node:module';
 import type { SpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { IMetricReader } from '@opentelemetry/sdk-metrics';
 import type { ResolvedObservabilityConfig } from '../../core/models/config-types.js';
 import { SessionLogSpanProcessor, type SessionLogSpanProcessorOptions } from './sessionLogSpanProcessor.js';
+import { MonitorJsonMetricExporter, type MonitorJsonMetricExporterOptions } from './monitorJsonMetricExporter.js';
 
 const require = createRequire(import.meta.url);
 const { version: TAKT_VERSION } = require('../../../package.json') as { version: string };
@@ -22,6 +24,7 @@ export type OtelFoundationHandle = {
 
 export interface OtelFoundationOptions {
   sessionLogExporter?: SessionLogSpanProcessorOptions;
+  monitorJsonExporter?: MonitorJsonMetricExporterOptions;
 }
 
 let activeSdk: SharedOtelSdk | undefined;
@@ -82,8 +85,7 @@ async function getOrStartSdk(
     return activeSdk;
   }
   if (!startingSdk) {
-    const spanProcessors = createSpanProcessors(config, options);
-    startingSdk = startSdk(spanProcessors).then(
+    startingSdk = startSdk(config, options).then(
       (sdk) => {
         const shared = { sdk, refCount: 0 };
         activeSdk = shared;
@@ -110,13 +112,34 @@ function createSpanProcessors(
   return spanProcessors;
 }
 
-async function startSdk(spanProcessors: SpanProcessor[]): Promise<OtelSdk> {
+async function createMetricReaders(
+  config: ResolvedObservabilityConfig,
+  options: OtelFoundationOptions | undefined,
+): Promise<IMetricReader[]> {
+  if (!config.monitor || !options?.monitorJsonExporter) {
+    return [];
+  }
+  const { PeriodicExportingMetricReader } = await import('@opentelemetry/sdk-metrics');
+  return [
+    new PeriodicExportingMetricReader({
+      exporter: new MonitorJsonMetricExporter(options.monitorJsonExporter),
+      exportIntervalMillis: 1000,
+    }),
+  ];
+}
+
+async function startSdk(
+  config: ResolvedObservabilityConfig,
+  options: OtelFoundationOptions | undefined,
+): Promise<OtelSdk> {
+  const spanProcessors = createSpanProcessors(config, options);
+  const metricReaders = await createMetricReaders(config, options);
   const { NodeSDK, resources } = await import('@opentelemetry/sdk-node');
   const sdk = new NodeSDK({
     autoDetectResources: false,
     instrumentations: [],
     logRecordProcessors: [],
-    metricReaders: [],
+    metricReaders,
     resource: resources.resourceFromAttributes({
       'service.name': 'takt',
       'service.version': TAKT_VERSION,

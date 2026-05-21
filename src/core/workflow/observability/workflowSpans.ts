@@ -1,10 +1,35 @@
-import { context, SpanStatusCode, trace, type Attributes, type Span } from '@opentelemetry/api';
+import { context, metrics, SpanStatusCode, trace, type Attributes, type Span } from '@opentelemetry/api';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import type { WorkflowMaxSteps, WorkflowResumePointEntry, WorkflowStep } from '../../models/types.js';
 import type { JudgeStageEntry, PhaseName, StepProviderInfo, StepRunResult } from '../types.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 
 const tracer = trace.getTracer('takt.workflow');
+const meter = metrics.getMeter('takt.workflow');
+const workflowRunCounter = meter.createCounter('takt.workflow.runs', {
+  description: 'Workflow executions by status',
+});
+const workflowDurationHistogram = meter.createHistogram('takt.workflow.duration', {
+  description: 'Workflow execution duration',
+  unit: 'ms',
+});
+const stepRunCounter = meter.createCounter('takt.workflow.step.runs', {
+  description: 'Workflow step executions by status',
+});
+const stepDurationHistogram = meter.createHistogram('takt.workflow.step.duration', {
+  description: 'Workflow step execution duration',
+  unit: 'ms',
+});
+const phaseRunCounter = meter.createCounter('takt.workflow.phase.runs', {
+  description: 'Workflow phase executions by status',
+});
+const phaseDurationHistogram = meter.createHistogram('takt.workflow.phase.duration', {
+  description: 'Workflow phase execution duration',
+  unit: 'ms',
+});
+const judgeStageCounter = meter.createCounter('takt.workflow.judge_stage.runs', {
+  description: 'Workflow judge stage executions by status',
+});
 
 type AttributeInput = Record<string, string | number | boolean | undefined>;
 
@@ -79,13 +104,24 @@ export async function runWithWorkflowSpan<T>(
     return execute();
   }
 
+  const startedAt = Date.now();
   return runInSpan(
     buildSpanName('workflow', params.workflowName),
     buildWorkflowAttributes(params),
     async (span) => {
-      const result = await execute();
-      recordWorkflowOutcome(span, getOutcome(result));
-      return result;
+      try {
+        const result = await execute();
+        const outcome = getOutcome(result);
+        recordWorkflowOutcome(span, outcome);
+        recordWorkflowMetrics(params, outcome, Date.now() - startedAt);
+        return result;
+      } catch (error) {
+        recordWorkflowMetrics(params, {
+          status: 'error',
+          abortReason: getErrorMessage(error),
+        }, Date.now() - startedAt);
+        throw error;
+      }
     },
   );
 }
@@ -98,13 +134,20 @@ export async function runWithStepSpan(
     return execute();
   }
 
+  const startedAt = Date.now();
   return runInSpan(
     buildSpanName('step', params.step.name),
     buildStepAttributes(params),
     async (span) => {
-      const result = await execute();
-      recordStepResult(span, params, result);
-      return result;
+      try {
+        const result = await execute();
+        recordStepResult(span, params, result);
+        recordStepMetrics(params, result, Date.now() - startedAt);
+        return result;
+      } catch (error) {
+        recordStepMetrics(params, undefined, Date.now() - startedAt, getErrorMessage(error));
+        throw error;
+      }
     },
   );
 }
@@ -118,13 +161,21 @@ export async function runWithPhaseSpan<T>(
     return execute();
   }
 
+  const startedAt = Date.now();
   return runInSpan(
     buildPhaseSpanName(params),
     buildPhaseAttributes(params),
     async (span) => {
-      const result = await execute();
-      recordPhaseOutcome(span, params, getOutcome(result));
-      return result;
+      try {
+        const result = await execute();
+        const outcome = getOutcome(result);
+        recordPhaseOutcome(span, params, outcome);
+        recordPhaseMetrics(params, outcome, Date.now() - startedAt);
+        return result;
+      } catch (error) {
+        recordPhaseMetrics(params, { status: 'error', error: getErrorMessage(error) }, Date.now() - startedAt);
+        throw error;
+      }
     },
   );
 }
@@ -138,6 +189,7 @@ export function recordJudgeStageSpan(params: JudgeStageSpanParams): void {
     attributes: buildJudgeStageAttributes(params),
   });
   try {
+    recordJudgeStageMetrics(params);
     if (params.entry.status === 'error') {
       span.setStatus({ code: SpanStatusCode.ERROR, message: `judge stage ${params.entry.status}` });
     }
@@ -237,6 +289,21 @@ function recordWorkflowOutcome(span: Span, outcome: WorkflowSpanOutcome): void {
   }
 }
 
+function recordWorkflowMetrics(
+  params: WorkflowSpanParams,
+  outcome: WorkflowSpanOutcome,
+  durationMs: number,
+): void {
+  const attributes = compactAttributes({
+    'takt.workflow.name': params.workflowName,
+    'takt.workflow.status': outcome.status ?? 'unknown',
+    'takt.workflow.abort.kind': outcome.abortKind,
+    'takt.workflow.run_mode': params.runMode,
+  });
+  workflowRunCounter.add(1, attributes);
+  workflowDurationHistogram.record(durationMs, attributes);
+}
+
 function recordStepResult(span: Span, params: StepSpanParams, result: StepRunResult): void {
   const finalStepIteration = params.getFinalStepIteration?.();
   span.setAttributes(compactAttributes({
@@ -258,6 +325,25 @@ function recordStepResult(span: Span, params: StepSpanParams, result: StepRunRes
   }
 }
 
+function recordStepMetrics(
+  params: StepSpanParams,
+  result: StepRunResult | undefined,
+  durationMs: number,
+  errorMessage?: string,
+): void {
+  const providerInfo = result?.providerInfo ?? params.providerInfo;
+  const attributes = compactAttributes({
+    'takt.workflow.name': params.workflowName,
+    'takt.step.name': params.step.name,
+    'takt.step.type': getWorkflowStepKind(params.step),
+    'takt.step.status': result?.response.status ?? (errorMessage ? 'error' : 'unknown'),
+    'takt.step.result.failure_category': result?.response.failureCategory,
+    ...providerAttributes(providerInfo),
+  });
+  stepRunCounter.add(1, attributes);
+  stepDurationHistogram.record(durationMs, attributes);
+}
+
 function recordPhaseOutcome(span: Span, params: PhaseSpanParams, outcome: PhaseSpanOutcome): void {
   span.setAttributes(compactAttributes({
     'takt.phase.status': outcome.status,
@@ -270,6 +356,37 @@ function recordPhaseOutcome(span: Span, params: PhaseSpanParams, outcome: PhaseS
   if (outcome.status === 'error' || outcome.status === 'rate_limited') {
     span.setStatus({ code: SpanStatusCode.ERROR, message: `phase ${outcome.status}` });
   }
+}
+
+function recordPhaseMetrics(
+  params: PhaseSpanParams,
+  outcome: PhaseSpanOutcome,
+  durationMs: number,
+): void {
+  const attributes = compactAttributes({
+    'takt.workflow.name': params.workflowName,
+    'takt.step.name': params.step.name,
+    'takt.step.type': getWorkflowStepKind(params.step),
+    'takt.phase.number': params.phase,
+    'takt.phase.name': params.phaseName,
+    'takt.phase.status': outcome.status ?? 'unknown',
+    ...providerAttributes(params.providerInfo),
+  });
+  phaseRunCounter.add(1, attributes);
+  phaseDurationHistogram.record(durationMs, attributes);
+}
+
+function recordJudgeStageMetrics(params: JudgeStageSpanParams): void {
+  judgeStageCounter.add(1, compactAttributes({
+    'takt.workflow.name': params.workflowName,
+    'takt.step.name': params.step.name,
+    'takt.step.type': getWorkflowStepKind(params.step),
+    'takt.phase.number': 3,
+    'takt.phase.name': 'judge',
+    'takt.judge.stage': params.entry.stage,
+    'takt.judge.method': params.entry.method,
+    'takt.judge.status': params.entry.status,
+  }));
 }
 
 function sanitizeSpanText(sanitizeText: ((text: string) => string) | undefined, text: string | undefined): string | undefined {

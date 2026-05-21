@@ -45,10 +45,18 @@ class FakeSpan {
   }
 }
 
+type MetricRecord = {
+  instrument: 'counter' | 'histogram';
+  name: string;
+  value: number;
+  attributes: Record<string, unknown>;
+};
+
 async function loadWorkflowSpansWithMockedApi() {
   vi.resetModules();
 
   const spans: FakeSpan[] = [];
+  const metricRecords: MetricRecord[] = [];
   let activeSpan: FakeSpan | undefined;
 
   vi.doMock('@opentelemetry/api', () => ({
@@ -78,10 +86,24 @@ async function loadWorkflowSpansWithMockedApi() {
       })),
       setSpan: vi.fn((_ctx: unknown, span: FakeSpan) => ({ span })),
     },
+    metrics: {
+      getMeter: vi.fn(() => ({
+        createCounter: vi.fn((name: string) => ({
+          add: vi.fn((value: number, attributes: Record<string, unknown> = {}) => {
+            metricRecords.push({ instrument: 'counter', name, value, attributes });
+          }),
+        })),
+        createHistogram: vi.fn((name: string) => ({
+          record: vi.fn((value: number, attributes: Record<string, unknown> = {}) => {
+            metricRecords.push({ instrument: 'histogram', name, value, attributes });
+          }),
+        })),
+      })),
+    },
   }));
 
   const module = await import('../core/workflow/observability/workflowSpans.js');
-  return { module, spans };
+  return { module, spans, metricRecords };
 }
 
 function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
@@ -136,7 +158,7 @@ describe('workflow OpenTelemetry spans', () => {
   });
 
   it('records workflow span attributes and terminal status', async () => {
-    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
 
     await module.runWithWorkflowSpan({
       enabled: true,
@@ -160,10 +182,29 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.workflow.status': 'completed',
     });
     expect(spans[0]?.ended).toBe(true);
+    expect(metricRecords).toEqual([
+      expect.objectContaining({
+        instrument: 'counter',
+        name: 'takt.workflow.runs',
+        value: 1,
+        attributes: expect.objectContaining({
+          'takt.workflow.name': 'test-workflow',
+          'takt.workflow.status': 'completed',
+        }) as unknown,
+      }),
+      expect.objectContaining({
+        instrument: 'histogram',
+        name: 'takt.workflow.duration',
+        attributes: expect.objectContaining({
+          'takt.workflow.name': 'test-workflow',
+          'takt.workflow.status': 'completed',
+        }) as unknown,
+      }),
+    ]);
   });
 
   it('creates step spans as workflow children with provider and step attributes', async () => {
-    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep();
 
     await module.runWithWorkflowSpan({
@@ -204,6 +245,18 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.model.source': 'global',
     });
     expect(spans[1]?.ended).toBe(true);
+    expect(metricRecords).toContainEqual(expect.objectContaining({
+      instrument: 'counter',
+      name: 'takt.workflow.step.runs',
+      value: 1,
+      attributes: expect.objectContaining({
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.step.status': 'done',
+        'takt.provider.name': 'codex',
+        'takt.model.name': 'gpt-5',
+      }) as unknown,
+    }));
   });
 
   it('sanitizes text before attaching session-log parity attributes to step spans', async () => {
@@ -233,7 +286,7 @@ describe('workflow OpenTelemetry spans', () => {
   });
 
   it('creates phase spans as step children and records phase outcomes', async () => {
-    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep({ personaDisplayName: 'coder' });
 
     await module.runWithStepSpan({
@@ -283,10 +336,20 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.model.name': 'gpt-5',
     });
     expect(spans[1]?.ended).toBe(true);
+    expect(metricRecords).toContainEqual(expect.objectContaining({
+      instrument: 'counter',
+      name: 'takt.workflow.phase.runs',
+      value: 1,
+      attributes: expect.objectContaining({
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'done',
+      }) as unknown,
+    }));
   });
 
   it('creates judge stage sub-spans under the active phase span', async () => {
-    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep({ personaDisplayName: 'conductor' });
 
     await module.runWithPhaseSpan({
@@ -337,6 +400,16 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.phase.result.matched_rule_index': 1,
       'takt.phase.result.matched_rule_method': 'structured_output',
     });
+    expect(metricRecords).toContainEqual(expect.objectContaining({
+      instrument: 'counter',
+      name: 'takt.workflow.judge_stage.runs',
+      value: 1,
+      attributes: expect.objectContaining({
+        'takt.judge.stage': 1,
+        'takt.judge.method': 'structured_output',
+        'takt.judge.status': 'done',
+      }) as unknown,
+    }));
   });
 
   it('marks thrown step spans as errors without swallowing the original error', async () => {

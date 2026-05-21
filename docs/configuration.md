@@ -165,7 +165,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
-| `observability` | object | disabled | Opt-in OpenTelemetry foundation. Only `enabled` initializes the SDK today; `monitor`, `session_log_exporter`, and `usage_events_phase` are reserved no-op flags for later changes. |
+| `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` is reserved for a later change. |
 
 ## Project Configuration
 
@@ -227,7 +227,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 | `workflow_arpeggio` | object | - | Arpeggio custom code policy (overrides global) |
 | `workflow_runtime_prepare` | object | - | Runtime prepare policy (overrides global) |
 | `sync_conflict_resolver` | object | - | Sync conflict resolver policy (overrides global) |
-| `observability` | object | - | Project-level OpenTelemetry opt-in override. Only `enabled` initializes the SDK today; `monitor`, `session_log_exporter`, and `usage_events_phase` are reserved no-op flags for later changes. |
+| `observability` | object | - | Project-level OpenTelemetry opt-in override. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` is reserved for a later change. |
 
 Project config values override global config when both are set.
 

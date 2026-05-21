@@ -227,17 +227,26 @@ export async function createWorkflowExecutionBootstrap(
     mode: traceReportMode,
     logger: log,
   });
+  const observabilityOptions = globalConfig.observability.enabled
+    && (globalConfig.observability.sessionLogExporter || globalConfig.observability.monitor)
+    ? {
+        ...(globalConfig.observability.sessionLogExporter
+          ? {
+              sessionLogExporter: {
+                shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
+                sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
+                workflowName: workflowConfig.name,
+              },
+            }
+          : {}),
+        ...(globalConfig.observability.monitor
+          ? { monitorJsonExporter: { monitorPath: join(runPaths.runRootAbs, 'monitor.json') } }
+          : {}),
+      }
+    : undefined;
   const observabilityHandle = await initializeOtelFoundation(
     globalConfig.observability,
-    globalConfig.observability.enabled && globalConfig.observability.sessionLogExporter
-      ? {
-          sessionLogExporter: {
-            shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
-            sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
-            workflowName: workflowConfig.name,
-          },
-        }
-      : undefined,
+    observabilityOptions,
   );
 
   return {

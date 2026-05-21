@@ -470,6 +470,32 @@ describe('executeWorkflow session loading', () => {
     );
   });
 
+  it('should pass monitor JSON exporter options when observability monitor is enabled', async () => {
+    const observability = {
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(
+      observability,
+      {
+        monitorJsonExporter: {
+          monitorPath: '/tmp/project/.takt/runs/test-report-dir/monitor.json',
+        },
+      },
+    );
+  });
+
   it('should shutdown observability when workflow execution throws', async () => {
     const observability = {
       enabled: true,
