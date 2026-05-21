@@ -233,9 +233,8 @@ export async function createWorkflowExecutionBootstrap(
       ? {
           sessionLogExporter: {
             shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
-            task,
+            sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
             workflowName: workflowConfig.name,
-            allowSensitiveData,
           },
         }
       : undefined,

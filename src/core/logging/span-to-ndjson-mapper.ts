@@ -6,7 +6,7 @@ import type {
   NdjsonWorkflowComplete,
   NdjsonWorkflowStackEntry,
 } from '../../shared/utils/index.js';
-import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
+import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
 
 export interface SpanSnapshot {
   name: string;
@@ -105,7 +105,7 @@ function mapStepComplete(span: SpanSnapshot): NdjsonStepComplete | undefined {
     ...optionalString('matchedRuleMethod', getString(span.attributes, 'takt.step.result.matched_rule_method')),
     ...optionalString('matchMethod', getString(span.attributes, 'takt.step.result.match_method')),
     ...optionalString('error', getString(span.attributes, 'takt.step.result.error')),
-    ...(failureCategory ? { failureCategory: failureCategory as AgentFailureCategory } : {}),
+    ...(isAgentFailureCategory(failureCategory) ? { failureCategory } : {}),
     timestamp: getString(span.attributes, 'takt.step.result.timestamp') ?? getTimestamp(span.endTime),
   };
 }
@@ -154,6 +154,13 @@ function isWorkflowStackEntry(value: unknown): value is NdjsonWorkflowStackEntry
     && (entry.workflow_ref === undefined || typeof entry.workflow_ref === 'string')
     && typeof entry.step === 'string'
     && (entry.kind === 'agent' || entry.kind === 'system' || entry.kind === 'workflow_call');
+}
+
+function isAgentFailureCategory(value: string | undefined): value is AgentFailureCategory {
+  return value === AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT
+    || value === AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
+    || value === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+    || value === AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT;
 }
 
 function getString(attributes: Record<string, unknown>, key: string): string | undefined {

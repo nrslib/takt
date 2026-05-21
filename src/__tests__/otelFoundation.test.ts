@@ -45,9 +45,8 @@ async function loadFoundationWithMockedSdk(): Promise<{
     options?: {
       sessionLogExporter?: {
         shadowLogPath: string;
-        task: string;
+        sanitizedTask: string;
         workflowName: string;
-        allowSensitiveData: boolean;
       };
     },
   ) => Promise<{ shutdown(): Promise<void> }>;
@@ -90,9 +89,8 @@ async function loadFoundationWithMockedSdk(): Promise<{
       options?: {
         sessionLogExporter?: {
           shadowLogPath: string;
-          task: string;
+          sanitizedTask: string;
           workflowName: string;
-          allowSensitiveData: boolean;
         };
       },
     ) => Promise<{ shutdown(): Promise<void> }>;
@@ -157,9 +155,8 @@ describe('otel foundation', () => {
         {
           sessionLogExporter: {
             shadowLogPath,
-            task: 'secret task',
+            sanitizedTask: 'secret task',
             workflowName: 'default',
-            allowSensitiveData: true,
           },
         },
       );

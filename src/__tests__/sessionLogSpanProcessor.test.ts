@@ -33,9 +33,8 @@ describe('SessionLogSpanProcessor', () => {
     const shadowLogPath = createTempLogPath();
     const processor = new SessionLogSpanProcessor({
       shadowLogPath,
-      task: 'task',
+      sanitizedTask: 'task',
       workflowName: 'default',
-      allowSensitiveData: true,
     });
     const stepSpan = {
       name: 'step.implement',
@@ -70,5 +69,32 @@ describe('SessionLogSpanProcessor', () => {
       'step_complete',
       'workflow_complete',
     ]);
+  });
+
+  it('does not throw when shadow log appends fail', () => {
+    const shadowLogPath = join(createTempLogPath(), 'missing', 'shadow.jsonl');
+
+    expect(() => {
+      const processor = new SessionLogSpanProcessor({
+        shadowLogPath,
+        sanitizedTask: 'task',
+        workflowName: 'default',
+      });
+      processor.onStart({
+        name: 'step.implement',
+        attributes: {
+          'takt.step.name': 'implement',
+          'takt.step.persona': 'coder',
+          'takt.step.iteration': 1,
+        },
+      } as unknown as Span, {} as Context);
+      processor.onEnd({
+        name: 'workflow.default',
+        attributes: {
+          'takt.workflow.status': 'completed',
+          'takt.workflow.iterations': 1,
+        },
+      } as unknown as ReadableSpan);
+    }).not.toThrow();
   });
 });

@@ -34,6 +34,7 @@ describe('span-to-ndjson mapper', () => {
         'takt.step.result.matched_rule_index': 0,
         'takt.step.result.matched_rule_method': 'structured_output',
         'takt.step.result.match_method': 'structured_output',
+        'takt.step.result.failure_category': 'provider_error',
       },
     };
 
@@ -65,7 +66,31 @@ describe('span-to-ndjson mapper', () => {
       matchedRuleIndex: 0,
       matchedRuleMethod: 'structured_output',
       matchMethod: 'structured_output',
+      failureCategory: 'provider_error',
       timestamp: '2026-05-18T00:00:00.000Z',
+    });
+  });
+
+  it('omits invalid failureCategory values from mapped records', () => {
+    expect(mapSpanEndToNdjson({
+      name: 'step.implement',
+      attributes: {
+        'takt.step.name': 'implement',
+        'takt.step.persona': 'coder',
+        'takt.step.iteration': 1,
+        'takt.step.status': 'error',
+        'takt.step.result.content': 'failed',
+        'takt.step.result.failure_category': 'unexpected',
+      },
+    })).toEqual({
+      type: 'step_complete',
+      step: 'implement',
+      persona: 'coder',
+      iteration: 1,
+      status: 'error',
+      content: 'failed',
+      instruction: '',
+      timestamp: expect.any(String),
     });
   });
 

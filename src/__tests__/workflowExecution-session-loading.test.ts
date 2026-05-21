@@ -463,9 +463,8 @@ describe('executeWorkflow session loading', () => {
       {
         sessionLogExporter: {
           shadowLogPath: '/tmp/project/.takt/runs/test-report-dir/logs/test-session-id-otel-session-shadow.jsonl',
-          task: 'task',
+          sanitizedTask: 'task',
           workflowName: 'test-workflow',
-          allowSensitiveData: false,
         },
       },
     );
