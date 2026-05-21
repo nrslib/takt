@@ -25,6 +25,7 @@ import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntr
 import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 
 const log = createLogger('parallel-runner');
 
@@ -65,6 +66,7 @@ export interface ParallelRunnerDeps {
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
   readonly getReportDir: () => string;
+  readonly getWorkflowName?: () => string;
   readonly getInteractive: () => boolean;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
@@ -197,7 +199,21 @@ export class ParallelRunner {
           this.deps.onPhaseStart?.(subStep, 1, 'execute', subInstruction, promptParts, undefined, parentIteration);
           didEmitPhaseStart = true;
         };
-        const subResponse = await executeAgent(subStep.persona, subInstruction, agentOptions);
+        const subResponse = await runWithPhaseSpan({
+          enabled: this.deps.engineOptions.observability?.enabled === true,
+          workflowName: this.deps.getWorkflowName?.() ?? 'unknown',
+          step: subStep,
+          iteration: parentIteration,
+          phase: 1,
+          phaseName: 'execute',
+          instruction: subInstruction,
+          sanitizeText: this.deps.engineOptions.sanitizeObservabilityText,
+          providerInfo: subPm,
+        }, () => executeAgent(subStep.persona, subInstruction, agentOptions), (result) => ({
+          status: result.status,
+          content: result.content,
+          error: result.error,
+        }));
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }

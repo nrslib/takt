@@ -232,6 +232,113 @@ describe('workflow OpenTelemetry spans', () => {
     });
   });
 
+  it('creates phase spans as step children and records phase outcomes', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({ personaDisplayName: 'coder' });
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 3,
+    }, async () => {
+      await module.runWithPhaseSpan({
+        enabled: true,
+        workflowName: 'test-workflow',
+        step,
+        iteration: 3,
+        phase: 1,
+        phaseName: 'execute',
+        instruction: 'secret execute',
+        sanitizeText: (text: string) => text.replaceAll('secret', '[REDACTED]'),
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+          providerSource: 'project',
+          modelSource: 'global',
+        },
+      }, async () => ({ status: 'done', content: 'secret content' }), (result: { status: string; content: string }) => ({
+        status: result.status,
+        content: result.content,
+      }));
+      return makeDoneResult();
+    });
+
+    expect(spans.map((span) => span.name)).toEqual([
+      'step.implement',
+      'phase.implement.execute',
+    ]);
+    expect(spans[1]?.parentName).toBe('step.implement');
+    expect(spans[1]?.attributes).toMatchObject({
+      'takt.workflow.name': 'test-workflow',
+      'takt.step.name': 'implement',
+      'takt.step.persona': 'coder',
+      'takt.step.iteration': 3,
+      'takt.phase.number': 1,
+      'takt.phase.name': 'execute',
+      'takt.phase.instruction': '[REDACTED] execute',
+      'takt.phase.status': 'done',
+      'takt.phase.result.content': '[REDACTED] content',
+      'takt.provider.name': 'codex',
+      'takt.model.name': 'gpt-5',
+    });
+    expect(spans[1]?.ended).toBe(true);
+  });
+
+  it('creates judge stage sub-spans under the active phase span', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({ personaDisplayName: 'conductor' });
+
+    await module.runWithPhaseSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 4,
+      phase: 3,
+      phaseName: 'judge',
+      phaseExecutionId: 'implement:3:4:1',
+    }, async () => {
+      module.recordJudgeStageSpan({
+        enabled: true,
+        workflowName: 'test-workflow',
+        step,
+        iteration: 4,
+        phaseExecutionId: 'implement:3:4:1',
+        entry: {
+          stage: 1,
+          method: 'structured_output',
+          status: 'done',
+          instruction: 'judge instruction',
+          response: 'judge response',
+        },
+      });
+      return { ruleIndex: 1, method: 'structured_output' };
+    }, (result: { ruleIndex: number; method: string }) => ({
+      status: 'done',
+      matchedRuleIndex: result.ruleIndex,
+      matchedRuleMethod: result.method,
+    }));
+
+    expect(spans.map((span) => span.name)).toEqual([
+      'phase.implement.judge',
+      'judge_stage.implement.1.structured_output',
+    ]);
+    expect(spans[1]?.parentName).toBe('phase.implement.judge');
+    expect(spans[1]?.attributes).toMatchObject({
+      'takt.phase.execution_id': 'implement:3:4:1',
+      'takt.judge.stage': 1,
+      'takt.judge.method': 'structured_output',
+      'takt.judge.status': 'done',
+      'takt.judge.instruction': 'judge instruction',
+      'takt.judge.response': 'judge response',
+    });
+    expect(spans[0]?.attributes).toMatchObject({
+      'takt.phase.status': 'done',
+      'takt.phase.result.matched_rule_index': 1,
+      'takt.phase.result.matched_rule_method': 'structured_output',
+    });
+  });
+
   it('marks thrown step spans as errors without swallowing the original error', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
     const error = new Error('agent failed');

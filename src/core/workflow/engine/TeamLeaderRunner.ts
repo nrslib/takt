@@ -19,6 +19,7 @@ import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
 import type { RuntimeStepResolution, StepRunResult } from '../types.js';
 import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 
 const log = createLogger('team-leader-runner');
 const MAX_TOTAL_PARTS = 20;
@@ -28,6 +29,7 @@ export interface TeamLeaderRunnerDeps {
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
+  readonly getWorkflowName?: () => string;
   readonly getInteractive: () => boolean;
   readonly onPhaseStart?: (
     step: WorkflowStep,
@@ -97,22 +99,38 @@ export class TeamLeaderRunner {
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
-    const parts = await structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxParts, {
-      cwd: this.deps.getCwd(),
-      persona: leaderStep.persona,
-      personaPath: leaderStep.personaPath,
-      model: leaderModel,
-      provider: leaderProvider,
-      resolvedModel: leaderModel,
-      resolvedProvider: leaderProvider,
-      workflowMeta: leaderWorkflowMeta,
-      onStream: this.deps.engineOptions.onStream,
-      onPromptResolved: (promptParts) => {
-        if (didEmitPhaseStart) return;
-        this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
-        didEmitPhaseStart = true;
+    const parts = await runWithPhaseSpan(
+      {
+        enabled: this.deps.engineOptions.observability?.enabled === true,
+        workflowName: this.deps.getWorkflowName?.() ?? 'unknown',
+        step: leaderStep,
+        iteration: parentIteration,
+        phase: 1,
+        phaseName: 'execute',
+        instruction,
+        sanitizeText: this.deps.engineOptions.sanitizeObservabilityText,
+        providerInfo: leaderProviderInfo,
       },
-    });
+      () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxParts, {
+        cwd: this.deps.getCwd(),
+        persona: leaderStep.persona,
+        personaPath: leaderStep.personaPath,
+        model: leaderModel,
+        provider: leaderProvider,
+        resolvedModel: leaderModel,
+        resolvedProvider: leaderProvider,
+        workflowMeta: leaderWorkflowMeta,
+        onStream: this.deps.engineOptions.onStream,
+        onPromptResolved: (promptParts) => {
+          if (didEmitPhaseStart) return;
+          this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
+          didEmitPhaseStart = true;
+        },
+      }), (result) => ({
+        status: 'done',
+        content: JSON.stringify({ parts: result }, null, 2),
+      }),
+    );
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
     }

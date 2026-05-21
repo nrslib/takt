@@ -23,6 +23,12 @@ export interface PhaseRunnerContext {
   interactive?: boolean;
   /** Last response from Phase 1 */
   lastResponse?: string;
+  /** Workflow name for observability spans */
+  workflowName?: string;
+  /** Whether OpenTelemetry shadow spans are enabled */
+  observabilityEnabled?: boolean;
+  /** Optional text sanitizer for observability span attributes */
+  sanitizeObservabilityText?: (text: string) => string;
   /** Parent workflow iteration for sub-step phase events */
   iteration?: number;
   /** Get persona session ID */
