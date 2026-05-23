@@ -11,7 +11,6 @@ export interface TaskAttachment {
 export interface PreparedTaskSpec {
   taskDir: string;
   taskDirRelative: string;
-  taskDirSlug: string;
 }
 
 export interface PrepareTaskSpecOptions {
@@ -159,7 +158,7 @@ export function prepareTaskSpecDirectory(
     throw error;
   }
 
-  return { taskDir, taskDirRelative, taskDirSlug };
+  return { taskDir, taskDirRelative };
 }
 
 export function copyTaskAttachmentsToRunContext(sourceTaskDir: string, runContextTaskDir: string): void {

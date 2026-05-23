@@ -233,7 +233,6 @@ beforeEach(() => {
   mockPrepareTaskSpecDirectory.mockReturnValue({
     taskDir: '/project/.takt/tasks/my-task',
     taskDirRelative: '.takt/tasks/my-task',
-    taskDirSlug: 'my-task',
   });
 });
 

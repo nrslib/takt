@@ -19,6 +19,7 @@ import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
+import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
@@ -166,7 +167,6 @@ export async function resolveTaskExecution(
     if (!taskSlug) {
       throw new Error(`Invalid task_dir format: ${task.taskDir}`);
     }
-    reportDirName = taskSlug;
   }
 
   if (data.worktree) {
@@ -216,13 +216,14 @@ export async function resolveTaskExecution(
     }
   }
 
-  if (task.taskDir && reportDirName) {
+  if (task.taskDir) {
+    reportDirName = generateExecutionReportDir(execCwd, task.content);
     const stagedTaskSpec = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
     taskPrompt = stagedTaskSpec.taskPrompt;
     orderContent = stagedTaskSpec.orderContent;
   }
 
-  const resolvedReportDirName = reportDirName ?? generateReportDir(taskPrompt ?? task.content);
+  const resolvedReportDirName = reportDirName ?? generateReportDir(task.content);
   const retryResume = resolveRetryResume(
     workflowIdentifier,
     defaultCwd,

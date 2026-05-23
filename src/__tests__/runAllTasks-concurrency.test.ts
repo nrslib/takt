@@ -408,7 +408,8 @@ describe('runAllTasks concurrency', () => {
 
       const executionOrder: string[] = [];
 
-      // Each task takes about 300ms. Sequential execution exceeds 600ms, while parallel execution stays around 300ms.
+      // Each task remains pending until its timer fires. Sequential execution would record
+      // end:slow-1 before start:slow-2, so order is enough to prove concurrency.
       mockExecuteWorkflow.mockImplementation((_config, task) => {
         executionOrder.push(`start:${task}`);
         return new Promise((resolve) => {
@@ -424,9 +425,7 @@ describe('runAllTasks concurrency', () => {
         .mockReturnValueOnce([]);
 
       // When
-      const startTime = Date.now();
       await runAllTasks('/project');
-      const elapsed = Date.now() - startTime;
 
       // Then: Both tasks started before either completed (concurrent execution)
       expect(executionOrder.slice(0, 2)).toEqual([
@@ -434,9 +433,6 @@ describe('runAllTasks concurrency', () => {
         'start:Task: slow-2',
       ]);
       expect(executionOrder.findIndex((entry) => entry.startsWith('end:'))).toBe(2);
-      // Elapsed time remains a secondary guard: concurrent execution should stay well below
-      // the 600ms sequential baseline even on slower CI runners.
-      expect(elapsed).toBeLessThan(550);
     });
 
     it('should fill slots immediately when a task completes (no batch waiting)', async () => {

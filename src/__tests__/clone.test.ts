@@ -1317,3 +1317,36 @@ describe('resolveCloneBaseDir parent-not-writable fallback', () => {
     expect(result.path).not.toContain('.takt/worktrees');
   });
 });
+
+describe('auto clone path allocation', () => {
+  it('should allocate a suffixed path when the generated clone path already exists', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.123Z'));
+    mockResolveConfigValue.mockReturnValue('/tmp/takt-worktrees');
+    vi.mocked(fs.existsSync).mockImplementation((value: fs.PathLike) => (
+      String(value) === '/tmp/takt-worktrees/20260101T0000-test-task'
+    ));
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'show-ref') throw new Error('not found');
+      if (argsArr[0] === 'symbolic-ref') return Buffer.from('refs/remotes/origin/main\n');
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    try {
+      const result = new CloneManager().createSharedClone('/project', {
+        worktree: true,
+        taskSlug: 'test-task',
+      });
+
+      expect(result.path).toBe('/tmp/takt-worktrees/20260101T0000-test-task-2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

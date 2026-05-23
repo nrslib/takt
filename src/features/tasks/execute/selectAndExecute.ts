@@ -7,6 +7,7 @@ import { createSharedClone, summarizeTaskName, resolveBaseBranch, TaskRunner } f
 import { info, error, warn, withProgress } from '../../../shared/ui/index.js';
 import { statusLine } from '../../../shared/ui/StatusLine.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { executeTask } from './taskExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
@@ -106,13 +107,15 @@ export async function selectAndExecuteTask(
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   let preparedSpec: ReturnType<typeof prepareTaskSpecDirectory> | undefined;
   let stagedSpec: StagedTaskSpec | undefined;
+  let reportDirName: string | undefined;
   try {
     preparedSpec = options?.attachments && options.attachments.length > 0
       ? prepareTaskSpecDirectory(cwd, task, options.attachments)
       : undefined;
-    stagedSpec = preparedSpec
-      ? stageTaskSpecForExecution(cwd, execCwd, preparedSpec.taskDirRelative, preparedSpec.taskDirSlug)
-      : undefined;
+    if (preparedSpec) {
+      reportDirName = generateExecutionReportDir(execCwd, task);
+      stagedSpec = stageTaskSpecForExecution(cwd, execCwd, preparedSpec.taskDirRelative, reportDirName);
+    }
   } catch (error) {
     if (preparedSpec) {
       cleanupPreparedTaskSpec(preparedSpec.taskDir);
@@ -145,7 +148,7 @@ export async function selectAndExecuteTask(
       agentOverrides,
       interactiveUserInput: options?.interactiveUserInput === true,
       interactiveMetadata: options?.interactiveMetadata,
-      ...(preparedSpec ? { reportDirName: preparedSpec.taskDirSlug } : {}),
+      ...(reportDirName ? { reportDirName } : {}),
     });
   } catch (err) {
     const completedAt = new Date().toISOString();

@@ -206,7 +206,6 @@ describe('instructBranch direct execution flow', () => {
     mockPrepareTaskSpecDirectory.mockReturnValue({
       taskDir: '/project/.takt/tasks/done-task',
       taskDirRelative: '.takt/tasks/done-task',
-      taskDirSlug: 'done-task',
     });
   });
 
