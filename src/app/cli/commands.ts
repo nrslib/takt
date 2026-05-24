@@ -9,7 +9,7 @@ import type { Command } from 'commander';
 import { clearPersonaSessions, resolveConfigValue } from '../../infra/config/index.js';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { success, info, error as logError } from '../../shared/ui/index.js';
-import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
+import { runAllTasks, addTask, watchTasks, listTasks, resumeDirectRun } from '../../features/tasks/index.js';
 import {
   ejectBuiltin,
   ejectFacet,
@@ -105,6 +105,13 @@ program
         yes: opts.yes === true,
       },
     );
+  });
+
+program
+  .command('resume')
+  .description('Resume the latest failed or aborted direct run')
+  .action(async () => {
+    await resumeDirectRun(resolvedCwd, resolveAgentOverrides(program));
   });
 
 program

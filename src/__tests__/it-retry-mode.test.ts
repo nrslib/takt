@@ -101,7 +101,7 @@ import {
   formatRunSessionForPrompt,
   getRunPaths,
 } from '../features/interactive/runSessionReader.js';
-import { runRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
+import { runTaskRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
@@ -198,7 +198,10 @@ describe('E2E: Retry mode with failure context injection', () => {
         lastMessage: 'Agent stopped responding',
         retryNote: '',
       },
-      branchName: 'takt/implement-auth',
+      subject: {
+        kind: 'branch',
+        value: 'takt/implement-auth',
+      },
       workflowContext: {
         name: 'default',
         description: '',
@@ -209,7 +212,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext, null);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     // Verify: system prompt contains failure information
     expect(capture.systemPrompts.length).toBeGreaterThan(0);
@@ -243,7 +246,10 @@ describe('E2E: Retry mode with failure context injection', () => {
         lastMessage: 'Agent stopped responding',
         retryNote: '',
       },
-      branchName: 'takt/implement-auth',
+      subject: {
+        kind: 'branch',
+        value: 'takt/implement-auth',
+      },
       workflowContext: {
         name: 'default',
         description: '',
@@ -254,7 +260,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext, null);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Inspect the failing logs and summarize the timeout root cause.');
@@ -279,7 +285,10 @@ describe('E2E: Retry mode with failure context injection', () => {
         lastMessage: 'Agent stopped responding',
         retryNote: '',
       },
-      branchName: 'takt/implement-auth',
+      subject: {
+        kind: 'branch',
+        value: 'takt/implement-auth',
+      },
       workflowContext: {
         name: 'default',
         description: '',
@@ -290,7 +299,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext, null);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Inspect the failing logs from the retry context and summarize the timeout root cause.');
@@ -333,7 +342,10 @@ describe('E2E: Retry mode with failure context injection', () => {
         lastMessage: 'PostCSS error: unknown property',
         retryNote: '',
       },
-      branchName: 'takt/build-login',
+      subject: {
+        kind: 'branch',
+        value: 'takt/build-login',
+      },
       workflowContext: {
         name: 'default',
         description: '',
@@ -352,7 +364,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext, null);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     // Verify: system prompt contains BOTH failure info and run session data
     const systemPrompt = capture.systemPrompts[0]!;
@@ -397,7 +409,10 @@ describe('E2E: Retry mode with failure context injection', () => {
         lastMessage: '',
         retryNote: 'Previous attempt: added missing mocks but still failing',
       },
-      branchName: 'takt/fix-tests',
+      subject: {
+        kind: 'branch',
+        value: 'takt/fix-tests',
+      },
       workflowContext: {
         name: 'default',
         description: '',
@@ -408,7 +423,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    await runRetryMode(tmpDir, retryContext, null);
+    await runTaskRetryMode(tmpDir, retryContext);
 
     const systemPrompt = capture.systemPrompts[0]!;
     expect(systemPrompt).toContain('Existing Retry Note');
@@ -432,7 +447,10 @@ describe('E2E: Retry mode with failure context injection', () => {
         lastMessage: '',
         retryNote: '',
       },
-      branchName: 'takt/some-task',
+      subject: {
+        kind: 'branch',
+        value: 'takt/some-task',
+      },
       workflowContext: {
         name: 'default',
         description: '',
@@ -443,7 +461,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext, null);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(result.action).toBe('cancel');
     expect(result.task).toBe('');
@@ -471,7 +489,10 @@ describe('E2E: Retry mode with failure context injection', () => {
         lastMessage: '',
         retryNote: '',
       },
-      branchName: 'takt/optimize-review',
+      subject: {
+        kind: 'branch',
+        value: 'takt/optimize-review',
+      },
       workflowContext: {
         name: 'default',
         description: '',
@@ -482,7 +503,7 @@ describe('E2E: Retry mode with failure context injection', () => {
       previousOrderContent: null,
     };
 
-    const result = await runRetryMode(tmpDir, retryContext, null);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Increase review timeout to 600s and add retry logic.');

@@ -23,29 +23,9 @@ import { type RunSessionContext, formatRunSessionForPrompt } from '../../interac
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
+import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
-export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
-
-export interface InstructModeResult {
-  action: InstructModeAction;
-  task: string;
-}
-
-export interface InstructUIText {
-  intro: string;
-  resume: string;
-  noConversation: string;
-  summarizeFailed: string;
-  continuePrompt: string;
-  proposed: string;
-  actionPrompt: string;
-  actions: {
-    execute: string;
-    saveTask: string;
-    continue: string;
-  };
-  cancelled: string;
-}
+export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
 const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
 

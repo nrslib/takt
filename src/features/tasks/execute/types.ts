@@ -13,6 +13,7 @@ import type {
   ProviderOptionsSource,
   ProviderResolutionSource,
 } from '../../../core/workflow/provider-options-trace.js';
+import type { DirectResumeMetadata } from './runMeta.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -79,6 +80,8 @@ export interface WorkflowExecutionOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
+  /** Source direct run metadata for resumed direct executions */
+  directResume?: DirectResumeMetadata;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
@@ -138,6 +141,8 @@ export interface ExecuteTaskOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
+  /** Source direct run metadata for resumed direct executions */
+  directResume?: DirectResumeMetadata;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */

@@ -9,7 +9,7 @@ const {
   mockResolveWorkflowConfigValue,
   mockLoadWorkflowByIdentifier,
   mockGetWorkflowDescription,
-  mockRunRetryMode,
+  mockRunTaskRetryMode,
   mockFindRunForTask,
   mockFindPreviousOrderContent,
   mockLoadRunSessionContext,
@@ -37,7 +37,7 @@ const {
     workflowStructure: '',
     stepPreviews: [],
   })),
-  mockRunRetryMode: vi.fn(),
+  mockRunTaskRetryMode: vi.fn(),
   mockFindRunForTask: vi.fn(() => null),
   mockFindPreviousOrderContent: vi.fn(() => null),
   mockLoadRunSessionContext: vi.fn(),
@@ -103,7 +103,7 @@ vi.mock('../features/interactive/index.js', () => ({
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
   getRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
   formatRunSessionForPrompt: (...args: unknown[]) => mockFormatRunSessionForPrompt(...args),
-  runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
+  runTaskRetryMode: (...args: unknown[]) => mockRunTaskRetryMode(...args),
   findPreviousOrderContent: (...args: unknown[]) => mockFindPreviousOrderContent(...args),
 }));
 
@@ -189,7 +189,7 @@ beforeEach(() => {
   mockIsWorkflowPath.mockImplementation((workflow: string) => workflow.startsWith('/') || workflow.startsWith('~') || workflow.startsWith('./') || workflow.startsWith('../') || workflow.endsWith('.yaml') || workflow.endsWith('.yml'));
   mockLoadAllStandaloneWorkflowsWithSources.mockReturnValue(new Map<string, unknown>([['default', {}], ['selected-workflow', {}]]));
   mockSelectOptionWithDefault.mockResolvedValue('plan');
-  mockRunRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
+  mockRunTaskRetryMode.mockResolvedValue({ action: 'execute', task: '追加指示A' });
   mockFindPreviousOrderContent.mockReturnValue(null);
   mockLoadRunSessionContext.mockReturnValue({
     task: 'Do something',
@@ -214,7 +214,7 @@ describe('requeueFailedTask', () => {
     const result = await requeueFailedTask(task, '/project');
 
     expect(result).toBe(true);
-    expect(mockRunRetryMode).not.toHaveBeenCalled();
+    expect(mockRunTaskRetryMode).not.toHaveBeenCalled();
     expect(mockStartReExecution).not.toHaveBeenCalled();
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
     expect(mockRequeueTask).toHaveBeenCalledWith(
@@ -530,12 +530,15 @@ describe('retryFailedTask', () => {
 
     expect(result).toBe(true);
     expect(mockSelectWorkflow).not.toHaveBeenCalled();
-    expect(mockRunRetryMode).toHaveBeenCalledWith(
+    expect(mockRunTaskRetryMode).toHaveBeenCalledWith(
       '/project/.takt/worktrees/my-task',
       expect.objectContaining({
         failure: expect.objectContaining({ taskName: 'my-task', taskContent: 'Do something' }),
+        subject: {
+          kind: 'branch',
+          value: 'takt/my-task',
+        },
       }),
-      null,
     );
     expect(mockStartReExecution).toHaveBeenCalledWith(
       'my-task',
@@ -1092,7 +1095,7 @@ describe('retryFailedTask', () => {
 
   it('should return false when retry mode is cancelled', async () => {
     const task = makeFailedTask();
-    mockRunRetryMode.mockResolvedValue({ action: 'cancel', task: '' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'cancel', task: '' });
 
     const result = await retryFailedTask(task, '/project');
 
@@ -1102,7 +1105,7 @@ describe('retryFailedTask', () => {
 
   it('should requeue task via requeueTask when save_task action', async () => {
     const task = makeFailedTask();
-    mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
 
     const result = await retryFailedTask(task, '/project');
 
@@ -1123,7 +1126,7 @@ describe('retryFailedTask', () => {
     const task = makeFailedTask();
     mockConfirm.mockResolvedValue(false);
     mockSelectWorkflow.mockResolvedValue('selected-workflow');
-    mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
 
     await retryFailedTask(task, '/project');
 
@@ -1156,7 +1159,7 @@ describe('retryFailedTask', () => {
       ],
     });
     mockSelectOptionWithDefault.mockResolvedValue('delegate');
-    mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
 
     const task = makeFailedTask({
       data: {
@@ -1183,7 +1186,7 @@ describe('retryFailedTask', () => {
 
   it('should sanitize task name in requeue confirmation', async () => {
     const task = makeFailedTask({ name: 'bad\x1b[31m-task\n' });
-    mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
 
     await retryFailedTask(task, '/project');
 
@@ -1192,7 +1195,7 @@ describe('retryFailedTask', () => {
 
   it('should requeue task with existing retry note appended when save_task', async () => {
     const task = makeFailedTask({ data: { task: 'Do something', workflow: 'default', retry_note: '既存ノート' } });
-    mockRunRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
+    mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A' });
 
     await retryFailedTask(task, '/project');
 

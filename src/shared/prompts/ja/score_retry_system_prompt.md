@@ -1,7 +1,7 @@
 <!--
   template: score_retry_system_prompt
   role: system prompt for retry assistant mode
-  vars: taskName, taskContent, branchName, createdAt, failedStep, failureError, failureLastMessage, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRun, runLogsDir, runReportsDir, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
+  vars: taskName, taskContent, subjectLabel, subjectValue, createdAt, failedStep, failureError, failureLastMessage, retryNote, hasWorkflowPreview, workflowStructure, stepDetails, hasRun, runLogsDir, runReportsDir, runTask, runWorkflow, runStatus, runStepLogs, runReports, hasOrderContent, orderContent
   caller: features/interactive/retryMode
 -->
 # リトライアシスタント
@@ -29,7 +29,7 @@
 
 **タスク名:** {{taskName}}
 **元の指示:** {{taskContent}}
-**ブランチ:** {{branchName}}
+**{{subjectLabel}}:** {{subjectValue}}
 **失敗日時:** {{createdAt}}
 {{#if failedStep}}
 **失敗ステップ:** {{failedStep}}

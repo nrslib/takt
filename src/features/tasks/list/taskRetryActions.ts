@@ -19,7 +19,7 @@ import {
   loadRunSessionContext,
   getRunPaths,
   formatRunSessionForPrompt,
-  runRetryMode,
+  runTaskRetryMode,
   findPreviousOrderContent,
   type RetryContext,
   type RetryFailureInfo,
@@ -364,16 +364,18 @@ export async function retryFailedTask(
   };
 
   blankLine();
-  const branchName = task.branch ?? task.name;
   const retryContext: RetryContext = {
     failure: buildRetryFailureInfo(task, selection.failure),
-    branchName,
+    subject: {
+      kind: 'branch',
+      value: task.branch ?? task.name,
+    },
     workflowContext,
     run: runInfo,
     previousOrderContent: selection.previousOrderContent,
   };
 
-  const retryResult = await runRetryMode(selection.worktreePath, retryContext, selection.previousOrderContent);
+  const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext);
   if (retryResult.action === 'cancel') {
     return false;
   }
