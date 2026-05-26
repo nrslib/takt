@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isRealPathInside } from '../../shared/utils/index.js';
 
-const SYNCED_TAKT_RESOURCES = ['config.yaml', 'workflows', 'facets'] as const;
+const SYNCED_TAKT_RESOURCES = ['config.yaml', 'workflows', 'facets', 'quality-gates'] as const;
+const QUALITY_GATES_GENERATED_DIRS = new Set(['logs']);
 
 type PathKind = 'missing' | 'file' | 'directory' | 'symlink';
 
@@ -81,7 +82,7 @@ function syncDirectory(sourceDir: string, targetDir: string, targetRoot: string)
   fs.mkdirSync(targetDir, { recursive: true });
   assertTargetPathInside(targetRoot, targetDir);
 
-  const sourceEntries = new Set(fs.readdirSync(sourceDir));
+  const sourceEntries = new Set(fs.readdirSync(sourceDir).filter((entry) => !shouldSkipTaktSyncEntry(sourceDir, entry)));
   for (const entry of fs.readdirSync(targetDir)) {
     if (!sourceEntries.has(entry)) {
       removePath(path.join(targetDir, entry));
@@ -101,6 +102,10 @@ function syncDirectory(sourceDir: string, targetDir: string, targetRoot: string)
     }
     syncFile(sourcePath, targetPath, targetRoot);
   }
+}
+
+function shouldSkipTaktSyncEntry(sourceDir: string, entry: string): boolean {
+  return path.basename(sourceDir) === 'quality-gates' && QUALITY_GATES_GENERATED_DIRS.has(entry);
 }
 
 export function syncProjectLocalTaktForRetry(projectDir: string, worktreePath: string): void {

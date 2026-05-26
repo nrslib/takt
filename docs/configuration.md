@@ -101,6 +101,8 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 #   custom_merge_files: false            # Allow external merge files (default: false)
 # workflow_runtime_prepare:              # Runtime prepare policy
 #   custom_scripts: false                # Allow custom scripts (default: false; builtin presets always allowed)
+# workflow_command_gates:                # Workflow YAML command quality gate policy
+#   custom_scripts: false                # Allow command gates from workflow YAML (default: false)
 # sync_conflict_resolver:                # Sync conflict resolver policy
 #   auto_approve_tools: false            # Allow auto-approval of tools (default: false)
 
@@ -164,6 +166,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 | `workflow_mcp_servers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
+| `workflow_command_gates` | object | `{ custom_scripts: false }` | Workflow YAML command quality gate policy |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. Only `enabled` initializes the SDK today; `monitor`, `session_log_exporter`, and `usage_events_phase` are reserved no-op flags for later changes. |
 
@@ -226,6 +229,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 | `workflow_mcp_servers` | object | - | MCP server transport policy (overrides global) |
 | `workflow_arpeggio` | object | - | Arpeggio custom code policy (overrides global) |
 | `workflow_runtime_prepare` | object | - | Runtime prepare policy (overrides global) |
+| `workflow_command_gates` | object | - | Workflow YAML command quality gate policy (overrides global) |
 | `sync_conflict_resolver` | object | - | Sync conflict resolver policy (overrides global) |
 | `observability` | object | - | Project-level OpenTelemetry opt-in override. Only `enabled` initializes the SDK today; `monitor`, `session_log_exporter`, and `usage_events_phase` are reserved no-op flags for later changes. |
 

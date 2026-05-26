@@ -38,6 +38,7 @@ import {
   createStructuredOutputNormalizerRegistry,
   type StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
+import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -206,6 +207,8 @@ export class WorkflowEngine extends EventEmitter {
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+          runQualityGates,
+          persistPreviousResponseSnapshot: this.stepExecutor.persistPreviousResponseSnapshot.bind(this.stepExecutor),
           buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
           buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
@@ -363,6 +366,8 @@ export class WorkflowEngine extends EventEmitter {
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+          runQualityGates,
+          persistPreviousResponseSnapshot: this.stepExecutor.persistPreviousResponseSnapshot.bind(this.stepExecutor),
           buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
           buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),

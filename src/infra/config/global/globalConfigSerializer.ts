@@ -135,6 +135,11 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       custom_scripts: config.workflowRuntimePrepare.customScripts,
     };
   }
+  if (config.workflowCommandGates) {
+    raw.workflow_command_gates = {
+      custom_scripts: config.workflowCommandGates.customScripts,
+    };
+  }
   if (config.workflowArpeggio) {
     raw.workflow_arpeggio = {
       custom_data_source_modules: config.workflowArpeggio.customDataSourceModules,

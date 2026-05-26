@@ -1,4 +1,4 @@
-import type { AnalyticsConfig, WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
+import type { AnalyticsConfig, WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowMcpServersConfig, WorkflowRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
 
 const SUBMODULES_ALL = 'all';
 
@@ -77,6 +77,19 @@ export function normalizeWorkflowRuntimePreparePolicy(
 
 export function denormalizeWorkflowRuntimePreparePolicy(
   config: WorkflowRuntimePrepareConfig | undefined,
+): Record<string, unknown> | undefined {
+  if (!config) return undefined;
+  return { custom_scripts: config.customScripts };
+}
+
+export function normalizeWorkflowCommandGatesPolicy(
+  raw: { custom_scripts?: boolean } | undefined,
+): WorkflowCommandGatesConfig | undefined {
+  return raw ? { customScripts: raw.custom_scripts } : undefined;
+}
+
+export function denormalizeWorkflowCommandGatesPolicy(
+  config: WorkflowCommandGatesConfig | undefined,
 ): Record<string, unknown> | undefined {
   if (!config) return undefined;
   return { custom_scripts: config.customScripts };

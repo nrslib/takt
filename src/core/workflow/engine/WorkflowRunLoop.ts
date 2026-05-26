@@ -16,6 +16,7 @@ import { handleBlocked } from './blocked-handler.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
 import { runWithStepSpan } from '../observability/workflowSpans.js';
+import type { QualityGateRunResult } from '../quality-gates/types.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -43,6 +44,17 @@ interface WorkflowRunLoopDeps {
     prebuiltInstruction?: string,
     runtime?: RuntimeStepResolution,
   ) => Promise<StepRunResult>;
+  runQualityGates: (options: {
+    qualityGates: WorkflowStep['qualityGates'];
+    projectRoot: string;
+    step: WorkflowStep;
+  }) => Promise<QualityGateRunResult>;
+  persistPreviousResponseSnapshot: (
+    state: WorkflowState,
+    stepName: string,
+    stepIteration: number,
+    content: string,
+  ) => void;
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
@@ -218,6 +230,33 @@ function requireNextStep(step: WorkflowStep, transition: WorkflowRuleTransition)
   throw new Error(`Step "${step.name}" resolved to a return transition where a next step is required`);
 }
 
+function applyQualityGateFailure(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  stepIteration: number,
+  response: AgentResponse,
+): void {
+  deps.state.stepOutputs.set(step.name, response);
+  deps.state.lastOutput = response;
+  deps.state.currentStep = step.name;
+  deps.persistPreviousResponseSnapshot(deps.state, step.name, stepIteration, response.content);
+}
+
+function resolveQualityGateSnapshotIteration(
+  state: WorkflowState,
+  step: WorkflowStep,
+  stepIteration: number | undefined,
+): number {
+  if (stepIteration !== undefined) {
+    return stepIteration;
+  }
+  const currentIteration = state.stepIterations.get(step.name);
+  if (currentIteration !== undefined) {
+    return currentIteration;
+  }
+  throw new Error(`Step "${step.name}" completed without a step iteration for quality gate feedback`);
+}
+
 export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promise<WorkflowRunResult> {
   let abort: WorkflowAbortResult | undefined;
   let returnValue: string | undefined;
@@ -323,6 +362,16 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         deps.state.rateLimitFallbackAttempts = undefined;
       }
 
+      if (result.qualityGateFailure) {
+        applyQualityGateFailure(
+          deps,
+          step,
+          result.qualityGateFailure.stepIteration,
+          result.qualityGateFailure.response,
+        );
+        continue;
+      }
+
       if (response.status === 'blocked') {
         deps.emit('step:blocked', step, response);
         const result = await handleBlocked(step, response, deps.options);
@@ -342,6 +391,21 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           `Step "${step.name}" failed: ${response.error ?? response.content}`,
         );
         break;
+      }
+
+      const qualityGateResult = await deps.runQualityGates({
+        qualityGates: step.qualityGates,
+        projectRoot: deps.getCwd(),
+        step,
+      });
+      if (!qualityGateResult.ok) {
+        applyQualityGateFailure(
+          deps,
+          step,
+          resolveQualityGateSnapshotIteration(deps.state, step, stepIteration),
+          qualityGateResult.response,
+        );
+        continue;
       }
 
       const transition = deps.resolveDoneTransition(step, response);
@@ -503,6 +567,41 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
 
   if (stepRuntime?.fallback) {
     deps.state.rateLimitFallbackAttempts = undefined;
+  }
+
+  if (result.qualityGateFailure) {
+    applyQualityGateFailure(
+      deps,
+      step,
+      result.qualityGateFailure.stepIteration,
+      result.qualityGateFailure.response,
+    );
+    return {
+      response: result.qualityGateFailure.response,
+      nextStep: step.name,
+      isComplete: false,
+      loopDetected: loopCheck.isLoop,
+    };
+  }
+
+  const qualityGateResult = await deps.runQualityGates({
+    qualityGates: step.qualityGates,
+    projectRoot: deps.getCwd(),
+    step,
+  });
+  if (!qualityGateResult.ok) {
+    applyQualityGateFailure(
+      deps,
+      step,
+      resolveQualityGateSnapshotIteration(deps.state, step, stepIteration),
+      qualityGateResult.response,
+    );
+    return {
+      response: qualityGateResult.response,
+      nextStep: step.name,
+      isComplete: false,
+      loopDetected: loopCheck.isLoop,
+    };
   }
 
   const transition = deps.resolveDoneTransition(step, response);

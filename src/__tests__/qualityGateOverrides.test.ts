@@ -6,16 +6,9 @@ import { describe, it, expect } from 'vitest';
 import { applyQualityGateOverrides } from '../infra/config/loaders/qualityGateOverrides.js';
 import type { WorkflowOverrides } from '../core/models/config-types.js';
 
-type ApplyOverridesArgs = [
-  string,
-  string[] | undefined,
-  boolean | undefined,
-  string | undefined,
-  WorkflowOverrides | undefined,
-  WorkflowOverrides | undefined,
-];
+type ApplyOverridesArgs = Parameters<typeof applyQualityGateOverrides>;
 
-function applyOverrides(...args: ApplyOverridesArgs): string[] | undefined {
+function applyOverrides(...args: ApplyOverridesArgs): ReturnType<typeof applyQualityGateOverrides> {
   return applyQualityGateOverrides(...args);
 }
 
@@ -156,6 +149,37 @@ describe('applyQualityGateOverrides', () => {
       'Project gate',
       'Project step gate',
       'YAML gate',
+    ]);
+  });
+
+  it('preserves mixed string and command gates across override layers in execution order', () => {
+    const yamlCommandGate = {
+      type: 'command',
+      name: 'yaml-command',
+      command: './.takt/quality-gates/yaml.sh',
+    } as const;
+    const projectCommandGate = {
+      type: 'command',
+      name: 'project-command',
+      command: './.takt/quality-gates/project.sh',
+      timeoutMs: 300000,
+    } as const;
+    const yamlGates = ['YAML AI gate', yamlCommandGate];
+    const projectOverrides: WorkflowOverrides = {
+      steps: {
+        implement: {
+          qualityGates: ['Project AI gate', projectCommandGate],
+        },
+      },
+    };
+
+    const result = applyOverrides('implement', yamlGates, true, undefined, projectOverrides, undefined);
+
+    expect(result).toEqual([
+      'Project AI gate',
+      projectCommandGate,
+      'YAML AI gate',
+      yamlCommandGate,
     ]);
   });
 

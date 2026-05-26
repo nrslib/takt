@@ -381,6 +381,36 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は workflow_command_gates の leaf env を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-command-gates-leaf-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_COMMAND_GATES_CUSTOM_SCRIPTS = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.workflowCommandGates).toEqual({
+      customScripts: true,
+    });
+  });
+
+  it('project config は workflow_command_gates の root JSON env を反映する', () => {
+    const projectDir = join(testRoot, 'project-workflow-command-gates-root-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: codex\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_COMMAND_GATES = JSON.stringify({
+      custom_scripts: true,
+    });
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.workflowCommandGates).toEqual({
+      customScripts: true,
+    });
+  });
+
   it('project config は removed runtime_prepare env と canonical env が同時指定でも canonical env を優先する', () => {
     const projectDir = join(testRoot, 'project-workflow-runtime-prepare-env-priority');
     const configDir = getProjectConfigDir(projectDir);
@@ -571,6 +601,32 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('global config は workflow_command_gates の leaf env を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_COMMAND_GATES_CUSTOM_SCRIPTS = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.workflowCommandGates).toEqual({
+      customScripts: true,
+    });
+  });
+
+  it('global config は workflow_command_gates の root JSON env を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
+    process.env.TAKT_WORKFLOW_COMMAND_GATES = JSON.stringify({
+      custom_scripts: true,
+    });
+
+    const config = loadGlobalConfig();
+
+    expect(config.workflowCommandGates).toEqual({
+      customScripts: true,
+    });
+  });
+
   it('global config は sync_project_local_takt_on_retry の env override を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(
@@ -589,6 +645,7 @@ describe('config traced env overrides', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
     process.env.TAKT_WORKFLOW_RUNTIME_PREPARE_CUSTOM_SCRIPTS = 'true';
+    process.env.TAKT_WORKFLOW_COMMAND_GATES_CUSTOM_SCRIPTS = 'true';
     process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_DATA_SOURCE_MODULES = 'true';
     process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_INLINE_JS = 'false';
     process.env.TAKT_WORKFLOW_ARPEGGIO_CUSTOM_MERGE_FILES = 'true';
@@ -599,6 +656,9 @@ describe('config traced env overrides', () => {
     const config = loadGlobalConfig();
 
     expect(config.workflowRuntimePrepare).toEqual({
+      customScripts: true,
+    });
+    expect(config.workflowCommandGates).toEqual({
       customScripts: true,
     });
     expect(config.workflowArpeggio).toEqual({

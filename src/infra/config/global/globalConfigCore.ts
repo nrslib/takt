@@ -2,6 +2,7 @@ import { writeFileSync } from 'node:fs';
 import { stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { GlobalConfig } from '../../../core/models/config-types.js';
+import type { QualityGate } from '../../../core/models/workflow-types.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -170,6 +171,9 @@ export class GlobalConfigManager {
       workflowRuntimePrepare: parsed.workflow_runtime_prepare ? {
         customScripts: parsed.workflow_runtime_prepare.custom_scripts,
       } : undefined,
+      workflowCommandGates: parsed.workflow_command_gates ? {
+        customScripts: parsed.workflow_command_gates.custom_scripts,
+      } : undefined,
       workflowArpeggio: parsed.workflow_arpeggio ? {
         customDataSourceModules: parsed.workflow_arpeggio.custom_data_source_modules,
         customMergeInlineJs: parsed.workflow_arpeggio.custom_merge_inline_js,
@@ -195,10 +199,10 @@ export class GlobalConfigManager {
       autoFetch: parsed.auto_fetch,
       baseBranch: parsed.base_branch,
       workflowOverrides: normalizeWorkflowOverrides(parsed.workflow_overrides as {
-        quality_gates?: string[];
+        quality_gates?: QualityGate[];
         quality_gates_edit_only?: boolean;
-        steps?: Record<string, { quality_gates?: string[] }>;
-        personas?: Record<string, { quality_gates?: string[] }>;
+        steps?: Record<string, { quality_gates?: QualityGate[] }>;
+        personas?: Record<string, { quality_gates?: QualityGate[] }>;
       } | undefined),
       // Project-local keys (also accepted in global config)
       pipeline: normalizePipelineConfig(

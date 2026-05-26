@@ -82,9 +82,18 @@ steps:
       report:
         - name: 00-plan.md
           format: plan               # report_formats マップを参照
+    quality_gates:                   # agent step 完了時の品質 gate
+      - "レビュー前に実装を確認する" # AI への指示
+      - type: command                # 機械的に実行される command gate
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        cwd: "."
+        timeout_ms: 300000
 ```
 
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
+
+`quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、output log path、上限付きでサニタイズされた stdout / stderr が同じ agent step の差し戻し入力に含まれます。raw stdout / stderr はローカルの output log にも保存されます。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
 ## 利用可能な変数
 
@@ -316,7 +325,7 @@ promotion は並列サブ step ではサポートされません。
 | `allow_git_commit` | `false` | step 指示内での `git add` / `commit` / `push` を許可。デフォルトは禁止（1 PR = 1 タスクを保つため） |
 | `required_permission_mode` | - | 最低限の権限モード: `readonly`, `edit`, `full` |
 | `output_contracts` | - | レポートファイル設定（name, format） |
-| `quality_gates` | - | step 完了の品質基準（AI 向け指示） |
+| `quality_gates` | - | agent step 完了 gate。文字列は AI 向け指示、`type: command` は step 完了後に実行し、失敗時は同じ agent step に差し戻す |
 
 ## Workflow レベルの設定
 

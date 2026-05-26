@@ -86,6 +86,16 @@ export interface OutputContractItem {
 
 export type OutputContractEntry = OutputContractItem;
 
+export interface CommandQualityGate {
+  type: 'command';
+  name?: string;
+  command: string;
+  cwd?: string;
+  timeoutMs?: number;
+}
+
+export type QualityGate = string | CommandQualityGate;
+
 export type WorkflowParamType = 'facet_ref' | 'facet_ref[]';
 export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'report_format';
 export type WorkflowCallArgValue = string | string[];
@@ -153,11 +163,11 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   requiredPermissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
   edit?: boolean;
+  qualityGates?: QualityGate[];
   structuredOutput?: WorkflowStructuredOutput;
   systemInputs?: never;
   effects?: never;
   outputContracts?: OutputContractEntry[];
-  qualityGates?: string[];
   parallel?: AgentWorkflowStep[];
   concurrency?: number;
   arpeggio?: ArpeggioStepConfig;
@@ -182,11 +192,11 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   requiredPermissionMode?: never;
   providerOptions?: never;
   edit?: never;
+  qualityGates?: never;
   structuredOutput?: never;
   systemInputs?: WorkflowSystemInput[];
   effects?: WorkflowEffect[];
   outputContracts?: never;
-  qualityGates?: never;
   parallel?: never;
   concurrency?: never;
   arpeggio?: never;
@@ -212,11 +222,11 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   requiredPermissionMode?: never;
   providerOptions?: never;
   edit?: never;
+  qualityGates?: never;
   structuredOutput?: never;
   systemInputs?: never;
   effects?: never;
   outputContracts?: never;
-  qualityGates?: never;
   parallel?: never;
   concurrency?: never;
   arpeggio?: never;

@@ -2,7 +2,7 @@
  * Workflow YAML parsing and normalization.
  */
 
-import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
+import type { WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { WorkflowConfig, WorkflowStep, WorkflowSubworkflowConfig } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
@@ -15,6 +15,7 @@ import {
 } from './resource-resolver.js';
 import {
   validateWorkflowRuntimePrepare,
+  validateWorkflowCommandGates,
 } from './workflowNormalizationPolicies.js';
 import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
 import { normalizeProviderReference, normalizeStepFromRaw } from './workflowStepNormalizer.js';
@@ -62,6 +63,7 @@ export function normalizeWorkflowConfig(
   callableArgs?: Record<string, string | string[]>,
   callableArgPolicy?: WorkflowCallArgResolutionPolicy,
   callableArgMode: 'runtime' | 'discovery' = 'runtime',
+  workflowCommandGatesPolicy?: WorkflowCommandGatesConfig,
 ): WorkflowConfig {
   const parsedRaw = WorkflowConfigRawSchema.parse(raw);
   const callableDiscovery = callableArgMode === 'discovery'
@@ -94,6 +96,7 @@ export function normalizeWorkflowConfig(
 
   const workflowRuntime = normalizeRuntime(parsed.workflow_config?.runtime);
   validateWorkflowRuntimePrepare(workflowRuntime, workflowRuntimePreparePolicy);
+  validateWorkflowCommandGates(parsed.steps, workflowCommandGatesPolicy);
   const normalizedWorkflowProvider = normalizeProviderReference(
     parsed.workflow_config?.provider,
     parsed.workflow_config?.model,

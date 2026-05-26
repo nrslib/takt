@@ -8,7 +8,7 @@
  */
 
 import type { ProviderType } from '../../shared/types/provider.js';
-import type { RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
+import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
@@ -40,13 +40,13 @@ export interface AssistantConfig {
 
 /** Step-specific quality gates override */
 export interface StepQualityGatesOverride {
-  qualityGates?: string[];
+  qualityGates?: QualityGate[];
 }
 
 /** Workflow-level overrides (quality_gates, etc.) */
 export interface WorkflowOverrides {
   /** Global quality gates applied to all steps */
-  qualityGates?: string[];
+  qualityGates?: QualityGate[];
   /** Whether to apply quality_gates only to edit: true steps */
   qualityGatesEditOnly?: boolean;
   /** Step-specific quality gates overrides */
@@ -120,6 +120,12 @@ export interface PipelineConfig {
 /** Workflow-level runtime.prepare policy */
 export interface WorkflowRuntimePrepareConfig {
   /** Allow custom script paths from workflow YAML (default: false) */
+  customScripts?: boolean;
+}
+
+/** Workflow-level command quality gate policy */
+export interface WorkflowCommandGatesConfig {
+  /** Allow command gates from workflow YAML (default: false) */
   customScripts?: boolean;
 }
 
@@ -226,6 +232,8 @@ export interface ProjectConfig {
   runtime?: WorkflowRuntimeConfig;
   /** Workflow-level runtime.prepare policy */
   workflowRuntimePrepare?: WorkflowRuntimePrepareConfig;
+  /** Workflow-level command quality gate policy */
+  workflowCommandGates?: WorkflowCommandGatesConfig;
   /** Workflow-level Arpeggio policy */
   workflowArpeggio?: WorkflowArpeggioConfig;
   /** Sync conflict resolver behavior */

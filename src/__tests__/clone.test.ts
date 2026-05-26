@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 
-const { mockLogInfo, mockLogDebug, mockLogError } = vi.hoisted(() => ({
+const { mockLogInfo, mockLogDebug, mockLogError, mockSyncProjectLocalTaktForRetry } = vi.hoisted(() => ({
   mockLogInfo: vi.fn(),
   mockLogDebug: vi.fn(),
   mockLogError: vi.fn(),
+  mockSyncProjectLocalTaktForRetry: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
+  spawn: vi.fn(),
 }));
 
 vi.mock('node:fs', () => ({
@@ -54,13 +57,18 @@ vi.mock('../infra/config/index.js', () => ({
   resolveConfigValue: vi.fn(() => undefined),
 }));
 
-import { execFileSync } from 'node:child_process';
+vi.mock('../infra/task/projectLocalTaktSync.js', () => ({
+  syncProjectLocalTaktForRetry: mockSyncProjectLocalTaktForRetry,
+}));
+
+import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { loadProjectConfig, resolveConfigValue } from '../infra/config/index.js';
 import { CloneManager, createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
+const mockSpawn = vi.mocked(spawn);
 const mockLoadProjectConfig = vi.mocked(loadProjectConfig);
 const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 
@@ -69,6 +77,29 @@ beforeEach(() => {
   mockLoadProjectConfig.mockReturnValue({});
   mockResolveConfigValue.mockReturnValue(undefined);
 });
+
+function mockGitSpawn(
+  resolveExitCode: (args: string[]) => number,
+): void {
+  mockSpawn.mockImplementation((_cmd, args) => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      pid: number;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = 12345;
+    child.kill = vi.fn();
+
+    setImmediate(() => {
+      child.emit('close', resolveExitCode(args as string[]));
+    });
+
+    return child as never;
+  });
+}
 
 describe('cloneAndIsolate git config propagation', () => {
   /**
@@ -1319,6 +1350,79 @@ describe('resolveCloneBaseDir parent-not-writable fallback', () => {
 });
 
 describe('auto clone path allocation', () => {
+  it('should sync project-local quality gate assets after creating a shared clone', () => {
+    vi.mocked(fs.accessSync).mockImplementation(() => undefined);
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'fetch') throw new Error('missing remote branch');
+      if (argsArr[0] === 'show-ref') throw new Error('missing local branch');
+      if (argsArr[0] === 'symbolic-ref') return Buffer.from('refs/remotes/origin/main\n');
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    const result = new CloneManager().createSharedClone('/project', {
+      worktree: '/tmp/takt-command-gate-clone',
+      taskSlug: 'command-gate',
+    });
+
+    expect(result.path).toBe('/tmp/takt-command-gate-clone');
+    expect(mockSyncProjectLocalTaktForRetry).toHaveBeenCalledWith('/project', '/tmp/takt-command-gate-clone');
+  });
+
+  it('should sync project-local quality gate assets after creating an abortable shared clone', async () => {
+    vi.mocked(fs.accessSync).mockImplementation(() => undefined);
+    mockGitSpawn((args) => {
+      if (args[0] === 'fetch') return 1;
+      if (args[0] === 'show-ref' && String(args[3]).startsWith('refs/remotes/origin/')) return 1;
+      if (args[0] === 'show-ref' && String(args[3]).startsWith('refs/heads/')) return 0;
+      return 0;
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    const result = await new CloneManager().createSharedCloneAbortable('/project', {
+      worktree: '/tmp/takt-command-gate-abortable-clone',
+      taskSlug: 'command-gate',
+      branch: 'feature/local-command-gate',
+    });
+
+    expect(result.path).toBe('/tmp/takt-command-gate-abortable-clone');
+    expect(mockSyncProjectLocalTaktForRetry).toHaveBeenCalledWith(
+      '/project',
+      '/tmp/takt-command-gate-abortable-clone',
+    );
+  });
+
+  it('should sync project-local quality gate assets after creating a temp clone', () => {
+    vi.mocked(fs.accessSync).mockImplementation(() => undefined);
+    mockResolveConfigValue.mockReturnValue('/tmp/takt-worktrees');
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'symbolic-ref') return Buffer.from('refs/remotes/origin/main\n');
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    const result = new CloneManager().createTempCloneForBranch('/project', 'feature/temp-command-gate');
+
+    expect(result.path).toContain('/tmp/takt-worktrees/tmp-');
+    expect(mockSyncProjectLocalTaktForRetry).toHaveBeenCalledWith('/project', result.path);
+  });
+
   it('should allocate a suffixed path when the generated clone path already exists', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.123Z'));

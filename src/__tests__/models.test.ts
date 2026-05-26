@@ -1107,6 +1107,18 @@ describe('ProjectConfigSchema', () => {
     });
   });
 
+  it('should parse workflow_command_gates policy block', () => {
+    const result = ProjectConfigSchema.parse({
+      workflow_command_gates: {
+        custom_scripts: true,
+      },
+    } as unknown) as Record<string, unknown>;
+
+    expect(result.workflow_command_gates).toEqual({
+      custom_scripts: true,
+    });
+  });
+
   it('should parse workflow_arpeggio policy block', () => {
     const result = ProjectConfigSchema.parse({
       workflow_arpeggio: {

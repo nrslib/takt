@@ -14,6 +14,7 @@ import {
 } from './clone-base-branch.js';
 import { cloneAndIsolate, cloneAndIsolateAbortable, resolveCloneSubmoduleOptions, runGitCommandAbortable } from './clone-exec.js';
 import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
+import { syncProjectLocalTaktForRetry } from './projectLocalTaktSync.js';
 
 export type { WorktreeOptions, WorktreeResult };
 export {
@@ -161,6 +162,7 @@ export class CloneManager {
       execFileSync('git', ['checkout', '-b', branch], { cwd: clonePath, stdio: 'pipe' });
     }
 
+    syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 
@@ -213,6 +215,7 @@ export class CloneManager {
       await runGitCommandAbortable(clonePath, ['checkout', '-b', branch], abortSignal);
     }
 
+    syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 
@@ -232,6 +235,7 @@ export class CloneManager {
 
     cloneAndIsolate(projectDir, clonePath, branch);
 
+    syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Temp clone created', { path: clonePath, branch });
 

@@ -47,6 +47,23 @@ import {
   applyDefaultMocks,
 } from './engine-test-helpers.js';
 
+function normalizeWorkflowConfigWithCommandGateOptIn(raw: unknown, workflowDir: string) {
+  return normalizeWorkflowConfig(
+    raw,
+    workflowDir,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    'runtime',
+    { customScripts: true },
+  );
+}
+
 describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   let tmpDir: string;
 
@@ -129,6 +146,68 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.has('reviewers')).toBe(true);
     expect(state.stepOutputs.get('arch-review')!.content).toBe('Arch content');
     expect(state.stepOutputs.get('security-review')!.content).toBe('Sec content');
+  });
+
+  it('should return the parallel parent step when a sub-step command quality gate fails', async () => {
+    const config = normalizeWorkflowConfigWithCommandGateOptIn({
+      name: 'parallel-command-gate',
+      max_steps: 5,
+      initial_step: 'reviewers',
+      steps: [
+        {
+          name: 'reviewers',
+          persona: '../personas/reviewers.md',
+          instruction: 'Run parallel reviews',
+          parallel: [
+            {
+              name: 'arch-review',
+              persona: '../personas/arch-review.md',
+              instruction: 'Review architecture',
+              quality_gates: [
+                {
+                  type: 'command',
+                  name: 'arch-command-gate',
+                  command: 'node -e "process.stdout.write(\'arch out\'); process.stderr.write(\'arch err\'); process.exit(1)"',
+                },
+              ],
+              rules: [{ condition: 'approved' }],
+            },
+            {
+              name: 'security-review',
+              persona: '../personas/security-review.md',
+              instruction: 'Review security',
+              rules: [{ condition: 'approved' }],
+            },
+          ],
+          rules: [
+            {
+              condition: 'all("approved")',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    }, tmpDir);
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'arch-review', content: 'approved' }),
+      makeResponse({ persona: 'security-review', content: 'approved' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const result = await engine.runSingleIteration();
+    const state = engine.getState();
+
+    expect(result.nextStep).toBe('reviewers');
+    expect(result.isComplete).toBe(false);
+    expect(state.currentStep).toBe('reviewers');
+    expect(state.stepOutputs.get('arch-review')?.content).toContain('Quality gate failed: arch-command-gate');
+    expect(result.response.content).toContain('Parallel sub-step quality gate failed: arch-review');
+    expect(result.response.content).toContain('Quality gate failed: arch-command-gate');
   });
 
   it.each([

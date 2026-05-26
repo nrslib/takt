@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
 import type { ProjectLocalConfig } from '../infra/config/types.js';
+import type { QualityGate } from '../core/models/workflow-types.js';
 import { MAX_ASSISTANT_INIT_FILES } from '../core/models/assistant-config.js';
 import {
   unexpectedInteractivePreviewConfigKey,
@@ -291,6 +292,71 @@ workflow_overrides:
       expect(reloaded.workflowOverrides?.qualityGates).toEqual(['Test 1', 'Test 2']);
     });
 
+    it('should preserve mixed string and command quality_gates in save/load cycle', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = `
+workflow_overrides:
+  steps:
+    implement:
+      quality_gates:
+        - "Review the implementation before finishing"
+        - type: command
+          name: quality-check
+          command: "./.takt/quality-gates/check.sh"
+          cwd: "."
+          timeout_ms: 300000
+`;
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([
+        'Review the implementation before finishing',
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+          cwd: '.',
+          timeoutMs: 300000,
+        },
+      ]);
+
+      saveProjectConfig(testDir, loaded);
+
+      const saved = readFileSync(configPath, 'utf-8');
+      expect(saved).toContain('timeout_ms: 300000');
+      expect(saved).not.toContain('timeoutMs');
+
+      const reloaded = loadProjectConfig(testDir);
+      expect(reloaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([
+        'Review the implementation before finishing',
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+          cwd: '.',
+          timeoutMs: 300000,
+        },
+      ]);
+    });
+
+    it('should reject command quality_gate without command', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        [
+          'workflow_overrides:',
+          '  steps:',
+          '    implement:',
+          '      quality_gates:',
+          '        - type: command',
+          '          name: missing-command',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/command/);
+    });
+
     it('should preserve personas quality_gates in save/load cycle', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = `
@@ -304,7 +370,7 @@ workflow_overrides:
 
       const loaded = loadProjectConfig(testDir);
       const loadedWorkflowOverrides = loaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(loadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual(['Project persona gate']);
 
@@ -312,7 +378,7 @@ workflow_overrides:
 
       const reloaded = loadProjectConfig(testDir);
       const reloadedWorkflowOverrides = reloaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(reloadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual(['Project persona gate']);
     });
@@ -329,7 +395,7 @@ workflow_overrides:
 
       const loaded = loadProjectConfig(testDir);
       const loadedWorkflowOverrides = loaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(loadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual([]);
 
@@ -337,7 +403,7 @@ workflow_overrides:
 
       const reloaded = loadProjectConfig(testDir);
       const reloadedWorkflowOverrides = reloaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(reloadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual([]);
     });
@@ -1169,6 +1235,17 @@ unexpected_overrides:
 
       const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
       expect(saved).toContain('workflow_runtime_prepare:');
+    });
+
+    it('should round-trip workflow_command_gates policy block', () => {
+      const config: ProjectLocalConfig = {
+        workflowCommandGates: { customScripts: true },
+      };
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir);
+
+      expect(reloaded.workflowCommandGates).toEqual({ customScripts: true });
     });
   });
 

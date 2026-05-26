@@ -93,6 +93,10 @@ export interface StepRunResult {
   instruction: string;
   providerInfo?: StepProviderInfo;
   consumedStepIterations?: readonly string[];
+  qualityGateFailure?: {
+    response: AgentResponse;
+    stepIteration: number;
+  };
 }
 
 export interface TeamLeaderPartRuntimeResolution {

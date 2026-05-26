@@ -1043,6 +1043,7 @@ describe('system workflow schema', () => {
       structured_output: {
         schema_ref: 'followup-task',
       },
+      quality_gates: ['Review before finishing'],
       rules: [
         {
           when: 'structured.plan_from_issue.action == "enqueue_new_task"',
@@ -1080,6 +1081,7 @@ describe('system workflow schema', () => {
       structured_output: {
         schema_ref: 'followup-task',
       },
+      quality_gates: ['System route must pass'],
       rules: [
         {
           when: 'true',
@@ -1105,6 +1107,10 @@ describe('system workflow schema', () => {
         expect.objectContaining({
           path: ['structured_output'],
           message: 'System step does not allow "structured_output"',
+        }),
+        expect.objectContaining({
+          path: ['quality_gates'],
+          message: 'System step does not allow "quality_gates"',
         }),
       ]),
     );

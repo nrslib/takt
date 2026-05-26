@@ -10,6 +10,7 @@ import type { FacetResolutionContext } from './resource-resolver.js';
 import { normalizeWorkflowConfig } from './workflowParser.js';
 import {
   resolveWorkflowArpeggioPolicy,
+  resolveWorkflowCommandGatesPolicy,
   resolveWorkflowMcpServersPolicy,
   resolveWorkflowRuntimePreparePolicy,
 } from './workflowNormalizationPolicies.js';
@@ -68,6 +69,7 @@ function loadWorkflowFromFileInternal(
     options?.callableArgs,
     options?.callableArgPolicy,
     loadMode,
+    resolveWorkflowCommandGatesPolicy(globalConfig.workflowCommandGates, projectConfig.workflowCommandGates),
   );
   attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(filePath, trustInfo));
   attachWorkflowSourcePath(config, filePath);

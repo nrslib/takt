@@ -22,6 +22,7 @@ import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
+import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 
 const log = createLogger('workflow-engine');
 
@@ -166,6 +167,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getInteractive: () => params.options.interactive === true,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
+    runQualityGates,
     ...phaseRelay,
   });
 
