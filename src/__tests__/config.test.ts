@@ -150,15 +150,16 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers');
     expect(reviewersStep).toBeDefined();
     expect(reviewersStep!.parallel).toBeDefined();
-    expect(reviewersStep!.parallel).toHaveLength(3);
+    expect(reviewersStep!.parallel).toHaveLength(4);
   });
 
-  it('should have arch-review and supervise as parallel sub-steps', () => {
+  it('should have arch-review, coding-review and supervise as parallel sub-steps', () => {
     const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
     const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
     const subStepNames = reviewersStep.parallel!.map((s) => s.name);
 
     expect(subStepNames).toContain('arch-review');
+    expect(subStepNames).toContain('coding-review');
     expect(subStepNames).toContain('supervise');
   });
 
@@ -204,6 +205,25 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     expect(supervise.rules).toHaveLength(2);
   });
 
+  it('should have coding-review sub-step with approved/needs_fix conditions', () => {
+    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+
+    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
+    expect(codingReview.rules).toBeDefined();
+    const conditions = codingReview.rules!.map((r) => r.condition);
+    expect(conditions).toContain('approved');
+    expect(conditions).toContain('needs_fix');
+  });
+
+  it('should run coding-review without previous response context', () => {
+    const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
+    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
+
+    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
+    expect(codingReview.passPreviousResponse).toBe(false);
+  });
+
   it('should have ai-antipattern-review-1st (in default-draft) transitioning to COMPLETE on approval', () => {
     const workflow = getBuiltinWorkflow('default-draft', process.cwd());
     const aiReviewStep = workflow!.steps.find((s) => s.name === 'ai-antipattern-review-1st')!;
@@ -245,6 +265,9 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.persona).toContain('architecture-reviewer');
 
+    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
+    expect(codingReview.persona).toContain('coding-reviewer');
+
     const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
     expect(supervise.persona).toContain('supervisor');
   });
@@ -255,6 +278,9 @@ describe('default-peer-review workflow parallel reviewers step', () => {
 
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.outputContracts).toBeDefined();
+
+    const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
+    expect(codingReview.outputContracts).toBeDefined();
 
     const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
     expect(supervise.outputContracts).toBeDefined();
