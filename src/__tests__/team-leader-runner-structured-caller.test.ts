@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
-import type { WorkflowStep, WorkflowState } from '../core/models/types.js';
+import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 
 function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions['phase1ProcessSafetyByStep'] {
   return {
@@ -1004,6 +1005,583 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       await runner.runTeamLeaderStep(buildStep(), buildState(), 'implement feature', 5, vi.fn());
 
       expect(onPhaseStart).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('timeout feedback failure fallback', () => {
+    function buildStep(maxParts: number): WorkflowStep {
+      return {
+        name: 'implement',
+        persona: 'coder',
+        personaDisplayName: 'coder',
+        instruction: 'Task: {task}',
+        passPreviousResponse: true,
+        teamLeader: {
+          persona: 'team-leader',
+          maxParts,
+          refillThreshold: 0,
+          timeoutMs: 1000,
+          partPersona: 'coder',
+        },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      };
+    }
+
+    function buildState(): WorkflowState {
+      return {
+        workflowName: 'workflow',
+        currentStep: 'implement',
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        lastOutput: undefined,
+        previousResponseSourcePath: undefined,
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        status: 'running',
+      };
+    }
+
+    function buildRunner(structuredCaller: {
+      decomposeTask: ReturnType<typeof vi.fn>;
+      requestMoreParts: ReturnType<typeof vi.fn>;
+    }): TeamLeaderRunner {
+      return new TeamLeaderRunner({
+        optionsBuilder: {
+          buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project', language: 'en' }),
+          buildBaseOptions: vi.fn().mockReturnValue({}),
+          buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
+        },
+        stepExecutor: {
+          buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+          applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+          persistPreviousResponseSnapshot: vi.fn(),
+          emitStepReports: vi.fn(),
+        },
+        engineOptions: {
+          projectCwd: '/tmp/project',
+          language: 'en',
+          structuredCaller,
+        },
+        getCwd: () => '/tmp/project',
+        getInteractive: () => false,
+      } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+        engineOptions: { projectCwd: string; language: 'en'; structuredCaller: typeof structuredCaller };
+      });
+    }
+
+    function createDeferredResponse(): {
+      promise: Promise<AgentResponse>;
+      resolve: (response: AgentResponse) => void;
+    } {
+      let resolve!: (response: AgentResponse) => void;
+      const promise = new Promise<AgentResponse>((resolvePromise) => {
+        resolve = resolvePromise;
+      });
+      return { promise, resolve };
+    }
+
+    it('Given part_timeout and feedback failure, When running team leader step, Then a continuation part completes the step', async () => {
+      mockExecuteAgent
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'done',
+          content: 'Continuation completed',
+          timestamp: new Date('2026-04-01T00:01:00.000Z'),
+        });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(1),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('done');
+      expect(result.response.content).toContain('## part-1: Implementation');
+      expect(result.response.content).toContain('[ERROR] part timeout: Part timeout after 1000ms');
+      expect(result.response.content).toContain('timeout-continuation');
+      expect(result.response.content).toContain('Continuation completed');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[1] ?? [];
+      expect(continuationInstruction).toContain('Preserve existing changes');
+      expect(continuationInstruction).toContain('Inspect the timed-out part result');
+      expect(continuationInstruction).toContain('part-1');
+    });
+
+    it('Given a timeout continuation also times out, When feedback fails again, Then no second-level continuation is created', async () => {
+      mockExecuteAgent
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:01:00.000Z'),
+        });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(1),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('error');
+      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).toContain('timeout-continuation: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).not.toContain('timeout-continuation-2');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[1] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1');
+    });
+
+    it('Given two parallel parts time out after the first fallback, When feedback fails, Then each timed-out part gets a continuation', async () => {
+      mockExecuteAgent
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:00:30.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'done',
+          content: 'Continuation 1 completed',
+          timestamp: new Date('2026-04-01T00:01:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'done',
+          content: 'Continuation 2 completed',
+          timestamp: new Date('2026-04-01T00:01:30.000Z'),
+        });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [
+            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
+            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
+          ];
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(2),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('done');
+      expect(result.response.content).toContain('## timeout-continuation: Timeout continuation');
+      expect(result.response.content).toContain('## timeout-continuation-2: Timeout continuation');
+      expect(result.response.content).toContain('Continuation 1 completed');
+      expect(result.response.content).toContain('Continuation 2 completed');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+      const [, firstContinuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
+      expect(firstContinuationInstruction).toContain('Timed-out part: part-1');
+      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+    });
+
+    it('Given two timeout continuations and one continuation times out, When feedback fails, Then the step returns error', async () => {
+      mockExecuteAgent
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:00:30.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'done',
+          content: 'Continuation 1 completed',
+          timestamp: new Date('2026-04-01T00:01:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:01:30.000Z'),
+        });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [
+            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
+            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
+          ];
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(2),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('error');
+      expect(result.response.error).toContain('Team leader timeout continuation failed');
+      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).toContain('part-2: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).toContain('timeout-continuation-2: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).not.toContain('timeout-continuation-3');
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+      const [, firstContinuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
+      expect(firstContinuationInstruction).toContain('Timed-out part: part-1');
+      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+    });
+
+    it('Given a timeout continuation returns provider_error with a successful part, When feedback fails, Then the step returns error', async () => {
+      mockExecuteAgent
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Part timeout after 1000ms',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'done',
+          content: 'Independent part completed',
+          timestamp: new Date('2026-04-01T00:00:30.000Z'),
+        })
+        .mockResolvedValueOnce({
+          persona: 'coder',
+          status: 'error',
+          content: '',
+          error: 'Upstream model returned 500',
+          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+          timestamp: new Date('2026-04-01T00:01:00.000Z'),
+        });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [
+            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
+            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
+          ];
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(2),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response.status).toBe('error');
+      expect(result.response.error).toContain('Team leader timeout continuation failed');
+      expect(result.response.error).toContain('part-1: part timeout: Part timeout after 1000ms');
+      expect(result.response.error).toContain('timeout-continuation: provider error: Upstream model returned 500');
+      expect(result.response.error).not.toContain('timeout-continuation-2');
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      const [, continuationInstruction] = mockExecuteAgent.mock.calls[2] ?? [];
+      expect(continuationInstruction).toContain('Timed-out part: part-1');
+    });
+
+    it('Given a timeout continuation finishes before another running part times out, When feedback fails, Then planning waits for the later timeout', async () => {
+      const part1Timeout = createDeferredResponse();
+      const part2Timeout = createDeferredResponse();
+      const continuation1 = createDeferredResponse();
+      const continuation2 = createDeferredResponse();
+      mockExecuteAgent.mockImplementation((_persona, executedInstruction: string) => {
+        if (executedInstruction.includes('Implement first area')) return part1Timeout.promise;
+        if (executedInstruction.includes('Implement second area')) return part2Timeout.promise;
+        if (executedInstruction.includes('Timed-out part: part-1')) return continuation1.promise;
+        if (executedInstruction.includes('Timed-out part: part-2')) return continuation2.promise;
+        throw new Error(`Unexpected instruction: ${executedInstruction}`);
+      });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [
+            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
+            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
+          ];
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const runnerPromise = buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(2),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      });
+      part1Timeout.resolve({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 1000ms',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      });
+      continuation1.resolve({
+        persona: 'coder',
+        status: 'done',
+        content: 'Continuation 1 completed before part 2 timed out',
+        timestamp: new Date('2026-04-01T00:01:00.000Z'),
+      });
+
+      await vi.waitFor(() => {
+        expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      });
+      part2Timeout.resolve({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 1000ms',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+        timestamp: new Date('2026-04-01T00:02:00.000Z'),
+      });
+
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+      });
+      continuation2.resolve({
+        persona: 'coder',
+        status: 'done',
+        content: 'Continuation 2 completed',
+        timestamp: new Date('2026-04-01T00:03:00.000Z'),
+      });
+
+      const result = await runnerPromise;
+
+      expect(result.response.status).toBe('done');
+      expect(result.response.content).toContain('Continuation 1 completed before part 2 timed out');
+      expect(result.response.content).toContain('Continuation 2 completed');
+      expect(result.response.content).toContain('## timeout-continuation-2: Timeout continuation');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
+      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
+      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+    });
+
+    it('Given structured feedback returns done while another part is still running, When that part later times out, Then continuation planning stays open', async () => {
+      const part1Timeout = createDeferredResponse();
+      const part2Timeout = createDeferredResponse();
+      const continuation1 = createDeferredResponse();
+      const continuation2 = createDeferredResponse();
+      mockExecuteAgent.mockImplementation((_persona, executedInstruction: string) => {
+        if (executedInstruction.includes('Implement first area')) return part1Timeout.promise;
+        if (executedInstruction.includes('Implement second area')) return part2Timeout.promise;
+        if (executedInstruction.includes('Timed-out part: part-1')) return continuation1.promise;
+        if (executedInstruction.includes('Timed-out part: part-2')) return continuation2.promise;
+        throw new Error(`Unexpected instruction: ${executedInstruction}`);
+      });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [
+            { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
+            { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
+          ];
+        }),
+        requestMoreParts: vi.fn()
+          .mockRejectedValueOnce(new Error('feedback failed'))
+          .mockResolvedValueOnce({ done: true, reasoning: 'leader says complete', parts: [] })
+          .mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const runnerPromise = buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(2),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+      });
+      part1Timeout.resolve({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 1000ms',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(3);
+      });
+      continuation1.resolve({
+        persona: 'coder',
+        status: 'done',
+        content: 'Continuation 1 completed before part 2 timed out',
+        timestamp: new Date('2026-04-01T00:01:00.000Z'),
+      });
+
+      await vi.waitFor(() => {
+        expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(2);
+      });
+      part2Timeout.resolve({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Part timeout after 1000ms',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PART_TIMEOUT,
+        timestamp: new Date('2026-04-01T00:02:00.000Z'),
+      });
+
+      await vi.waitFor(() => {
+        expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+      });
+      continuation2.resolve({
+        persona: 'coder',
+        status: 'done',
+        content: 'Continuation 2 completed after structured done',
+        timestamp: new Date('2026-04-01T00:03:00.000Z'),
+      });
+
+      const result = await runnerPromise;
+
+      expect(result.response.status).toBe('done');
+      expect(result.response.content).toContain('Continuation 1 completed before part 2 timed out');
+      expect(result.response.content).toContain('Continuation 2 completed after structured done');
+      expect(structuredCaller.requestMoreParts).toHaveBeenCalledTimes(4);
+      const [, secondContinuationInstruction] = mockExecuteAgent.mock.calls[3] ?? [];
+      expect(secondContinuationInstruction).toContain('Timed-out part: part-2');
+    });
+
+    it('Given provider_error and feedback failure, When running team leader step, Then no timeout continuation is created', async () => {
+      mockExecuteAgent.mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        error: 'Upstream model returned 500',
+        failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+        timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      });
+      const structuredCaller = {
+        decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+          options.onPromptResolved?.({
+            systemPrompt: 'team-leader-system',
+            userInstruction: 'leader instruction',
+          });
+          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+        }),
+        requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
+      };
+
+      const result = await buildRunner(structuredCaller).runTeamLeaderStep(
+        buildStep(1),
+        buildState(),
+        'implement feature',
+        5,
+        vi.fn(),
+      );
+
+      expect(result.response).toMatchObject({
+        status: 'error',
+        error: 'All team leader parts failed: part-1: provider error: Upstream model returned 500',
+      });
+      expect(result.response.content).not.toContain('timeout-continuation');
+      expect(mockExecuteAgent).toHaveBeenCalledTimes(1);
     });
   });
 });

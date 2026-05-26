@@ -77,6 +77,18 @@ describe('parseParts', () => {
     expect(() => parseParts(content, 3)).toThrow('Duplicate part id: dup');
   });
 
+  it('timeout continuation 用の予約済み part id はエラー', () => {
+    const content = [
+      '```json',
+      '[{"id":"timeout-continuation-2","title":"A","instruction":"Do A"}]',
+      '```',
+    ].join('\n');
+
+    expect(() => parseParts(content, 3)).toThrow(
+      'Part[0] "id" uses reserved timeout continuation prefix: timeout-continuation-2',
+    );
+  });
+
   it('part に timeout_ms が含まれる場合はエラー', () => {
     const content = '```json\n[{"id":"a","title":"A","instruction":"Do A","timeout_ms":1200}]\n```';
 

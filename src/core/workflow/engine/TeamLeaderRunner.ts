@@ -13,6 +13,11 @@ import { runTeamLeaderExecution } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
 import { resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
+import {
+  collectUncoveredPartTimeoutIds,
+  createTimeoutContinuationFeedback,
+  hasFailedTimeoutContinuationResult,
+} from './team-leader-timeout-fallback.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
@@ -144,6 +149,7 @@ export class TeamLeaderRunner {
         maxSteps,
       ))
       : undefined;
+    const coveredTimedOutPartIds = new Set<string>();
 
     const { plannedParts, partResults } = await runTeamLeaderExecution({
       initialParts: parts,
@@ -187,33 +193,63 @@ export class TeamLeaderRunner {
           detail: getErrorMessage(error),
         });
       },
-      requestMoreParts: async ({ partResults: currentResults, scheduledIds, remainingPartBudget }) => {
+      requestMoreParts: async ({
+        partResults: currentResults,
+        scheduledIds,
+        remainingPartBudget,
+        unfinishedScheduledPartCount,
+      }) => {
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
-        return structuredCaller.requestMoreParts(
-          instruction,
-          currentResults.map((result) => ({
-            id: result.part.id,
-            title: result.part.title,
-            status: result.response.status,
-            content: result.response.status === 'error'
-              ? `[ERROR] ${resolvePartErrorDetail(result)}`
-              : result.response.content,
-          })),
-          scheduledIds,
-          remainingPartBudget,
-          {
-            cwd: this.deps.getCwd(),
-            persona: leaderStep.persona,
-            personaPath: leaderStep.personaPath,
+        try {
+          return await structuredCaller.requestMoreParts(
+            instruction,
+            currentResults.map((result) => ({
+              id: result.part.id,
+              title: result.part.title,
+              status: result.response.status,
+              content: result.response.status === 'error'
+                ? `[ERROR] ${resolvePartErrorDetail(result)}`
+                : result.response.content,
+            })),
+            scheduledIds,
+            remainingPartBudget,
+            {
+              cwd: this.deps.getCwd(),
+              persona: leaderStep.persona,
+              personaPath: leaderStep.personaPath,
+              language: this.deps.engineOptions.language,
+              model: leaderModel,
+              provider: leaderProvider,
+              resolvedModel: leaderModel,
+              resolvedProvider: leaderProvider,
+              workflowMeta: leaderWorkflowMeta,
+              onStream: this.deps.engineOptions.onStream,
+            },
+          );
+        } catch (error) {
+          const timeoutFallback = createTimeoutContinuationFeedback({
+            partResults: currentResults,
+            scheduledIds,
+            remainingPartBudget,
+            coveredTimedOutPartIds,
+            unfinishedScheduledPartCount,
             language: this.deps.engineOptions.language,
-            model: leaderModel,
-            provider: leaderProvider,
-            resolvedModel: leaderModel,
-            resolvedProvider: leaderProvider,
-            workflowMeta: leaderWorkflowMeta,
-            onStream: this.deps.engineOptions.onStream,
-          },
-        );
+          });
+          if (timeoutFallback) {
+            if (timeoutFallback.parts.length > 0) {
+              for (const partId of collectUncoveredPartTimeoutIds(currentResults, coveredTimedOutPartIds)) {
+                coveredTimedOutPartIds.add(partId);
+              }
+            }
+            log.info('Team leader feedback failed; using timeout continuation fallback', {
+              step: step.name,
+              detail: getErrorMessage(error),
+              parts: summarizeParts(timeoutFallback.parts),
+            });
+            return timeoutFallback;
+          }
+          throw error;
+        }
       },
       runPart: async (part, partIndex) => this.runSinglePart(
         step,
@@ -244,9 +280,13 @@ export class TeamLeaderRunner {
     }
 
     const allFailed = partResults.every((result) => result.response.status === 'error');
-    if (allFailed) {
-      const errors = partResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
-      const errorMessage = `All team leader parts failed: ${errors}`;
+    const timeoutContinuationFailed = hasFailedTimeoutContinuationResult(partResults);
+    if (allFailed || timeoutContinuationFailed) {
+      const failedResults = partResults.filter((result) => result.response.status === 'error');
+      const errors = failedResults.map((result) => `${result.part.id}: ${resolvePartErrorDetail(result)}`).join('; ');
+      const errorMessage = allFailed
+        ? `All team leader parts failed: ${errors}`
+        : `Team leader timeout continuation failed: ${errors}`;
       const errorResponse: AgentResponse = {
         persona: step.name,
         status: 'error',
