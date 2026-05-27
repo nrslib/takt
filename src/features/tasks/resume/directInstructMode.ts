@@ -61,7 +61,7 @@ function createDirectSelectAction(
     blankLine();
     info(ui.proposed);
     info(task);
-    return selectOption('Action:', [
+    return selectOption(ui.actionPrompt, [
       { label: ui.actions.execute, value: 'execute' },
       { label: ui.actions.continue, value: 'continue' },
     ]);

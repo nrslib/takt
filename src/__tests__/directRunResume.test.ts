@@ -139,8 +139,8 @@ describe('resumeDirectRun', () => {
 
     await resumeDirectRun('/project');
 
-    expect(mockInfo).toHaveBeenCalledWith('No resumable direct run found.');
-    expect(mockInfo).toHaveBeenCalledWith('Use `takt list` for queued tasks.');
+    expect(mockInfo).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith('No resumable direct run found. Use `takt list` for queued tasks.');
     expect(mockSelectOption).not.toHaveBeenCalled();
   });
 

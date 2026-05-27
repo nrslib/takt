@@ -140,6 +140,10 @@ function createTempProject(): string {
   return projectDir;
 }
 
+function hasTasksYamlWrite(): boolean {
+  return mockWriteFileAtomic.mock.calls.some((call) => String(call[0]).endsWith('/.takt/tasks.yaml'));
+}
+
 describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -212,6 +216,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     });
 
     expect(existsSync(join(projectDir, '.takt', 'tasks.yaml'))).toBe(false);
+    expect(hasTasksYamlWrite()).toBe(false);
   });
 
   it('Given tasks.yaml already exists, When direct resume bootstrap runs, Then tasks.yaml remains unchanged', async () => {
@@ -233,5 +238,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     });
 
     expect(readFileSync(tasksPath, 'utf-8')).toBe(initialTasks);
+    expect(hasTasksYamlWrite()).toBe(false);
   });
 });

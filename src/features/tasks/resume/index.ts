@@ -301,8 +301,7 @@ export async function resumeDirectRun(
 ): Promise<boolean> {
   const run = findLatestResumableDirectRun(projectDir);
   if (!run) {
-    info('No resumable direct run found.');
-    info('Use `takt list` for queued tasks.');
+    info('No resumable direct run found. Use `takt list` for queued tasks.');
     return false;
   }
 
