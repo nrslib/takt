@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
-import { runTakt } from '../helpers/takt-runner';
+import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -210,10 +210,13 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       timeout: 240_000,
     });
 
-    expect(runResult.exitCode).toBe(0);
+    expect(runResult.exitCode, formatTaktRunResult(runResult)).toBe(0);
 
     const taskMeta = readTaskMeta(testRepo.path, taskName);
-    expect(taskMeta.status).toBe('completed');
+    expect(
+      taskMeta.status,
+      `taskMeta:\n${JSON.stringify(taskMeta, null, 2)}\n\n${formatTaktRunResult(runResult)}`,
+    ).toBe('completed');
     expect(taskMeta.branch).toMatch(/^takt\//);
     expect(taskMeta.worktree_path).toBeTruthy();
 
@@ -235,7 +238,7 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       timeout: 240_000,
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
 
     const stagedFiles = execFileSync('git', ['diff', '--cached', '--name-only'], {
       cwd: testRepo.path,
@@ -266,10 +269,13 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       timeout: 240_000,
     });
 
-    expect(runResult.exitCode).toBe(0);
+    expect(runResult.exitCode, formatTaktRunResult(runResult)).toBe(0);
 
     const taskMeta = readTaskMeta(testRepo.path, taskName);
-    expect(taskMeta.status).toBe('completed');
+    expect(
+      taskMeta.status,
+      `taskMeta:\n${JSON.stringify(taskMeta, null, 2)}\n\n${formatTaktRunResult(runResult)}`,
+    ).toBe('completed');
     expect(taskMeta.branch).toMatch(/^takt\//);
     expect(taskMeta.worktree_path).toBeTruthy();
 
@@ -284,7 +290,7 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       timeout: 240_000,
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
 
     const syncedFile = execFileSync('git', ['show', `${taskMeta.branch!}:ROOT_SYNC.txt`], {
       cwd: testRepo.path,

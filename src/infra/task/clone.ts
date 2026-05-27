@@ -78,7 +78,26 @@ export class CloneManager {
         : path.resolve(projectDir, options.worktree);
     }
 
-    return path.join(CloneManager.resolveCloneBaseDir(projectDir), dirName);
+    return CloneManager.resolveAvailableClonePath(
+      CloneManager.resolveCloneBaseDir(projectDir),
+      dirName,
+    );
+  }
+
+  private static resolveAvailableClonePath(baseDir: string, dirName: string): string {
+    const firstCandidate = path.join(baseDir, dirName);
+    if (!fs.existsSync(firstCandidate)) {
+      return firstCandidate;
+    }
+
+    for (let suffix = 2; suffix <= 100; suffix += 1) {
+      const candidate = path.join(baseDir, `${dirName}-${suffix}`);
+      if (!fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    throw new Error(`Unable to allocate clone path in ${baseDir} for ${dirName}`);
   }
 
   private static resolveBranchName(options: WorktreeOptions): string {
@@ -204,7 +223,10 @@ export class CloneManager {
     CloneManager.resolveBaseBranch(projectDir);
 
     const timestamp = CloneManager.generateTimestamp();
-    const clonePath = path.join(CloneManager.resolveCloneBaseDir(projectDir), `tmp-${timestamp}`);
+    const clonePath = CloneManager.resolveAvailableClonePath(
+      CloneManager.resolveCloneBaseDir(projectDir),
+      `tmp-${timestamp}`,
+    );
 
     log.info('Creating temp clone for branch', { path: clonePath, branch });
 

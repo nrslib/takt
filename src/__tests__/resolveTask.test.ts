@@ -8,6 +8,7 @@ import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { unexpectedWorkflowKey } from '../../test/helpers/unknown-contract-test-keys.js';
+import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
 let originalTaktConfigDir: string | undefined;
@@ -22,6 +23,7 @@ import { resolveTaskExecution, resolveTaskIssue } from '../features/tasks/execut
 const tempRoots = new Set<string>();
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of tempRoots) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -506,7 +508,7 @@ describe('resolveTaskExecution', () => {
     });
 
     const result = await resolveTaskExecutionStrict(task, root);
-    const expectedReportOrderPath = path.join(root, '.takt', 'runs', 'issue-task-123', 'context', 'task', 'order.md');
+    const expectedReportOrderPath = path.join(root, '.takt', 'runs', result.reportDirName, 'context', 'task', 'order.md');
 
     expect(result).toMatchObject({
       execCwd: root,
@@ -516,12 +518,45 @@ describe('resolveTaskExecution', () => {
       draftPr: false,
       orderContent: '# task instruction',
       shouldPublishBranchToOrigin: true,
-      reportDirName: 'issue-task-123',
       issueNumber: 12345,
-      taskPrompt: expect.stringContaining('Primary spec: `.takt/runs/issue-task-123/context/task/order.md`'),
+      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
     });
+    expect(result.reportDirName).not.toBe('issue-task-123');
     expect(fs.existsSync(expectedReportOrderPath)).toBe(true);
     expect(fs.readFileSync(expectedReportOrderPath, 'utf-8')).toBe('# task instruction');
+  });
+
+  it('should create separate run contexts when executing the same task_dir repeatedly', async () => {
+    const root = createTempProjectDir();
+    const taskDir = '.takt/tasks/reused-task-123';
+    const sourceTaskDir = path.join(root, taskDir);
+    fs.mkdirSync(sourceTaskDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), '# reused task instruction');
+
+    const task = createTask({
+      taskDir,
+      content: 'Run reused task',
+      data: {
+        task: 'Run reused task',
+        workflow: 'default',
+      },
+    });
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0.1)
+      .mockReturnValueOnce(0.2);
+
+    const first = await resolveTaskExecutionStrict(task, root);
+    const second = await resolveTaskExecutionStrict(task, root);
+
+    expect(first.reportDirName).not.toBe('reused-task-123');
+    expect(second.reportDirName).not.toBe('reused-task-123');
+    expect(second.reportDirName).not.toBe(first.reportDirName);
+    expect(fs.readFileSync(path.join(root, '.takt', 'runs', first.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
+      '# reused task instruction',
+    );
+    expect(fs.readFileSync(path.join(root, '.takt', 'runs', second.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
+      '# reused task instruction',
+    );
   });
 
   it('should stage order.md into the worktree run context and return order content', async () => {
@@ -557,7 +592,7 @@ describe('resolveTaskExecution', () => {
     });
 
     const result = await resolveTaskExecutionStrict(task, root);
-    const stagedOrderPath = path.join(worktreePath, '.takt', 'runs', 'worktree-task-123', 'context', 'task', 'order.md');
+    const stagedOrderPath = path.join(worktreePath, '.takt', 'runs', result.reportDirName, 'context', 'task', 'order.md');
 
     expect(result).toMatchObject({
       execCwd: worktreePath,
@@ -566,13 +601,63 @@ describe('resolveTaskExecution', () => {
       autoPr: true,
       draftPr: false,
       shouldPublishBranchToOrigin: true,
-      reportDirName: 'worktree-task-123',
       branch: 'feature/worktree-task-123',
       worktreePath,
       orderContent,
-      taskPrompt: expect.stringContaining('Primary spec: `.takt/runs/worktree-task-123/context/task/order.md`'),
+      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
     });
+    expect(result.reportDirName).not.toBe('worktree-task-123');
     expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(orderContent);
+
+    mockCreateSharedClone.mockRestore();
+    mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should sequence worktree reportDirName against existing run directories in execCwd', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const root = createTempProjectDir();
+    const worktreePath = createTempProjectDir();
+    const taskDir = '.takt/tasks/worktree-collision-task';
+    const sourceTaskDir = path.join(root, taskDir);
+    const orderContent = '# worktree collision instruction';
+    const taskContent = 'Run worktree task';
+    fs.mkdirSync(sourceTaskDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), orderContent);
+
+    const existingReportDirName = generateExecutionReportDir(worktreePath, taskContent);
+    fs.mkdirSync(path.join(worktreePath, '.takt', 'runs', existingReportDirName), { recursive: true });
+
+    const task = createTask({
+      slug: 'worktree-collision-task',
+      content: taskContent,
+      taskDir,
+      data: ({
+        task: taskContent,
+        workflow: 'default',
+        worktree: true,
+        branch: 'feature/worktree-collision-task',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: undefined,
+      status: 'pending',
+    });
+
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'main',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: worktreePath,
+      branch: 'feature/worktree-collision-task',
+    });
+
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.reportDirName).toBe(`${existingReportDirName}-2`);
+    expect(fs.existsSync(path.join(worktreePath, '.takt', 'runs', existingReportDirName, 'context', 'task', 'order.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(worktreePath, '.takt', 'runs', result.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
+      orderContent,
+    );
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -596,12 +681,10 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const stagedOrderPath = path.join(root, '.takt', 'runs', 'symlink-task-123', 'context', 'task', 'order.md');
-
     await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(
       `Task spec file must be a regular file: ${path.join(sourceTaskDir, 'order.md')}`,
     );
-    expect(fs.existsSync(stagedOrderPath)).toBe(false);
+    expect(fs.existsSync(path.join(root, '.takt', 'runs', 'symlink-task-123'))).toBe(false);
   });
 
   it('should not read run context order content when task_dir is absent', async () => {

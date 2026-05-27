@@ -6,10 +6,13 @@ Analyze the implementation task and, if decomposition is appropriate, split into
 
 1. Assess whether decomposition is appropriate
    - Identify files to change and check inter-file dependencies
-   - If cross-cutting concerns exist (shared types, IDs, events), implement in a single part
+   - First look for parallelizable responsibility boundaries
+   - If cross-cutting concerns exist (shared types, IDs, events), consider staged work: foundation part -> consuming parts -> verification part
    - If few files are involved, or the task is a rename/refactoring, implement in a single part
+   - When parts.length === 1, first consider whether verification separation or staged work is possible
+   - Avoid oversized single parts such as "implementation and verification"
 
-2. If decomposing: prioritize splitting along frontend and backend boundaries
+2. If decomposing: prioritize splitting along frontend and backend boundaries, or group files by layer/module when that split does not fit
    - **If design references exist and backend changes are not explicitly required, do not decompose.** Visual structure, copy, spacing, and styling are tightly coupled, and splitting them increases design drift risk
    - **If design references exist, keep all UI components of the same screen in the same part.** Do not split headers, filters, cards, banners, and modals of one screen across different parts
    - Splitting between frontend (UI, components, styles) and backend (API, logic, data layer) is the most natural decomposition axis
@@ -19,6 +22,7 @@ Analyze the implementation task and, if decomposition is appropriate, split into
    - If there are type or interface dependencies, keep both sides in the same group
    - Never assign the same file to multiple parts
    - Keep test files and implementation files in the same part
+   - Separate implementation parts from verification parts
 
 3. Assign file ownership exclusively to each part
    - Each part's instruction must clearly state:
@@ -32,6 +36,7 @@ Analyze the implementation task and, if decomposition is appropriate, split into
    - If tests are already written, instruct parts to implement so existing tests pass
    - Refer to Quality Gates and plan any required verification as a dedicated single verification part
    - Do not make parallel implementation parts run duplicate full-build or full-test checks
+   - Do not duplicate npm test / npm run test:e2e:mock in each implementation part
 
 **Constraints:**
 - If tests or build verification are needed, run them as a dedicated single verification part after dependent implementation parts are complete

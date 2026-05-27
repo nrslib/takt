@@ -38,6 +38,7 @@ import {
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { prependInitialPromptContext } from './promptSections.js';
+import { buildInteractiveResultWithAttachments, createSessionImageAttachmentStore } from './imageAttachments.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
@@ -131,6 +132,7 @@ export async function runConversationLoop(
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
+  const attachmentStore = createSessionImageAttachmentStore();
 
   info(strategy.introMessage);
   if (sessionId) {
@@ -162,7 +164,7 @@ export async function runConversationLoop(
       return null;
     }
     log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
-    return { action: selectedAction, task };
+    return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
   }
 
   const commandAvailability: CommandAvailability = {
@@ -171,12 +173,12 @@ export async function runConversationLoop(
   };
 
   while (true) {
-    const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability);
+    const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability, attachmentStore);
 
     if (input === null) {
       blankLine();
       info(ui.cancelled);
-      return { action: 'cancel', task: '' };
+      return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
     }
 
     const trimmed = input.trim();
@@ -208,7 +210,7 @@ export async function runConversationLoop(
           error(result.content);
           blankLine();
           history.pop();
-          return { action: 'cancel', task: '' };
+          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
         }
         history.push({ role: 'assistant', content: result.content });
         blankLine();
@@ -225,7 +227,7 @@ export async function runConversationLoop(
           info(ui.acceptNoAssistant);
           continue;
         }
-        return { action: 'execute', task: assistantMessage.content };
+        return buildInteractiveResultWithAttachments({ action: 'execute', task: assistantMessage.content }, attachmentStore);
       }
 
       case SlashCommand.Play: {
@@ -234,7 +236,7 @@ export async function runConversationLoop(
           continue;
         }
         log.info('Play command', createPlayCommandLogMeta(match.text));
-        return { action: 'execute', task: match.text };
+        return buildInteractiveResultWithAttachments({ action: 'execute', task: match.text }, attachmentStore);
       }
 
       case SlashCommand.Retry: {
@@ -292,7 +294,7 @@ export async function runConversationLoop(
         if (!summaryResult.success) {
           error(summaryResult.content);
           blankLine();
-          return { action: 'cancel', task: '' };
+          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
         }
         const task = summaryResult.content.trim();
         const selectedAction = await handleSummaryAction(task);
@@ -309,12 +311,12 @@ export async function runConversationLoop(
           continue;
         }
         log.info('Replay command');
-        return { action: 'execute', task: strategy.previousOrderContent };
+        return buildInteractiveResultWithAttachments({ action: 'execute', task: strategy.previousOrderContent }, attachmentStore);
       }
 
       case SlashCommand.Cancel: {
         info(ui.cancelled);
-        return { action: 'cancel', task: '' };
+        return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
       }
 
       case SlashCommand.Resume: {

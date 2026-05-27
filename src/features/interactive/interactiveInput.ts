@@ -3,6 +3,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
 import { filterSlashCommands, type CommandAvailability } from './slashCommandRegistry.js';
 import type { CompletionCandidate, CompletionContext, CompletionProvider } from './completionMenu.js';
+import { createImagePasteHandler, type ImageAttachmentStore } from './imageAttachments.js';
 
 /**
  * Build localized slash-command completion candidates for the current input.
@@ -70,7 +71,11 @@ export const readInteractiveInput = (
   prompt: string,
   lang: Language,
   availability?: CommandAvailability,
+  imageAttachmentStore?: ImageAttachmentStore,
 ): Promise<string | null> =>
   readMultilineInput(prompt, {
     completionProvider: createSlashCommandCompletionProvider(lang, availability),
+    ...(imageAttachmentStore ? {
+      onImagePaste: createImagePasteHandler(imageAttachmentStore),
+    } : {}),
   });

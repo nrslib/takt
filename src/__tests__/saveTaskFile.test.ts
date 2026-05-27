@@ -4,6 +4,10 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
+const { mockCreateIssue } = vi.hoisted(() => ({
+  mockCreateIssue: vi.fn(),
+}));
+
 vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   summarizeTaskName: vi.fn().mockImplementation((content: string) => {
@@ -43,9 +47,15 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
   branchExists: vi.fn().mockReturnValue(true),
 }));
 
+vi.mock('../infra/git/index.js', () => ({
+  getGitProvider: () => ({
+    createIssue: (...args: unknown[]) => mockCreateIssue(...args),
+  }),
+}));
+
 import { success, info } from '../shared/ui/index.js';
 import { confirm, promptInput } from '../shared/prompt/index.js';
-import { saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
+import { createIssueAndSaveTask, saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
 import { getCurrentBranch, branchExists } from '../infra/task/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 
@@ -69,6 +79,24 @@ function expectNoTaskArtifacts(testDir: string): void {
   expect(fs.existsSync(path.join(testDir, '.takt', 'tasks'))).toBe(false);
 }
 
+interface TestTaskAttachment {
+  placeholder: string;
+  tempPath: string;
+  fileName: string;
+}
+
+function createTempAttachment(root: string, fileName: string, content: string): TestTaskAttachment {
+  const sourceDir = path.join(root, 'tmp-attachments');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  const tempPath = path.join(sourceDir, fileName);
+  fs.writeFileSync(tempPath, content, 'utf-8');
+  return {
+    placeholder: '[Image #1]',
+    tempPath,
+    fileName,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
@@ -76,6 +104,7 @@ beforeEach(() => {
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-save-'));
   mockGetCurrentBranch.mockReturnValue('main');
   mockBranchExists.mockReturnValue(true);
+  mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
 });
 
 afterEach(() => {
@@ -234,6 +263,69 @@ describe('saveTaskFile', () => {
     expect(fs.readFileSync(path.join(testDir, String(tasks[0]?.task_dir), 'order.md'), 'utf-8')).toContain('Same title');
     expect(fs.readFileSync(path.join(testDir, String(tasks[1]?.task_dir), 'order.md'), 'utf-8')).toContain('Same title');
   });
+
+  it('should promote image attachments and append relative paths to order.md', async () => {
+    const attachment = createTempAttachment(testDir, 'image-1.png', 'png-data');
+
+    await saveTaskFile(testDir, 'Use [Image #1] as the visual reference.', {
+      attachments: [attachment],
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
+
+    expect(orderContent).toContain('Use [Image #1] as the visual reference.');
+    expect(orderContent).toContain('## 添付画像');
+    expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
+    expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+  });
+
+  it('should not create task artifacts when attachment promotion fails', async () => {
+    const attachment: TestTaskAttachment = {
+      placeholder: '[Image #1]',
+      tempPath: path.join(testDir, 'missing-image-1.png'),
+      fileName: 'image-1.png',
+    };
+
+    await expect(saveTaskFile(testDir, 'Use [Image #1].', {
+      attachments: [attachment],
+    })).rejects.toThrow();
+
+    expectNoTaskArtifacts(testDir);
+  });
+
+  it('should reject symlink attachment tempPath and clean up task artifacts', async () => {
+    const sourcePath = path.join(testDir, 'source-image.png');
+    const symlinkPath = path.join(testDir, 'linked-image.png');
+    fs.writeFileSync(sourcePath, 'png-data', 'utf-8');
+    fs.symlinkSync(sourcePath, symlinkPath);
+
+    await expect(saveTaskFile(testDir, 'Use [Image #1].', {
+      attachments: [{
+        placeholder: '[Image #1]',
+        tempPath: symlinkPath,
+        fileName: 'image-1.png',
+      }],
+    })).rejects.toThrow(`Task attachment source must be a regular file: ${symlinkPath}`);
+
+    expectNoTaskArtifacts(testDir);
+  });
+
+  it('should reject directory attachment tempPath and clean up task artifacts', async () => {
+    const directoryPath = path.join(testDir, 'image-directory');
+    fs.mkdirSync(directoryPath);
+
+    await expect(saveTaskFile(testDir, 'Use [Image #1].', {
+      attachments: [{
+        placeholder: '[Image #1]',
+        tempPath: directoryPath,
+        fileName: 'image-1.png',
+      }],
+    })).rejects.toThrow(`Task attachment source must be a regular file: ${directoryPath}`);
+
+    expectNoTaskArtifacts(testDir);
+  });
 });
 
 describe('saveTaskFromInteractive', () => {
@@ -286,6 +378,24 @@ describe('saveTaskFromInteractive', () => {
     expect(task.issue).toBe(42);
   });
 
+  it('should persist image attachments when saving an interactive task with preset settings', async () => {
+    const attachment = createTempAttachment(testDir, 'image-1.png', 'interactive-image');
+
+    await saveTaskFromInteractive(testDir, 'Review [Image #1].', 'default', {
+      presetSettings: { worktree: true, autoPr: false, draftPr: false },
+      attachments: [attachment],
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
+    expect(task.workflow).toBe('default');
+    expect(task.worktree).toBe(true);
+    expect(orderContent).toContain('Review [Image #1].');
+    expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
+    expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('interactive-image');
+  });
+
   describe('with confirmAtEndMessage', () => {
     it('should not save task when user declines confirmAtEndMessage', async () => {
       mockConfirm.mockResolvedValueOnce(false);
@@ -328,5 +438,31 @@ describe('saveTaskFromInteractive', () => {
 
     const task = loadTasks(testDir).tasks[0]!;
     expect(task.base_branch).toBe('feature/custom-base');
+  });
+});
+
+describe('createIssueAndSaveTask', () => {
+  it('should persist issue task attachments through interactive save', async () => {
+    const attachment = createTempAttachment(testDir, 'image-1.png', 'issue-image');
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
+      attachments: [attachment],
+    });
+
+    expect(mockCreateIssue).toHaveBeenCalledWith(
+      { title: 'Review [Image #1].', body: 'Review [Image #1].', labels: undefined },
+      testDir,
+    );
+    const task = loadTasks(testDir).tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
+    expect(task.issue).toBe(42);
+    expect(task.workflow).toBe('default');
+    expect(orderContent).toContain('Review [Image #1].');
+    expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
+    expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('issue-image');
   });
 });

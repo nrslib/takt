@@ -1,8 +1,11 @@
+import type { InteractiveImageAttachment } from './imageAttachments.js';
+
 export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
 
 export interface InstructModeResult {
   action: InstructModeAction;
   task: string;
+  attachments?: InteractiveImageAttachment[];
 }
 
 export interface InstructUIText {

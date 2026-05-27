@@ -91,6 +91,7 @@ export function createIsolatedEnv(): IsolatedEnv {
 
   const taktDir = join(baseDir, '.takt');
   const gitConfigPath = join(baseDir, '.gitconfig');
+  const worktreeDir = join(baseDir, 'worktrees');
 
   // Create TAKT config directory and config.yaml
   mkdirSync(taktDir, { recursive: true });
@@ -103,10 +104,14 @@ export function createIsolatedEnv(): IsolatedEnv {
   const config = provider
     ? {
       ...baseConfig,
+      worktree_dir: worktreeDir,
       provider,
       ...(model ? { model } : {}),
     }
-    : baseConfig;
+    : {
+      ...baseConfig,
+      worktree_dir: worktreeDir,
+    };
   writeConfigFile(taktDir, config);
 
   // Create isolated Git config file

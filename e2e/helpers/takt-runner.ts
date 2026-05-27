@@ -35,6 +35,14 @@ function getTaktBinPath(): string {
   return resolve(__dirname, '../../bin/takt');
 }
 
+export function formatTaktRunResult(result: TaktRunResult): string {
+  return [
+    `exitCode: ${result.exitCode}`,
+    `stdout:\n${result.stdout}`,
+    `stderr:\n${result.stderr}`,
+  ].join('\n\n');
+}
+
 /**
  * Prepend --provider <provider> to args if provider is specified
  * and args do not already contain --provider.

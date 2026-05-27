@@ -174,10 +174,18 @@ async function runRetryConversation(
   const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
 
   if (result.action === 'cancel') {
-    return { action: 'cancel', task: '' };
+    return {
+      action: 'cancel',
+      task: '',
+      ...(result.attachments ? { attachments: result.attachments } : {}),
+    };
   }
 
-  return { action: result.action as InstructModeResult['action'], task: result.task };
+  return {
+    action: result.action as InstructModeResult['action'],
+    task: result.task,
+    ...(result.attachments ? { attachments: result.attachments } : {}),
+  };
 }
 
 export async function runTaskRetryMode(
