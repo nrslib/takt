@@ -11,10 +11,14 @@ function truncateForFeedback(text: string): string {
   return `${text.slice(0, MAX_FEEDBACK_CHARS)}\n[TRUNCATED ${text.length - MAX_FEEDBACK_CHARS} chars]`;
 }
 
-function sanitizeSensitiveText(text: string): string {
+export function sanitizeSensitiveText(text: string): string {
   if (!text) return text;
   return text
     .replace(/(Authorization\s*:\s*Bearer\s+)([^\s]+)/gi, '$1[REDACTED]')
+    .replace(
+      /(--(?:api[_-]?key|token|password|secret|access[_-]?token|refresh[_-]?token)\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
+      '$1[REDACTED]',
+    )
     .replace(
       /(["']?(?:api[_-]?key|token|password|secret|access[_-]?token|refresh[_-]?token)["']?\s*[:=]\s*["']?)([^"',\s}\]]+)(["']?)/gi,
       '$1[REDACTED]$3',

@@ -736,6 +736,7 @@ describe('WorkflowEngine rate limit fallback', () => {
 
     // Then
     expect(state.status).toBe('completed');
+    expect(existsSync(gateMarkerPath)).toBe(true);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[2]).toContain('Fallback Execution');

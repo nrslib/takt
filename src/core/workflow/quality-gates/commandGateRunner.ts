@@ -2,10 +2,11 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { isPathInside } from '../../../shared/utils/index.js';
+import { DEFAULT_COMMAND_GATE_TIMEOUT_MS } from '../../models/quality-gate-defaults.js';
+import { isRealPathInside } from '../../../shared/utils/index.js';
+import { sanitizeSensitiveText } from './commandGateMessage.js';
 import type { CommandQualityGateResult, RunCommandQualityGateOptions } from './types.js';
 
-const DEFAULT_COMMAND_GATE_TIMEOUT_MS = 300_000;
 const FORCE_KILL_GRACE_MS = 100;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const OUTPUT_LIMIT_MARKER = `[OUTPUT TRUNCATED: exceeded ${MAX_OUTPUT_BYTES} bytes]`;
@@ -42,29 +43,29 @@ function appendStderr(stderr: string, message: string): string {
   return stderr ? `${stderr}\n${message}` : message;
 }
 
-function appendOutputWithinLimit(current: string, currentBytes: number, chunk: string): {
+function appendOutputWithinLimit(current: string, outputBytes: number, chunk: string): {
   output: string;
   bytes: number;
   exceeded: boolean;
 } {
-  if (currentBytes >= MAX_OUTPUT_BYTES) {
+  if (outputBytes >= MAX_OUTPUT_BYTES) {
     return {
       output: current.endsWith(OUTPUT_LIMIT_MARKER) ? current : `${current}\n${OUTPUT_LIMIT_MARKER}`,
-      bytes: currentBytes,
+      bytes: outputBytes,
       exceeded: true,
     };
   }
 
   const chunkBytes = Buffer.byteLength(chunk, 'utf8');
-  if (currentBytes + chunkBytes <= MAX_OUTPUT_BYTES) {
+  if (outputBytes + chunkBytes < MAX_OUTPUT_BYTES) {
     return {
       output: `${current}${chunk}`,
-      bytes: currentBytes + chunkBytes,
+      bytes: outputBytes + chunkBytes,
       exceeded: false,
     };
   }
 
-  const remainingBytes = Math.max(0, MAX_OUTPUT_BYTES - currentBytes);
+  const remainingBytes = Math.max(0, MAX_OUTPUT_BYTES - outputBytes);
   const boundedChunk = Buffer.from(chunk, 'utf8').subarray(0, remainingBytes).toString('utf8');
   return {
     output: `${current}${boundedChunk}\n${OUTPUT_LIMIT_MARKER}`,
@@ -73,14 +74,13 @@ function appendOutputWithinLimit(current: string, currentBytes: number, chunk: s
   };
 }
 
-function sanitizeLogName(name: string): string {
-  const sanitized = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-  return sanitized.length > 0 ? sanitized.slice(0, 80) : 'command-gate';
+function sanitizeCommandForOutputLog(command: string): string {
+  const sanitized = sanitizeSensitiveText(command);
+  return sanitized === command ? command : '[REDACTED]';
 }
 
 function writeOutputLog(
   projectRoot: string,
-  gateName: string,
   command: string,
   cwd: string,
   stdout: string,
@@ -93,16 +93,16 @@ function writeOutputLog(
   try {
     const logDir = path.join(projectRoot, '.takt', 'quality-gates', 'logs');
     mkdirSync(logDir, { recursive: true });
-    const logPath = path.join(logDir, `${Date.now()}-${sanitizeLogName(gateName)}-${randomUUID()}.log`);
+    const logPath = path.join(logDir, `${Date.now()}-command-gate-${randomUUID()}.log`);
     const content = [
-      `Command: ${command}`,
-      `Cwd: ${cwd}`,
+      `Command: ${sanitizeCommandForOutputLog(command)}`,
+      `Cwd: ${sanitizeSensitiveText(cwd)}`,
       '',
       'Stdout:',
-      stdout,
+      sanitizeSensitiveText(stdout),
       '',
       'Stderr:',
-      stderr,
+      sanitizeSensitiveText(stderr),
     ].join('\n');
     writeFileSync(logPath, content, 'utf8');
     return { outputLogPath: logPath };
@@ -133,7 +133,7 @@ function buildFailure(
   outputLimitExceeded: boolean,
   exitCode?: number,
 ): CommandQualityGateResult {
-  const outputLog = writeOutputLog(projectRoot, gateName, gateCommand, cwd, stdout, stderr);
+  const outputLog = writeOutputLog(projectRoot, gateCommand, cwd, stdout, stderr);
   return {
     ok: false,
     failure: {
@@ -176,7 +176,7 @@ export function runCommandQualityGate({
   const cwd = resolveGateCwd(projectRoot, gate.cwd);
   const gateName = gate.name ?? gate.command;
 
-  if (!isPathInside(projectRoot, cwd)) {
+  if (!isRealPathInside(projectRoot, cwd)) {
     return Promise.resolve(buildFailure(
       gateName,
       gate.command,
@@ -201,8 +201,7 @@ export function runCommandQualityGate({
     });
     let stdout = '';
     let stderr = '';
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
+    let outputBytes = 0;
     let timedOut = false;
     let outputLimitExceeded = false;
     let settled = false;
@@ -212,18 +211,24 @@ export function runCommandQualityGate({
     child.stdout?.setEncoding('utf-8');
     child.stderr?.setEncoding('utf-8');
     child.stdout?.on('data', (chunk: string) => {
-      const appended = appendOutputWithinLimit(stdout, stdoutBytes, chunk);
+      if (outputLimitExceeded) {
+        return;
+      }
+      const appended = appendOutputWithinLimit(stdout, outputBytes, chunk);
       stdout = appended.output;
-      stdoutBytes = appended.bytes;
+      outputBytes = appended.bytes;
       if (appended.exceeded) {
         outputLimitExceeded = true;
         terminateProcess();
       }
     });
     child.stderr?.on('data', (chunk: string) => {
-      const appended = appendOutputWithinLimit(stderr, stderrBytes, chunk);
+      if (outputLimitExceeded) {
+        return;
+      }
+      const appended = appendOutputWithinLimit(stderr, outputBytes, chunk);
       stderr = appended.output;
-      stderrBytes = appended.bytes;
+      outputBytes = appended.bytes;
       if (appended.exceeded) {
         outputLimitExceeded = true;
         terminateProcess();

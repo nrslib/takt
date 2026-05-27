@@ -1060,6 +1060,45 @@ describe('system workflow schema', () => {
     }
   });
 
+  it('agent step で string gate と command gate が混在する quality_gates を保持できる', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement the feature',
+      quality_gates: [
+        'Review before finishing',
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+          cwd: '.',
+          timeout_ms: 300000,
+        },
+      ],
+      rules: [
+        {
+          when: 'done',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const step = result.data as Record<string, unknown>;
+      expect(step.quality_gates).toEqual([
+        'Review before finishing',
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+          cwd: '.',
+          timeoutMs: 300000,
+        },
+      ]);
+    }
+  });
+
   it('system step では agent 用フィールドを拒否する', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',

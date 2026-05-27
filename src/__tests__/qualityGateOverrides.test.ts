@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { applyQualityGateOverrides } from '../infra/config/loaders/qualityGateOverrides.js';
 import type { WorkflowOverrides } from '../core/models/config-types.js';
 
@@ -13,6 +15,12 @@ function applyOverrides(...args: ApplyOverridesArgs): ReturnType<typeof applyQua
 }
 
 describe('applyQualityGateOverrides', () => {
+  it('does not import command gate runtime modules into the config loader', () => {
+    const source = readFileSync(join(process.cwd(), 'src/infra/config/loaders/qualityGateOverrides.ts'), 'utf-8');
+
+    expect(source).not.toContain('core/workflow/quality-gates');
+  });
+
   it('returns undefined when no gates are defined', () => {
     const result = applyOverrides('implement', undefined, true, undefined, undefined, undefined);
     expect(result).toBeUndefined();
@@ -198,7 +206,6 @@ describe('applyQualityGateOverrides', () => {
 
   describe('persona overrides', () => {
     it('applies persona-specific gates from global and project configs in order', () => {
-      // Given: both global and project configs define gates for the same persona
       const yamlGates = ['YAML gate'];
       const globalOverrides = {
         personas: {
@@ -215,15 +222,12 @@ describe('applyQualityGateOverrides', () => {
         },
       } as WorkflowOverrides;
 
-      // When: the step is executed with the matching persona
       const result = applyOverrides('implement', yamlGates, true, 'coder', projectOverrides, globalOverrides);
 
-      // Then: gates are additive with global persona gates before project persona gates
       expect(result).toEqual(['Global persona gate', 'Project persona gate', 'YAML gate']);
     });
 
     it('does not apply persona-specific gates when persona does not match', () => {
-      // Given: config defines gates for reviewer persona only
       const yamlGates = ['YAML gate'];
       const projectOverrides = {
         personas: {
@@ -233,15 +237,12 @@ describe('applyQualityGateOverrides', () => {
         },
       } as WorkflowOverrides;
 
-      // When: step persona is coder
       const result = applyOverrides('implement', yamlGates, true, 'coder', projectOverrides, undefined);
 
-      // Then: only YAML gates remain
       expect(result).toEqual(['YAML gate']);
     });
 
     it('deduplicates gates across step, persona, and YAML sources', () => {
-      // Given: same gate appears in multiple override layers
       const yamlGates = ['Shared gate', 'YAML only'];
       const globalOverrides = {
         steps: {
@@ -263,10 +264,8 @@ describe('applyQualityGateOverrides', () => {
         },
       } as WorkflowOverrides;
 
-      // When: overrides are merged for matching step + persona
       const result = applyOverrides('implement', yamlGates, true, 'coder', projectOverrides, globalOverrides);
 
-      // Then: duplicates are removed, first appearance order is preserved
       expect(result).toEqual([
         'Shared gate',
         'Global step only',
@@ -320,6 +319,181 @@ describe('applyQualityGateOverrides', () => {
       const result = applyOverrides('implement', yamlGates, true, undefined, projectOverrides, undefined);
       // 'npm run test' appears only once
       expect(result).toEqual(['npm run test', 'npm run build', 'npm run lint']);
+    });
+
+    it('removes duplicate command gates with the same semantic fields from multiple sources', () => {
+      const yamlCommandGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const globalCommandGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const projectCommandGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const globalOverrides: WorkflowOverrides = {
+        qualityGates: [globalCommandGate],
+      };
+      const projectOverrides: WorkflowOverrides = {
+        qualityGates: [projectCommandGate],
+      };
+
+      const result = applyOverrides('implement', [yamlCommandGate], true, undefined, projectOverrides, globalOverrides);
+
+      expect(result).toEqual([globalCommandGate]);
+    });
+
+    it('removes duplicate command gates when cwd and timeout use runtime defaults', () => {
+      const globalCommandGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+      } as const;
+      const projectCommandGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const yamlCommandGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+        cwd: './',
+      } as const;
+      const globalOverrides: WorkflowOverrides = {
+        qualityGates: [globalCommandGate],
+      };
+      const projectOverrides: WorkflowOverrides = {
+        qualityGates: [projectCommandGate],
+      };
+
+      const result = applyOverrides('implement', [yamlCommandGate], true, undefined, projectOverrides, globalOverrides);
+
+      expect(result).toEqual([globalCommandGate]);
+    });
+
+    it('keeps command gates with different command values', () => {
+      const lintGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm run lint',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const testGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const projectOverrides: WorkflowOverrides = {
+        qualityGates: [lintGate, testGate],
+      };
+
+      const result = applyOverrides('implement', undefined, true, undefined, projectOverrides, undefined);
+
+      expect(result).toEqual([lintGate, testGate]);
+    });
+
+    it('keeps command gates with different cwd values', () => {
+      const rootGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const packageGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+        cwd: 'packages/cli',
+        timeoutMs: 300000,
+      } as const;
+      const projectOverrides: WorkflowOverrides = {
+        qualityGates: [rootGate, packageGate],
+      };
+
+      const result = applyOverrides('implement', undefined, true, undefined, projectOverrides, undefined);
+
+      expect(result).toEqual([rootGate, packageGate]);
+    });
+
+    it('keeps command gates with different name values', () => {
+      const lintGate = {
+        type: 'command',
+        name: 'lint',
+        command: 'npm test',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const testGate = {
+        type: 'command',
+        name: 'test',
+        command: 'npm test',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const projectOverrides: WorkflowOverrides = {
+        qualityGates: [lintGate, testGate],
+      };
+
+      const result = applyOverrides('implement', undefined, true, undefined, projectOverrides, undefined);
+
+      expect(result).toEqual([lintGate, testGate]);
+    });
+
+    it('keeps command gates with different timeout values', () => {
+      const fastGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+        cwd: '.',
+        timeoutMs: 1000,
+      } as const;
+      const slowGate = {
+        type: 'command',
+        name: 'quality-check',
+        command: 'npm test',
+        cwd: '.',
+        timeoutMs: 300000,
+      } as const;
+      const projectOverrides: WorkflowOverrides = {
+        qualityGates: [fastGate, slowGate],
+      };
+
+      const result = applyOverrides('implement', undefined, true, undefined, projectOverrides, undefined);
+
+      expect(result).toEqual([fastGate, slowGate]);
+    });
+
+    it('keeps string gates and command gates as different gate kinds', () => {
+      const commandGate = {
+        type: 'command',
+        command: 'npm test',
+      } as const;
+      const projectOverrides: WorkflowOverrides = {
+        qualityGates: ['npm test', commandGate],
+      };
+
+      const result = applyOverrides('implement', undefined, true, undefined, projectOverrides, undefined);
+
+      expect(result).toEqual(['npm test', commandGate]);
     });
   });
 });

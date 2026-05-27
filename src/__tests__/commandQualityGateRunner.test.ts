@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { formatCommandGateFailure } from '../core/workflow/quality-gates/commandGateMessage.js';
@@ -73,6 +73,7 @@ describe('command quality gates', () => {
   it('should execute relative cwd from the worktree project root', async () => {
     const projectRoot = createTempDir();
     mkdirSync(join(projectRoot, 'subdir'));
+    const expectedCwd = realpathSync(join(projectRoot, 'subdir'));
 
     const result = await runCommandQualityGate({
       gate: {
@@ -86,8 +87,78 @@ describe('command quality gates', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      stdout: join(projectRoot, 'subdir'),
+      stdout: expectedCwd,
     });
+  });
+
+  it('should allow cwd inside the project root', async () => {
+    const projectRoot = createTempDir();
+    mkdirSync(join(projectRoot, 'checks'));
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'inside-cwd-check',
+        command: 'node -e "process.stdout.write(\'inside\')"',
+        cwd: 'checks',
+      },
+      projectRoot,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      stdout: 'inside',
+    });
+  });
+
+  it('should execute absolute cwd inside the project root', async () => {
+    const projectRoot = createTempDir();
+    const checksDir = join(projectRoot, 'checks');
+    mkdirSync(checksDir);
+    const expectedCwd = realpathSync(checksDir);
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'absolute-cwd-check',
+        command: 'node -e "process.stdout.write(process.cwd())"',
+        cwd: checksDir,
+      },
+      projectRoot,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      stdout: expectedCwd,
+    });
+  });
+
+  it('should reject cwd that resolves through a project symlink to outside the project root', async () => {
+    const projectRoot = createTempDir();
+    const outsideDir = createTempDir();
+    symlinkSync(outsideDir, join(projectRoot, 'external-link'), 'dir');
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'external-symlink-cwd-check',
+        command: 'node -e "process.stdout.write(\'should-not-run\')"',
+        cwd: 'external-link',
+      },
+      projectRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure).toMatchObject({
+        gateName: 'external-symlink-cwd-check',
+        cwd: join(projectRoot, 'external-link'),
+        projectRoot,
+        timedOut: false,
+      });
+      expect(result.failure.stderr).toContain('Command quality gate cwd must stay inside the project root');
+      expect(result.failure.stdout).toBe('');
+    }
   });
 
   it('should report timeout details when the command exceeds timeout_ms', async () => {
@@ -219,6 +290,98 @@ describe('command quality gates', () => {
       expect(result.failure.stderr).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
       expect(result.failure.outputLogPath).toBeDefined();
       expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+    }
+  });
+
+  it('should fail and stop the command when stdout and stderr exceed the combined output byte limit', async () => {
+    const projectRoot = createTempDir();
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'combined-noisy-check',
+        command: 'node -e "process.stdout.write(\'o\'.repeat(40000)); process.stderr.write(\'e\'.repeat(40000)); setInterval(()=>{},1000)"',
+        timeoutMs: 1000,
+      },
+      projectRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure).toMatchObject({
+        gateName: 'combined-noisy-check',
+        outputLimitExceeded: true,
+        outputLimitBytes: 65536,
+        timedOut: false,
+      });
+      expect(result.failure.stdout.length + result.failure.stderr.length).toBeLessThan(67000);
+      expect(`${result.failure.stdout}${result.failure.stderr}`).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
+      expect(result.failure.outputLogPath).toBeDefined();
+      expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+    }
+  });
+
+  it('should fail and stop the command when stdout and stderr reach the combined output byte limit exactly', async () => {
+    const projectRoot = createTempDir();
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'combined-boundary-check',
+        command: 'node -e "process.stdout.write(\'o\'.repeat(32768)); process.stderr.write(\'e\'.repeat(32768)); setInterval(()=>{},1000)"',
+        timeoutMs: 1000,
+      },
+      projectRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure).toMatchObject({
+        gateName: 'combined-boundary-check',
+        outputLimitExceeded: true,
+        outputLimitBytes: 65536,
+        timedOut: false,
+      });
+      expect(`${result.failure.stdout}${result.failure.stderr}`).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
+      expect(result.failure.outputLogPath).toBeDefined();
+      expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+    }
+  });
+
+  it('should not expose command secrets in unnamed command gate log paths or failure messages', async () => {
+    const projectRoot = createTempDir();
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        command: 'node -e "process.stdout.write(\'api_key=top-secret\'); process.stderr.write(\'password=hunter2\'); process.exit(1)" -- --token top-secret --api-key other-secret',
+      },
+      projectRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.outputLogPath).toBeDefined();
+      expect(result.failure.outputLogPath).not.toContain('top-secret');
+      expect(result.failure.outputLogPath).not.toContain('token-top-secret');
+      expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+
+      const outputLog = readFileSync(result.failure.outputLogPath!, 'utf-8');
+      expect(outputLog).toContain('Command: [REDACTED]');
+      expect(outputLog).toContain('api_key=[REDACTED]');
+      expect(outputLog).toContain('password=[REDACTED]');
+      expect(outputLog).not.toContain('top-secret');
+      expect(outputLog).not.toContain('other-secret');
+      expect(outputLog).not.toContain('hunter2');
+      expect(outputLog).not.toContain('--token top-secret');
+      expect(outputLog).not.toContain('--api-key other-secret');
+
+      const message = formatCommandGateFailure(result.failure);
+      expect(message).toContain('Output log: .takt/quality-gates/logs/');
+      expect(message).not.toContain('top-secret');
+      expect(message).not.toContain('other-secret');
+      expect(message).not.toContain('token-top-secret');
+      expect(message).not.toContain('hunter2');
     }
   });
 
@@ -365,6 +528,29 @@ describe('command quality gates', () => {
     expect(message).not.toContain('top-secret');
     expect(message).not.toContain('hunter2');
     expect(message).not.toContain('sk-abcdef12345678');
+  });
+
+  it('should redact space-separated secret CLI arguments before AI feedback', () => {
+    const projectRoot = createTempDir();
+
+    const message = formatCommandGateFailure({
+      gateName: 'leaky-cli-check --api-key other-secret',
+      type: 'command',
+      command: './check.sh --token top-secret --password hunter2',
+      cwd: projectRoot,
+      projectRoot,
+      exitCode: 1,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+    });
+
+    expect(message).toContain('--token [REDACTED]');
+    expect(message).toContain('--api-key [REDACTED]');
+    expect(message).toContain('--password [REDACTED]');
+    expect(message).not.toContain('top-secret');
+    expect(message).not.toContain('other-secret');
+    expect(message).not.toContain('hunter2');
   });
 
 });
