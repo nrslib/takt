@@ -240,6 +240,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       selectOptions.workflow = workflowId;
       selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
       selectOptions.skipTaskList = true;
+      if (result.attachments) {
+        selectOptions.attachments = result.attachments;
+      }
       await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
     },
     create_issue: async ({ task: confirmedTask }) => {
@@ -247,6 +250,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       await createIssueAndSaveTask(resolvedCwd, confirmedTask, workflowId, {
         confirmAtEndMessage: 'Add this issue to tasks?',
         labels,
+        ...(result.attachments ? { attachments: result.attachments } : {}),
       });
     },
     save_task: async ({ task: confirmedTask }) => {
@@ -258,7 +262,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
         }
         : undefined;
-      await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, { presetSettings });
+      await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
+        presetSettings,
+        ...(result.attachments ? { attachments: result.attachments } : {}),
+      });
     },
     cancel: () => undefined,
   });

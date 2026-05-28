@@ -1,5 +1,5 @@
 name: peer-review
-description: takt-default の Phase 2。5 並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループ。
+description: takt-default の Phase 2。6 並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループ。
 subworkflow:
   callable: true
   visibility: internal
@@ -151,6 +151,28 @@ steps:
           report:
             - name: requirements-review.md
               format: requirements-review
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        pass_previous_response: false
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
       - name: ai-antipattern-review-2nd
         edit: false
         persona: ai-antipattern-reviewer

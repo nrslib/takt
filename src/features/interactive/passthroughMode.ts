@@ -10,6 +10,11 @@ import { info, blankLine } from '../../shared/ui/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
 import type { InteractiveModeResult } from './interactive.js';
+import {
+  buildInteractiveResultWithAttachments,
+  createImagePasteHandler,
+  createSessionImageAttachmentStore,
+} from './imageAttachments.js';
 
 /**
  * Run passthrough mode: collect user input and return it as-is.
@@ -29,22 +34,26 @@ export async function passthroughMode(
     return { action: 'execute', task: initialInput };
   }
 
+  const attachmentStore = createSessionImageAttachmentStore();
+
   info(getLabel('interactive.ui.introPassthrough', lang));
   blankLine();
 
-  const input = await readMultilineInput(chalk.green('> '));
+  const input = await readMultilineInput(chalk.green('> '), {
+    onImagePaste: createImagePasteHandler(attachmentStore),
+  });
 
   if (input === null) {
     blankLine();
     info(getLabel('interactive.ui.cancelled', lang));
-    return { action: 'cancel', task: '' };
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
   const trimmed = input.trim();
   if (!trimmed) {
     info(getLabel('interactive.ui.cancelled', lang));
-    return { action: 'cancel', task: '' };
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
-  return { action: 'execute', task: trimmed };
+  return buildInteractiveResultWithAttachments({ action: 'execute', task: trimmed }, attachmentStore);
 }

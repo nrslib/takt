@@ -1,0 +1,45 @@
+Write tests based on the plan before implementing production code, while protecting existing behavior.
+Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
+
+**Important: Do NOT create or modify production code. Only test files may be created.**
+
+**Actions:**
+1. Review the plan report and separate behavior changed by the request from existing behavior that must not change
+2. Examine existing code and tests to learn the project's test patterns
+3. Add regression tests when existing contracts are not protected
+4. Write unit tests for the planned feature or fix
+5. Determine whether integration tests are needed and create them if so
+   - Does the data flow cross 3+ modules?
+   - Does a new status/state merge into an existing workflow?
+   - Does a new option propagate through a call chain to the endpoint?
+   - If any apply, create integration tests
+
+**Test writing guidelines:**
+- Follow the project's existing test patterns (naming conventions, directory structure, helpers)
+- Write tests in Given-When-Then structure
+- One concept per test. Do not mix multiple concerns in a single test
+- Cover happy path, error cases, boundary values, and edge cases
+- Do not weaken existing expectations for implementation convenience
+- When an external contract exists, include tests that use the contract-defined input location
+  - Example: pass request bodies using the defined root shape as-is
+  - Example: keep query / path parameters in their defined location instead of moving them into the body
+- Include tests that would catch implementations that incorrectly reuse a response envelope when reading requests
+- Write tests that are expected to pass after implementation is complete (build errors and test failures are expected at this stage)
+
+**Non-executable asset constraints:**
+- Do not create tests that freeze prose, headings, or structure in explanations, guides, README files, or Markdown documentation
+- For docs-only changes, do not add tests unless an explicit executable contract exists
+- Tests are only needed when assets contain contracts tied to code behavior or machine processing, such as CLI examples, config examples, or generated artifacts
+
+**Test execution:**
+- Run tests after creating them to check results
+- Test failures and import errors are expected before implementation (including imports of not-yet-implemented modules)
+- Fix errors that will persist after implementation, such as wrong import paths for existing modules
+
+**Required output (include headings)**
+## Work Results
+- {Summary of created or updated tests}
+## Protected Existing Contracts
+- {Existing behavior protected by tests}
+## Test Results
+- {Command and result if run, or reason if not run}

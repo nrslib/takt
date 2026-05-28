@@ -14,15 +14,18 @@ import {
 import { initializeSession } from './sessionInitialization.js';
 import {
   createSelectActionWithoutExecute,
+  buildSummaryActionOptions,
   formatStepPreviews,
+  selectSummaryAction,
   type WorkflowContext,
+  type PostSummaryAction,
 } from './interactive-summary.js';
 import { resolveLanguage } from './interactive.js';
 import { buildInteractivePolicyPrompt } from './policyPrompt.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
-import type { InstructModeResult, InstructUIText } from '../tasks/list/instructMode.js';
+import type { InstructModeResult, InstructUIText } from './instructModeTypes.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -46,10 +49,17 @@ export interface RetryRunInfo {
   readonly reports: string;
 }
 
+export type RetrySubjectKind = 'branch' | 'run';
+
+export interface RetrySubject {
+  readonly kind: RetrySubjectKind;
+  readonly value: string;
+}
+
 /** Full retry context assembled by the caller */
 export interface RetryContext {
   readonly failure: RetryFailureInfo;
-  readonly branchName: string;
+  readonly subject: RetrySubject;
   readonly workflowContext: WorkflowContext;
   readonly run: RetryRunInfo | null;
   readonly previousOrderContent: string | null;
@@ -57,10 +67,17 @@ export interface RetryContext {
 
 const RETRY_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
 
-/**
- * Convert RetryContext into template variable map.
- */
-export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', previousOrderContent: string | null = null): Record<string, string | boolean> {
+type RetrySelectAction = (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+type RetrySelectActionFactory = (ui: InstructUIText) => RetrySelectAction;
+
+function formatRetrySubjectLabel(kind: RetrySubjectKind, lang: 'en' | 'ja'): string {
+  if (kind === 'run') {
+    return 'Run';
+  }
+  return lang === 'ja' ? 'ブランチ' : 'Branch';
+}
+
+export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja'): Record<string, string | boolean> {
   const hasWorkflowPreview = !!ctx.workflowContext.stepPreviews?.length;
   const stepDetails =
     hasWorkflowPreview && ctx.workflowContext.stepPreviews
@@ -72,7 +89,8 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', pre
   return {
     taskName: ctx.failure.taskName,
     taskContent: ctx.failure.taskContent,
-    branchName: ctx.branchName,
+    subjectLabel: formatRetrySubjectLabel(ctx.subject.kind, lang),
+    subjectValue: ctx.subject.value,
     createdAt: ctx.failure.createdAt,
     failedStep: ctx.failure.failedStep,
     failureError: ctx.failure.error,
@@ -89,21 +107,35 @@ export function buildRetryTemplateVars(ctx: RetryContext, lang: 'en' | 'ja', pre
     runStatus: run !== null ? run.status : '',
     runStepLogs: run !== null ? run.stepLogs : '',
     runReports: run !== null ? run.reports : '',
-    hasOrderContent: previousOrderContent !== null,
-    orderContent: previousOrderContent ?? '',
+    hasOrderContent: ctx.previousOrderContent !== null,
+    orderContent: ctx.previousOrderContent ?? '',
   };
 }
 
-/**
- * Run retry mode conversation loop.
- *
- * Uses a dedicated system prompt with failure context, run session data,
- * and workflow structure injected for the AI assistant.
- */
-export async function runRetryMode(
+function createDirectRetrySelectAction(
+  ui: InstructUIText,
+): (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null> {
+  return async (task: string): Promise<PostSummaryAction | null> =>
+    selectSummaryAction(
+      task,
+      ui.proposed,
+      ui.actionPrompt,
+      buildSummaryActionOptions(
+        {
+          execute: ui.actions.execute,
+          saveTask: ui.actions.saveTask,
+          continue: ui.actions.continue,
+        },
+        [],
+        ['save_task'],
+      ),
+    );
+}
+
+async function runRetryConversation(
   cwd: string,
   retryContext: RetryContext,
-  previousOrderContent: string | null,
+  createSelectAction: RetrySelectActionFactory,
 ): Promise<InstructModeResult> {
   const globalConfig = resolveConfigValues(cwd, ['language', 'provider']);
   const lang = resolveLanguage(globalConfig.language);
@@ -119,13 +151,14 @@ export async function runRetryMode(
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
 
-  const templateVars = buildRetryTemplateVars(retryContext, lang, previousOrderContent);
+  const templateVars = buildRetryTemplateVars(retryContext, lang);
   const systemPrompt = loadTemplate('score_retry_system_prompt', ctx.lang, templateVars);
 
   const retryIntro = getLabel('retry.ui.intro', ctx.lang);
+  const subjectLabel = formatRetrySubjectLabel(retryContext.subject.kind, ctx.lang);
   const introLabel = ctx.lang === 'ja'
-    ? `## リトライ: ${retryContext.failure.taskName}\n\nブランチ: ${retryContext.branchName}\n\n${retryIntro}`
-    : `## Retry: ${retryContext.failure.taskName}\n\nBranch: ${retryContext.branchName}\n\n${retryIntro}`;
+    ? `## リトライ: ${retryContext.failure.taskName}\n\n${subjectLabel}: ${retryContext.subject.value}\n\n${retryIntro}`
+    : `## Retry: ${retryContext.failure.taskName}\n\n${subjectLabel}: ${retryContext.subject.value}\n\n${retryIntro}`;
 
   const strategy: ConversationStrategy = {
     systemPrompt,
@@ -133,16 +166,38 @@ export async function runRetryMode(
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
     introMessage: introLabel,
-    selectAction: createSelectActionWithoutExecute(ui),
-    previousOrderContent: previousOrderContent ?? undefined,
+    selectAction: createSelectAction(ui),
+    previousOrderContent: retryContext.previousOrderContent ?? undefined,
     enableRetryCommand: true,
   };
 
   const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
 
   if (result.action === 'cancel') {
-    return { action: 'cancel', task: '' };
+    return {
+      action: 'cancel',
+      task: '',
+      ...(result.attachments ? { attachments: result.attachments } : {}),
+    };
   }
 
-  return { action: result.action as InstructModeResult['action'], task: result.task };
+  return {
+    action: result.action as InstructModeResult['action'],
+    task: result.task,
+    ...(result.attachments ? { attachments: result.attachments } : {}),
+  };
+}
+
+export async function runTaskRetryMode(
+  cwd: string,
+  retryContext: RetryContext,
+): Promise<InstructModeResult> {
+  return runRetryConversation(cwd, retryContext, createSelectActionWithoutExecute);
+}
+
+export async function runDirectRetryMode(
+  cwd: string,
+  retryContext: RetryContext,
+): Promise<InstructModeResult> {
+  return runRetryConversation(cwd, retryContext, createDirectRetrySelectAction);
 }

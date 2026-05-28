@@ -1130,6 +1130,20 @@ describe('loadGlobalConfig', () => {
       const reloaded = loadGlobalConfig();
       expect(reloaded.workflowRuntimePrepare).toEqual({ customScripts: true });
     });
+
+    it('should save and reload workflow_command_gates', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig();
+      config.workflowCommandGates = { customScripts: true };
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig();
+      expect(reloaded.workflowCommandGates).toEqual({ customScripts: true });
+    });
   });
 
   describe('workflow_arpeggio global config', () => {

@@ -138,7 +138,7 @@ When any of the following apply:
 - **Stop loops**: Suggest design revision for 3+ iterations
 - **Don't forget business value**: Value delivery over technical perfection
 - **Consider context**: Judge according to project situation
-- **Verify non-blocking classifications**: Always verify issues classified as "non-blocking," "existing problems," or "informational" by reviewers. If an issue in a changed file was marked as non-blocking, escalate it to blocking and REJECT
+- **Verify non-blocking classifications**: Always verify issues classified as "non-blocking," "existing problems," or "informational" by reviewers. If an issue in changed code or in an area directly related to correctness, contracts, or wiring of the change was marked as non-blocking, escalate it to blocking and REJECT
 - **Do not invent command outcomes**: If there is no execution evidence, treat it as unverified
 
 ## Execution Evidence

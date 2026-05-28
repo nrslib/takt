@@ -212,6 +212,7 @@ Detect comments that simply restate code behavior in natural language.
 | REJECT | JSDoc that only paraphrases the function name without adding information |
 | OK | Explains why a particular implementation was chosen |
 | OK | Explains the reason behind seemingly unusual behavior |
+| OK | Explains the calculation basis or components of a constant or magic number |
 | Best | No comment needed — the code itself communicates intent |
 
 ```typescript
@@ -238,6 +239,10 @@ if (status === 'interrupted') {
 // OK - Reason behind seemingly odd behavior
 // stay can cause loops, but is only used when explicitly specified by the user
 return step.name;
+
+// OK - Calculation basis for a constant
+// paddingTop + paddingBottom + button height
+const footerHeight = 24 + 12 + 48;
 ```
 
 **Direct State Mutation Detection Criteria:**

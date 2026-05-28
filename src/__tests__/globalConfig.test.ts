@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import type { GlobalConfig } from '../core/models/config-types.js';
+import type { QualityGate } from '../core/models/workflow-types.js';
 import {
   unexpectedEnableBuiltinWorkflowsConfigKey,
   unexpectedNotificationWorkflowAbortConfigKey,
@@ -207,6 +208,49 @@ workflow_overrides:
       expect(reloaded.workflowOverrides?.qualityGates).toEqual(['Test 1', 'Test 2']);
     });
 
+    it('should preserve mixed string and command quality_gates in save/load cycle', () => {
+      const configContent = `
+workflow_overrides:
+  quality_gates:
+    - "Global AI gate"
+    - type: command
+      name: global-quality-check
+      command: "npm test"
+      timeout_ms: 120000
+`;
+      writeFileSync(testConfigPath, configContent, 'utf-8');
+
+      const manager = GlobalConfigManager.getInstance();
+      const loaded = manager.load();
+      expect(loaded.workflowOverrides?.qualityGates).toEqual([
+        'Global AI gate',
+        {
+          type: 'command',
+          name: 'global-quality-check',
+          command: 'npm test',
+          timeoutMs: 120000,
+        },
+      ]);
+
+      manager.save(loaded);
+
+      const saved = readFileSync(testConfigPath, 'utf-8');
+      expect(saved).toContain('timeout_ms: 120000');
+      expect(saved).not.toContain('timeoutMs');
+
+      GlobalConfigManager.resetInstance();
+      const reloaded = GlobalConfigManager.getInstance().load();
+      expect(reloaded.workflowOverrides?.qualityGates).toEqual([
+        'Global AI gate',
+        {
+          type: 'command',
+          name: 'global-quality-check',
+          command: 'npm test',
+          timeoutMs: 120000,
+        },
+      ]);
+    });
+
     it('should preserve personas quality_gates in save/load cycle', () => {
       const configContent = `
 workflow_overrides:
@@ -220,7 +264,7 @@ workflow_overrides:
       const manager = GlobalConfigManager.getInstance();
       const loaded = manager.load();
       const loadedWorkflowOverrides = loaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(loadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual(['Global persona gate']);
 
@@ -230,7 +274,7 @@ workflow_overrides:
       const reloadedManager = GlobalConfigManager.getInstance();
       const reloaded = reloadedManager.load();
       const reloadedWorkflowOverrides = reloaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(reloadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual(['Global persona gate']);
     });
@@ -247,7 +291,7 @@ workflow_overrides:
       const manager = GlobalConfigManager.getInstance();
       const loaded = manager.load();
       const loadedWorkflowOverrides = loaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(loadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual([]);
 
@@ -257,7 +301,7 @@ workflow_overrides:
       const reloadedManager = GlobalConfigManager.getInstance();
       const reloaded = reloadedManager.load();
       const reloadedWorkflowOverrides = reloaded.workflowOverrides as unknown as {
-        personas?: Record<string, { qualityGates?: string[] }>;
+        personas?: Record<string, { qualityGates?: QualityGate[] }>;
       };
       expect(reloadedWorkflowOverrides.personas?.coder?.qualityGates).toEqual([]);
     });
@@ -490,6 +534,17 @@ logging:
 
       const saved = readFileSync(testConfigPath, 'utf-8');
       expect(saved).toContain('workflow_runtime_prepare:');
+    });
+
+    it('should save workflowCommandGates using workflow_command_gates key', () => {
+      const config: GlobalConfig = {
+        workflowCommandGates: { customScripts: true },
+      };
+
+      GlobalConfigManager.getInstance().save(config);
+
+      const saved = readFileSync(testConfigPath, 'utf-8');
+      expect(saved).toContain('workflow_command_gates:');
     });
 
     it('should load workflow_arpeggio policy block', () => {

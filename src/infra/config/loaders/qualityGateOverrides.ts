@@ -9,20 +9,70 @@
  * Merge strategy: Additive (config gates + YAML gates)
  */
 
+import * as path from 'node:path';
 import type { WorkflowOverrides } from '../../../core/models/config-types.js';
+import { DEFAULT_COMMAND_GATE_TIMEOUT_MS } from '../../../core/models/quality-gate-defaults.js';
+import type { QualityGate } from '../../../core/models/workflow-types.js';
 
 function getStepQualityGates(
   overrides: WorkflowOverrides | undefined,
   stepName: string,
-): string[] | undefined {
+): QualityGate[] | undefined {
   const withSteps = overrides as (WorkflowOverrides & {
-    steps?: Record<string, { qualityGates?: string[] }>;
+    steps?: Record<string, { qualityGates?: QualityGate[] }>;
   }) | undefined;
   return withSteps?.steps?.[stepName]?.qualityGates ?? overrides?.steps?.[stepName]?.qualityGates;
 }
 
+function normalizeCommandGateCwd(cwd: string | undefined): string {
+  if (cwd === undefined) {
+    return '.';
+  }
+
+  const normalized = path.normalize(cwd);
+  if (normalized === path.parse(normalized).root) {
+    return normalized;
+  }
+
+  const withoutTrailingSeparator = normalized.endsWith(path.sep) ? normalized.slice(0, -1) : normalized;
+  return withoutTrailingSeparator.length > 0 ? withoutTrailingSeparator : '.';
+}
+
+function qualityGateDedupeKey(gate: QualityGate): string {
+  if (typeof gate === 'string') {
+    return `string:${JSON.stringify(gate)}`;
+  }
+
+  const cwd = normalizeCommandGateCwd(gate.cwd);
+  const timeoutMs = gate.timeoutMs ?? DEFAULT_COMMAND_GATE_TIMEOUT_MS;
+
+  return `command:${JSON.stringify([
+    gate.type,
+    gate.name ?? null,
+    gate.command,
+    cwd,
+    timeoutMs,
+  ])}`;
+}
+
+function dedupeQualityGates(gates: QualityGate[]): QualityGate[] {
+  const seenKeys = new Set<string>();
+  const uniqueGates: QualityGate[] = [];
+
+  for (const gate of gates) {
+    const key = qualityGateDedupeKey(gate);
+    if (seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    uniqueGates.push(gate);
+  }
+
+  return uniqueGates;
+}
+
 /**
- * Apply quality gate overrides to a step.
+ * Apply quality gate overrides to an agent step.
  *
  * Merge order (gates are added in this sequence):
  * 1. Global override in global config (filtered by edit flag if qualityGatesEditOnly=true)
@@ -45,12 +95,12 @@ function getStepQualityGates(
  */
 export function applyQualityGateOverrides(
   stepName: string,
-  yamlGates: string[] | undefined,
+  yamlGates: QualityGate[] | undefined,
   editFlag: boolean | undefined,
   personaName: string | undefined,
   projectOverrides: WorkflowOverrides | undefined,
   globalOverrides: WorkflowOverrides | undefined,
-): string[] | undefined {
+): QualityGate[] | undefined {
   if (personaName !== undefined && personaName.trim().length === 0) {
     throw new Error(`Invalid persona name for step "${stepName}": empty value`);
   }
@@ -58,7 +108,7 @@ export function applyQualityGateOverrides(
 
   // Track whether yamlGates was explicitly defined (even if empty)
   const hasYamlGates = yamlGates !== undefined;
-  const gates: string[] = [];
+  const gates: QualityGate[] = [];
 
   // Collect global gates from global config
   const globalGlobalGates = globalOverrides?.qualityGates;
@@ -107,8 +157,7 @@ export function applyQualityGateOverrides(
     gates.push(...yamlGates);
   }
 
-  // Deduplicate gates (same text = same gate)
-  const uniqueGates = Array.from(new Set(gates));
+  const uniqueGates = dedupeQualityGates(gates);
 
   // Return undefined only if no gates were defined anywhere
   // If yamlGates was explicitly set (even if empty), return the merged array

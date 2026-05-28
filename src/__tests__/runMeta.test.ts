@@ -18,6 +18,10 @@ function createRunPaths(): RunPaths {
     reportsRel: '.takt/runs/20260409-force-fail-test/reports',
     contextAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context',
     contextRel: '.takt/runs/20260409-force-fail-test/context',
+    contextTaskAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/task',
+    contextTaskRel: '.takt/runs/20260409-force-fail-test/context/task',
+    contextTaskOrderAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/task/order.md',
+    contextTaskOrderRel: '.takt/runs/20260409-force-fail-test/context/task/order.md',
     contextKnowledgeAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/knowledge',
     contextKnowledgeRel: '.takt/runs/20260409-force-fail-test/context/knowledge',
     contextPolicyAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/policy',
@@ -191,5 +195,46 @@ describe('RunMetaManager', () => {
     expect(finalizedMeta.currentStep).toBe('delegate');
     expect(finalizedMeta.currentIteration).toBe(7);
     expect(finalizedMeta.resume_point).toEqual(refreshedResumePoint);
+  });
+
+  it('should persist direct resume source metadata for resumed runs', () => {
+    const manager = new RunMetaManager(
+      createRunPaths(),
+      'Force fail task',
+      'default',
+      {
+        sourceRunSlug: '20260409-source-run',
+        resumeMode: 'retry',
+      },
+    );
+
+    manager.updateStep('review', 3);
+    manager.finalize('completed', 3);
+
+    const initialMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[0]![1])) as {
+      source_run_slug?: string;
+      resume_mode?: string;
+    } & Record<string, unknown>;
+    const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
+      source_run_slug?: string;
+      resume_mode?: string;
+    } & Record<string, unknown>;
+    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
+      source_run_slug?: string;
+      resume_mode?: string;
+    } & Record<string, unknown>;
+
+    expect(initialMeta.source_run_slug).toBe('20260409-source-run');
+    expect(initialMeta.resume_mode).toBe('retry');
+    expect(initialMeta).not.toHaveProperty('sourceRunSlug');
+    expect(initialMeta).not.toHaveProperty('resumeMode');
+    expect(updatedMeta.source_run_slug).toBe('20260409-source-run');
+    expect(updatedMeta.resume_mode).toBe('retry');
+    expect(updatedMeta).not.toHaveProperty('sourceRunSlug');
+    expect(updatedMeta).not.toHaveProperty('resumeMode');
+    expect(finalizedMeta.source_run_slug).toBe('20260409-source-run');
+    expect(finalizedMeta.resume_mode).toBe('retry');
+    expect(finalizedMeta).not.toHaveProperty('sourceRunSlug');
+    expect(finalizedMeta).not.toHaveProperty('resumeMode');
   });
 });

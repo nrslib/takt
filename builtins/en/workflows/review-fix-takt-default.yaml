@@ -1,5 +1,5 @@
 name: review-fix-takt-default
-description: "TAKT-focused multi-perspective review + fix loop (6-parallel initial review, AI antipattern pre-review on fix iterations)"
+description: "TAKT-focused multi-perspective review + fix loop (6-parallel initial review, AI antipattern pre-review on fix iterations, supervisor-finding fixes)"
 workflow_config:
   provider_options:
     codex:
@@ -334,7 +334,7 @@ steps:
       - condition: All checks passed
         next: COMPLETE
       - condition: Requirements unmet, tests failing, build errors
-        next: ABORT
+        next: fix_supervisor
     output_contracts:
       report:
         - name: supervisor-validation.md
@@ -342,3 +342,31 @@ steps:
         - name: summary.md
           format: summary
           use_judge: false
+  - name: fix_supervisor
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - takt
+      - architecture
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
+    required_permission_mode: edit
+    instruction: fix-supervisor
+    pass_previous_response: false
+    rules:
+      - condition: Fixes for supervisor findings complete
+        next: supervise
+      - condition: Unable to proceed with fixes
+        next: supervise

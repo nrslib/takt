@@ -12,6 +12,13 @@ import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
 import { createCompletionController } from './completionController.js';
 import type { CompletionProvider } from './completionMenu.js';
+import {
+  assertPendingInlineImageWithinLimit,
+  OSC_IMAGE_PREFIX,
+  parseInlineImageSequence,
+  type ImagePasteHandler,
+  type PastedImage,
+} from './inlineImagePaste.js';
 
 /** Escape sequences for terminal protocol control */
 const PASTE_BRACKET_ENABLE = '\x1B[?2004h';
@@ -27,6 +34,22 @@ const ESC_PASTE_END = '[201~';
 const ESC_SHIFT_ENTER = '[13;2u';
 
 type InputState = 'normal' | 'paste';
+
+function splitTrailingInlineImagePrefix(input: string): { ready: string; pending: string } {
+  const maxCandidateLength = Math.min(OSC_IMAGE_PREFIX.length - 1, input.length);
+
+  for (let length = maxCandidateLength; length > 0; length--) {
+    const candidate = input.slice(input.length - length);
+    if (candidate.startsWith('\x1B') && OSC_IMAGE_PREFIX.startsWith(candidate)) {
+      return {
+        ready: input.slice(0, input.length - length),
+        pending: candidate,
+      };
+    }
+  }
+
+  return { ready: input, pending: '' };
+}
 
 /**
  * Decode Kitty CSI-u key sequence into a control character.
@@ -275,6 +298,7 @@ export function readMultilineInput(
   prompt: string,
   options?: {
     completionProvider?: CompletionProvider;
+    onImagePaste?: ImagePasteHandler;
   },
 ): Promise<string | null> {
   if (!process.stdin.isTTY) {
@@ -304,7 +328,7 @@ export function readMultilineInput(
     });
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let buffer = '';
     let cursorPos = 0;
     let state: InputState = 'normal';
@@ -511,6 +535,7 @@ export function readMultilineInput(
     }
 
     function cleanup(): void {
+      clearInlineImagePrefixTimer();
       escParser.flush();
       completion.hide();
       process.stdin.removeListener('data', onData);
@@ -659,6 +684,119 @@ export function readMultilineInput(
     // --- Input dispatch ---
 
     const utf8Decoder = new StringDecoder('utf8');
+    let pendingInlineImage = '';
+    let inlineImagePrefixTimer: ReturnType<typeof setTimeout> | null = null;
+    let inputQueue = Promise.resolve();
+    let settled = false;
+
+    function clearInlineImagePrefixTimer(): void {
+      if (inlineImagePrefixTimer !== null) {
+        clearTimeout(inlineImagePrefixTimer);
+        inlineImagePrefixTimer = null;
+      }
+    }
+
+    function flushAmbiguousInlineImagePrefix(): void {
+      clearInlineImagePrefixTimer();
+      if (pendingInlineImage.length === 0) {
+        return;
+      }
+      const pending = pendingInlineImage;
+      pendingInlineImage = '';
+      escParser.feed(pending);
+      if (pending === '\x1B') {
+        escParser.flush();
+      }
+    }
+
+    function holdPendingInlineImage(pending: string): void {
+      clearInlineImagePrefixTimer();
+      assertPendingInlineImageWithinLimit(pending);
+      pendingInlineImage = pending;
+      if (pending === '\x1B') {
+        inlineImagePrefixTimer = setTimeout(flushAmbiguousInlineImagePrefix, ESC_AMBIGUITY_TIMEOUT_MS);
+      }
+    }
+
+    function finish(value: string | null): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(value);
+    }
+
+    function fail(error: unknown): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    }
+
+    function insertText(text: string): void {
+      insertAt(cursorPos, text);
+      cursorPos += text.length;
+      process.stdout.write(text);
+      rerenderFromCursor();
+    }
+
+    async function handleInlineImage(image: PastedImage): Promise<void> {
+      if (!options?.onImagePaste) {
+        return;
+      }
+      completion.hide();
+      const placeholder = await options.onImagePaste({
+        mimeType: image.mimeType,
+        data: image.data,
+      });
+      if (settled) {
+        return;
+      }
+      insertText(placeholder);
+      completion.update();
+    }
+
+    async function feedInputWithImages(input: string): Promise<void> {
+      clearInlineImagePrefixTimer();
+      const currentInput = pendingInlineImage + input;
+      pendingInlineImage = '';
+      let offset = 0;
+
+      while (offset < currentInput.length) {
+        const imageStart = currentInput.indexOf(OSC_IMAGE_PREFIX, offset);
+        if (imageStart === -1) {
+          const tail = splitTrailingInlineImagePrefix(currentInput.slice(offset));
+          if (tail.ready.length > 0) {
+            escParser.feed(tail.ready);
+          }
+          if (tail.pending.length > 0) {
+            holdPendingInlineImage(tail.pending);
+          }
+          return;
+        }
+
+        if (imageStart > offset) {
+          escParser.feed(currentInput.slice(offset, imageStart));
+        }
+
+        const sequence = parseInlineImageSequence(currentInput, imageStart);
+        if (sequence.status === 'incomplete') {
+          const pending = currentInput.slice(imageStart);
+          holdPendingInlineImage(pending);
+          return;
+        }
+
+        if (sequence.status === 'image') {
+          await handleInlineImage(sequence.image);
+        } else {
+          escParser.feed(currentInput.slice(imageStart, sequence.sequenceEnd));
+        }
+        offset = sequence.sequenceEnd;
+      }
+    }
 
     const escParser = createEscapeParser({
           onPasteStart() { state = 'paste'; completion.hide(); },
@@ -818,15 +956,13 @@ export function readMultilineInput(
             if (ch === '\r' || ch === '\n') {
               completion.acceptSelection();
               process.stdout.write('\n');
-              cleanup();
-              resolve(buffer);
+              finish(buffer);
               return;
             }
             // Cancel
             if (ch === '\x03' || ch === '\x04') {
               process.stdout.write('\n');
-              cleanup();
-              resolve(null);
+              finish(null);
               return;
             }
             // Editing
@@ -858,10 +994,16 @@ export function readMultilineInput(
       try {
         const str = utf8Decoder.write(data);
         if (!str) return;
-        escParser.feed(str);
-      } catch {
-        cleanup();
-        resolve(null);
+        inputQueue = inputQueue
+          .then(() => {
+            if (settled) {
+              return undefined;
+            }
+            return feedInputWithImages(str);
+          })
+          .catch(fail);
+      } catch (error) {
+        fail(error);
       }
     }
 

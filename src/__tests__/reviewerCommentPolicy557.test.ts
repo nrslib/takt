@@ -18,6 +18,8 @@ describe('reviewer comment policy (#557)', () => {
     'saveTaskFile.test.ts',
     'taskListSerializer.test.ts',
     'nffHintDry557.test.ts',
+    'inlineImagePaste.test.ts',
+    'imageAttachments.test.ts',
     'reviewerCommentPolicy557.test.ts',
   ] as const) {
     it(`${file} has no // Given/When/Then explanation comment lines`, () => {

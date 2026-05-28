@@ -28,3 +28,4 @@ export {
   deleteBranch,
   instructBranch,
 } from './list/index.js';
+export { resumeDirectRun } from './resume/index.js';

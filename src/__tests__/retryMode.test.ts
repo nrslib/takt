@@ -16,7 +16,10 @@ function createRetryContext(overrides?: Partial<RetryContext>): RetryContext {
       lastMessage: 'Agent stopped',
       retryNote: '',
     },
-    branchName: 'takt/my-task',
+    subject: {
+      kind: 'branch',
+      value: 'takt/my-task',
+    },
     workflowContext: {
       name: 'default',
       description: '',
@@ -35,7 +38,8 @@ describe('buildRetryTemplateVars', () => {
     const vars = buildRetryTemplateVars(ctx, 'en');
 
     expect(vars.taskName).toBe('my-task');
-    expect(vars.branchName).toBe('takt/my-task');
+    expect(vars.subjectLabel).toBe('Branch');
+    expect(vars.subjectValue).toBe('takt/my-task');
     expect(vars.createdAt).toBe('2026-02-15T10:00:00Z');
     expect(vars.failedStep).toBe('review');
     expect(vars.failureError).toBe('Timeout');
@@ -140,9 +144,9 @@ describe('buildRetryTemplateVars', () => {
     expect(vars.orderContent).toBe('');
   });
 
-  it('should set hasOrderContent=true and populate orderContent when provided via parameter', () => {
-    const ctx = createRetryContext();
-    const vars = buildRetryTemplateVars(ctx, 'en', '# Order content');
+  it('should set hasOrderContent=true and populate orderContent when previousOrderContent is set', () => {
+    const ctx = createRetryContext({ previousOrderContent: '# Order content' });
+    const vars = buildRetryTemplateVars(ctx, 'en');
 
     expect(vars.hasOrderContent).toBe(true);
     expect(vars.orderContent).toBe('# Order content');
@@ -167,25 +171,30 @@ describe('buildRetryTemplateVars', () => {
 
   it('should set hasOrderContent=false when previousOrderContent is null', () => {
     const ctx = createRetryContext();
-    const vars = buildRetryTemplateVars(ctx, 'en', null);
+    const vars = buildRetryTemplateVars(ctx, 'en');
 
     expect(vars.hasOrderContent).toBe(false);
     expect(vars.orderContent).toBe('');
   });
 
   it('should set hasOrderContent=true and populate orderContent when provided', () => {
-    const ctx = createRetryContext();
-    const vars = buildRetryTemplateVars(ctx, 'en', '# Previous Order\nDo the thing');
+    const ctx = createRetryContext({ previousOrderContent: '# Previous Order\nDo the thing' });
+    const vars = buildRetryTemplateVars(ctx, 'en');
 
     expect(vars.hasOrderContent).toBe(true);
     expect(vars.orderContent).toBe('# Previous Order\nDo the thing');
   });
 
-  it('should default hasOrderContent to false when previousOrderContent is omitted', () => {
-    const ctx = createRetryContext();
-    const vars = buildRetryTemplateVars(ctx, 'en');
+  it('should use a run subject label for direct run retry context', () => {
+    const ctx = createRetryContext({
+      subject: {
+        kind: 'run',
+        value: '20260524-direct-failed',
+      },
+    });
+    const vars = buildRetryTemplateVars(ctx, 'ja');
 
-    expect(vars.hasOrderContent).toBe(false);
-    expect(vars.orderContent).toBe('');
+    expect(vars.subjectLabel).toBe('Run');
+    expect(vars.subjectValue).toBe('20260524-direct-failed');
   });
 });

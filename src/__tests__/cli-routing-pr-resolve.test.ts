@@ -124,7 +124,7 @@ vi.mock('../app/cli/helpers.js', () => ({
   resolveWorkflowCliOption: vi.fn((opts: Record<string, unknown>) => typeof opts.workflow === 'string' ? opts.workflow : undefined),
 }));
 
-import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determineWorkflow, saveTaskFromInteractive, createIssueAndSaveTask } from '../features/tasks/index.js';
 import {
   interactiveMode,
   passthroughMode,
@@ -148,8 +148,15 @@ const mockSelectInteractiveMode = vi.mocked(selectInteractiveMode);
 const mockExecutePipeline = vi.mocked(executePipeline);
 const mockLogError = vi.mocked(logError);
 const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
+const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
 const mockResolveConfigValuesFn = mockResolveConfigValues;
 const mockLoadPersonaSessionsFn = mockLoadPersonaSessions;
+
+const testAttachment = {
+  placeholder: '[Image #1]',
+  tempPath: '/tmp/takt/session-1/attachments/image-1.png',
+  fileName: 'image-1.png',
+};
 
 function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: string }> = {}): PrReviewData {
   return {
@@ -183,6 +190,79 @@ beforeEach(() => {
   mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
   mockLoadPersonaSessionsFn.mockReturnValue({});
   mockResolveAgentOverrides.mockReturnValue(undefined);
+});
+
+describe('interactive image attachment routing', () => {
+  it('should pass attachments from interactive execute result to selectAndExecuteTask', async () => {
+    mockInteractiveMode.mockResolvedValue({
+      action: 'execute',
+      task: 'Use [Image #1] as reference.',
+      attachments: [testAttachment],
+    } satisfies InteractiveModeResult);
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'Use [Image #1] as reference.',
+      expect.objectContaining({
+        attachments: [testAttachment],
+      }),
+      undefined,
+    );
+  });
+
+  it('should pass attachments from interactive save_task result to saveTaskFromInteractive', async () => {
+    mockInteractiveMode.mockResolvedValue({
+      action: 'save_task',
+      task: 'Use [Image #1] as reference.',
+      attachments: [testAttachment],
+    } satisfies InteractiveModeResult);
+
+    await executeDefaultAction();
+
+    expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+      '/test/cwd',
+      'Use [Image #1] as reference.',
+      'default',
+      expect.objectContaining({
+        attachments: [testAttachment],
+      }),
+    );
+  });
+
+  it('should pass attachments from interactive create_issue result to createIssueAndSaveTask', async () => {
+    mockInteractiveMode.mockResolvedValue({
+      action: 'create_issue',
+      task: 'Use [Image #1] as reference.',
+      attachments: [testAttachment],
+    } satisfies InteractiveModeResult);
+
+    await executeDefaultAction();
+
+    expect(mockCreateIssueAndSaveTask).toHaveBeenCalledWith(
+      '/test/cwd',
+      'Use [Image #1] as reference.',
+      'default',
+      expect.objectContaining({
+        attachments: [testAttachment],
+      }),
+    );
+  });
+
+  it('should not promote pasted image attachments when interactive input is cancelled', async () => {
+    mockInteractiveMode.mockResolvedValue({
+      action: 'cancel',
+      task: '',
+      attachments: [testAttachment],
+    } satisfies InteractiveModeResult);
+
+    await executeDefaultAction();
+
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+    expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
+  });
 });
 
 describe('PR resolution in routing', () => {

@@ -2,6 +2,8 @@
  * Tests for interactive mode variants (assistant, persona, quiet, passthrough)
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mocks ──────────────────────────────────────────────
@@ -60,6 +62,7 @@ const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOptionWithDefault = vi.mocked(selectOptionWithDefault);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
+const attachmentSessionDirs = new Set<string>();
 
 // ── Stdin helpers (same pattern as interactive.test.ts) ──
 
@@ -182,7 +185,20 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreStdin();
+  for (const sessionDir of attachmentSessionDirs) {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  }
+  attachmentSessionDirs.clear();
 });
+
+function createOscImagePaste(): string {
+  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
+}
+
+function trackAttachmentSession(tempPath: string): void {
+  attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
+}
 
 // ── InteractiveMode type & constants tests ──
 
@@ -344,6 +360,20 @@ describe('passthroughMode', () => {
     expect(result.task).toBe('implement login feature');
   });
 
+  it('should return pasted image attachments with placeholders in task text', async () => {
+    setupRawStdin([`use ${createOscImagePaste()} please\r`]);
+
+    const result = await passthroughMode('en');
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('use [Image #1] please');
+    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
+    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
+    expect(result.attachments?.[0]?.tempPath).toBeDefined();
+    trackAttachmentSession(result.attachments![0]!.tempPath);
+    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+  });
+
   it('should trim whitespace from user input', async () => {
     // Given
     setupRawStdin(toRawInputs(['  my task  ']));
@@ -442,6 +472,22 @@ describe('quietMode', () => {
     // Then
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Fix the bug instruction.');
+  });
+
+  it('should return pasted image attachments from prompted quiet input', async () => {
+    setupRawStdin([`use ${createOscImagePaste()} please\r`]);
+    setupMockProvider(['Generated task using [Image #1].']);
+    mockSelectOption.mockResolvedValue('execute');
+
+    const result = await quietMode('/project');
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Generated task using [Image #1].');
+    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
+    expect(result.attachments?.[0]).not.toHaveProperty('relativePath');
+    expect(result.attachments?.[0]?.tempPath).toBeDefined();
+    trackAttachmentSession(result.attachments![0]!.tempPath);
+    expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
   });
 
   it('should include workflow context in summary generation', async () => {

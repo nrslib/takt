@@ -680,6 +680,71 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(detectMatchedRule).toHaveBeenCalledTimes(3);
   });
 
+  it('parallel sub-step の rate_limited は別 sub-step の command gate failure より優先して fallback provider で再実行する', async () => {
+    // Given
+    const gateMarkerPath = join(tmpDir, 'quality-gate-failed-once');
+    const config = buildDefaultWorkflowConfig({
+      initialStep: 'reviewers',
+      maxSteps: 3,
+      steps: [
+        makeStep('reviewers', {
+          parallel: [
+            makeStep('arch-review', {
+              rules: [makeRule('done', 'COMPLETE')],
+            }),
+            makeStep('security-review', {
+              qualityGates: [
+                {
+                  type: 'command',
+                  name: 'security-quality-check',
+                  command: `node -e 'const fs=require("fs"); const p=${JSON.stringify(gateMarkerPath)}; if (fs.existsSync(p)) process.exit(0); fs.writeFileSync(p, "failed"); process.exit(1);'`,
+                },
+              ],
+              rules: [makeRule('done', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('any("done")', 'COMPLETE', {
+              isAggregateCondition: true,
+              aggregateType: 'any',
+              aggregateConditionText: 'done',
+            }),
+          ],
+        }),
+      ],
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    }));
+    mockRunAgentSequence([
+      makeRateLimitedResponse('claude', { persona: 'arch-review' }),
+      makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
+      makeResponse({ persona: 'arch-review', content: '[STEP:1] done' }),
+      makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+
+    // When
+    const state = await engine.run();
+
+    // Then
+    expect(state.status).toBe('completed');
+    expect(existsSync(gateMarkerPath)).toBe(true);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
+    const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
+    expect(prompts[2]).toContain('Fallback Execution');
+    expect(prompts[3]).toContain('Fallback Execution');
+    expect(prompts[2]).not.toContain('Quality gate failed');
+    expect(prompts[3]).not.toContain('Quality gate failed');
+  });
+
   it('parallel sub-step の report phase が rate_limited の場合も fallback provider で再実行する', async () => {
     // Given
     const config = buildDefaultWorkflowConfig({

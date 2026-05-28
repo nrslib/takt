@@ -28,6 +28,10 @@ import {
 } from './requeueHelpers.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
 import { prepareTaskForExecution } from './prepareTaskForExecution.js';
+import {
+  cleanupPreparedRetryTaskSpec,
+  prepareRetryTaskSpecWithAttachments,
+} from './retryTaskSpecAttachments.js';
 
 const log = createLogger('list-tasks');
 
@@ -134,8 +138,16 @@ export async function instructBranch(
 
   const executeWithInstruction = async (instruction: string): Promise<boolean> => {
     const retryNote = appendRetryNote(target.data?.retry_note, instruction);
+    const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, target.content, retryNote, result.attachments, target.taskDir);
+    const taskDir = preparedSpec?.taskDirRelative;
     const runner = new TaskRunner(projectDir);
-    const taskInfo = runner.startReExecution(target.name, ['completed', 'failed'], undefined, retryNote);
+    let taskInfo: ReturnType<TaskRunner['startReExecution']>;
+    try {
+      taskInfo = runner.startReExecution(target.name, ['completed', 'failed'], undefined, retryNote, undefined, undefined, taskDir);
+    } catch (error) {
+      cleanupPreparedRetryTaskSpec(preparedSpec);
+      throw error;
+    }
     const taskForExecution = prepareTaskForExecution(taskInfo, selectedWorkflow);
 
     log.info('Starting re-execution of instructed task', {
@@ -156,8 +168,15 @@ export async function instructBranch(
     execute: async ({ task }) => executeWithInstruction(task),
     save_task: async ({ task }) => {
       const retryNote = appendRetryNote(target.data?.retry_note, task);
+      const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, target.content, retryNote, result.attachments, target.taskDir);
+      const taskDir = preparedSpec?.taskDirRelative;
       const runner = new TaskRunner(projectDir);
-      runner.requeueTask(target.name, ['completed', 'failed'], undefined, retryNote);
+      try {
+        runner.requeueTask(target.name, ['completed', 'failed'], undefined, retryNote, undefined, undefined, taskDir);
+      } catch (error) {
+        cleanupPreparedRetryTaskSpec(preparedSpec);
+        throw error;
+      }
       info(`Task "${target.name}" has been requeued.`);
       return true;
     },

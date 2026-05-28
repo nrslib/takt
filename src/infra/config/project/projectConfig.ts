@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
+import type { QualityGate } from '../../../core/models/workflow-types.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
 import {
@@ -37,6 +38,8 @@ import {
   denormalizeAnalytics,
   normalizeWorkflowRuntimePreparePolicy,
   denormalizeWorkflowRuntimePreparePolicy,
+  normalizeWorkflowCommandGatesPolicy,
+  denormalizeWorkflowCommandGatesPolicy,
   normalizeWorkflowArpeggioPolicy,
   denormalizeWorkflowArpeggioPolicy,
   normalizeSyncConflictResolver,
@@ -158,13 +161,14 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       }> | undefined,
     ),
     workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides as {
-      quality_gates?: string[];
+      quality_gates?: QualityGate[];
       quality_gates_edit_only?: boolean;
-      steps?: Record<string, { quality_gates?: string[] }>;
-      personas?: Record<string, { quality_gates?: string[] }>;
+      steps?: Record<string, { quality_gates?: QualityGate[] }>;
+      personas?: Record<string, { quality_gates?: QualityGate[] }>;
     } | undefined),
     runtime: normalizeRuntime(runtime),
     workflowRuntimePrepare: normalizeWorkflowRuntimePreparePolicy(parsedConfigResult.workflow_runtime_prepare),
+    workflowCommandGates: normalizeWorkflowCommandGatesPolicy(parsedConfigResult.workflow_command_gates),
     workflowArpeggio: normalizeWorkflowArpeggioPolicy(parsedConfigResult.workflow_arpeggio),
     syncConflictResolver: normalizeSyncConflictResolver(sync_conflict_resolver),
     workflowMcpServers: normalizeWorkflowMcpServers(parsedConfigResult.workflow_mcp_servers),
@@ -267,7 +271,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'taktProviders', 'workflowRuntimePrepare', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 
@@ -283,7 +287,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.runtime;
   }
-  for (const [key, raw] of [['workflow_runtime_prepare', denormalizeWorkflowRuntimePreparePolicy(config.workflowRuntimePrepare)], ['workflow_arpeggio', denormalizeWorkflowArpeggioPolicy(config.workflowArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizeWorkflowMcpServers(config.workflowMcpServers)]] as const) {
+  for (const [key, raw] of [['workflow_runtime_prepare', denormalizeWorkflowRuntimePreparePolicy(config.workflowRuntimePrepare)], ['workflow_command_gates', denormalizeWorkflowCommandGatesPolicy(config.workflowCommandGates)], ['workflow_arpeggio', denormalizeWorkflowArpeggioPolicy(config.workflowArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizeWorkflowMcpServers(config.workflowMcpServers)]] as const) {
     if (raw) { savePayload[key] = raw; } else { delete savePayload[key]; }
   }
 

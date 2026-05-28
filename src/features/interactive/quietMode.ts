@@ -25,6 +25,11 @@ import {
   callAIWithRetry,
 } from './conversationLoop.js';
 import { initializeSession } from './sessionInitialization.js';
+import {
+  buildInteractiveResultWithAttachments,
+  createImagePasteHandler,
+  createSessionImageAttachmentStore,
+} from './imageAttachments.js';
 
 const log = createLogger('quiet-mode');
 
@@ -49,6 +54,7 @@ export async function quietMode(
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'interactive');
   const sourceContext = initialInput?.sourceContext;
+  const attachmentStore = createSessionImageAttachmentStore();
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
@@ -57,16 +63,18 @@ export async function quietMode(
     info(getLabel('interactive.ui.introQuiet', ctx.lang));
     blankLine();
 
-    const input = await readMultilineInput(chalk.green('> '));
+    const input = await readMultilineInput(chalk.green('> '), {
+      onImagePaste: createImagePasteHandler(attachmentStore),
+    });
     if (input === null) {
       blankLine();
       info(getLabel('interactive.ui.cancelled', ctx.lang));
-      return { action: 'cancel', task: '' };
+      return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
     }
     const trimmed = input.trim();
     if (!trimmed) {
       info(getLabel('interactive.ui.cancelled', ctx.lang));
-      return { action: 'cancel', task: '' };
+      return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
     }
     history.push({ role: 'user', content: trimmed });
   }
@@ -80,7 +88,7 @@ export async function quietMode(
 
   if (!summaryPrompt) {
     info(getLabel('interactive.ui.noConversation', ctx.lang));
-    return { action: 'cancel', task: '' };
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
   const { result } = await callAIWithRetry(
@@ -89,13 +97,13 @@ export async function quietMode(
   );
 
   if (!result) {
-    return { action: 'cancel', task: '' };
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
   if (!result.success) {
     error(result.content);
     blankLine();
-    return { action: 'cancel', task: '' };
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
   const task = result.content.trim();
@@ -103,9 +111,9 @@ export async function quietMode(
 
   const selectedAction = await selectPostSummaryAction(task, ui.proposed, ui);
   if (selectedAction === 'continue' || selectedAction === null) {
-    return { action: 'cancel', task: '' };
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
   log.info('Quiet mode action selected', { action: selectedAction });
-  return { action: selectedAction, task };
+  return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
 }

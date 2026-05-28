@@ -104,10 +104,7 @@ const workflowCallForbiddenFieldCases = [
       ],
     },
   },
-  {
-    field: 'quality_gates',
-    value: ['must pass'],
-  },
+  { field: 'quality_gates', value: ['Review before finishing'] },
   { field: 'pass_previous_response', value: false },
 ] as const;
 

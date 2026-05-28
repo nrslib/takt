@@ -375,6 +375,48 @@ describe('Instruction Builder IT: quality gates injection', () => {
 
     expect(result).not.toContain('## Quality Gates');
   });
+
+  it('should inject only string quality gates and omit command gates from the AI prompt', () => {
+    const step = makeStep({
+      qualityGates: [
+        'All tests must pass',
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+          timeoutMs: 300000,
+        },
+      ],
+    });
+    const ctx = makeContext();
+
+    const result = buildInstruction(step, ctx);
+
+    expect(result).toContain('## Quality Gates');
+    expect(result).toContain('- All tests must pass');
+    expect(result).not.toContain('[object Object]');
+    expect(result).not.toContain('quality-check');
+    expect(result).not.toContain('./.takt/quality-gates/check.sh');
+  });
+
+  it('should not inject quality gates section when only command gates are defined', () => {
+    const step = makeStep({
+      qualityGates: [
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+        },
+      ],
+    });
+    const ctx = makeContext();
+
+    const result = buildInstruction(step, ctx);
+
+    expect(result).not.toContain('## Quality Gates');
+    expect(result).not.toContain('[object Object]');
+    expect(result).not.toContain('quality-check');
+  });
 });
 
 describe('Instruction Builder IT: template injection prevention', () => {

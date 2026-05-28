@@ -32,6 +32,7 @@ export class TaskRetryService {
     retryNote?: string,
     resumePoint?: WorkflowResumePoint,
     workflow?: string,
+    taskDir?: string,
   ): TaskInfo {
     const taskName = normalizeTaskRef(taskRef);
     let found: TaskRecord | undefined;
@@ -47,7 +48,7 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
-      const updated = buildRetryTaskRecord(target, 'running', startStep, retryNote, resumePoint, workflow);
+      const updated = buildRetryTaskRecord(target, 'running', startStep, retryNote, resumePoint, workflow, taskDir);
 
       found = updated;
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
@@ -63,6 +64,7 @@ export class TaskRetryService {
     retryNote?: string,
     resumePoint?: WorkflowResumePoint,
     workflow?: string,
+    taskDir?: string,
   ): string {
     const taskName = normalizeTaskRef(taskRef);
 
@@ -77,7 +79,7 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
-      const updated = buildRetryTaskRecord(target, 'pending', startStep, retryNote, resumePoint, workflow);
+      const updated = buildRetryTaskRecord(target, 'pending', startStep, retryNote, resumePoint, workflow, taskDir);
 
       return { tasks: replaceTaskAtIndex(current.tasks, index, updated) };
     });

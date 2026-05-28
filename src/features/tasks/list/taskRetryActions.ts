@@ -19,7 +19,7 @@ import {
   loadRunSessionContext,
   getRunPaths,
   formatRunSessionForPrompt,
-  runRetryMode,
+  runTaskRetryMode,
   findPreviousOrderContent,
   type RetryContext,
   type RetryFailureInfo,
@@ -34,6 +34,10 @@ import {
   selectWorkflowWithOptionalReuse,
 } from './requeueHelpers.js';
 import { prepareTaskForExecution } from './prepareTaskForExecution.js';
+import {
+  cleanupPreparedRetryTaskSpec,
+  prepareRetryTaskSpecWithAttachments,
+} from './retryTaskSpecAttachments.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 
@@ -364,44 +368,61 @@ export async function retryFailedTask(
   };
 
   blankLine();
-  const branchName = task.branch ?? task.name;
   const retryContext: RetryContext = {
     failure: buildRetryFailureInfo(task, selection.failure),
-    branchName,
+    subject: {
+      kind: 'branch',
+      value: task.branch ?? task.name,
+    },
     workflowContext,
     run: runInfo,
     previousOrderContent: selection.previousOrderContent,
   };
 
-  const retryResult = await runRetryMode(selection.worktreePath, retryContext, selection.previousOrderContent);
+  const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext);
   if (retryResult.action === 'cancel') {
     return false;
   }
 
   const retryNote = appendRetryNote(task.data?.retry_note, retryResult.task);
+  const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, task.content, retryNote, retryResult.attachments, task.taskDir);
+  const taskDir = preparedSpec?.taskDirRelative;
   const runner = new TaskRunner(projectDir);
 
   if (retryResult.action === 'save_task') {
-    runner.requeueTask(
+    try {
+      runner.requeueTask(
+        task.name,
+        ['failed'],
+        selection.startStep,
+        retryNote,
+        selection.selectedResumePoint,
+        selection.selectedWorkflowOverride,
+        taskDir,
+      );
+    } catch (error) {
+      cleanupPreparedRetryTaskSpec(preparedSpec);
+      throw error;
+    }
+    info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
+    return true;
+  }
+
+  let taskInfo: ReturnType<TaskRunner['startReExecution']>;
+  try {
+    taskInfo = runner.startReExecution(
       task.name,
       ['failed'],
       selection.startStep,
       retryNote,
       selection.selectedResumePoint,
       selection.selectedWorkflowOverride,
+      taskDir,
     );
-    info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
-    return true;
+  } catch (error) {
+    cleanupPreparedRetryTaskSpec(preparedSpec);
+    throw error;
   }
-
-  const taskInfo = runner.startReExecution(
-    task.name,
-    ['failed'],
-    selection.startStep,
-    retryNote,
-    selection.selectedResumePoint,
-    selection.selectedWorkflowOverride,
-  );
   const taskForExecution = prepareTaskForExecution(taskInfo, selection.selectedWorkflow);
 
   log.info('Starting re-execution of failed task', {

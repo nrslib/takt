@@ -2,18 +2,30 @@ import type { z } from 'zod';
 import { isRuntimePreparePreset } from '../../../core/models/workflow-types.js';
 import type {
   WorkflowArpeggioConfig,
+  WorkflowCommandGatesConfig,
   WorkflowMcpServersConfig,
   WorkflowRuntimePrepareConfig,
 } from '../../../core/models/config-types.js';
 import type { WorkflowConfig, WorkflowStepRawSchema } from '../../../core/models/index.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
+type RawParallelSubStep = NonNullable<RawStep['parallel']>[number];
 
 export function resolveWorkflowRuntimePreparePolicy(
   globalPolicy: WorkflowRuntimePrepareConfig | undefined,
   projectPolicy: WorkflowRuntimePrepareConfig | undefined,
 ): WorkflowRuntimePrepareConfig | undefined {
   const policy: WorkflowRuntimePrepareConfig = {};
+  if (globalPolicy?.customScripts !== undefined) policy.customScripts = globalPolicy.customScripts;
+  if (projectPolicy?.customScripts !== undefined) policy.customScripts = projectPolicy.customScripts;
+  return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+export function resolveWorkflowCommandGatesPolicy(
+  globalPolicy: WorkflowCommandGatesConfig | undefined,
+  projectPolicy: WorkflowCommandGatesConfig | undefined,
+): WorkflowCommandGatesConfig | undefined {
+  const policy: WorkflowCommandGatesConfig = {};
   if (globalPolicy?.customScripts !== undefined) policy.customScripts = globalPolicy.customScripts;
   if (projectPolicy?.customScripts !== undefined) policy.customScripts = projectPolicy.customScripts;
   return Object.keys(policy).length > 0 ? policy : undefined;
@@ -29,6 +41,34 @@ export function validateWorkflowRuntimePrepare(
     throw new Error(
       `Workflow runtime.prepare custom script "${entry}" is disabled by default. `
       + 'Configure workflow_runtime_prepare.custom_scripts in project/global config to allow it.',
+    );
+  }
+}
+
+export function validateWorkflowCommandGates(
+  steps: RawStep[],
+  policy?: WorkflowCommandGatesConfig,
+): void {
+  for (const step of steps) {
+    validateStepCommandGates(step, step.name, policy);
+    for (const subStep of step.parallel ?? []) {
+      validateStepCommandGates(subStep, `${step.name}.${subStep.name}`, policy);
+    }
+  }
+}
+
+function validateStepCommandGates(
+  step: Pick<RawStep | RawParallelSubStep, 'quality_gates'>,
+  stepName: string,
+  policy?: WorkflowCommandGatesConfig,
+): void {
+  for (const gate of step.quality_gates ?? []) {
+    if (typeof gate === 'string') continue;
+    if (gate.type !== 'command') continue;
+    if (policy?.customScripts === true) continue;
+    throw new Error(
+      `Step "${stepName}" uses command quality gate "${gate.command}", which is disabled by default for workflows. `
+      + 'Configure workflow_command_gates.custom_scripts in project/global config to allow it.',
     );
   }
 }

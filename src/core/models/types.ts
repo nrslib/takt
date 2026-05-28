@@ -48,6 +48,8 @@ export type {
   WorkflowEffectScalarReference,
   OutputContractItem,
   OutputContractEntry,
+  CommandQualityGate,
+  QualityGate,
   McpServerConfig,
   RuntimePreparePreset,
   RuntimePrepareEntry,

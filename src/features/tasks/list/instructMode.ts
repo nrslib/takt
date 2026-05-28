@@ -15,6 +15,7 @@ import { initializeSession } from '../../interactive/sessionInitialization.js';
 import {
   resolveLanguage,
   formatStepPreviews,
+  type InteractiveModeResult,
   type WorkflowContext,
 } from '../../interactive/interactive.js';
 import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
@@ -23,31 +24,27 @@ import { type RunSessionContext, formatRunSessionForPrompt } from '../../interac
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
+import type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
-export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
-
-export interface InstructModeResult {
-  action: InstructModeAction;
-  task: string;
-}
-
-export interface InstructUIText {
-  intro: string;
-  resume: string;
-  noConversation: string;
-  summarizeFailed: string;
-  continuePrompt: string;
-  proposed: string;
-  actionPrompt: string;
-  actions: {
-    execute: string;
-    saveTask: string;
-    continue: string;
-  };
-  cancelled: string;
-}
+export type { InstructModeAction, InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
 const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
+
+function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
+  if (result.action === 'cancel') {
+    return {
+      action: 'cancel',
+      task: '',
+      ...(result.attachments ? { attachments: result.attachments } : {}),
+    };
+  }
+
+  return {
+    action: result.action as InstructModeAction,
+    task: result.task,
+    ...(result.attachments ? { attachments: result.attachments } : {}),
+  };
+}
 
 function buildInstructTemplateVars(
   branchContext: string,
@@ -131,9 +128,5 @@ export async function runInstructMode(
 
   const result = await runConversationLoop(cwd, ctx, strategy, workflowContext, undefined);
 
-  if (result.action === 'cancel') {
-    return { action: 'cancel', task: '' };
-  }
-
-  return { action: result.action as InstructModeAction, task: result.task };
+  return toInstructModeResult(result);
 }

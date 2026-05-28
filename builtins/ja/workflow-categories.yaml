@@ -19,6 +19,7 @@ workflow_categories:
     workflows:
       - frontend
       - frontend-mini
+      - frontend-maintenance
   ⚙️ バックエンド:
     workflows:
       - backend

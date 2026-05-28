@@ -1194,9 +1194,11 @@ describe('Workflow Loader IT: report config loading', () => {
 
 describe('Workflow Loader IT: quality_gates loading', () => {
   let testDir: string;
+  const loadGlobalConfigMock = vi.mocked(loadGlobalConfig);
 
   beforeEach(() => {
     testDir = createTestDir();
+    loadGlobalConfigMock.mockReturnValue({});
   });
 
   afterEach(() => {
@@ -1293,6 +1295,224 @@ steps:
     const implementStep = config!.steps.find((s) => s.name === 'implement');
     expect(implementStep).toBeDefined();
     expect(implementStep!.qualityGates).toEqual([]);
+  });
+
+  it('should parse mixed string and command quality_gates from YAML', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_command_gates:\n  custom_scripts: true\n');
+
+    writeFileSync(join(workflowsDir, 'mixed-gates.yaml'), `
+name: mixed-gates
+description: Workflow with mixed quality gates
+max_steps: 5
+initial_step: implement
+
+steps:
+  - name: implement
+    persona: coder
+    edit: true
+    quality_gates:
+      - "All tests must pass"
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        cwd: "."
+        timeout_ms: 300000
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadWorkflowConfig('mixed-gates', testDir);
+
+    expect(config).not.toBeNull();
+    const implementStep = config!.steps.find((s) => s.name === 'implement');
+    expect(implementStep).toBeDefined();
+    expect(implementStep!.qualityGates).toEqual([
+      'All tests must pass',
+      {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        cwd: '.',
+        timeoutMs: 300000,
+      },
+    ]);
+  });
+
+  it('rejects workflow command quality gates by default', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+
+    writeFileSync(join(workflowsDir, 'command-gate.yaml'), `
+name: command-gate
+description: Workflow with command quality gate
+max_steps: 5
+initial_step: implement
+
+steps:
+  - name: implement
+    persona: coder
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    expect(() => loadWorkflowConfig('command-gate', testDir)).toThrow(/workflow_command_gates\.custom_scripts/);
+  });
+
+  it('rejects workflow command quality gates when project config explicitly overrides global true with false', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    loadGlobalConfigMock.mockReturnValue({
+      workflowCommandGates: { customScripts: true },
+    });
+    writeFileSync(
+      join(testDir, '.takt', 'config.yaml'),
+      'workflow_command_gates:\n  custom_scripts: false\n',
+    );
+
+    writeFileSync(join(workflowsDir, 'command-gate-denied.yaml'), `
+name: command-gate-denied
+description: Workflow with command quality gate denied by project
+max_steps: 5
+initial_step: implement
+
+steps:
+  - name: implement
+    persona: coder
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    expect(() => loadWorkflowConfig('command-gate-denied', testDir))
+      .toThrow(/workflow_command_gates\.custom_scripts/);
+  });
+
+  it('preserves globally allowed workflow command quality gates when project config sets an empty policy block', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    loadGlobalConfigMock.mockReturnValue({
+      workflowCommandGates: { customScripts: true },
+    });
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_command_gates: {}\n');
+
+    writeFileSync(join(workflowsDir, 'command-gate-allowed-by-global.yaml'), `
+name: command-gate-allowed-by-global
+description: Workflow with command quality gate allowed by global config
+max_steps: 5
+initial_step: implement
+
+steps:
+  - name: implement
+    persona: coder
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadWorkflowConfig('command-gate-allowed-by-global', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.steps.find((s) => s.name === 'implement')?.qualityGates).toEqual([
+      {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+      },
+    ]);
+  });
+
+  it('rejects parallel sub-step command quality gates by default', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+
+    writeFileSync(join(workflowsDir, 'parallel-command-gate.yaml'), `
+name: parallel-command-gate
+description: Workflow with parallel command quality gate
+max_steps: 5
+initial_step: reviewers
+
+steps:
+  - name: reviewers
+    persona: reviewers
+    parallel:
+      - name: arch-review
+        persona: reviewer
+        quality_gates:
+          - type: command
+            name: arch-quality-check
+            command: "./.takt/quality-gates/check.sh"
+        rules:
+          - condition: approved
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+    instruction: "Run reviews"
+`);
+
+    expect(() => loadWorkflowConfig('parallel-command-gate', testDir))
+      .toThrow(/Step "reviewers\.arch-review" uses command quality gate/);
+  });
+
+  it('allows parallel sub-step command quality gates when workflow command gates are enabled', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_command_gates:\n  custom_scripts: true\n');
+
+    writeFileSync(join(workflowsDir, 'parallel-command-gate-allowed.yaml'), `
+name: parallel-command-gate-allowed
+description: Workflow with allowed parallel command quality gate
+max_steps: 5
+initial_step: reviewers
+
+steps:
+  - name: reviewers
+    persona: reviewers
+    parallel:
+      - name: arch-review
+        persona: reviewer
+        quality_gates:
+          - type: command
+            name: arch-quality-check
+            command: "./.takt/quality-gates/check.sh"
+        rules:
+          - condition: approved
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+    instruction: "Run reviews"
+`);
+
+    const config = loadWorkflowConfig('parallel-command-gate-allowed', testDir);
+
+    expect(config).not.toBeNull();
+    const reviewersStep = config!.steps.find((s) => s.name === 'reviewers');
+    expect(reviewersStep?.parallel?.[0]?.qualityGates).toEqual([
+      {
+        type: 'command',
+        name: 'arch-quality-check',
+        command: './.takt/quality-gates/check.sh',
+      },
+    ]);
   });
 });
 

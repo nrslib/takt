@@ -1,5 +1,5 @@
 name: review-fix-takt-default
-description: TAKT開発向け多角レビュー＋修正ループ（初回6並列レビュー、修正後はAIアンチパターン事前レビュー＋5並列レビュー）
+description: TAKT開発向け多角レビュー＋修正ループ（初回6並列レビュー、修正後はAIアンチパターン事前レビュー＋5並列レビュー、監督者指摘の再修正）
 workflow_config:
   provider_options:
     codex:
@@ -334,7 +334,7 @@ steps:
       - condition: すべて問題なし
         next: COMPLETE
       - condition: 要求未達成、テスト失敗、ビルドエラー
-        next: ABORT
+        next: fix_supervisor
     output_contracts:
       report:
         - name: supervisor-validation.md
@@ -342,3 +342,31 @@ steps:
         - name: summary.md
           format: summary
           use_judge: false
+  - name: fix_supervisor
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - takt
+      - architecture
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
+    required_permission_mode: edit
+    instruction: fix-supervisor
+    pass_previous_response: false
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: supervise
+      - condition: 修正を進行できない
+        next: supervise

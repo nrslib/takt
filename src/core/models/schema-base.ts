@@ -230,8 +230,57 @@ export const OutputContractsFieldSchema = z.object({
   report: z.array(OutputContractItemSchema).optional(),
 }).optional();
 
-/** Quality gates schema - AI directives for step completion (string array) */
-export const QualityGatesSchema = z.array(z.string()).optional();
+const CommandQualityGateInputSchema = z.object({
+  type: z.literal('command'),
+  name: z.string().min(1).optional(),
+  command: z.string({ error: 'command quality gate requires "command"' }).min(1),
+  cwd: z.string().min(1).optional(),
+  timeout_ms: z.number().int().positive().optional(),
+}).strict();
+
+function normalizeCommandQualityGate(gate: z.output<typeof CommandQualityGateInputSchema>) {
+  return {
+    type: gate.type,
+    ...(gate.name !== undefined ? { name: gate.name } : {}),
+    command: gate.command,
+    ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
+    ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
+  };
+}
+
+const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
+  if (typeof gate === 'string') {
+    return;
+  }
+
+  if (gate !== null && typeof gate === 'object' && (gate as { type?: unknown }).type === 'command') {
+    const parsed = CommandQualityGateInputSchema.safeParse(gate);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: issue.path,
+          message: issue.message,
+        });
+      }
+    }
+    return;
+  }
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'quality gate must be a string or command gate object',
+  });
+}).transform((gate) => {
+  if (typeof gate === 'string') {
+    return gate;
+  }
+
+  return normalizeCommandQualityGate(CommandQualityGateInputSchema.parse(gate));
+});
+
+/** Quality gates schema - AI directives and command gates for step completion */
+export const QualityGatesSchema = z.array(QualityGateRawSchema).optional();
 
 /** Step-specific quality gates override schema */
 export const StepQualityGatesOverrideSchema = z.object({

@@ -5,7 +5,6 @@
  */
 
 import * as path from 'node:path';
-import * as fs from 'node:fs';
 import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
@@ -18,12 +17,17 @@ import {
   resolveTaskWorkflowValue,
 } from '../../../infra/task/index.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
-import { createLogger, getErrorMessage, generateReportDir } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
 import type { PrReviewData } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
 import { extractTitle, createIssueFromTask } from './issueTask.js';
 import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
+import {
+  cleanupPreparedTaskSpec,
+  prepareTaskSpecDirectory,
+  type TaskAttachment,
+} from '../attachments.js';
 export { extractTitle, createIssueFromTask };
 
 const log = createLogger('add-task');
@@ -39,19 +43,8 @@ type SaveTaskOptions = {
   managedPr?: boolean;
   shouldPublishBranchToOrigin?: boolean;
   prNumber?: number;
+  attachments?: TaskAttachment[];
 };
-
-function resolveUniqueTaskSlug(cwd: string, baseSlug: string): string {
-  let sequence = 1;
-  let slug = baseSlug;
-  let taskDir = path.join(cwd, '.takt', 'tasks', slug);
-  while (fs.existsSync(taskDir)) {
-    sequence += 1;
-    slug = `${baseSlug}-${sequence}`;
-    taskDir = path.join(cwd, '.takt', 'tasks', slug);
-  }
-  return slug;
-}
 
 function buildValidatedTaskConfig(options?: SaveTaskOptions): Omit<TaskFileData, 'task'> {
   const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
@@ -74,14 +67,6 @@ function buildValidatedTaskConfig(options?: SaveTaskOptions): Omit<TaskFileData,
   });
 }
 
-function cleanupFailedTaskDir(taskDir: string): void {
-  fs.rmSync(taskDir, { recursive: true, force: true });
-  const tasksDir = path.dirname(taskDir);
-  if (fs.existsSync(tasksDir) && fs.readdirSync(tasksDir).length === 0) {
-    fs.rmdirSync(tasksDir);
-  }
-}
-
 /**
  * Save a task entry to .takt/tasks.yaml.
  *
@@ -97,22 +82,17 @@ export async function saveTaskFile(
   const config = buildValidatedTaskConfig(options);
   const slug = await summarizeTaskName(taskContent, { cwd });
   const summary = firstLine(taskContent);
-  const taskDirSlug = resolveUniqueTaskSlug(cwd, generateReportDir(taskContent));
-  const taskDir = path.join(cwd, '.takt', 'tasks', taskDirSlug);
-  const taskDirRelative = `.takt/tasks/${taskDirSlug}`;
-  const orderPath = path.join(taskDir, 'order.md');
-  fs.mkdirSync(taskDir, { recursive: true });
-  fs.writeFileSync(orderPath, taskContent, 'utf-8');
+  const preparedSpec = prepareTaskSpecDirectory(cwd, taskContent, options?.attachments);
   let created;
   try {
     created = runner.addTask(taskContent, {
       ...config,
-      task_dir: taskDirRelative,
+      task_dir: preparedSpec.taskDirRelative,
       slug,
       summary,
     });
   } catch (error) {
-    cleanupFailedTaskDir(taskDir);
+    cleanupPreparedTaskSpec(preparedSpec.taskDir);
     throw error;
   }
   const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
@@ -156,7 +136,12 @@ export async function saveTaskFromInteractive(
   cwd: string,
   task: string,
   workflow?: string,
-  options?: { issue?: number; confirmAtEndMessage?: string; presetSettings?: WorktreeSettings },
+  options?: {
+    issue?: number;
+    confirmAtEndMessage?: string;
+    presetSettings?: WorktreeSettings;
+    attachments?: TaskAttachment[];
+  },
 ): Promise<void> {
   if (options?.confirmAtEndMessage) {
     const approved = await confirm(options.confirmAtEndMessage, true);
@@ -165,7 +150,12 @@ export async function saveTaskFromInteractive(
     }
   }
   const settings = options?.presetSettings ?? await promptWorktreeSettings(cwd);
-  const created = await saveTaskFile(cwd, task, { workflow, issue: options?.issue, ...settings });
+  const created = await saveTaskFile(cwd, task, {
+    workflow,
+    issue: options?.issue,
+    ...settings,
+    ...(options?.attachments ? { attachments: options.attachments } : {}),
+  });
   displayTaskCreationResult(created, settings, workflow);
 }
 
@@ -173,7 +163,7 @@ export async function createIssueAndSaveTask(
   cwd: string,
   task: string,
   workflow?: string,
-  options?: { confirmAtEndMessage?: string; labels?: string[] },
+  options?: { confirmAtEndMessage?: string; labels?: string[]; attachments?: TaskAttachment[] },
 ): Promise<void> {
   const issueNumber = createIssueFromTask(task, { labels: options?.labels, cwd });
   if (issueNumber === undefined) {
@@ -182,6 +172,7 @@ export async function createIssueAndSaveTask(
   await saveTaskFromInteractive(cwd, task, workflow, {
     issue: issueNumber,
     confirmAtEndMessage: options?.confirmAtEndMessage,
+    ...(options?.attachments ? { attachments: options.attachments } : {}),
   });
 }
 

@@ -10,8 +10,15 @@ import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
 
-type PersistedRunMeta = Omit<RunMeta, 'resumePoint'> & {
+export interface DirectResumeMetadata {
+  readonly sourceRunSlug: string;
+  readonly resumeMode: 'requeue' | 'retry' | 'instruct';
+}
+
+type PersistedRunMeta = Omit<RunMeta, 'resumePoint' | 'sourceRunSlug' | 'resumeMode'> & {
   resume_point?: WorkflowResumePoint;
+  source_run_slug?: string;
+  resume_mode?: DirectResumeMetadata['resumeMode'];
 };
 
 export class RunMetaManager {
@@ -19,7 +26,12 @@ export class RunMetaManager {
   private readonly metaAbs: string;
   private finalized = false;
 
-  constructor(runPaths: RunPaths, task: string, workflowName: string) {
+  constructor(
+    runPaths: RunPaths,
+    task: string,
+    workflowName: string,
+    directResume?: DirectResumeMetadata,
+  ) {
     this.metaAbs = runPaths.metaAbs;
     this.runMeta = {
       task,
@@ -31,6 +43,10 @@ export class RunMetaManager {
       logsDirectory: runPaths.logsRel,
       status: 'running',
       startTime: new Date().toISOString(),
+      ...(directResume ? {
+        sourceRunSlug: directResume.sourceRunSlug,
+        resumeMode: directResume.resumeMode,
+      } : {}),
     };
     ensureDir(runPaths.runRootAbs);
     this.writeRunMeta(this.runMeta);
@@ -72,12 +88,14 @@ export class RunMetaManager {
 
   private writeRunMeta(meta: RunMeta): void {
     const updatedAt = new Date().toISOString();
+    const { resumePoint, sourceRunSlug, resumeMode, ...baseMeta } = meta;
     const serialized: PersistedRunMeta = {
-      ...meta,
+      ...baseMeta,
       updatedAt,
-      ...(meta.resumePoint ? { resume_point: meta.resumePoint } : {}),
+      ...(resumePoint ? { resume_point: resumePoint } : {}),
+      ...(sourceRunSlug ? { source_run_slug: sourceRunSlug } : {}),
+      ...(resumeMode ? { resume_mode: resumeMode } : {}),
     };
-    delete (serialized as Partial<RunMeta>).resumePoint;
     this.runMeta.updatedAt = updatedAt;
     writeFileAtomic(this.metaAbs, JSON.stringify(serialized, null, 2));
   }

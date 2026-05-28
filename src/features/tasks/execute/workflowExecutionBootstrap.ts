@@ -121,7 +121,7 @@ export async function createWorkflowExecutionBootstrap(
   }
 
   const runPaths = buildRunPaths(cwd, runSlug);
-  const runMetaManager = new RunMetaManager(runPaths, task, workflowConfig.name);
+  const runMetaManager = new RunMetaManager(runPaths, task, workflowConfig.name, options.directResume);
   const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',

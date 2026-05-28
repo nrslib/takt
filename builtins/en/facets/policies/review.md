@@ -10,7 +10,7 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Eliminate ambiguity | Vague feedback like "clean this up a bit" is prohibited. Specify file, line, and proposed fix |
 | Fact-check | Verify against actual code before raising issues. Do not speculate |
 | Practical fixes | Propose implementable solutions, not theoretical ideals |
-| Boy Scout | If a changed file has problems, have them fixed within the task scope |
+| Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
 
 ## Scope Determination
 
@@ -18,9 +18,10 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 |-----------|---------|--------|
 | Problem introduced by this change | Blocking | REJECT |
 | Code made unused by this change (arguments, imports, variables, functions) | Blocking | REJECT (change-induced problem) |
-| Existing problem in a changed file | Blocking | REJECT (Boy Scout rule) |
-| Structural problem in the changed module | Blocking | REJECT if within scope |
+| Existing problem in changed or directly related code | Blocking | REJECT (Boy Scout rule) |
+| Structural problem directly affecting correctness of the change | Blocking | REJECT if within scope |
 | Problem in an unchanged file | Non-blocking | Record only (informational) |
+| Existing problem that merely shares a changed file but does not directly affect correctness of the change | Non-blocking | Record only (informational) |
 | Refactoring that greatly exceeds task scope | Non-blocking | Note as a suggestion |
 
 ## Judgment Criteria
@@ -177,19 +178,20 @@ Leave it better than you found it.
 
 ### In Scope
 
-- Existing problems in changed files (unused code, poor naming, broken abstractions)
-- Structural problems in changed modules (mixed responsibilities, unnecessary dependencies)
+- Existing problems in changed code or in areas directly affecting correctness, contracts, or wiring of the change (unused code, poor naming, broken abstractions)
+- Structural problems directly affecting correctness of the change (mixed responsibilities, unnecessary dependencies)
 
 ### Out of Scope
 
 - Unchanged files (record existing issues only)
+- Existing problems that merely share a changed file but do not directly affect correctness, contracts, or wiring of the change
 - Refactoring that greatly exceeds task scope (note as a suggestion, non-blocking)
 
 ### Judgment
 
 | Situation | Verdict |
 |-----------|---------|
-| Changed file has an obvious problem | REJECT — have it fixed together |
+| Changed or directly related code has an obvious problem | REJECT — have it fixed together |
 | Redundant expression (a shorter equivalent exists) | REJECT |
 | Unnecessary branch/condition (unreachable or always the same result) | REJECT |
 | Fixable in seconds to minutes | REJECT (do not mark as "non-blocking") |
@@ -200,9 +202,9 @@ Do not tolerate problems just because existing code does the same. If existing c
 
 ## Judgment Rules
 
-- All issues detected in changed files are blocking (REJECT targets), even if the code existed before the change
-- Only issues in files NOT targeted by the change may be classified as "existing problems" or "non-blocking"
-- "The code itself existed before" is not a valid reason for non-blocking. As long as it is in a changed file, the Boy Scout rule applies
+- Issues detected in changed code or in areas directly affecting correctness, contracts, or wiring of the change are blocking (REJECT targets), even if the code existed before the change
+- Only issues not directly related to the change may be classified as "existing problems" or "non-blocking"
+- "The code itself existed before" is not a valid reason for non-blocking when the issue is in changed or directly related code
 - If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited
 
 ## Basic Review Procedure

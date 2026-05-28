@@ -14,6 +14,7 @@ export interface TeamLeaderExecutionOptions {
       partResults: PartResult[];
       scheduledIds: string[];
       remainingPartBudget: number;
+      unfinishedScheduledPartCount: number;
     }
   ) => Promise<MorePartsResponse>;
   onPartQueued?: (part: PartDefinition, partIndex: number) => void;
@@ -46,9 +47,20 @@ export async function runTeamLeaderExecution(
 
   let nextPartIndex = 0;
   let leaderDone = false;
+  let deferredDoneReason: string | undefined;
 
   const tryPlanMoreParts = async (): Promise<void> => {
     if (leaderDone) {
+      return;
+    }
+
+    if (deferredDoneReason && plannedParts.length === partResults.length && partResults.every(isSuccessfulPartResult)) {
+      options.onPlanningDone?.({
+        reason: deferredDoneReason,
+        plannedParts: plannedParts.length,
+        completedParts: partResults.length,
+      });
+      leaderDone = true;
       return;
     }
 
@@ -63,9 +75,14 @@ export async function runTeamLeaderExecution(
         partResults,
         scheduledIds: [...scheduledIds],
         remainingPartBudget,
+        unfinishedScheduledPartCount: plannedParts.length - partResults.length,
       });
 
       if (feedback.done) {
+        if (plannedParts.length > partResults.length) {
+          deferredDoneReason = feedback.reasoning;
+          return;
+        }
         options.onPlanningDone?.({
           reason: feedback.reasoning,
           plannedParts: plannedParts.length,
@@ -85,6 +102,9 @@ export async function runTeamLeaderExecution(
       }
 
       if (newParts.length === 0) {
+        if (plannedParts.length > partResults.length) {
+          return;
+        }
         options.onPlanningNoNewParts?.({
           reason: feedback.reasoning,
           plannedParts: plannedParts.length,
@@ -96,6 +116,7 @@ export async function runTeamLeaderExecution(
 
       plannedParts.push(...newParts);
       queue.push(...newParts);
+      deferredDoneReason = undefined;
       options.onPartsAdded?.({
         parts: newParts,
         reason: feedback.reasoning,
@@ -140,4 +161,8 @@ export async function runTeamLeaderExecution(
   }
 
   return { plannedParts, partResults };
+}
+
+function isSuccessfulPartResult(result: PartResult): boolean {
+  return result.response.status === 'done';
 }

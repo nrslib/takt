@@ -120,6 +120,41 @@ When shared state is required, call the hook once in the nearest common parent a
 | Multiple components call the same stateful hook independently when they need shared state | REJECT |
 | A hook returns JSX | REJECT |
 
+### Props Type Placement and Hook Boundaries
+
+Props types that belong to a single component should generally live in the same file as that component. Separate type files are appropriate when the contract is shared by multiple components, is part of a public API, or has independent meaning as a domain model.
+
+| Criteria | Judgment |
+|----------|----------|
+| A single component's private Props type is moved to a `types` file without a clear reason | Warning |
+| Props are moved to a separate file only so a hook can import a component's Props type | REJECT |
+| Shared Props/data contracts used by multiple components or public APIs live in a separate file | OK |
+| A hook returns state, events, and derived values while a container maps them to component props | OK |
+| Even when a hook returns a props-like object, the hook does not depend on the component's Props type | OK |
+
+```tsx
+// REJECT - the hook depends on a specific component's Props contract
+import type { DialogProps } from './Dialog'
+
+export function useDialog(): { dialogProps: DialogProps } {
+  return { dialogProps: { open, onOpenChange } }
+}
+
+// OK - component-local Props stay with the component
+interface DialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+export function Dialog(props: DialogProps) {
+  return <Modal {...props} />
+}
+
+// OK - the hook returns UI state and operations, and the caller passes them to the component
+const dialog = useDialog()
+return <Dialog open={dialog.open} onOpenChange={dialog.setOpen} />
+```
+
 ## Handling exhaustive-deps
 
 `react-hooks/exhaustive-deps` is not a rule to satisfy mechanically. If adding dependencies changes a mount-only effect into a loop, keep the effect mount-only and document why the suppression exists.

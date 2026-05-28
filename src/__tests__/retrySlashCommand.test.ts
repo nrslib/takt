@@ -8,8 +8,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   setupRawStdin,
@@ -91,11 +91,12 @@ vi.mock('../shared/i18n/index.js', () => ({
 // --- Imports (after mocks) ---
 
 import { getProvider } from '../infra/providers/index.js';
-import { runRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
+import { runDirectRetryMode, runTaskRetryMode, type RetryContext } from '../features/interactive/retryMode.js';
 import { info } from '../shared/ui/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockInfo = vi.mocked(info);
+const attachmentSessionDirs = new Set<string>();
 
 function createTmpDir(): string {
   const dir = join(tmpdir(), `takt-retry-cmd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -109,6 +110,15 @@ function setupProvider(responses: string[]): MockProviderCapture {
   return capture;
 }
 
+function createOscImagePaste(): string {
+  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
+}
+
+function trackAttachmentSession(tempPath: string): void {
+  attachmentSessionDirs.add(dirname(dirname(tempPath)));
+}
+
 function buildRetryContext(overrides?: Partial<RetryContext>): RetryContext {
   return {
     failure: {
@@ -120,7 +130,10 @@ function buildRetryContext(overrides?: Partial<RetryContext>): RetryContext {
       lastMessage: '',
       retryNote: '',
     },
-    branchName: 'takt/test-task',
+    subject: {
+      kind: 'branch',
+      value: 'takt/test-task',
+    },
     workflowContext: {
       name: 'default',
       description: '',
@@ -146,6 +159,10 @@ describe('/retry slash command', () => {
   afterEach(() => {
     restoreStdin();
     rmSync(tmpDir, { recursive: true, force: true });
+    for (const sessionDir of attachmentSessionDirs) {
+      rmSync(sessionDir, { recursive: true, force: true });
+    }
+    attachmentSessionDirs.clear();
   });
 
   it('should route previous order content through action selection when /retry is used', async () => {
@@ -155,7 +172,7 @@ describe('/retry slash command', () => {
     setupProvider([]);
 
     const retryContext = buildRetryContext({ previousOrderContent: orderContent });
-    const result = await runRetryMode(tmpDir, retryContext, orderContent);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(result.action).toBe('save_task');
     expect(result.task).toBe(orderContent);
@@ -166,7 +183,7 @@ describe('/retry slash command', () => {
     setupProvider([]);
 
     const retryContext = buildRetryContext({ previousOrderContent: null });
-    const result = await runRetryMode(tmpDir, retryContext, null);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(mockInfo).toHaveBeenCalledWith('No previous order found.');
     expect(result.action).toBe('cancel');
@@ -179,7 +196,7 @@ describe('/retry slash command', () => {
 
     const orderContent = '# Task Order\n\nImplement feature X with tests.';
     const retryContext = buildRetryContext({ previousOrderContent: orderContent });
-    const result = await runRetryMode(tmpDir, retryContext, orderContent);
+    const result = await runTaskRetryMode(tmpDir, retryContext);
 
     expect(result.action).toBe('cancel');
   });
@@ -190,7 +207,7 @@ describe('/retry slash command', () => {
     const capture = setupProvider(['I see the order content.']);
 
     const retryContext = buildRetryContext({ previousOrderContent: orderContent });
-    await runRetryMode(tmpDir, retryContext, orderContent);
+    await runTaskRetryMode(tmpDir, retryContext);
 
     expect(capture.systemPrompts.length).toBeGreaterThan(0);
     const systemPrompt = capture.systemPrompts[0]!;
@@ -198,12 +215,67 @@ describe('/retry slash command', () => {
     expect(systemPrompt).toContain(orderContent);
   });
 
+  it('should show Run context and omit save_task action in direct retry mode', async () => {
+    vi.mocked(selectOption).mockResolvedValueOnce('execute');
+    const orderContent = '# Direct Order\n\nFix the failed direct run.';
+    setupRawStdin(toRawInputs(['/retry']));
+    setupProvider([]);
+
+    const retryContext = buildRetryContext({
+      subject: {
+        kind: 'run',
+        value: '20260524-direct-failed',
+      },
+      previousOrderContent: orderContent,
+    });
+    const result = await runDirectRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe(orderContent);
+    const options = vi.mocked(selectOption).mock.calls[0]?.[1] as Array<{ value: string }>;
+    expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
+  });
+
+  it('should inject Run instead of Branch into the direct retry system prompt', async () => {
+    setupRawStdin(toRawInputs(['inspect context', '/cancel']));
+    const capture = setupProvider(['The direct run failed during review.']);
+
+    const retryContext = buildRetryContext({
+      subject: {
+        kind: 'run',
+        value: '20260524-direct-failed',
+      },
+    });
+    await runDirectRetryMode(tmpDir, retryContext);
+
+    expect(capture.systemPrompts[0]).toContain('**Run:** 20260524-direct-failed');
+    expect(capture.systemPrompts[0]).not.toContain('**Branch:** 20260524-direct-failed');
+  });
+
+  it('should preserve pasted image attachments from the retry conversation loop', async () => {
+    setupRawStdin([
+      `use ${createOscImagePaste()}\r`,
+      '/go\r',
+    ]);
+    setupProvider(['response', 'Retry using [Image #1].']);
+
+    const retryContext = buildRetryContext();
+    const result = await runTaskRetryMode(tmpDir, retryContext);
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Retry using [Image #1].');
+    expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
+    expect(result.attachments?.[0]?.tempPath).toBeDefined();
+    trackAttachmentSession(result.attachments![0]!.tempPath);
+    expect(existsSync(result.attachments![0]!.tempPath)).toBe(true);
+  });
+
   it('should not include order section when no order content', async () => {
     setupRawStdin(toRawInputs(['check the order', '/cancel']));
     const capture = setupProvider(['No order found.']);
 
     const retryContext = buildRetryContext({ previousOrderContent: null });
-    await runRetryMode(tmpDir, retryContext, null);
+    await runTaskRetryMode(tmpDir, retryContext);
 
     expect(capture.systemPrompts.length).toBeGreaterThan(0);
     const systemPrompt = capture.systemPrompts[0]!;

@@ -81,6 +81,18 @@ Third-party UI libraries such as data grids, date pickers, charts, and virtualiz
 | The real component is rendered with representative props and verified not to crash at screen level | OK |
 | Prop shapes are chosen by referencing existing in-project usage patterns and the installed version | OK |
 
+### Accessibility Contracts
+
+Accessible names, roles, and states are UI contracts consumed by assistive technologies and tests. Add appropriate accessibility attributes for new UI elements, but treat changes to existing accessibility contracts like other user-facing copy or behavior changes.
+
+| Criteria | Judgment |
+|----------|----------|
+| A new interactive element has no accessible name | REJECT |
+| Checked, expanded, disabled, or similar state is not exposed to assistive technologies | Warning |
+| An existing accessible name is changed without being required by the task | REJECT |
+| Existing accessible names are preserved while missing role/state is added | OK |
+| The reason and impact scope for changing an existing contract are explicit | OK |
+
 ## State Management
 
 Child components do not modify their own state. They bubble events to parent, and parent manipulates state.

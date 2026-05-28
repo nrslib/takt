@@ -91,10 +91,18 @@ language: ja         # 表示言語: ja | en
 # runtime:
 #   prepare: [node, gradle, ./custom-script.sh]
 
+# workflow YAML command gate ポリシー
+# workflow_command_gates:
+#   custom_scripts: false
+
 # ワークフローレベルのオーバーライド
 # workflow_overrides:
 #   quality_gates:
-#     - "All tests pass"
+#     - "All tests pass" # AI への完了条件
+#     - type: command    # step 完了時に機械実行される gate
+#       name: quality-check
+#       command: "./.takt/quality-gates/check.sh"
+#       timeout_ms: 300000
 #   quality_gates_edit_only: true
 #   steps:
 #     review:

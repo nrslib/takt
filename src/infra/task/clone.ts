@@ -14,6 +14,7 @@ import {
 } from './clone-base-branch.js';
 import { cloneAndIsolate, cloneAndIsolateAbortable, resolveCloneSubmoduleOptions, runGitCommandAbortable } from './clone-exec.js';
 import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
+import { syncProjectLocalTaktForRetry } from './projectLocalTaktSync.js';
 
 export type { WorktreeOptions, WorktreeResult };
 export {
@@ -78,7 +79,26 @@ export class CloneManager {
         : path.resolve(projectDir, options.worktree);
     }
 
-    return path.join(CloneManager.resolveCloneBaseDir(projectDir), dirName);
+    return CloneManager.resolveAvailableClonePath(
+      CloneManager.resolveCloneBaseDir(projectDir),
+      dirName,
+    );
+  }
+
+  private static resolveAvailableClonePath(baseDir: string, dirName: string): string {
+    const firstCandidate = path.join(baseDir, dirName);
+    if (!fs.existsSync(firstCandidate)) {
+      return firstCandidate;
+    }
+
+    for (let suffix = 2; suffix <= 100; suffix += 1) {
+      const candidate = path.join(baseDir, `${dirName}-${suffix}`);
+      if (!fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    throw new Error(`Unable to allocate clone path in ${baseDir} for ${dirName}`);
   }
 
   private static resolveBranchName(options: WorktreeOptions): string {
@@ -142,6 +162,7 @@ export class CloneManager {
       execFileSync('git', ['checkout', '-b', branch], { cwd: clonePath, stdio: 'pipe' });
     }
 
+    syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 
@@ -194,6 +215,7 @@ export class CloneManager {
       await runGitCommandAbortable(clonePath, ['checkout', '-b', branch], abortSignal);
     }
 
+    syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 
@@ -204,12 +226,16 @@ export class CloneManager {
     CloneManager.resolveBaseBranch(projectDir);
 
     const timestamp = CloneManager.generateTimestamp();
-    const clonePath = path.join(CloneManager.resolveCloneBaseDir(projectDir), `tmp-${timestamp}`);
+    const clonePath = CloneManager.resolveAvailableClonePath(
+      CloneManager.resolveCloneBaseDir(projectDir),
+      `tmp-${timestamp}`,
+    );
 
     log.info('Creating temp clone for branch', { path: clonePath, branch });
 
     cloneAndIsolate(projectDir, clonePath, branch);
 
+    syncProjectLocalTaktForRetry(projectDir, clonePath);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Temp clone created', { path: clonePath, branch });
 

@@ -1,5 +1,5 @@
 name: default-peer-review
-description: default 系の Phase 2。並列レビュアー（arch + ai-antipattern-2nd + supervise） ⇄ 修正 ループ。
+description: default 系の Phase 2。並列レビュアー（arch + ai-antipattern-2nd + coding-review + supervise） ⇄ 修正 ループ。
 subworkflow:
   callable: true
   visibility: internal
@@ -72,6 +72,28 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        pass_previous_response: false
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
       - name: supervise
         edit: false
         persona: supervisor
@@ -97,9 +119,9 @@ steps:
               format: summary
               use_judge: false
     rules:
-      - condition: all("approved", "AI特有の問題なし", "すべて問題なし")
+      - condition: all("approved", "AI特有の問題なし", "approved", "すべて問題なし")
         next: COMPLETE
-      - condition: any("needs_fix", "AI特有の問題あり", "要求未達成、テスト失敗、ビルドエラー")
+      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "要求未達成、テスト失敗、ビルドエラー")
         next: fix
   - name: fix
     edit: true

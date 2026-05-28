@@ -82,9 +82,18 @@ steps:
       report:
         - name: 00-plan.md
           format: plan               # References report_formats map
+    quality_gates:                   # Agent-step quality gates for step completion
+      - "Review the implementation before finishing" # AI directive
+      - type: command                # Machine-executed command gate
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        cwd: "."
+        timeout_ms: 300000
 ```
 
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
+
+String `quality_gates` remain AI completion directives and are injected into agent step prompts. `type: command` gates run inside the worktree after an agent step completes and pass only when the command exits with code `0`. Workflow YAML command gates require `workflow_command_gates.custom_scripts: true` in config. On failure, TAKT feeds command metadata, cwd, exit code or timeout/output-limit details, the output log path, and bounded sanitized stdout/stderr back into the same agent step. Raw stdout and stderr are also written to the local output log. `system` and `workflow_call` steps do not accept `quality_gates`.
 
 
 ## Available Variables
@@ -317,7 +326,7 @@ Promotion is not supported on parallel sub-steps.
 | `allow_git_commit` | `false` | Allow `git add` / `commit` / `push` in step instructions. Default prohibits these so each PR represents one task |
 | `required_permission_mode` | - | Required minimum permission mode: `readonly`, `edit`, or `full` |
 | `output_contracts` | - | Report file configuration (name, format) |
-| `quality_gates` | - | Quality criteria for step completion (AI instruction) |
+| `quality_gates` | - | Agent-step completion gates. String entries are AI instructions; `type: command` entries are executed after step completion and feed failures back into the same agent step |
 
 ## Workflow-level Configuration
 

@@ -2,47 +2,24 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { buildTaskInstruction } from '../../../infra/task/index.js';
+import { copyTaskAttachmentsToRunContext } from '../attachments.js';
+import { readTaskSpecFile } from '../taskSpecFile.js';
+
+export interface StagedTaskSpec {
+  taskPrompt: string;
+  orderContent: string;
+  contextTaskDir: string;
+  contextDir: string;
+  runRootDir: string;
+}
 
 function getTaskSpecPath(projectCwd: string, taskDir: string): string {
   return path.join(projectCwd, taskDir, 'order.md');
 }
 
-function buildMissingTaskSpecError(sourceOrderPath: string): Error {
-  return new Error(`Task spec file is missing: ${sourceOrderPath}`);
-}
-
-function buildInvalidTaskSpecError(sourceOrderPath: string): Error {
-  return new Error(`Task spec file must be a regular file: ${sourceOrderPath}`);
-}
-
-function readTaskSpecForStaging(sourceOrderPath: string): string {
-  let fileDescriptor: number | undefined;
-  try {
-    const sourceStats = fs.lstatSync(sourceOrderPath);
-    if (!sourceStats.isFile()) {
-      throw buildInvalidTaskSpecError(sourceOrderPath);
-    }
-
-    fileDescriptor = fs.openSync(sourceOrderPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    const descriptorStats = fs.fstatSync(fileDescriptor);
-    if (!descriptorStats.isFile()) {
-      throw buildInvalidTaskSpecError(sourceOrderPath);
-    }
-
-    return fs.readFileSync(fileDescriptor, 'utf-8');
-  } catch (error) {
-    const errorCode = (error as NodeJS.ErrnoException).code;
-    if (errorCode === 'ENOENT') {
-      throw buildMissingTaskSpecError(sourceOrderPath);
-    }
-    if (errorCode === 'ELOOP') {
-      throw buildInvalidTaskSpecError(sourceOrderPath);
-    }
-    throw error;
-  } finally {
-    if (fileDescriptor !== undefined) {
-      fs.closeSync(fileDescriptor);
-    }
+function removeEmptyDirectory(directory: string): void {
+  if (fs.existsSync(directory) && fs.readdirSync(directory).length === 0) {
+    fs.rmdirSync(directory);
   }
 }
 
@@ -51,16 +28,32 @@ export function stageTaskSpecForExecution(
   execCwd: string,
   taskDir: string,
   reportDirName: string,
-): { taskPrompt: string; orderContent: string } {
+): StagedTaskSpec {
+  const sourceTaskDir = path.join(projectCwd, taskDir);
   const sourceOrderPath = getTaskSpecPath(projectCwd, taskDir);
-  const orderContent = readTaskSpecForStaging(sourceOrderPath);
+  const orderContent = readTaskSpecFile(sourceOrderPath);
   const runPaths = buildRunPaths(execCwd, reportDirName);
 
-  fs.mkdirSync(runPaths.contextTaskAbs, { recursive: true });
-  fs.writeFileSync(runPaths.contextTaskOrderAbs, orderContent, 'utf-8');
+  try {
+    fs.mkdirSync(runPaths.contextTaskAbs, { recursive: true });
+    fs.writeFileSync(runPaths.contextTaskOrderAbs, orderContent, 'utf-8');
+    copyTaskAttachmentsToRunContext(sourceTaskDir, runPaths.contextTaskAbs);
+  } catch (error) {
+    fs.rmSync(runPaths.contextTaskAbs, { recursive: true, force: true });
+    throw error;
+  }
 
   return {
     taskPrompt: buildTaskInstruction(runPaths.contextTaskRel, runPaths.contextTaskOrderRel),
     orderContent,
+    contextTaskDir: runPaths.contextTaskAbs,
+    contextDir: runPaths.contextAbs,
+    runRootDir: runPaths.runRootAbs,
   };
+}
+
+export function cleanupStagedTaskSpec(stagedSpec: StagedTaskSpec): void {
+  fs.rmSync(stagedSpec.contextTaskDir, { recursive: true, force: true });
+  removeEmptyDirectory(stagedSpec.contextDir);
+  removeEmptyDirectory(stagedSpec.runRootDir);
 }

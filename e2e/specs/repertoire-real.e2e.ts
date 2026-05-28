@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
-import { runTakt } from '../helpers/takt-runner';
+import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 
 type LockFile = {
   source?: string;
@@ -251,7 +251,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         input: 'y\n',
         timeout: 240_000,
       });
-      expect(firstResult.exitCode).toBe(0);
+      expect(firstResult.exitCode, formatTaktRunResult(firstResult)).toBe(0);
 
       const secondResult = runTakt({
         args: ['repertoire', 'add', `github:${FIXTURE_REPO}@${FIXTURE_REF}`],
@@ -261,7 +261,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         timeout: 240_000,
       });
 
-      expect(secondResult.exitCode).toBe(0);
+      expect(secondResult.exitCode, formatTaktRunResult(secondResult)).toBe(0);
       expect(secondResult.stdout).toContain('既にインストールされています');
     },
     240_000,
@@ -277,7 +277,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         input: 'y\n',
         timeout: 240_000,
       });
-      expect(firstResult.exitCode).toBe(0);
+      expect(firstResult.exitCode, formatTaktRunResult(firstResult)).toBe(0);
 
       const packageDir = join(
         isolatedEnv.taktDir,
@@ -294,7 +294,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         timeout: 240_000,
       });
 
-      expect(secondResult.exitCode).toBe(0);
+      expect(secondResult.exitCode, formatTaktRunResult(secondResult)).toBe(0);
       expect(existsSync(`${packageDir}.tmp`)).toBe(false);
       expect(existsSync(`${packageDir}.bak`)).toBe(false);
       expect(existsSync(join(packageDir, '.takt-repertoire-lock.yaml'))).toBe(true);
@@ -312,7 +312,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         input: 'y\n',
         timeout: 240_000,
       });
-      expect(firstResult.exitCode).toBe(0);
+      expect(firstResult.exitCode, formatTaktRunResult(firstResult)).toBe(0);
 
       const lockPath = join(
         isolatedEnv.taktDir,
@@ -331,7 +331,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         timeout: 240_000,
       });
 
-      expect(secondResult.exitCode).toBe(0);
+      expect(secondResult.exitCode, formatTaktRunResult(secondResult)).toBe(0);
       const afterLock = readYamlFile<LockFile>(lockPath);
       expect(afterLock.commit).toBe(originalLock.commit);
       expect(afterLock.imported_at).toBe(originalLock.imported_at);
@@ -349,7 +349,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         input: 'y\n',
         timeout: 240_000,
       });
-      expect(firstResult.exitCode).toBe(0);
+      expect(firstResult.exitCode, formatTaktRunResult(firstResult)).toBe(0);
 
       const packageDir = join(
         isolatedEnv.taktDir,
@@ -368,7 +368,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         timeout: 240_000,
       });
 
-      expect(secondResult.exitCode).toBe(0);
+      expect(secondResult.exitCode, formatTaktRunResult(secondResult)).toBe(0);
       expect(existsSync(`${packageDir}.tmp`)).toBe(false);
     },
     240_000,
@@ -384,7 +384,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         input: 'y\n',
         timeout: 240_000,
       });
-      expect(firstResult.exitCode).toBe(0);
+      expect(firstResult.exitCode, formatTaktRunResult(firstResult)).toBe(0);
 
       const packageDir = join(
         isolatedEnv.taktDir,
@@ -403,7 +403,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
         timeout: 240_000,
       });
 
-      expect(secondResult.exitCode).toBe(0);
+      expect(secondResult.exitCode, formatTaktRunResult(secondResult)).toBe(0);
       expect(existsSync(`${packageDir}.bak`)).toBe(false);
     },
     240_000,

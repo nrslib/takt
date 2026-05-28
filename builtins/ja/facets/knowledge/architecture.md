@@ -212,6 +212,7 @@ for (const item of resolvedItems) {
 | REJECT | JSDocが関数名の言い換えだけで情報を追加していない |
 | OK | なぜその実装を選んだかの設計判断を説明している |
 | OK | 一見不自然に見える挙動の理由を説明している |
+| OK | 定数・マジックナンバーの算出根拠や内訳を説明している |
 | 最良 | コメントなしでコード自体が意図を語っている |
 
 ```typescript
@@ -238,6 +239,10 @@ if (status === 'interrupted') {
 // OK - 一見不自然な挙動の理由
 // stay はループを引き起こす可能性があるが、ユーザーが明示的に指定した場合のみ使われる
 return step.name;
+
+// OK - 定数の算出根拠
+// paddingTop + paddingBottom + button height
+const footerHeight = 24 + 12 + 48;
 ```
 
 **状態の直接変更の検出基準**

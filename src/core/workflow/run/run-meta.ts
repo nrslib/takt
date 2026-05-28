@@ -13,7 +13,7 @@ export interface RunMeta {
   reportDirectory: string;
   contextDirectory: string;
   logsDirectory: string;
-  status: 'running' | 'completed' | 'aborted';
+  status: 'running' | 'completed' | 'aborted' | 'failed';
   startTime: string;
   endTime?: string;
   iterations?: number;
@@ -22,10 +22,14 @@ export interface RunMeta {
   phase?: 1 | 2 | 3;
   updatedAt?: string;
   resumePoint?: WorkflowResumePoint;
+  sourceRunSlug?: string;
+  resumeMode?: 'requeue' | 'retry' | 'instruct';
 }
 
 interface RawRunMeta extends RunMeta {
   resume_point?: WorkflowResumePoint;
+  source_run_slug?: string;
+  resume_mode?: 'requeue' | 'retry' | 'instruct';
 }
 
 export type RunMetaWarningHandler = (warning: string) => void;
@@ -34,6 +38,8 @@ function normalizeRunMeta(raw: RawRunMeta): RunMeta {
   return {
     ...raw,
     resumePoint: raw.resumePoint ?? raw.resume_point,
+    sourceRunSlug: raw.sourceRunSlug ?? raw.source_run_slug,
+    resumeMode: raw.resumeMode ?? raw.resume_mode,
   };
 }
 

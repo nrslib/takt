@@ -192,6 +192,15 @@ export function normalizeStepFromRaw(
     return normalizedStep;
   }
 
+  const qualityGates = applyQualityGateOverrides(
+    step.name,
+    step.quality_gates,
+    step.edit,
+    personaOverrideKey,
+    projectOverrides,
+    globalOverrides,
+  );
+
   const normalizedStep: AgentWorkflowStep = {
     name: step.name,
     description: step.description,
@@ -220,14 +229,7 @@ export function normalizeStepFromRaw(
       sections.resolvedReportFormatsWithSource ?? sections.resolvedReportFormats,
       context,
     ),
-    qualityGates: applyQualityGateOverrides(
-      step.name,
-      step.quality_gates,
-      step.edit,
-      personaOverrideKey,
-      projectOverrides,
-      globalOverrides,
-    ),
+    qualityGates,
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
     knowledgeContents,

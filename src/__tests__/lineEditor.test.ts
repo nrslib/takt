@@ -3,8 +3,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseInputData, createEscapeParser, type InputCallbacks } from '../features/interactive/lineEditor.js';
+import {
+  parseInputData,
+  createEscapeParser,
+  readMultilineInput,
+  type InputCallbacks,
+} from '../features/interactive/lineEditor.js';
 import type { CompletionCandidate, CompletionProvider } from '../features/interactive/completionMenu.js';
+import { MAX_INLINE_IMAGE_BYTES, MAX_PENDING_INLINE_IMAGE_CHARS } from '../features/interactive/inlineImagePaste.js';
 
 function createCallbacks(): InputCallbacks & { calls: string[] } {
   const calls: string[] = [];
@@ -204,6 +210,7 @@ describe('readMultilineInput cursor navigation', () => {
   let savedColumns: number | undefined;
   let columnsOverridden = false;
   let stdoutCalls: string[];
+  let emitRawInput: ((data: string) => void) | null = null;
 
   function setupRawStdin(rawInputs: string[], termColumns?: number): void {
     savedIsTTY = process.stdin.isTTY;
@@ -242,14 +249,17 @@ describe('readMultilineInput cursor navigation', () => {
     process.stdin.on = vi.fn(((event: string, handler: (...args: unknown[]) => void) => {
       if (event === 'data') {
         currentHandler = handler as (data: Buffer) => void;
-        if (inputIndex < rawInputs.length) {
-          const data = rawInputs[inputIndex]!;
-          inputIndex++;
+        emitRawInput = (data: string) => {
           queueMicrotask(() => {
             if (currentHandler) {
               currentHandler(Buffer.from(data, 'utf-8'));
             }
           });
+        };
+        while (inputIndex < rawInputs.length) {
+          const data = rawInputs[inputIndex]!;
+          inputIndex += 1;
+          emitRawInput(data);
         }
       }
       return process.stdin;
@@ -258,6 +268,7 @@ describe('readMultilineInput cursor navigation', () => {
     process.stdin.removeListener = vi.fn(((event: string) => {
       if (event === 'data') {
         currentHandler = null;
+        emitRawInput = null;
       }
       return process.stdin;
     }) as typeof process.stdin.removeListener);
@@ -288,16 +299,21 @@ describe('readMultilineInput cursor navigation', () => {
 
   afterEach(() => {
     restoreStdin();
+    vi.useRealTimers();
   });
 
-  // We need to dynamically import after mocking stdin
+  async function flushQueuedInput(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   async function callReadMultilineInput(
     prompt: string,
     options?: {
       completionProvider?: CompletionProvider;
+      onImagePaste?: (image: { mimeType: string; data: Buffer }) => Promise<string>;
     },
   ): Promise<string | null> {
-    const { readMultilineInput } = await import('../features/interactive/lineEditor.js');
     return readMultilineInput(prompt, options);
   }
 
@@ -320,6 +336,169 @@ describe('readMultilineInput cursor navigation', () => {
       const result = await callReadMultilineInput('> ');
 
       expect(result).toBe('first\nsecond');
+    });
+  });
+
+  describe('image paste', () => {
+    it('should insert the returned placeholder at the cursor position', async () => {
+      const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const onImagePaste = vi.fn(async (image: { mimeType: string; data: Buffer }) => {
+        expect(image.mimeType).toBe('image/png');
+        expect(image.data.equals(imageData)).toBe(true);
+        return '[Image #1]';
+      });
+      setupRawStdin([
+        `before \x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07 after\r`,
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onImagePaste });
+
+      expect(result).toBe('before [Image #1] after');
+      expect(onImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should infer pasted image type from a base64-encoded OSC 1337 name', async () => {
+      const imageData = Buffer.from('GIF89a-data');
+      const fileName = Buffer.from('reference.gif').toString('base64');
+      const onImagePaste = vi.fn(async (image: { mimeType: string; data: Buffer }) => {
+        expect(image.mimeType).toBe('image/gif');
+        expect(image.data.equals(imageData)).toBe(true);
+        return '[Image #1]';
+      });
+      setupRawStdin([
+        `before \x1B]1337;File=inline=1;name=${fileName};size=${imageData.length}:${imageData.toString('base64')}\x07 after\r`,
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onImagePaste });
+
+      expect(result).toBe('before [Image #1] after');
+      expect(onImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should detect pasted images when the OSC prefix is split across chunks', async () => {
+      const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const onImagePaste = vi.fn(async (image: { mimeType: string; data: Buffer }) => {
+        expect(image.mimeType).toBe('image/png');
+        expect(image.data.equals(imageData)).toBe(true);
+        return '[Image #1]';
+      });
+
+      setupRawStdin([
+        'before \x1B',
+        ']1337;',
+        `File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07 after\r`,
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onImagePaste });
+
+      expect(result).toBe('before [Image #1] after');
+      expect(onImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should reject pasted inline images when only the filename extension claims an image type', async () => {
+      const imageData = Buffer.from('not-an-image');
+      const onImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`,
+      ]);
+
+      await expect(callReadMultilineInput('> ', { onImagePaste })).rejects.toThrow(
+        'Unsupported pasted inline image type',
+      );
+      expect(onImagePaste).not.toHaveBeenCalled();
+    });
+
+    it('should reject pasted inline images when filename extension and magic bytes disagree', async () => {
+      const imageData = Buffer.from('GIF89a-data');
+      const onImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`,
+      ]);
+
+      await expect(callReadMultilineInput('> ', { onImagePaste })).rejects.toThrow(
+        'filename type does not match image data',
+      );
+      expect(onImagePaste).not.toHaveBeenCalled();
+    });
+
+    it('should reject pasted inline images when only OSC 1337 type claims an image MIME type', async () => {
+      const imageData = Buffer.from('not-an-image');
+      const onImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        `\x1B]1337;File=inline=1;type=image/png;size=${imageData.length}:${imageData.toString('base64')}\x07`,
+      ]);
+
+      await expect(callReadMultilineInput('> ', { onImagePaste })).rejects.toThrow(
+        'Unsupported pasted inline image type',
+      );
+      expect(onImagePaste).not.toHaveBeenCalled();
+    });
+
+    it('should reject pasted inline images above the declared size limit before decoding', async () => {
+      const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const onImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        `\x1B]1337;File=inline=1;name=reference.png;size=${MAX_INLINE_IMAGE_BYTES + 1}:${imageData.toString('base64')}\x07`,
+      ]);
+
+      await expect(callReadMultilineInput('> ', { onImagePaste })).rejects.toThrow(
+        'Pasted inline image exceeds',
+      );
+      expect(onImagePaste).not.toHaveBeenCalled();
+    });
+
+    it('should reject unterminated pasted inline image sequences above the pending limit', async () => {
+      const onImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        `\x1B]1337;File=${'x'.repeat(MAX_PENDING_INLINE_IMAGE_CHARS)}`,
+      ]);
+
+      await expect(callReadMultilineInput('> ', { onImagePaste })).rejects.toThrow(
+        'pending limit',
+      );
+      expect(onImagePaste).not.toHaveBeenCalled();
+    });
+
+    it('should process later input after async image placeholder insertion completes', async () => {
+      const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      const onImagePaste = vi.fn(async () => {
+        await Promise.resolve();
+        return '[Image #1]';
+      });
+      setupRawStdin([
+        `Use \x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`,
+        '\r',
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onImagePaste });
+
+      expect(result).toBe('Use [Image #1]');
+      expect(onImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not keep a second Esc timeout after resolving a bare Esc with image paste enabled', async () => {
+      vi.useFakeTimers();
+      setupRawStdin([]);
+      const resultPromise = callReadMultilineInput('> ', {
+        completionProvider: testCompletionProvider,
+        onImagePaste: vi.fn(async () => '[Image #1]'),
+      });
+      await flushQueuedInput();
+
+      emitRawInput?.('/ca');
+      await flushQueuedInput();
+      emitRawInput?.('\x1B');
+      await flushQueuedInput();
+
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(vi.getTimerCount()).toBe(0);
+      emitRawInput?.('\r');
+      await flushQueuedInput();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(resultPromise).resolves.toBe('/ca');
     });
   });
 

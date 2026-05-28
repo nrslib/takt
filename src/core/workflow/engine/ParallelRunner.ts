@@ -26,6 +26,7 @@ import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import type { QualityGateRunResult } from '../quality-gates/types.js';
 
 const log = createLogger('parallel-runner');
 
@@ -73,6 +74,11 @@ export interface ParallelRunnerDeps {
   readonly sanitizeObservabilityText?: (text: string) => string;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
+  readonly runQualityGates: (options: {
+    qualityGates: WorkflowStep['qualityGates'];
+    projectRoot: string;
+    step: WorkflowStep;
+  }) => Promise<QualityGateRunResult>;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -285,6 +291,22 @@ export class ParallelRunner {
             : subResponse;
         }
 
+        const qualityGateResult = await this.deps.runQualityGates({
+          qualityGates: subStep.qualityGates,
+          projectRoot: this.deps.getCwd(),
+          step: subStep,
+        });
+        if (!qualityGateResult.ok) {
+          state.stepOutputs.set(subStep.name, qualityGateResult.response);
+          return {
+            subStep,
+            response: qualityGateResult.response,
+            instruction: subInstruction,
+            providerInfo: subPm,
+            qualityGateFailure: true,
+          };
+        }
+
         state.stepOutputs.set(subStep.name, finalResponse);
         this.deps.stepExecutor.emitStepReports(subStep);
 
@@ -332,6 +354,31 @@ export class ParallelRunner {
           step.name,
           ...subResults.map((result) => result.subStep.name),
         ],
+      };
+    }
+
+    const qualityGateFailure = subResults.find((r) => (
+      'qualityGateFailure' in r && r.qualityGateFailure === true
+    ));
+    if (qualityGateFailure) {
+      const failureResponse: AgentResponse = {
+        persona: step.name,
+        status: 'done',
+        content: [
+          `Parallel sub-step quality gate failed: ${qualityGateFailure.subStep.name}`,
+          '',
+          qualityGateFailure.response.content,
+        ].join('\n'),
+        timestamp: new Date(),
+      };
+      return {
+        response: failureResponse,
+        instruction: qualityGateFailure.instruction,
+        providerInfo: qualityGateFailure.providerInfo ?? parentPm,
+        qualityGateFailure: {
+          response: failureResponse,
+          stepIteration,
+        },
       };
     }
 

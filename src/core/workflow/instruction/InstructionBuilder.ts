@@ -163,9 +163,10 @@ export class InstructionBuilder {
       : '';
 
     // Quality gates injection (AI directives for step completion)
-    const hasQualityGates = !!(this.step.qualityGates && this.step.qualityGates.length > 0);
-    const qualityGatesContent = hasQualityGates && this.step.qualityGates
-      ? this.step.qualityGates.map(gate => `- ${gate}`).join('\n')
+    const aiQualityGates = this.step.qualityGates?.filter((gate): gate is string => typeof gate === 'string') ?? [];
+    const hasQualityGates = aiQualityGates.length > 0;
+    const qualityGatesContent = hasQualityGates
+      ? aiQualityGates.map(gate => `- ${gate}`).join('\n')
       : '';
 
     return loadTemplate('perform_phase1_message', language, {

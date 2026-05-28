@@ -34,6 +34,7 @@ import {
   selectSummaryAction,
 } from './interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
+import type { InteractiveImageAttachment } from './imageAttachments.js';
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
@@ -222,4 +223,6 @@ export interface InteractiveModeResult {
   action: InteractiveModeAction;
   /** The assembled task text (only meaningful when action is not 'cancel') */
   task: string;
+  /** Images pasted during interactive input and referenced by placeholder. */
+  attachments?: InteractiveImageAttachment[];
 }

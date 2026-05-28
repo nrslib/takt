@@ -1,4 +1,5 @@
 import type { PartDefinition } from '../models/part.js';
+import { isTimeoutContinuationPartId } from './team-leader-continuation-ids.js';
 
 function assertNonEmptyString(value: unknown, fieldName: string, index: number): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -17,6 +18,9 @@ export function parsePartDefinitionEntry(entry: unknown, index: number): PartDef
     throw new Error(`Part[${index}] "timeout_ms" is not supported; use team_leader.timeout_ms instead`);
   }
   const id = assertNonEmptyString(raw.id, 'id', index);
+  if (isTimeoutContinuationPartId(id)) {
+    throw new Error(`Part[${index}] "id" uses reserved timeout continuation prefix: ${id}`);
+  }
   const title = assertNonEmptyString(raw.title, 'title', index);
   const instruction = assertNonEmptyString(raw.instruction, 'instruction', index);
 

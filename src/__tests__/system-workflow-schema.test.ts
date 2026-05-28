@@ -1043,6 +1043,7 @@ describe('system workflow schema', () => {
       structured_output: {
         schema_ref: 'followup-task',
       },
+      quality_gates: ['Review before finishing'],
       rules: [
         {
           when: 'structured.plan_from_issue.action == "enqueue_new_task"',
@@ -1056,6 +1057,45 @@ describe('system workflow schema', () => {
       const step = result.data as Record<string, unknown>;
       expect(step.delay_before_ms).toBe(60000);
       expect(step.structured_output).toEqual({ schema_ref: 'followup-task' });
+    }
+  });
+
+  it('agent step で string gate と command gate が混在する quality_gates を保持できる', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement the feature',
+      quality_gates: [
+        'Review before finishing',
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+          cwd: '.',
+          timeout_ms: 300000,
+        },
+      ],
+      rules: [
+        {
+          when: 'done',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const step = result.data as Record<string, unknown>;
+      expect(step.quality_gates).toEqual([
+        'Review before finishing',
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+          cwd: '.',
+          timeoutMs: 300000,
+        },
+      ]);
     }
   });
 
@@ -1080,6 +1120,7 @@ describe('system workflow schema', () => {
       structured_output: {
         schema_ref: 'followup-task',
       },
+      quality_gates: ['System route must pass'],
       rules: [
         {
           when: 'true',
@@ -1105,6 +1146,10 @@ describe('system workflow schema', () => {
         expect.objectContaining({
           path: ['structured_output'],
           message: 'System step does not allow "structured_output"',
+        }),
+        expect.objectContaining({
+          path: ['quality_gates'],
+          message: 'System step does not allow "quality_gates"',
         }),
       ]),
     );
