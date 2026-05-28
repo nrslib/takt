@@ -11,6 +11,12 @@ let runPlanIndex = 0;
 let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
+const CODEX_RECONNECT_RETRYABLE_MESSAGES = [
+  'Reconnecting... 2/5',
+  'timeout waiting for child process to exit',
+  CODEX_RECONNECT_FAILURE_MESSAGE,
+];
 
 function createEvents(events: MockEvent[]) {
   return (async function* () {
@@ -45,6 +51,21 @@ function createIdleTimeoutPlan(onThreadStarted?: () => void): RunPlan {
       await waitForAbort(signal);
     })(),
   };
+}
+
+function createReconnectCommandFailureEvents(message: string, command: string): MockEvent[] {
+  return [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    {
+      type: 'item.started',
+      item: {
+        id: 'cmd-e2e',
+        type: 'command_execution',
+        command,
+      },
+    },
+    { type: 'turn.failed', error: { message } },
+  ];
 }
 
 function createThread(id: string) {
@@ -96,6 +117,7 @@ describe('CodexClient retry', () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -253,6 +275,323 @@ describe('CodexClient retry', () => {
     expect(elapsedMs).toBe(255000);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
+  });
+
+  it.each(CODEX_RECONNECT_RETRYABLE_MESSAGES)(
+    'turn.failed の %s provider_error を 1 秒後に retry して成功を返す',
+    async (reconnectMessage) => {
+      vi.useFakeTimers();
+
+      runPlans = [
+        {
+          type: 'events',
+          events: [
+            { type: 'thread.started', thread_id: 'thread-1' },
+            { type: 'turn.failed', error: { message: reconnectMessage } },
+          ],
+        },
+        {
+          type: 'events',
+          events: [
+            { type: 'thread.started', thread_id: 'thread-1' },
+            { type: 'item.completed', item: { id: 'msg-reconnect', type: 'agent_message', text: 'reconnect retry succeeded' } },
+            { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+          ],
+        },
+      ];
+
+      const client = new CodexClient();
+
+      const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(resumeThreadCalls).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+
+      expect(startThreadCalls).toHaveLength(1);
+      expect(resumeThreadCalls).toEqual([
+        {
+          threadId: 'thread-1',
+          options: expect.objectContaining({ workingDirectory: '/tmp' }),
+        },
+      ]);
+      expect(result.status).toBe('done');
+      expect(result.content).toBe('reconnect retry succeeded');
+    },
+  );
+
+  it('stream error event の Reconnecting provider_error を 1 秒後に retry して成功を返す', async () => {
+    vi.useFakeTimers();
+
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'error', message: CODEX_RECONNECT_FAILURE_MESSAGE },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-reconnect-event-error', type: 'agent_message', text: 'stream error retry succeeded' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(resumeThreadCalls).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toEqual([
+      {
+        threadId: 'thread-1',
+        options: expect.objectContaining({ workingDirectory: '/tmp' }),
+      },
+    ]);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('stream error retry succeeded');
+  });
+
+  it.each(CODEX_RECONNECT_RETRYABLE_MESSAGES)(
+    '例外経路の %s provider_error を 1 秒後に retry して成功を返す',
+    async (reconnectMessage) => {
+      vi.useFakeTimers();
+
+      runPlans = [
+        { type: 'throw', error: new Error(reconnectMessage) },
+        {
+          type: 'events',
+          events: [
+            { type: 'thread.started', thread_id: 'thread-1' },
+            { type: 'item.completed', item: { id: 'msg-reconnect-exception', type: 'agent_message', text: 'exception retry succeeded' } },
+            { type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 3 } },
+          ],
+        },
+      ];
+
+      const client = new CodexClient();
+
+      const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(resumeThreadCalls).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+
+      expect(startThreadCalls).toHaveLength(1);
+      expect(resumeThreadCalls).toEqual([
+        {
+          threadId: 'thread-1',
+          options: expect.objectContaining({ workingDirectory: '/tmp' }),
+        },
+      ]);
+      expect(result.status).toBe('done');
+      expect(result.content).toBe('exception retry succeeded');
+    },
+  );
+
+  it('Reconnecting 系 provider_error の retry を使い切った場合は実行中 command の結果不明を診断する', async () => {
+    vi.useFakeTimers();
+
+    runPlans = Array.from({ length: 9 }, () => ({
+      type: 'events' as const,
+      events: [
+        ...createReconnectCommandFailureEvents(
+          CODEX_RECONNECT_FAILURE_MESSAGE,
+          'npm run test:e2e:mock',
+        ),
+      ],
+    }));
+
+    const client = new CodexClient();
+    const onStream = vi.fn();
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp', onStream });
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(8);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.content).toContain('provider reconnect failure');
+    expect(result.content).toContain(CODEX_RECONNECT_FAILURE_MESSAGE);
+    expect(result.content).toContain('Active tool: Bash');
+    expect(result.content).toContain('Bash command: npm run test:e2e:mock');
+    expect(result.content).toContain('Command result: unknown');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('provider reconnect failure'),
+        failureCategory: 'provider_error',
+      }),
+    });
+  });
+
+  it('例外経路の Reconnecting 系 provider_error の retry を使い切った場合も実行中 command の結果不明を診断する', async () => {
+    vi.useFakeTimers();
+
+    runPlans = Array.from({ length: 9 }, () => ({
+      type: 'stream' as const,
+      createEvents: async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-1' };
+        yield {
+          type: 'item.started',
+          item: {
+            id: 'cmd-exception',
+            type: 'command_execution',
+            command: 'npm run test:e2e:mock',
+          },
+        };
+        throw new Error(CODEX_RECONNECT_FAILURE_MESSAGE);
+      },
+    }));
+
+    const client = new CodexClient();
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(8);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.content).toContain('provider reconnect failure');
+    expect(result.content).toContain(CODEX_RECONNECT_FAILURE_MESSAGE);
+    expect(result.content).toContain('Active tool: Bash');
+    expect(result.content).toContain('Bash command: npm run test:e2e:mock');
+    expect(result.content).toContain('Command result: unknown');
+  });
+
+  it('Reconnecting 系 provider_error の command 診断は機密値をマスクする', async () => {
+    vi.useFakeTimers();
+
+    const secretCommand = [
+      'curl -H "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz"',
+      'curl -H "Authorization: Basic dXNlcjpwYXNz"',
+      'curl -H "Authorization:    Bearer leading-space-token"',
+      'curl -H "Cookie: sessionid=plain-session-id; theme=dark"',
+      'curl -H "Set-Cookie: sessionid=set-cookie-secret; Path=/"',
+      'curl -u user:plain-password',
+      'curl -uuser:compact-password',
+      'curl --user other:other-password',
+      'curl --user=third:third-password',
+      'curl --proxy-user proxy:proxy-password',
+      'curl --proxy-user=proxy-eq:proxy-eq-password',
+      'curl https://url-user:url-password@example.test/path',
+      'https://example.test?api_key=query-secret',
+      '--token ghp_abcdefghijklmnopqrstuvwxyz1234567890',
+      'OPENAI_API_KEY=sk-proj-secret_1234567890',
+      "PASSWORD='correct horse battery staple'",
+      "AWS_SECRET_ACCESS_KEY='aws secret phrase with spaces'",
+      'SERVICE_PRIVATE_KEY="private key phrase with spaces"',
+      '--aws-access-key-id access-key-secret',
+      'PASSWORD="abc\\" double assignment leaked tail"',
+      "SECRET='abc\\' single assignment leaked tail'",
+      '--token "abc\\" double option leaked tail"',
+      "--private-key 'abc\\' single option leaked tail'",
+    ].join(' ');
+
+    runPlans = Array.from({ length: 9 }, () => ({
+      type: 'events' as const,
+      events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        {
+          type: 'item.started',
+          item: {
+            id: 'cmd-secret',
+            type: 'command_execution',
+            command: secretCommand,
+          },
+        },
+        { type: 'turn.failed', error: { message: CODEX_RECONNECT_FAILURE_MESSAGE } },
+      ],
+    }));
+
+    const client = new CodexClient();
+    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Bash command:');
+    expect(result.content).toContain('Authorization: Bearer [REDACTED]');
+    expect(result.content).toContain('Authorization: Basic [REDACTED]');
+    expect(result.content).toContain('Authorization:    Bearer [REDACTED]');
+    expect(result.content).toContain('Cookie: [REDACTED]');
+    expect(result.content).toContain('Set-Cookie: [REDACTED]');
+    expect(result.content).toContain('-u [REDACTED]');
+    expect(result.content).toContain('-u[REDACTED]');
+    expect(result.content).toContain('--user [REDACTED]');
+    expect(result.content).toContain('--user=[REDACTED]');
+    expect(result.content).toContain('--proxy-user [REDACTED]');
+    expect(result.content).toContain('--proxy-user=[REDACTED]');
+    expect(result.content).toContain('https://[REDACTED]@example.test/path');
+    expect(result.content).toContain('api_key=[REDACTED]');
+    expect(result.content).toContain('--token [REDACTED]');
+    expect(result.content).toContain('OPENAI_API_KEY=[REDACTED]');
+    expect(result.content).toContain("PASSWORD='[REDACTED]'");
+    expect(result.content).toContain("AWS_SECRET_ACCESS_KEY='[REDACTED]'");
+    expect(result.content).toContain('SERVICE_PRIVATE_KEY="[REDACTED]"');
+    expect(result.content).toContain('--aws-access-key-id [REDACTED]');
+    expect(result.content).toContain('PASSWORD="[REDACTED]"');
+    expect(result.content).toContain("SECRET='[REDACTED]'");
+    expect(result.content).toContain('--private-key [REDACTED]');
+    expect(result.content).not.toContain('sk-abcdefghijklmnopqrstuvwxyz');
+    expect(result.content).not.toContain('dXNlcjpwYXNz');
+    expect(result.content).not.toContain('leading-space-token');
+    expect(result.content).not.toContain('plain-session-id');
+    expect(result.content).not.toContain('set-cookie-secret');
+    expect(result.content).not.toContain('plain-password');
+    expect(result.content).not.toContain('compact-password');
+    expect(result.content).not.toContain('other-password');
+    expect(result.content).not.toContain('third-password');
+    expect(result.content).not.toContain('proxy-password');
+    expect(result.content).not.toContain('proxy-eq-password');
+    expect(result.content).not.toContain('url-password');
+    expect(result.content).not.toContain('query-secret');
+    expect(result.content).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz1234567890');
+    expect(result.content).not.toContain('sk-proj-secret_1234567890');
+    expect(result.content).not.toContain('correct horse battery staple');
+    expect(result.content).not.toContain('aws secret phrase with spaces');
+    expect(result.content).not.toContain('private key phrase with spaces');
+    expect(result.content).not.toContain('access-key-secret');
+    expect(result.content).not.toContain('double assignment leaked tail');
+    expect(result.content).not.toContain('single assignment leaked tail');
+    expect(result.content).not.toContain('double option leaked tail');
+    expect(result.content).not.toContain('single option leaked tail');
+    expect(result.error).not.toContain('correct horse battery staple');
+    expect(result.error).not.toContain('dXNlcjpwYXNz');
+    expect(result.error).not.toContain('leading-space-token');
+    expect(result.error).not.toContain('plain-session-id');
+    expect(result.error).not.toContain('set-cookie-secret');
+    expect(result.error).not.toContain('plain-password');
+    expect(result.error).not.toContain('compact-password');
+    expect(result.error).not.toContain('other-password');
+    expect(result.error).not.toContain('third-password');
+    expect(result.error).not.toContain('proxy-password');
+    expect(result.error).not.toContain('proxy-eq-password');
+    expect(result.error).not.toContain('url-password');
+    expect(result.error).not.toContain('aws secret phrase with spaces');
+    expect(result.error).not.toContain('private key phrase with spaces');
+    expect(result.error).not.toContain('access-key-secret');
+    expect(result.error).not.toContain('double assignment leaked tail');
+    expect(result.error).not.toContain('single assignment leaked tail');
+    expect(result.error).not.toContain('double option leaked tail');
+    expect(result.error).not.toContain('single option leaked tail');
   });
 
   it('ストリームの idle timeout を 1 回 retry して成功を返す', async () => {

@@ -3,18 +3,7 @@ import type {
   TraceReportMode,
   TraceReportParams,
 } from './traceReportTypes.js';
-
-export function sanitizeSensitiveText(text: string): string {
-  if (!text) return text;
-  return text
-    .replace(/(Authorization\s*:\s*Bearer\s+)([^\s]+)/gi, '$1[REDACTED]')
-    .replace(
-      /(["']?(?:api[_-]?key|token|password|secret|access[_-]?token|refresh[_-]?token)["']?\s*[:=]\s*["']?)([^"',\s}\]]+)(["']?)/gi,
-      '$1[REDACTED]$3',
-    )
-    .replace(/([?&](?:api[_-]?key|token|password|secret)=)([^&\s]+)/gi, '$1[REDACTED]')
-    .replace(/\b(?:sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g, '[REDACTED]');
-}
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
 function transformText(text: string, mode: TraceReportMode): string {
   if (!text) {

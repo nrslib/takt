@@ -8,6 +8,7 @@ import { Codex, type TurnOptions } from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
@@ -17,6 +18,7 @@ import {
   type AgentFailureCategory,
   type AgentFailureDetail,
 } from '../../shared/types/agent-failure.js';
+import type { StreamToolUseEventData } from '../../shared/types/provider.js';
 import { mapToCodexSandboxMode, type CodexCallOptions } from './types.js';
 import {
   type CodexEvent,
@@ -39,6 +41,10 @@ const CODEX_STREAM_ABORTED_MESSAGE = 'Codex execution aborted';
 const CODEX_TIMEOUT_MAX_RETRIES = 2;
 const CODEX_RETRY_MAX_RETRIES = 8;
 const CODEX_RETRY_BASE_DELAY_MS = 1000;
+const CODEX_RECONNECT_ERROR_PATTERNS = [
+  'reconnecting...',
+  'timeout waiting for child process to exit',
+];
 const CODEX_RETRYABLE_ERROR_PATTERNS = [
   'stream disconnected before completion',
   'transport error',
@@ -49,6 +55,7 @@ const CODEX_RETRYABLE_ERROR_PATTERNS = [
   'eai_again',
   'fetch failed',
   'at capacity',
+  ...CODEX_RECONNECT_ERROR_PATTERNS,
 ];
 
 function toNumber(value: unknown): number | undefined {
@@ -104,6 +111,43 @@ export class CodexClient {
   private isRetriableError(message: string): boolean {
     const lower = message.toLowerCase();
     return CODEX_RETRYABLE_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
+  }
+
+  private isReconnectFailure(message: string): boolean {
+    const lower = message.toLowerCase();
+    return CODEX_RECONNECT_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
+  }
+
+  private withReconnectFailureDiagnostics(
+    failure: AgentFailureDetail,
+    activeTool: StreamToolUseEventData | undefined,
+  ): AgentFailureDetail {
+    if (
+      failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+      || !this.isReconnectFailure(failure.reason)
+    ) {
+      return failure;
+    }
+
+    const lines = [
+      'provider reconnect failure',
+      `Original error: ${failure.reason}`,
+    ];
+    if (activeTool) {
+      lines.push(`Active tool: ${activeTool.tool}`);
+      const command = activeTool.tool === 'Bash' && typeof activeTool.input.command === 'string'
+        ? activeTool.input.command
+        : undefined;
+      if (command) {
+        lines.push(`Bash command: ${sanitizeSensitiveText(command)}`);
+      }
+    }
+    lines.push('Command result: unknown');
+
+    return {
+      ...failure,
+      reason: lines.join('\n'),
+    };
   }
 
   private async waitForRetryDelay(attempt: number, signal?: AbortSignal): Promise<void> {
@@ -256,6 +300,7 @@ export class CodexClient {
       const timeoutMessage = `Codex stream timed out after ${Math.floor(CODEX_STREAM_IDLE_TIMEOUT_MS / 60000)} minutes of inactivity`;
       let abortCause: 'timeout' | 'external' | undefined;
       let diagRef: StreamDiagnostics | undefined;
+      const state = createStreamTrackingState();
 
       const resetIdleTimeout = (): void => {
         if (idleTimeoutId !== undefined) {
@@ -281,7 +326,6 @@ export class CodexClient {
           options.abortSignal.addEventListener('abort', onExternalAbort, { once: true });
         }
       }
-
       try {
         log.debug('Executing Codex thread', {
           agentType,
@@ -307,7 +351,6 @@ export class CodexClient {
         let success = true;
         let failureMessage = '';
         let providerUsage: ProviderUsageSnapshot | undefined;
-        const state = createStreamTrackingState();
 
         for await (const event of events as AsyncGenerator<CodexEvent>) {
           resetIdleTimeout();
@@ -344,7 +387,7 @@ export class CodexClient {
           if (event.type === 'item.started') {
             const item = event.item as CodexItem | undefined;
             if (item) {
-              emitCodexItemStart(item, options.onStream, state.startedItems);
+              emitCodexItemStart(item, options.onStream, state);
             }
             continue;
           }
@@ -426,13 +469,14 @@ export class CodexClient {
             continue;
           }
 
-          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, failure);
+          const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
+          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure);
           emitResult(
             options.onStream,
             false,
             errorResponse.error ?? errorResponse.content,
             currentThreadId,
-            failure.category,
+            finalFailure.category,
           );
           return errorResponse;
         }
@@ -491,13 +535,14 @@ export class CodexClient {
           continue;
         }
 
-        const errorResponse = this.buildErrorResponse(agentType, currentThreadId, failure);
+        const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
+        const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure);
         emitResult(
           options.onStream,
           false,
           errorResponse.error ?? errorResponse.content,
           currentThreadId,
-          failure.category,
+          finalFailure.category,
         );
 
         return errorResponse;
