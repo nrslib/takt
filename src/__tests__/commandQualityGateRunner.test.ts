@@ -321,30 +321,23 @@ describe('command quality gates', () => {
     }
   });
 
-  it('should fail and stop the command when stdout and stderr reach the combined output byte limit exactly', async () => {
+  it('should pass when stdout and stderr reach the combined output byte limit exactly', async () => {
     const projectRoot = createTempDir();
 
     const result = await runCommandQualityGate({
       gate: {
         type: 'command',
         name: 'combined-boundary-check',
-        command: 'node -e "process.stdout.write(\'o\'.repeat(32768)); process.stderr.write(\'e\'.repeat(32768)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stdout.write(\'o\'.repeat(32768)); process.stderr.write(\'e\'.repeat(32768))"',
         timeoutMs: 1000,
       },
       projectRoot,
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.failure).toMatchObject({
-        gateName: 'combined-boundary-check',
-        outputLimitExceeded: true,
-        outputLimitBytes: 65536,
-        timedOut: false,
-      });
-      expect(`${result.failure.stdout}${result.failure.stderr}`).toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
-      expect(result.failure.outputLogPath).toBeDefined();
-      expect(existsSync(result.failure.outputLogPath!)).toBe(true);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.stdout.length + result.stderr.length).toBe(65536);
+      expect(`${result.stdout}${result.stderr}`).not.toContain('[OUTPUT TRUNCATED: exceeded 65536 bytes]');
     }
   });
 

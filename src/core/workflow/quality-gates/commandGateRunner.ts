@@ -57,7 +57,7 @@ function appendOutputWithinLimit(current: string, outputBytes: number, chunk: st
   }
 
   const chunkBytes = Buffer.byteLength(chunk, 'utf8');
-  if (outputBytes + chunkBytes < MAX_OUTPUT_BYTES) {
+  if (outputBytes + chunkBytes <= MAX_OUTPUT_BYTES) {
     return {
       output: `${current}${chunk}`,
       bytes: outputBytes + chunkBytes,
