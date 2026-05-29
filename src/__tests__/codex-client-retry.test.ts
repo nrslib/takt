@@ -12,6 +12,17 @@ let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
+const CODEX_RETRY_MAX_DELAY_MS = 30_000;
+const CODEX_CAPPED_RETRY_DELAYS_MS = [
+  1000,
+  2000,
+  4000,
+  8000,
+  16000,
+  CODEX_RETRY_MAX_DELAY_MS,
+  CODEX_RETRY_MAX_DELAY_MS,
+  CODEX_RETRY_MAX_DELAY_MS,
+];
 const CODEX_RECONNECT_RETRYABLE_MESSAGES = [
   'Reconnecting... 2/5',
   'timeout waiting for child process to exit',
@@ -241,7 +252,7 @@ describe('CodexClient retry', () => {
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
   });
 
-  it('at capacity が続く場合は 128 秒バックオフまで待ってから最後の retry を行う', async () => {
+  it('at capacity が続く場合は 30 秒 cap で最後の retry を行う', async () => {
     vi.useFakeTimers();
 
     runPlans = Array.from({ length: 9 }, () => ({
@@ -254,25 +265,24 @@ describe('CodexClient retry', () => {
     const client = new CodexClient();
     const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
 
-    const retryDelaysMs = [1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000];
     let elapsedMs = 0;
 
-    for (let index = 0; index < retryDelaysMs.length; index += 1) {
-      const delayMs = retryDelaysMs[index];
+    for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
+      const delayMs = CODEX_CAPPED_RETRY_DELAYS_MS[index];
       await vi.advanceTimersByTimeAsync(delayMs - 1);
       expect(resumeThreadCalls).toHaveLength(index);
 
       await vi.advanceTimersByTimeAsync(1);
       elapsedMs += delayMs;
       expect(resumeThreadCalls).toHaveLength(index + 1);
-      expect(elapsedMs).toBe(retryDelaysMs.slice(0, index + 1).reduce((sum, value) => sum + value, 0));
+      expect(elapsedMs).toBe(CODEX_CAPPED_RETRY_DELAYS_MS.slice(0, index + 1).reduce((sum, value) => sum + value, 0));
     }
 
     const result = await resultPromise;
 
     expect(startThreadCalls).toHaveLength(1);
     expect(resumeThreadCalls).toHaveLength(8);
-    expect(elapsedMs).toBe(255000);
+    expect(elapsedMs).toBe(121000);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
   });
@@ -322,9 +332,52 @@ describe('CodexClient retry', () => {
     },
   );
 
-  it('stream error event の Reconnecting provider_error を 1 秒後に retry して成功を返す', async () => {
-    vi.useFakeTimers();
+  it('stream error event の Reconnecting provider_error は retry せず同一 stream を継続して成功を返す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'error', message: CODEX_RECONNECT_FAILURE_MESSAGE },
+          { type: 'item.completed', item: { id: 'msg-reconnect-event-error', type: 'agent_message', text: 'stream error continued' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
 
+    const client = new CodexClient();
+
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('stream error continued');
+  });
+
+  it('stream error event 後に有効な出力があれば turn.completed なしの自然終了でも成功を返す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'error', message: CODEX_RECONNECT_FAILURE_MESSAGE },
+          { type: 'item.completed', item: { id: 'msg-reconnect-event-output', type: 'agent_message', text: 'stream output without turn completed' } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('stream output without turn completed');
+  });
+
+  it('stream error event だけで自然終了した場合は retry せず最後の error を provider_error として返す', async () => {
     runPlans = [
       {
         type: 'events',
@@ -333,35 +386,72 @@ describe('CodexClient retry', () => {
           { type: 'error', message: CODEX_RECONNECT_FAILURE_MESSAGE },
         ],
       },
+    ];
+
+    const client = new CodexClient();
+    const onStream = vi.fn();
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.content).toContain(CODEX_RECONNECT_FAILURE_MESSAGE);
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining(CODEX_RECONNECT_FAILURE_MESSAGE),
+        failureCategory: 'provider_error',
+      }),
+    });
+  });
+
+  it('command 実行中に stream error event だけで自然終了した場合は retry せず reconnect 診断を返す', async () => {
+    runPlans = [
       {
         type: 'events',
         events: [
           { type: 'thread.started', thread_id: 'thread-1' },
-          { type: 'item.completed', item: { id: 'msg-reconnect-event-error', type: 'agent_message', text: 'stream error retry succeeded' } },
-          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+          {
+            type: 'item.started',
+            item: {
+              id: 'cmd-stream-error',
+              type: 'command_execution',
+              command: 'npm run test:e2e:mock',
+            },
+          },
+          { type: 'error', message: CODEX_RECONNECT_FAILURE_MESSAGE },
         ],
       },
     ];
 
     const client = new CodexClient();
-
-    const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(resumeThreadCalls).toHaveLength(0);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await resultPromise;
+    const onStream = vi.fn();
+    const result = await client.call('coder', 'prompt', { cwd: '/tmp', onStream });
 
     expect(startThreadCalls).toHaveLength(1);
-    expect(resumeThreadCalls).toEqual([
-      {
-        threadId: 'thread-1',
-        options: expect.objectContaining({ workingDirectory: '/tmp' }),
-      },
-    ]);
-    expect(result.status).toBe('done');
-    expect(result.content).toBe('stream error retry succeeded');
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.content).toContain('provider reconnect failure');
+    expect(result.content).toContain(CODEX_RECONNECT_FAILURE_MESSAGE);
+    expect(result.content).toContain('Active tool: Bash');
+    expect(result.content).toContain('Bash command: npm run test:e2e:mock');
+    expect(result.content).toContain('Command result: unknown');
+    const resultEvent = onStream.mock.calls.find(([event]) => event.type === 'result')?.[0];
+    expect(resultEvent).toEqual({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.any(String),
+        failureCategory: 'provider_error',
+      }),
+    });
+    expect(resultEvent?.data.error).toContain('provider reconnect failure');
+    expect(resultEvent?.data.error).toContain('Active tool: Bash');
+    expect(resultEvent?.data.error).toContain('Bash command: npm run test:e2e:mock');
+    expect(resultEvent?.data.error).toContain('Command result: unknown');
   });
 
   it.each(CODEX_RECONNECT_RETRYABLE_MESSAGES)(
@@ -722,9 +812,8 @@ describe('CodexClient retry', () => {
     const client = new CodexClient();
     const resultPromise = client.call('coder', 'prompt', { cwd: '/tmp' });
 
-    const transientRetryDelaysMs = [1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000];
-    for (let index = 0; index < transientRetryDelaysMs.length; index += 1) {
-      await vi.advanceTimersByTimeAsync(transientRetryDelaysMs[index]);
+    for (let index = 0; index < CODEX_CAPPED_RETRY_DELAYS_MS.length; index += 1) {
+      await vi.advanceTimersByTimeAsync(CODEX_CAPPED_RETRY_DELAYS_MS[index]);
       expect(resumeThreadCalls).toHaveLength(index + 1);
     }
 
@@ -734,7 +823,7 @@ describe('CodexClient retry', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(resumeThreadCalls).toHaveLength(8);
 
-    await vi.advanceTimersByTimeAsync(256000 - 1);
+    await vi.advanceTimersByTimeAsync(CODEX_RETRY_MAX_DELAY_MS - 1);
     expect(resumeThreadCalls).toHaveLength(8);
 
     await vi.advanceTimersByTimeAsync(1);
