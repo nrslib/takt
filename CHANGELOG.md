@@ -6,6 +6,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.43.0] - 2026-05-29
+
+### Added
+
+- Image attachments (experimental, #751). Images can now flow through TAKT end to end. In interactive mode you can paste an image straight into the prompt — TAKT decodes terminal inline-image (OSC 1337) sequences into a pending attachment — and `takt add` plus retries carry image attachments with the task spec, so the agent receives the images alongside the text instruction. Works in assistant / passthrough / quiet / retry input modes, with a 10 MB per-image limit. Still under verification — behavior may change.
+- `takt resume` command for direct runs (#759). A direct (one-shot, non-queued) run that fails or aborts can now be resumed with `takt resume`, which finds the latest failed/aborted direct run and continues it instead of starting over. Resume reuses the existing run directory, and a dedicated scoring prompt decides how to re-enter the workflow.
+- Command quality gates (#761). Step `quality_gates` now accept machine-executed `type: command` entries in addition to AI directive strings. A command gate runs after an agent step completes and passes only when the command exits with code `0`; on failure TAKT feeds the command metadata, cwd, exit code (or timeout / output-limit details), the output log path, and bounded sanitized stdout/stderr back into the same agent step for another attempt. Workflow-YAML command gates require `workflow_command_gates.custom_scripts: true` in config. `system` and `workflow_call` steps do not accept `quality_gates`.
+- `frontend-maintenance` builtin workflow (experimental). A workflow for modifying existing frontend products rather than greenfield builds, shipping maintenance-scoped plan / implement / write-tests / fix / supervise instructions, an `existing-system` knowledge facet, an `existing-system-respect` policy that enforces respecting current conventions, and a `maintenance-scope` output contract. Experimental — it can currently be heavier-handed than intended, so treat it as a starting point for existing-product changes and tune to your codebase.
+- Coding review added to the default peer review. The builtin `default-peer-review` workflow now includes a coding-review sub-step backed by a new `coding-reviewer` persona, a `review-coding` instruction, and a `coding-review` output contract, so general code quality is reviewed alongside the existing specialist reviewers.
+
+### Changed
+
+- Review facets hardened against scope creep across the fix ↔ review loop (en + ja). The review baseline is now anchored to the task's base — every reviewer evaluates the entire cumulative diff from the merge-base, not just the increment from the most recent iteration. This stops unrequested changes that slipped in during earlier iterations (unrelated comment deletions, renames, reformatting, weakened tests) from being missed once the diff narrows to the latest fix. The `ai-antipattern` scope-creep check was made cumulative-diff based, and review and React facet guidance was refined alongside.
+
+### Fixed
+
+- `claude-terminal` prompt detection now works with Claude Code v2.1 (#766, refs #765). The tail-line regex required the prompt row to be exactly `❯` / `❱` / `>`, but v2.1 renders it as `❯ Try "..."`, so `waitForClaudeInputReady` never matched and timed out after 60 s. The pattern was relaxed to accept any prompt character followed by whitespace or end-of-line, while the busy-state gate still prevents false positives.
+- Codex `Reconnecting...` is no longer treated as a fatal error (#767). A transient `Reconnecting... N/5` event from the Codex SDK was surfaced as a final `provider_error` and aborted the whole workflow; it is now handled as a recoverable reconnect and retried.
+- `team_leader` part timeouts no longer abort the run (#764). When a worker part hit `part_timeout` or a feedback failure, `TeamLeaderRunner` aborted immediately; a timeout fallback now keeps the run going, and the decomposition instructions and facets were tuned so the leader is less likely to create one oversized part.
+- Parallel review aggregation no longer fails the whole step when a single reviewer errors (#770). A `provider_error` in one reviewer's Phase 1 during a parallel `reviewers` step previously broke aggregation even when the other reviewers completed; `ParallelRunner` terminal-status handling was fixed so the step aggregates correctly.
+- `review-fix-takt-default` now routes supervisor findings correctly. Findings raised by the review-fix supervisor were not routed back into the fix loop as intended; the workflow rules were corrected.
+
+### Internal
+
+- Added a three-phase step model tutorial to the docs (#735).
+
 ## [0.42.0] - 2026-05-20
 
 ### Added

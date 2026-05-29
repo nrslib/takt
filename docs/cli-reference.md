@@ -265,6 +265,14 @@ takt workflow doctor sample-flow
 takt workflow doctor .takt/workflows/sample-flow.yaml
 ```
 
+### takt resume
+
+Resume the latest failed or aborted direct (one-shot) run. Finds the most recent direct run that did not complete and continues it from where it stopped, reusing the existing run directory instead of starting over.
+
+```bash
+takt resume
+```
+
 ### takt clear
 
 Clear agent conversation sessions (reset state).

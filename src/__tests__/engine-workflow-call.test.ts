@@ -236,7 +236,7 @@ steps:
     engine = new WorkflowEngine(config, tmpDir, 'Relay rate limit', createWorkflowCallOptions(tmpDir));
     const rateLimited = makeResponse({
       persona: 'reviewer',
-      status: 'rate_limited' as never,
+      status: 'rate_limited',
       content: '',
       error: 'Rate limit exceeded. Please try again later.',
       errorKind: 'rate_limit',
@@ -307,7 +307,7 @@ steps:
     mockRunAgentSequence([
       makeResponse({
         persona: 'reviewer',
-        status: 'rate_limited' as never,
+        status: 'rate_limited',
         content: '',
         error: 'Rate limit exceeded. Please try again later.',
         errorKind: 'rate_limit',
@@ -375,7 +375,7 @@ steps:
     mockRunAgentSequence([
       makeResponse({
         persona: 'reviewer',
-        status: 'rate_limited' as never,
+        status: 'rate_limited',
         content: '',
         error: 'Rate limit exceeded. Please try again later.',
         errorKind: 'rate_limit',

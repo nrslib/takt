@@ -165,7 +165,7 @@ AI often justifies unnecessary cleanup as related work because it is "in the tou
 | Deleting old implementation that is genuinely no longer used | OK |
 
 Verification approach:
-1. List renames, moves, deletions, responsibility changes, and test expectation changes in the diff
+1. Obtain the entire cumulative diff from the task's starting point (the base) and list renames, moves, deletions, responsibility changes, and test expectation changes (do not look only at the most recent fix; unrelated changes buried in earlier iterations do not appear in the latest fix report)
 2. For each change, ask whether the request fails without it
 3. Do not accept "more readable", "more idiomatic", or "cleanup while here" as necessity
 4. Revert changes whose necessity cannot be explained before completing the task

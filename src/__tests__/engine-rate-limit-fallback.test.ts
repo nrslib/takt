@@ -63,7 +63,7 @@ function makeRateLimitedResponse(
 ): AgentResponse {
   return makeResponse({
     persona: 'plan',
-    status: 'rate_limited' as never,
+    status: 'rate_limited',
     content: '',
     error: 'Rate limit exceeded. Please try again later.',
     errorKind: 'rate_limit',
@@ -639,7 +639,6 @@ describe('WorkflowEngine rate limit fallback', () => {
   });
 
   it('parallel sub-step が rate_limited の場合は all-failed abort ではなく fallback provider で再実行する', async () => {
-    // Given
     const engine = new WorkflowEngine(parallelStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
       rateLimitFallback: {
         switchChain: [{ provider: 'codex', model: 'gpt-5' }],
@@ -657,10 +656,8 @@ describe('WorkflowEngine rate limit fallback', () => {
       { index: 0, method: 'aggregate' },
     ]);
 
-    // When
     const state = await engine.run();
 
-    // Then
     expect(state.status).toBe('completed');
     expect(state.iteration).toBe(1);
     expect(state.stepIterations.get('reviewers')).toBe(1);
@@ -673,9 +670,17 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(prompts[2]).toContain('Fallback Execution');
     expect(prompts[2]).toContain('claude');
     expect(prompts[2]).toContain('codex');
+    expect(prompts[2]).toContain('arch-review');
+    expect(prompts[2]).toContain('security-review');
+    expect(prompts[2]).toContain('Aggregate rules were not evaluated');
+    expect(prompts[2]).toContain('Rate limit exceeded. Please try again later.');
     expect(prompts[3]).toContain('Fallback Execution');
     expect(prompts[3]).toContain('claude');
     expect(prompts[3]).toContain('codex');
+    expect(prompts[3]).toContain('arch-review');
+    expect(prompts[3]).toContain('security-review');
+    expect(prompts[3]).toContain('Aggregate rules were not evaluated');
+    expect(prompts[3]).toContain('Rate limit exceeded. Please try again later.');
     expect(runAgent).toHaveBeenCalledTimes(4);
     expect(detectMatchedRule).toHaveBeenCalledTimes(3);
   });

@@ -211,6 +211,15 @@ Do not tolerate problems just because existing code does the same. If existing c
 
 Common procedure that every reviewer must follow. Do not duplicate this in individual instructions.
 
+### Diff Baseline (Anchor to the Base)
+
+The review target is the entire cumulative diff from the task's starting point (the base), not just the changes from the most recent iteration.
+
+- In the fix ↔ review loop, recompute the diff from the base every time and evaluate the whole. Do not move the baseline to the latest fix
+- The base is the merge-base with the integration branch, or the starting point recorded in `plan` / `order`. Do not treat only the "changes" section of `Previous Response` as the diff
+- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile against them every time
+- Track finding states (new / persists / resolved) on a fixed baseline. Do not narrow the diff scope and conclude "it is no longer in the diff"
+
 ### Referring to Primary Sources
 
 - Use `order.md`, `plan.md`, and the actual code as primary sources

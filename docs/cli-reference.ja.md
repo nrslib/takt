@@ -265,6 +265,14 @@ takt workflow doctor sample-flow
 takt workflow doctor .takt/workflows/sample-flow.yaml
 ```
 
+### takt resume
+
+直近の失敗・中断したダイレクト（ワンショット）run を再開します。完了しなかった最新のダイレクト run を探し、最初からやり直すのではなく既存の run ディレクトリを再利用して止まったところから続行します。
+
+```bash
+takt resume
+```
+
 ### takt clear
 
 エージェントの会話セッションをクリア（状態のリセット）します。

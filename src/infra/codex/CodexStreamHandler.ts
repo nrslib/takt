@@ -6,7 +6,7 @@
  */
 
 import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { StreamCallback, StreamToolUseEventData } from '../../shared/types/provider.js';
 
 export type CodexEvent = {
   type: string;
@@ -25,6 +25,8 @@ export interface StreamTrackingState {
   outputOffsets: Map<string, number>;
   textOffsets: Map<string, number>;
   thinkingOffsets: Map<string, number>;
+  anonymousItemIds: Map<string, string>;
+  activeTool?: StreamToolUseEventData;
 }
 
 export function createStreamTrackingState(): StreamTrackingState {
@@ -33,6 +35,7 @@ export function createStreamTrackingState(): StreamTrackingState {
     outputOffsets: new Map<string, number>(),
     textOffsets: new Map<string, number>(),
     thinkingOffsets: new Map<string, number>(),
+    anonymousItemIds: new Map<string, string>(),
   };
 }
 
@@ -78,6 +81,46 @@ export function emitToolUse(
 ): void {
   if (!onStream) return;
   onStream({ type: 'tool_use', data: { tool, input, id } });
+}
+
+function recordToolUse(
+  state: StreamTrackingState,
+  tool: string,
+  input: Record<string, unknown>,
+  id: string,
+): void {
+  state.activeTool = { tool, input, id };
+}
+
+function clearActiveTool(state: StreamTrackingState, id: string): void {
+  if (state.activeTool?.id === id) {
+    state.activeTool = undefined;
+  }
+}
+
+function resolveCodexItemId(item: CodexItem, state: StreamTrackingState): string {
+  if (item.id) {
+    return item.id;
+  }
+
+  const existingId = state.anonymousItemIds.get(item.type);
+  if (existingId) {
+    return existingId;
+  }
+
+  const id = `item_${Math.random().toString(36).slice(2, 10)}`;
+  state.anonymousItemIds.set(item.type, id);
+  return id;
+}
+
+function releaseAnonymousItemId(item: CodexItem, state: StreamTrackingState, id: string): void {
+  if (item.id) {
+    return;
+  }
+
+  if (state.anonymousItemIds.get(item.type) === id) {
+    state.anonymousItemIds.delete(item.type);
+  }
 }
 
 export function emitToolResult(
@@ -132,37 +175,48 @@ export function formatFileChangeSummary(changes: Array<{ path?: string; kind?: s
 export function emitCodexItemStart(
   item: CodexItem,
   onStream: StreamCallback | undefined,
-  startedItems: Set<string>,
+  state: StreamTrackingState,
 ): void {
-  if (!onStream) return;
-  const id = item.id || `item_${Math.random().toString(36).slice(2, 10)}`;
-  if (startedItems.has(id)) return;
+  emitCodexItemStartWithId(item, onStream, state, resolveCodexItemId(item, state));
+}
+
+function emitCodexItemStartWithId(
+  item: CodexItem,
+  onStream: StreamCallback | undefined,
+  state: StreamTrackingState,
+  id: string,
+): void {
+  if (state.startedItems.has(id)) return;
 
   switch (item.type) {
     case 'command_execution': {
       const command = typeof item.command === 'string' ? item.command : '';
+      recordToolUse(state, 'Bash', { command }, id);
       emitToolUse(onStream, 'Bash', { command }, id);
-      startedItems.add(id);
+      state.startedItems.add(id);
       break;
     }
     case 'mcp_tool_call': {
       const tool = typeof item.tool === 'string' ? item.tool : 'Tool';
       const args = (item.arguments ?? {}) as Record<string, unknown>;
+      recordToolUse(state, tool, args, id);
       emitToolUse(onStream, tool, args, id);
-      startedItems.add(id);
+      state.startedItems.add(id);
       break;
     }
     case 'web_search': {
       const query = typeof item.query === 'string' ? item.query : '';
+      recordToolUse(state, 'WebSearch', { query }, id);
       emitToolUse(onStream, 'WebSearch', { query }, id);
-      startedItems.add(id);
+      state.startedItems.add(id);
       break;
     }
     case 'file_change': {
       const changes = Array.isArray(item.changes) ? item.changes : [];
       const summary = formatFileChangeSummary(changes as Array<{ path?: string; kind?: string }>);
+      recordToolUse(state, 'Edit', { file_path: summary || 'patch' }, id);
       emitToolUse(onStream, 'Edit', { file_path: summary || 'patch' }, id);
-      startedItems.add(id);
+      state.startedItems.add(id);
       break;
     }
     default:
@@ -175,8 +229,7 @@ export function emitCodexItemCompleted(
   onStream: StreamCallback | undefined,
   state: StreamTrackingState,
 ): void {
-  if (!onStream) return;
-  const id = item.id || `item_${Math.random().toString(36).slice(2, 10)}`;
+  const id = resolveCodexItemId(item, state);
 
   switch (item.type) {
     case 'reasoning': {
@@ -203,7 +256,7 @@ export function emitCodexItemCompleted(
     }
     case 'command_execution': {
       if (!state.startedItems.has(id)) {
-        emitCodexItemStart(item, onStream, state.startedItems);
+        emitCodexItemStartWithId(item, onStream, state, id);
       }
       const output = typeof item.aggregated_output === 'string' ? item.aggregated_output : '';
       if (output) {
@@ -218,11 +271,12 @@ export function emitCodexItemCompleted(
       const isError = status === 'failed' || (exitCode !== undefined && exitCode !== 0);
       const content = output || (exitCode !== undefined ? `Exit code: ${exitCode}` : '');
       emitToolResult(onStream, content, isError);
+      clearActiveTool(state, id);
       break;
     }
     case 'mcp_tool_call': {
       if (!state.startedItems.has(id)) {
-        emitCodexItemStart(item, onStream, state.startedItems);
+        emitCodexItemStartWithId(item, onStream, state, id);
       }
       const status = typeof item.status === 'string' ? item.status : '';
       const isError = status === 'failed' || !!item.error;
@@ -239,29 +293,34 @@ export function emitCodexItemCompleted(
         }
       }
       emitToolResult(onStream, content, isError);
+      clearActiveTool(state, id);
       break;
     }
     case 'web_search': {
       if (!state.startedItems.has(id)) {
-        emitCodexItemStart(item, onStream, state.startedItems);
+        emitCodexItemStartWithId(item, onStream, state, id);
       }
       emitToolResult(onStream, 'Search completed', false);
+      clearActiveTool(state, id);
       break;
     }
     case 'file_change': {
       if (!state.startedItems.has(id)) {
-        emitCodexItemStart(item, onStream, state.startedItems);
+        emitCodexItemStartWithId(item, onStream, state, id);
       }
       const status = typeof item.status === 'string' ? item.status : '';
       const isError = status === 'failed';
       const changes = Array.isArray(item.changes) ? item.changes : [];
       const summary = formatFileChangeSummary(changes as Array<{ path?: string; kind?: string }>);
       emitToolResult(onStream, summary || 'Applied patch', isError);
+      clearActiveTool(state, id);
       break;
     }
     default:
       break;
   }
+
+  releaseAnonymousItemId(item, state, id);
 }
 
 export function emitCodexItemUpdate(
@@ -269,13 +328,12 @@ export function emitCodexItemUpdate(
   onStream: StreamCallback | undefined,
   state: StreamTrackingState,
 ): void {
-  if (!onStream) return;
-  const id = item.id || `item_${Math.random().toString(36).slice(2, 10)}`;
+  const id = resolveCodexItemId(item, state);
 
   switch (item.type) {
     case 'command_execution': {
       if (!state.startedItems.has(id)) {
-        emitCodexItemStart(item, onStream, state.startedItems);
+        emitCodexItemStartWithId(item, onStream, state, id);
       }
       const output = typeof item.aggregated_output === 'string' ? item.aggregated_output : '';
       if (output) {
@@ -313,7 +371,7 @@ export function emitCodexItemUpdate(
     case 'mcp_tool_call':
     case 'web_search': {
       if (!state.startedItems.has(id)) {
-        emitCodexItemStart(item, onStream, state.startedItems);
+        emitCodexItemStartWithId(item, onStream, state, id);
       }
       break;
     }

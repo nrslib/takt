@@ -13,7 +13,7 @@ const PANE_CHANGE_TIMEOUT_MS = 5000;
 const PANE_POLL_INTERVAL_MS = 100;
 const CLAUDE_READY_TAIL_LINES = 3;
 const CLAUDE_BUSY_PATTERN = /(Running|thinking|Searching|Reading|Writing|Editing|Crunched)/i;
-const CLAUDE_PROMPT_PATTERN = /^[❯❱>]$/;
+const CLAUDE_PROMPT_PATTERN = /^[❯❱>](?:\s+(?!\d+\.\s)|$)/;
 
 function getProperty(error: object, property: string): unknown {
   return (error as Record<string, unknown>)[property];
