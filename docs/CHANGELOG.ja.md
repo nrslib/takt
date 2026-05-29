@@ -14,7 +14,7 @@
 - ダイレクト run 向けの `takt resume` コマンドを追加 (#759)。失敗・中断したダイレクト（ワンショット・キュー外）run を `takt resume` で再開できるようになった。直近の失敗 / 中断したダイレクト run を探して、最初からやり直すのではなく続きから再開する。再開時は既存の run ディレクトリを再利用し、専用のスコアリングプロンプトがワークフローへの再入方法を判断する
 - コマンド品質ゲートを追加 (#761)。ステップの `quality_gates` が、AI 指示の文字列に加えて、機械実行される `type: command` エントリを受け付けるようになった。コマンドゲートはエージェントステップ完了後に実行され、コマンドが終了コード `0` で終わった場合のみ通過する。失敗時は、コマンドのメタデータ・cwd・終了コード（またはタイムアウト / 出力上限の詳細）・出力ログのパス・上限付きでサニタイズした stdout/stderr を同じエージェントステップに差し戻して再試行させる。ワークフロー YAML のコマンドゲートを使うには設定で `workflow_command_gates.custom_scripts: true` が必要。`system` / `workflow_call` ステップは `quality_gates` を受け付けない
 - ビルトインワークフロー `frontend-maintenance` を追加（実験的）。新規構築ではなく既存フロントエンドプロダクトの改修に向けたワークフローで、保守スコープの plan / implement / write-tests / fix / supervise インストラクション、`existing-system` ナレッジファセット、既存の規約を尊重させる `existing-system-respect` ポリシー、`maintenance-scope` 出力契約を同梱する。現状はやや過剰に動くことがあるため、既存プロダクト改修の出発点として使い、コードベースに合わせて調整することを推奨する実験的ワークフロー
-- デフォルトのピアレビューに coding review を追加。ビルトインの `default-peer-review` ワークフローに、新しい `coding-reviewer` ペルソナ・`review-coding` インストラクション・`coding-review` 出力契約に基づく coding-review サブステップが加わり、既存の専門レビューワと並んで一般的なコード品質もレビューされるようになった
+- デフォルトのピアレビューに coding review を追加。ビルトインの `default-peer-review` ワークフローに、新しい `coding-reviewer` ペルソナ・最小限の `review-coding` インストラクション・`coding-review` 出力契約に基づく coding-review サブステップが加わった。専門レビューワと違ってドメインナレッジも専門ポリシーもバインドせず（共通のレビューベースのみ）、タスク意図と diff を読んでモデル自身のコーディング判断で実装バグ・リグレッション・セキュリティ・テスト不足を拾う、ほぼ無指示の汎用レビューであり、観点特化のレビュー（architecture, AI antipattern）を補完する
 
 ### Changed
 
