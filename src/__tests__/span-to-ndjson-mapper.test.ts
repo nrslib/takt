@@ -127,4 +127,83 @@ describe('span-to-ndjson mapper', () => {
       },
     })).toBeUndefined();
   });
+
+  it('maps phase spans into session log compatible phase records', () => {
+    const stack = [
+      { workflow: 'default', step: 'implement', kind: 'agent' },
+    ];
+    const phaseSpan: SpanSnapshot = {
+      name: 'phase.implement.execute',
+      startTime: [1_778_777_200, 0],
+      endTime: [1_778_777_205, 0],
+      attributes: {
+        'takt.workflow.current_name': 'default',
+        'takt.workflow.stack': JSON.stringify(stack),
+        'takt.step.name': 'implement',
+        'takt.step.iteration': 1,
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.execution_id': 'implement:1:1',
+        'takt.phase.instruction': 'Implement it',
+        'takt.phase.status': 'done',
+        'takt.phase.result.content': 'implemented',
+      },
+    };
+
+    expect(mapSpanStartToNdjson(phaseSpan)).toEqual({
+      type: 'phase_start',
+      step: 'implement',
+      iteration: 1,
+      workflow: 'default',
+      stack,
+      phase: 1,
+      phaseName: 'execute',
+      phaseExecutionId: 'implement:1:1',
+      timestamp: '2026-05-14T16:46:40.000Z',
+      instruction: 'Implement it',
+    });
+    expect(mapSpanEndToNdjson(phaseSpan)).toEqual({
+      type: 'phase_complete',
+      step: 'implement',
+      iteration: 1,
+      workflow: 'default',
+      stack,
+      phase: 1,
+      phaseName: 'execute',
+      phaseExecutionId: 'implement:1:1',
+      status: 'done',
+      content: 'implemented',
+      timestamp: '2026-05-14T16:46:45.000Z',
+    });
+  });
+
+  it('maps judge stage spans into session log compatible judge records', () => {
+    expect(mapSpanEndToNdjson({
+      name: 'judge_stage.implement.1.structured_output',
+      endTime: [1_778_777_210, 0],
+      attributes: {
+        'takt.step.name': 'implement',
+        'takt.step.iteration': 1,
+        'takt.phase.execution_id': 'implement:3:1',
+        'takt.judge.stage': 1,
+        'takt.judge.method': 'structured_output',
+        'takt.judge.status': 'done',
+        'takt.judge.instruction': 'Judge it',
+        'takt.judge.response': 'ok',
+      },
+    })).toEqual({
+      type: 'phase_judge_stage',
+      step: 'implement',
+      iteration: 1,
+      phase: 3,
+      phaseName: 'judge',
+      phaseExecutionId: 'implement:3:1',
+      stage: 1,
+      method: 'structured_output',
+      status: 'done',
+      instruction: 'Judge it',
+      response: 'ok',
+      timestamp: '2026-05-14T16:46:50.000Z',
+    });
+  });
 });

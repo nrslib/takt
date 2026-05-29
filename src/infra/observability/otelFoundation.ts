@@ -46,7 +46,7 @@ export async function initializeOtelFoundation(
     return createNoopHandle();
   }
 
-  const shared = await acquireSdk(config, options);
+  const shared = await acquireSdk();
   const registrations = registerRunExporters(shared, options);
 
   let released = false;
@@ -70,10 +70,7 @@ export async function initializeOtelFoundation(
   };
 }
 
-async function acquireSdk(
-  config: ResolvedObservabilityConfig,
-  options: OtelFoundationOptions | undefined,
-): Promise<SharedOtelSdk> {
+async function acquireSdk(): Promise<SharedOtelSdk> {
   if (stoppingSdk) {
     await stoppingSdk;
   }
@@ -83,7 +80,7 @@ async function acquireSdk(
     return activeSdk;
   }
 
-  const shared = await getOrStartSdk(config, options);
+  const shared = await getOrStartSdk();
   shared.refCount += 1;
   return shared;
 }
@@ -94,15 +91,12 @@ function createNoopHandle(): OtelFoundationHandle {
   };
 }
 
-async function getOrStartSdk(
-  config: ResolvedObservabilityConfig,
-  options: OtelFoundationOptions | undefined,
-): Promise<SharedOtelSdk> {
+async function getOrStartSdk(): Promise<SharedOtelSdk> {
   if (activeSdk) {
     return activeSdk;
   }
   if (!startingSdk) {
-    startingSdk = startSdk(config, options).then(
+    startingSdk = startSdk().then(
       (started) => {
         const shared = { ...started, refCount: 0 };
         activeSdk = shared;
@@ -132,26 +126,12 @@ function registerRunExporters(
   return registrations;
 }
 
-function createSpanProcessorState(
-  config: ResolvedObservabilityConfig,
-  options: OtelFoundationOptions | undefined,
-): { spanProcessors: SpanProcessor[]; sessionLogSpanProcessor?: SessionLogSpanProcessor } {
-  const spanProcessors: SpanProcessor[] = [];
-  let sessionLogSpanProcessor: SessionLogSpanProcessor | undefined;
-  if (config.sessionLogExporter || options?.sessionLogExporter) {
-    sessionLogSpanProcessor = new SessionLogSpanProcessor();
-    spanProcessors.push(sessionLogSpanProcessor);
-  }
-  return { spanProcessors, sessionLogSpanProcessor };
+function createSpanProcessorState(): { spanProcessors: SpanProcessor[]; sessionLogSpanProcessor: SessionLogSpanProcessor } {
+  const sessionLogSpanProcessor = new SessionLogSpanProcessor();
+  return { spanProcessors: [sessionLogSpanProcessor], sessionLogSpanProcessor };
 }
 
-async function createMetricReaders(
-  config: ResolvedObservabilityConfig,
-  options: OtelFoundationOptions | undefined,
-): Promise<{ metricReaders: IMetricReader[]; monitorJsonMetricExporter?: MonitorJsonMetricExporter }> {
-  if (!config.monitor && !options?.monitorJsonExporter) {
-    return { metricReaders: [] };
-  }
+async function createMetricReaders(): Promise<{ metricReaders: IMetricReader[]; monitorJsonMetricExporter: MonitorJsonMetricExporter }> {
   const { PeriodicExportingMetricReader } = await import('@opentelemetry/sdk-metrics');
   const monitorJsonMetricExporter = new MonitorJsonMetricExporter();
   return {
@@ -165,12 +145,9 @@ async function createMetricReaders(
   };
 }
 
-async function startSdk(
-  config: ResolvedObservabilityConfig,
-  options: OtelFoundationOptions | undefined,
-): Promise<StartedOtelSdk> {
-  const { spanProcessors, sessionLogSpanProcessor } = createSpanProcessorState(config, options);
-  const { metricReaders, monitorJsonMetricExporter } = await createMetricReaders(config, options);
+async function startSdk(): Promise<StartedOtelSdk> {
+  const { spanProcessors, sessionLogSpanProcessor } = createSpanProcessorState();
+  const { metricReaders, monitorJsonMetricExporter } = await createMetricReaders();
   const { NodeSDK, resources } = await import('@opentelemetry/sdk-node');
   const sdk = new NodeSDK({
     autoDetectResources: false,

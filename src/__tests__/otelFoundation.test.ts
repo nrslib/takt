@@ -198,8 +198,8 @@ describe('otel foundation', () => {
       'service.name': 'takt',
       'service.version': packageJson.version,
     });
-    expect(foundation.constructedOptions[0]?.spanProcessors).toEqual([]);
-    expect(foundation.constructedOptions[0]?.metricReaders).toEqual([]);
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(1);
+    expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.constructedOptions[0]).not.toHaveProperty('traceExporter');
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
   });
@@ -405,6 +405,100 @@ describe('otel foundation', () => {
     }
   });
 
+  it('should retain exporter capability when the first shared SDK user has no run exporters', async () => {
+    const foundation = await loadFoundationWithMockedSdk();
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-otel-late-run-routing-'));
+    const shadowLogPath = join(tempDir, 'late-otel-session-shadow.jsonl');
+    const monitorPath = join(tempDir, 'late-monitor.json');
+    let first: { shutdown(): Promise<void> } | undefined;
+    let second: { shutdown(): Promise<void> } | undefined;
+
+    try {
+      first = await foundation.initializeOtelFoundation(enabledObservability);
+      second = await foundation.initializeOtelFoundation(
+        enabledAllObservability,
+        {
+          sessionLogExporter: {
+            runId: 'run-late',
+            shadowLogPath,
+            sanitizedTask: 'late task',
+            workflowName: 'default',
+          },
+          monitorJsonExporter: {
+            runId: 'run-late',
+            monitorPath,
+          },
+        },
+      );
+
+      const processor = foundation.constructedOptions[0]?.spanProcessors?.[0] as {
+        onEnd(span: unknown): void;
+      } | undefined;
+      expect(processor).toBeDefined();
+      processor?.onEnd({
+        name: 'workflow.default',
+        attributes: {
+          'takt.run.id': 'run-late',
+          'takt.workflow.status': 'completed',
+          'takt.workflow.iterations': 1,
+        },
+      });
+
+      const exporter = foundation.metricReaderOptions[0]?.exporter as {
+        export(metrics: unknown, callback: (result: { code: number; error?: Error }) => void): void;
+      } | undefined;
+      expect(exporter).toBeDefined();
+      let exportResult: { code: number; error?: Error } | undefined;
+      exporter?.export({
+        resource: {
+          attributes: {
+            'service.name': 'takt',
+          },
+        },
+        scopeMetrics: [
+          {
+            scope: { name: 'takt.workflow' },
+            metrics: [
+              {
+                descriptor: {
+                  name: 'takt.workflow.runs',
+                  description: 'Workflow executions by status',
+                  unit: '',
+                  valueType: 1,
+                },
+                dataPointType: 3,
+                aggregationTemporality: 1,
+                isMonotonic: true,
+                dataPoints: [
+                  {
+                    startTime: [1_778_777_200, 0],
+                    endTime: [1_778_777_205, 0],
+                    attributes: {
+                      'takt.run.id': 'run-late',
+                      'takt.workflow.status': 'completed',
+                    },
+                    value: 1,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }, (result) => {
+        exportResult = result;
+      });
+
+      expect(exportResult).toEqual({ code: 0 });
+      expect(readFileSync(shadowLogPath, 'utf-8')).toContain('late task');
+      expect(readFileSync(shadowLogPath, 'utf-8')).toContain('workflow_complete');
+      expect(readFileSync(monitorPath, 'utf-8')).toContain('"takt.run.id": "run-late"');
+    } finally {
+      await second?.shutdown();
+      await first?.shutdown();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('should share one SDK instance across concurrent enabled handles and shutdown once', async () => {
     const foundation = await loadFoundationWithMockedSdk();
 
@@ -450,12 +544,12 @@ describe('otel foundation', () => {
 
     const first = await foundation.initializeOtelFoundation(enabledObservability);
     const firstShutdown = first.shutdown();
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
 
     const secondPromise = foundation.initializeOtelFoundation(enabledObservability);
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(foundation.startMock).toHaveBeenCalledOnce();
 

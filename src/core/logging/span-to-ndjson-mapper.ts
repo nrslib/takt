@@ -1,5 +1,8 @@
 import type {
   NdjsonRecord,
+  NdjsonPhaseComplete,
+  NdjsonPhaseJudgeStage,
+  NdjsonPhaseStart,
   NdjsonStepComplete,
   NdjsonStepStart,
   NdjsonWorkflowAbort,
@@ -16,8 +19,15 @@ export interface SpanSnapshot {
 }
 
 type TerminalWorkflowRecord = NdjsonWorkflowComplete | NdjsonWorkflowAbort;
+type PhaseName = NdjsonPhaseStart['phaseName'];
+type JudgeStage = NdjsonPhaseJudgeStage['stage'];
+type JudgeMethod = NdjsonPhaseJudgeStage['method'];
+type JudgeStatus = NdjsonPhaseJudgeStage['status'];
 
 export function mapSpanStartToNdjson(span: SpanSnapshot): NdjsonRecord | undefined {
+  if (span.name.startsWith('phase.')) {
+    return mapPhaseStart(span);
+  }
   if (!span.name.startsWith('step.')) {
     return undefined;
   }
@@ -30,6 +40,12 @@ export function mapSpanEndToNdjson(span: SpanSnapshot): NdjsonRecord | undefined
   }
   if (span.name.startsWith('step.')) {
     return mapStepComplete(span);
+  }
+  if (span.name.startsWith('phase.')) {
+    return mapPhaseComplete(span);
+  }
+  if (span.name.startsWith('judge_stage.')) {
+    return mapJudgeStage(span);
   }
   return undefined;
 }
@@ -114,6 +130,81 @@ function mapStepComplete(span: SpanSnapshot): NdjsonStepComplete | undefined {
   };
 }
 
+function mapPhaseStart(span: SpanSnapshot): NdjsonPhaseStart | undefined {
+  const step = getString(span.attributes, 'takt.step.name');
+  const phase = getPhaseNumber(span.attributes, 'takt.phase.number');
+  const phaseName = getPhaseName(span.attributes, 'takt.phase.name');
+  if (!step || phase === undefined || phaseName === undefined) {
+    return undefined;
+  }
+
+  return {
+    type: 'phase_start',
+    step,
+    ...optionalNumber('iteration', getNumber(span.attributes, 'takt.step.iteration')),
+    ...getWorkflowStack(span.attributes),
+    phase,
+    phaseName,
+    ...optionalString('phaseExecutionId', getString(span.attributes, 'takt.phase.execution_id')),
+    timestamp: getTimestamp(span.startTime),
+    ...optionalString('instruction', getString(span.attributes, 'takt.phase.instruction')),
+    ...optionalString('systemPrompt', getString(span.attributes, 'takt.phase.system_prompt')),
+    ...optionalString('userInstruction', getString(span.attributes, 'takt.phase.user_instruction')),
+  };
+}
+
+function mapPhaseComplete(span: SpanSnapshot): NdjsonPhaseComplete | undefined {
+  const step = getString(span.attributes, 'takt.step.name');
+  const phase = getPhaseNumber(span.attributes, 'takt.phase.number');
+  const phaseName = getPhaseName(span.attributes, 'takt.phase.name');
+  const status = getString(span.attributes, 'takt.phase.status');
+  if (!step || phase === undefined || phaseName === undefined || !status) {
+    return undefined;
+  }
+
+  return {
+    type: 'phase_complete',
+    step,
+    ...optionalNumber('iteration', getNumber(span.attributes, 'takt.step.iteration')),
+    ...getWorkflowStack(span.attributes),
+    phase,
+    phaseName,
+    ...optionalString('phaseExecutionId', getString(span.attributes, 'takt.phase.execution_id')),
+    status,
+    ...optionalString('content', getString(span.attributes, 'takt.phase.result.content')),
+    timestamp: getTimestamp(span.endTime),
+    ...optionalString('error', getString(span.attributes, 'takt.phase.result.error')),
+  };
+}
+
+function mapJudgeStage(span: SpanSnapshot): NdjsonPhaseJudgeStage | undefined {
+  const step = getString(span.attributes, 'takt.step.name');
+  const stage = getJudgeStage(span.attributes, 'takt.judge.stage');
+  const method = getJudgeMethod(span.attributes, 'takt.judge.method');
+  const status = getJudgeStatus(span.attributes, 'takt.judge.status');
+  const instruction = getString(span.attributes, 'takt.judge.instruction');
+  const response = getString(span.attributes, 'takt.judge.response');
+  if (!step || stage === undefined || method === undefined || status === undefined || instruction === undefined || response === undefined) {
+    return undefined;
+  }
+
+  return {
+    type: 'phase_judge_stage',
+    step,
+    ...optionalNumber('iteration', getNumber(span.attributes, 'takt.step.iteration')),
+    ...getWorkflowStack(span.attributes),
+    phase: 3,
+    phaseName: 'judge',
+    ...optionalString('phaseExecutionId', getString(span.attributes, 'takt.phase.execution_id')),
+    stage,
+    method,
+    status,
+    instruction,
+    response,
+    timestamp: getTimestamp(span.endTime),
+  };
+}
+
 function getWorkflowStack(attributes: Record<string, unknown>): {
   workflow?: string;
   stack?: NdjsonWorkflowStackEntry[];
@@ -177,8 +268,37 @@ function getNumber(attributes: Record<string, unknown>, key: string): number | u
   return typeof value === 'number' ? value : undefined;
 }
 
+function getPhaseNumber(attributes: Record<string, unknown>, key: string): 1 | 2 | 3 | undefined {
+  const value = getNumber(attributes, key);
+  return value === 1 || value === 2 || value === 3 ? value : undefined;
+}
+
+function getPhaseName(attributes: Record<string, unknown>, key: string): PhaseName | undefined {
+  const value = getString(attributes, key);
+  return value === 'execute' || value === 'report' || value === 'judge' ? value : undefined;
+}
+
+function getJudgeStage(attributes: Record<string, unknown>, key: string): JudgeStage | undefined {
+  const value = getNumber(attributes, key);
+  return value === 1 || value === 2 || value === 3 ? value : undefined;
+}
+
+function getJudgeMethod(attributes: Record<string, unknown>, key: string): JudgeMethod | undefined {
+  const value = getString(attributes, key);
+  return value === 'structured_output' || value === 'phase3_tag' || value === 'ai_judge' ? value : undefined;
+}
+
+function getJudgeStatus(attributes: Record<string, unknown>, key: string): JudgeStatus | undefined {
+  const value = getString(attributes, key);
+  return value === 'done' || value === 'error' || value === 'skipped' ? value : undefined;
+}
+
 function optionalString<K extends string>(key: K, value: string | undefined): Partial<Record<K, string>> {
   return value !== undefined ? { [key]: value } as Partial<Record<K, string>> : {};
+}
+
+function optionalNumber<K extends string>(key: K, value: number | undefined): Partial<Record<K, number>> {
+  return value !== undefined ? { [key]: value } as Partial<Record<K, number>> : {};
 }
 
 function getTimestamp(time: readonly [number, number] | undefined): string {
