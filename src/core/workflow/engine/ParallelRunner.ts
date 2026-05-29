@@ -26,8 +26,19 @@ import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
 const log = createLogger('parallel-runner');
+
+type ParallelSubStepResult = {
+  subStep: WorkflowStep;
+  response: AgentResponse;
+  instruction: string;
+  providerInfo?: StepRunResult['providerInfo'];
+  qualityGateFailure?: boolean;
+};
+
+type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
 
 /**
  * Simple semaphore for controlling concurrency.
@@ -300,13 +311,13 @@ export class ParallelRunner {
     );
 
     // Map settled results: fulfilled → as-is, rejected → error AgentResponse
-    const subResults = settled.map((result, index) => {
+    const subResults: ParallelSubStepResult[] = settled.map((result, index) => {
       if (result.status === 'fulfilled') {
         return result.value;
       }
       const failedStep = subSteps[index]!;
       const errorMsg = getErrorMessage(result.reason);
-      log.error('Sub-step failed', { step: failedStep.name, error: errorMsg });
+      log.error('Sub-step failed', { step: failedStep.name, error: sanitizeSensitiveText(errorMsg) });
       const errorResponse: AgentResponse = {
         persona: failedStep.name,
         status: 'error',
@@ -318,23 +329,44 @@ export class ParallelRunner {
       return { subStep: failedStep, response: errorResponse, instruction: '', providerInfo: undefined };
     });
 
-    const rateLimitedResult = subResults.find((r) => r.response.status === 'rate_limited');
+    const terminalResults = this.collectTerminalResults(subResults);
+    const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
     if (rateLimitedResult) {
-      const rateLimitedResponse: AgentResponse = {
-        ...rateLimitedResult.response,
-        persona: step.name,
-      };
-      state.stepOutputs.set(step.name, rateLimitedResponse);
-      state.lastOutput = rateLimitedResponse;
-      return {
-        response: rateLimitedResponse,
-        instruction: rateLimitedResult.instruction,
-        providerInfo: rateLimitedResult.providerInfo,
-        consumedStepIterations: [
-          step.name,
-          ...subResults.map((result) => result.subStep.name),
-        ],
-      };
+      return this.createTerminalParentResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        terminalResults,
+        status: 'rate_limited',
+        providerInfo: rateLimitedResult.providerInfo ?? parentPm,
+      });
+    }
+
+    const errorResults = terminalResults.filter((r) => r.response.status === 'error');
+    if (errorResults.length > 0) {
+      return this.createTerminalParentResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        terminalResults,
+        status: 'error',
+        providerInfo: errorResults[0]?.providerInfo ?? parentPm,
+      });
+    }
+
+    const blockedResults = terminalResults.filter((r) => r.response.status === 'blocked');
+    if (blockedResults.length > 0) {
+      return this.createTerminalParentResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        terminalResults: blockedResults,
+        status: 'blocked',
+        providerInfo: blockedResults[0]?.providerInfo ?? parentPm,
+      });
     }
 
     const qualityGateFailure = subResults.find((r) => (
@@ -360,13 +392,6 @@ export class ParallelRunner {
           stepIteration,
         },
       };
-    }
-
-    // If all sub-steps failed (error-originated), throw
-    const allFailed = subResults.every(r => r.response.error != null);
-    if (allFailed) {
-      const errors = subResults.map(r => `${r.subStep.name}: ${r.response.error}`).join('; ');
-      throw new Error(`All parallel sub-steps failed: ${errors}`);
     }
 
     // Print completion summary
@@ -441,6 +466,106 @@ export class ParallelRunner {
     }
 
     return options;
+  }
+
+  private createTerminalParentResult(options: {
+    step: WorkflowStep;
+    state: WorkflowState;
+    stepIteration: number;
+    subResults: ParallelSubStepResult[];
+    terminalResults: ParallelSubStepResult[];
+    status: ParallelTerminalStatus;
+    providerInfo: StepRunResult['providerInfo'];
+  }): StepRunResult {
+    const content = this.buildTerminalDiagnostic(
+      options.step,
+      options.terminalResults,
+      options.status,
+    );
+    const failureCategory = this.firstFailureCategory(options.terminalResults);
+    const response: AgentResponse = {
+      persona: options.step.name,
+      status: options.status,
+      content,
+      timestamp: new Date(),
+      ...(options.status === 'error' || options.status === 'rate_limited' ? { error: content } : {}),
+      ...(failureCategory && { failureCategory }),
+      ...this.firstRateLimitMetadata(options.terminalResults),
+    };
+
+    options.state.stepOutputs.set(options.step.name, response);
+    options.state.lastOutput = response;
+    if (options.status === 'blocked') {
+      this.deps.stepExecutor.persistPreviousResponseSnapshot(
+        options.state,
+        options.step.name,
+        options.stepIteration,
+        response.content,
+      );
+    }
+
+    return {
+      response,
+      instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
+      providerInfo: options.providerInfo,
+      consumedStepIterations: [
+        options.step.name,
+        ...options.subResults.map((result) => result.subStep.name),
+      ],
+    };
+  }
+
+  private collectTerminalResults(results: ParallelSubStepResult[]): ParallelSubStepResult[] {
+    return results.filter((result) => (
+      result.response.status === 'error'
+      || result.response.status === 'blocked'
+      || result.response.status === 'rate_limited'
+    ));
+  }
+
+  private buildTerminalDiagnostic(
+    step: WorkflowStep,
+    terminalResults: ParallelSubStepResult[],
+    status: ParallelTerminalStatus,
+  ): string {
+    const detailLines = terminalResults.map((result) => {
+      const failureCategory = result.response.failureCategory ?? 'none';
+      const detail = sanitizeSensitiveText(result.response.error ?? result.response.content);
+      const lines = [
+        `- sub-step: ${result.subStep.name}`,
+        `  status: ${result.response.status}`,
+        `  failureCategory: ${failureCategory}`,
+      ];
+      if (result.response.rateLimitInfo) {
+        lines.push(`  rateLimitInfo: provider=${result.response.rateLimitInfo.provider}, source=${result.response.rateLimitInfo.source}`);
+      }
+      lines.push(`  detail: ${detail}`);
+      return lines.join('\n');
+    });
+
+    return [
+      `Parallel step "${step.name}" returned ${status} because one or more sub-steps ended in a non-rule terminal status.`,
+      'Aggregate rules were not evaluated as a normal review result because terminal sub-step statuses',
+      'do not represent matched aggregate conditions such as all("approved") or any("needs_fix").',
+      '',
+      'Sub-step diagnostics:',
+      ...detailLines,
+    ].join('\n');
+  }
+
+  private firstFailureCategory(results: ParallelSubStepResult[]): AgentResponse['failureCategory'] | undefined {
+    return results.find((result) => result.response.failureCategory)?.response.failureCategory;
+  }
+
+  private firstRateLimitMetadata(results: ParallelSubStepResult[]): Pick<AgentResponse, 'errorKind' | 'rateLimitInfo'> {
+    const rateLimitedResult = results.find((result) => result.response.status === 'rate_limited');
+    if (!rateLimitedResult) {
+      return {};
+    }
+    return {
+      ...(rateLimitedResult.response.errorKind && { errorKind: rateLimitedResult.response.errorKind }),
+      ...(rateLimitedResult.response.rateLimitInfo && { rateLimitInfo: rateLimitedResult.response.rateLimitInfo }),
+    };
   }
 
 }

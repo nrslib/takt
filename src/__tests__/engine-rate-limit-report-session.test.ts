@@ -40,7 +40,7 @@ function makeResponse(overrides: Partial<AgentResponse>): AgentResponse {
 
 function makeRateLimitedResponse(): AgentResponse {
   return makeResponse({
-    status: 'rate_limited' as never,
+    status: 'rate_limited',
     content: '',
     error: 'Rate limit exceeded. Please try again later.',
     errorKind: 'rate_limit',

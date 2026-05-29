@@ -479,7 +479,7 @@ describe('runReportPhase retry with new session', () => {
     const ctx = createContext(reportDir);
     const response: AgentResponse = {
       persona: 'coder',
-      status: 'rate_limited' as never,
+      status: 'rate_limited',
       content: '',
       timestamp: new Date('2026-02-11T00:05:00Z'),
       error: RATE_LIMIT_MESSAGE,
