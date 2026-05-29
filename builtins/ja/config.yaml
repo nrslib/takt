@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude                    # デフォルトプロバイダー: claude | codex | opencode | cursor | copilot | mock
+# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
@@ -122,12 +122,14 @@ language: ja         # 表示言語: ja | en
 # openrouter_api_key: "..."        # OpenRouter APIキー
 # opencode_api_key: "..."          # OpenCode APIキー
 # cursor_api_key: "..."            # Cursor APIキー
+# kiro_api_key: "..."              # Kiro APIキー
 
 # CLIパス
 # codex_cli_path: "/absolute/path/to/codex"    # Codex CLI絶対パス
 # claude_cli_path: "/absolute/path/to/claude"  # Claude Code CLI絶対パス
 # cursor_cli_path: "/absolute/path/to/cursor"  # cursor-agent CLI絶対パス
 # copilot_cli_path: "/absolute/path/to/copilot" # Copilot CLI絶対パス
+# kiro_cli_path: "/absolute/path/to/kiro-cli"   # Kiro CLI絶対パス
 # copilot_github_token: "ghp_..."              # Copilot GitHubトークン
 
 # その他

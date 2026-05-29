@@ -86,10 +86,33 @@ export function resolveCopilotCliPath(): string | undefined {
   return validateCliPath(config.copilotCliPath, 'copilot_cli_path');
 }
 
+export function resolveKiroCliPath(): string | undefined {
+  const envPath = process.env[envVarNameFromPath('kiro_cli_path')];
+  if (envPath !== undefined) {
+    return validateCliPath(envPath, 'TAKT_KIRO_CLI_PATH');
+  }
+
+  const config: GlobalConfig = loadGlobalConfig();
+  if (config.kiroCliPath === undefined) {
+    return undefined;
+  }
+  return validateCliPath(config.kiroCliPath, 'kiro_cli_path');
+}
+
 export function resolveCopilotGithubToken(): string | undefined {
   const envKey = process.env[envVarNameFromPath('copilot_github_token')];
   if (envKey) return envKey;
 
   const config = loadGlobalConfig();
   return config.copilotGithubToken;
+}
+
+export function resolveKiroApiKey(): string | undefined {
+  const envKey = process.env[envVarNameFromPath('kiro_api_key')];
+  if (envKey) return envKey;
+
+  const config = loadGlobalConfig();
+  if (config.kiroApiKey) return config.kiroApiKey;
+
+  return process.env.KIRO_API_KEY;
 }

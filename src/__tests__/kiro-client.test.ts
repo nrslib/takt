@@ -1,0 +1,517 @@
+import { EventEmitter } from 'node:events';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockSpawn } = vi.hoisted(() => ({
+  mockSpawn: vi.fn(),
+}));
+
+vi.mock('node:child_process', () => ({
+  spawn: mockSpawn,
+}));
+
+import { callKiro } from '../infra/kiro/client.js';
+
+type SpawnScenario = {
+  stdout?: string;
+  stderr?: string;
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
+  error?: Partial<NodeJS.ErrnoException> & { message: string };
+};
+
+type MockChildProcess = EventEmitter & {
+  stdin: { end: ReturnType<typeof vi.fn> };
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  kill: ReturnType<typeof vi.fn>;
+};
+
+function createMockChildProcess(): MockChildProcess {
+  const child = new EventEmitter() as MockChildProcess;
+  child.stdin = { end: vi.fn() };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn(() => true);
+  return child;
+}
+
+function mockSpawnWithScenario(scenario: SpawnScenario): void {
+  mockSpawn.mockImplementation((_cmd: string, _args: string[], _options: object) => {
+    const child = createMockChildProcess();
+
+    queueMicrotask(() => {
+      if (scenario.stdout) {
+        child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
+      }
+      if (scenario.stderr) {
+        child.stderr.emit('data', Buffer.from(scenario.stderr, 'utf-8'));
+      }
+
+      if (scenario.error) {
+        const error = Object.assign(new Error(scenario.error.message), scenario.error);
+        child.emit('error', error);
+        return;
+      }
+
+      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+    });
+
+    return child;
+  });
+}
+
+describe('callKiro', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.KIRO_API_KEY;
+  });
+
+  it('Given full permission and a session, When called, Then invokes kiro-cli headless with trust-all and resume-id', async () => {
+    mockSpawnWithScenario({
+      stdout: 'Implementation complete.',
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      sessionId: 'sess-prev',
+      permissionMode: 'full',
+      kiroApiKey: 'kiro-secret',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Implementation complete.');
+    expect(result.sessionId).toBe('sess-prev');
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const [command, args, options] = mockSpawn.mock.calls[0] as [
+      string,
+      string[],
+      { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean },
+    ];
+    const child = mockSpawn.mock.results[0]?.value as MockChildProcess;
+
+    expect(command).toBe('kiro-cli');
+    expect(args).toEqual([
+      'chat',
+      '--no-interactive',
+      '--trust-all-tools',
+      '--resume-id',
+      'sess-prev',
+      'implement feature',
+    ]);
+    expect(child.stdin.end).toHaveBeenCalledWith();
+    expect(options.cwd).toBe('/repo');
+    expect(options.env?.KIRO_API_KEY).toBe('kiro-secret');
+    expect(options.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+    expect(options.shell).toBeUndefined();
+  });
+
+  it('Given edit permission, When called, Then maps to conservative Kiro trust tools', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      permissionMode: 'edit',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toContain('--trust-tools=read,grep,write,shell');
+    expect(args).not.toContain('--trust-all-tools');
+  });
+
+  it('Given readonly permission, When called, Then maps to read-only Kiro trust tools', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'inspect', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toContain('--trust-tools=read,grep');
+    expect(args).not.toContain('--trust-tools=read,grep,write,shell');
+  });
+
+  it('Given no permission mode, When called, Then does not add Kiro trust flags', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'inspect', { cwd: '/repo' });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--trust-all-tools');
+    expect(args.some((arg) => arg.startsWith('--trust-tools'))).toBe(false);
+  });
+
+  it('Given system prompt, When called, Then prepends it to the user prompt', async () => {
+    mockSpawnWithScenario({
+      stdout: 'reviewed',
+      code: 0,
+    });
+
+    await callKiro('reviewer', 'review this code', {
+      cwd: '/repo',
+      systemPrompt: 'You are a strict reviewer.',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args.at(-1)).toBe('You are a strict reviewer.\n\nreview this code');
+  });
+
+  it('Given no Kiro API key, When called, Then only passes the minimal Kiro child env', async () => {
+    process.env.GITHUB_TOKEN = 'github-token';
+    process.env.TAKT_OPENAI_API_KEY = 'openai-token';
+    process.env.SERVICE_SECRET = 'service-secret';
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      const result = await callKiro('coder', 'implement feature', {
+        cwd: '/repo',
+      });
+
+      expect(result.status).toBe('done');
+
+      const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+      expect(options.env).not.toBe(process.env);
+      expect(options.env?.GITHUB_TOKEN).toBeUndefined();
+      expect(options.env?.TAKT_OPENAI_API_KEY).toBeUndefined();
+      expect(options.env?.SERVICE_SECRET).toBeUndefined();
+      expect(options.env?.KIRO_API_KEY).toBeUndefined();
+    } finally {
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.TAKT_OPENAI_API_KEY;
+      delete process.env.SERVICE_SECRET;
+    }
+  });
+
+  it('Given KIRO_API_KEY resolved at config boundary, When called with resolved key, Then passes it to Kiro child env', async () => {
+    process.env.GITHUB_TOKEN = 'github-token';
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      await callKiro('coder', 'implement feature', {
+        cwd: '/repo',
+        kiroApiKey: 'inherited-kiro-secret',
+      });
+
+      const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+      expect(options.env?.KIRO_API_KEY).toBe('inherited-kiro-secret');
+      expect(options.env?.GITHUB_TOKEN).toBeUndefined();
+    } finally {
+      delete process.env.GITHUB_TOKEN;
+    }
+  });
+
+  it('Given custom CLI path, When called, Then uses it as the executable', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      kiroCliPath: '/custom/bin/kiro-cli',
+    });
+
+    const [command] = mockSpawn.mock.calls[0] as [string];
+    expect(command).toBe('/custom/bin/kiro-cli');
+  });
+
+  it('Given model-like options are out of scope, When called, Then does not add model or MCP flags', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      permissionMode: 'full',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--model');
+    expect(args.some((arg) => arg.includes('mcp'))).toBe(false);
+  });
+
+  it('Given prompt starts with a flag, When called, Then rejects before spawn', async () => {
+    const result = await callKiro('coder', '--trust-all-tools', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Prompt must not start with a hyphen');
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('Given prompt contains shell metacharacters, When called, Then passes prompt as an argv element without shell execution', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'inspect & whoami | cat', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+    });
+
+    const [, args, options] = mockSpawn.mock.calls[0] as [
+      string,
+      string[],
+      { shell?: boolean },
+    ];
+    expect(args).toEqual([
+      'chat',
+      '--no-interactive',
+      '--trust-tools=read,grep',
+      'inspect & whoami | cat',
+    ]);
+    expect(options.shell).toBeUndefined();
+  });
+
+  it('Given session ID contains shell metacharacters, When called, Then rejects it before spawn', async () => {
+    const result = await callKiro('coder', 'inspect', {
+      cwd: '/repo',
+      sessionId: 'sess & whoami | cat',
+      permissionMode: 'readonly',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Invalid Kiro session ID');
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('Given plain text stdout, When command succeeds, Then returns stdout without JSON parsing', async () => {
+    const output = 'Here is the implementation:\n\n```typescript\nconsole.log("hello");\n```';
+    mockSpawnWithScenario({
+      stdout: output,
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe(output);
+  });
+
+  it('Given onStream callback, When command succeeds, Then emits text and successful result events', async () => {
+    mockSpawnWithScenario({
+      stdout: 'stream content',
+      code: 0,
+    });
+
+    const onStream = vi.fn();
+    await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      onStream,
+    });
+
+    expect(onStream).toHaveBeenCalledTimes(2);
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'text',
+      data: { text: 'stream content' },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: expect.objectContaining({
+        result: 'stream content',
+        success: true,
+      }),
+    });
+  });
+
+  it('Given missing Kiro CLI binary, When spawn emits ENOENT, Then returns an actionable error', async () => {
+    mockSpawnWithScenario({
+      error: { code: 'ENOENT', message: 'spawn kiro-cli ENOENT' },
+    });
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('kiro-cli binary not found');
+    expect(result.error).toContain('kiro-cli binary not found');
+    expect(result.content).toContain('TAKT_KIRO_CLI_PATH');
+  });
+
+  it('Given authentication stderr, When command fails, Then returns an authentication error without exposing the key', async () => {
+    mockSpawnWithScenario({
+      code: 1,
+      stderr: 'Authentication failed for API key kiro-secret',
+    });
+
+    const result = await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      kiroApiKey: 'kiro-secret',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Kiro authentication failed');
+    expect(result.error).toContain('Kiro authentication failed');
+    expect(result.content).toContain('TAKT_KIRO_API_KEY');
+    expect(result.content).toContain('KIRO_API_KEY');
+    expect(result.content).not.toContain('kiro-secret');
+  });
+
+  it('Given non-zero exit, When command fails, Then returns exit code and redacted detail', async () => {
+    mockSpawnWithScenario({
+      code: 3,
+      stderr: 'MCP startup failure: token kiro-secret was rejected',
+    });
+
+    const result = await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      kiroApiKey: 'kiro-secret',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('code 3');
+    expect(result.content).toContain('[REDACTED]');
+    expect(result.content).not.toContain('kiro-secret');
+  });
+
+  it('Given KIRO_API_KEY resolved at config boundary, When non-auth failure includes it, Then redacts it as the configured provider key', async () => {
+    mockSpawnWithScenario({
+      code: 3,
+      stderr: 'MCP startup failure: token inherited-kiro-secret was rejected',
+    });
+
+    const result = await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      kiroApiKey: 'inherited-kiro-secret',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('[REDACTED]');
+    expect(result.content).not.toContain('inherited-kiro-secret');
+    expect(result.error).toBe(result.content);
+  });
+
+  it('Given API key crosses the detail trim boundary, When command fails, Then redacts before trimming', async () => {
+    const prefix = 'x'.repeat(390);
+    const kiroApiKey = 'kiro-secret-crosses-boundary';
+    mockSpawnWithScenario({
+      code: 3,
+      stderr: `${prefix}${kiroApiKey} rejected`,
+    });
+
+    const result = await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      kiroApiKey,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('[REDACTED]');
+    expect(result.content).not.toContain('kiro-secret');
+  });
+
+  it('Given empty stdout on success, When command closes, Then returns an error result event', async () => {
+    mockSpawnWithScenario({
+      stdout: '',
+      code: 0,
+    });
+
+    const onStream = vi.fn();
+    const result = await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      onStream,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('kiro-cli returned empty output');
+    expect(result.error).toContain('kiro-cli returned empty output');
+    expect(onStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'result',
+        data: expect.objectContaining({ success: false }),
+      }),
+    );
+  });
+
+  it('Given an abort signal, When it aborts, Then terminates the child process and reports abort', async () => {
+    const controller = new AbortController();
+    let childProcess: MockChildProcess | undefined;
+
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      childProcess = child;
+
+      queueMicrotask(() => {
+        controller.abort();
+        child.emit('close', null, 'SIGTERM');
+      });
+
+      return child;
+    });
+
+    const result = await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      abortSignal: controller.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Kiro execution aborted');
+    expect(childProcess?.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('Given stdout exceeds the buffer limit, When reading output, Then returns a buffer limit error', async () => {
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+      });
+      return child;
+    });
+
+    const result = await callKiro('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Kiro CLI output exceeded buffer limit');
+  });
+
+  it('Given close has no code or signal, When command closes, Then reports the malformed close state', async () => {
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      queueMicrotask(() => {
+        child.emit('close', null, null);
+      });
+      return child;
+    });
+
+    const result = await callKiro('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('kiro-cli closed without exit code or signal');
+    expect(result.content).not.toContain('unknown');
+    expect(result.error).toBe(result.content);
+  });
+
+  it('Given stderr exceeds the buffer limit, When reading output, Then returns a buffer limit error', async () => {
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.alloc(10 * 1024 * 1024 + 1));
+      });
+      return child;
+    });
+
+    const result = await callKiro('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Kiro CLI output exceeded buffer limit');
+  });
+});

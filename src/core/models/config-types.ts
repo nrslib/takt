@@ -294,8 +294,14 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** External Copilot CLI path (overridden by TAKT_COPILOT_CLI_PATH env var) */
   copilotCliPath?: string;
   /** @globalOnly */
+  /** External Kiro CLI path (overridden by TAKT_KIRO_CLI_PATH env var) */
+  kiroCliPath?: string;
+  /** @globalOnly */
   /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
   copilotGithubToken?: string;
+  /** @globalOnly */
+  /** Kiro API key (overridden by TAKT_KIRO_API_KEY env var) */
+  kiroApiKey?: string;
   /** @globalOnly */
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencodeApiKey?: string;

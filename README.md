@@ -4,7 +4,7 @@
 
 **T**AKT **A**gent **K**oordination **T**opology — Orchestrate multiple AI agents with structured review loops, managed prompts, and guardrails.
 
-Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Cursor, and GitHub Copilot CLI as agents with different roles, permissions, and context.
+Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
 
 TAKT is built primarily for AI coding workflows, but the same model applies beyond coding: any task where multiple AI agents need to coordinate, or where review, judgment, and feedback loops can improve task quality.
 
@@ -42,6 +42,7 @@ These providers require an external CLI:
 - `claude-terminal` — [Claude Code](https://claude.ai/code) driven in an interactive terminal session (also requires [`tmux`](https://github.com/tmux/tmux))
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
+- `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
 
 Optional:
 
@@ -184,7 +185,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, or copilot
+provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
@@ -197,6 +198,7 @@ export TAKT_OPENAI_API_KEY=sk-...          # OpenAI (Codex)
 export TAKT_OPENCODE_API_KEY=...           # OpenCode
 export TAKT_CURSOR_API_KEY=...             # Cursor Agent (optional if logged in)
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
+export TAKT_KIRO_API_KEY=...               # Kiro CLI
 ```
 
 See the [Configuration Guide](./docs/configuration.md) for all options, provider profiles, and model resolution.

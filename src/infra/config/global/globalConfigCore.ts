@@ -154,7 +154,9 @@ export class GlobalConfigManager {
       claudeCliPath: expandOptionalHomePath(parsed.claude_cli_path),
       cursorCliPath: expandOptionalHomePath(parsed.cursor_cli_path),
       copilotCliPath: expandOptionalHomePath(parsed.copilot_cli_path),
+      kiroCliPath: expandOptionalHomePath(parsed.kiro_cli_path),
       copilotGithubToken: parsed.copilot_github_token,
+      kiroApiKey: parsed.kiro_api_key,
       opencodeApiKey: parsed.opencode_api_key,
       cursorApiKey: parsed.cursor_api_key,
       bookmarksFile: expandOptionalHomePath(parsed.bookmarks_file),
@@ -163,7 +165,8 @@ export class GlobalConfigManager {
       rateLimitFallback: normalizeRateLimitFallback(parsed.rate_limit_fallback),
       providerProfiles: normalizeProviderProfiles(
         parsed.provider_profiles as Record<string, {
-          default_permission_mode: string;
+          type?: string;
+          default_permission_mode?: 'readonly' | 'edit' | 'full';
           step_permission_overrides?: Record<string, string>;
         }> | undefined,
       ),

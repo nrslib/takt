@@ -156,7 +156,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
-        default_permission_mode: string;
+        type?: string;
+        default_permission_mode?: 'readonly' | 'edit' | 'full';
         step_permission_overrides?: Record<string, string>;
       }> | undefined,
     ),

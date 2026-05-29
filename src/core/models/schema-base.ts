@@ -89,6 +89,7 @@ export const ProviderProfileNameSchema = z.enum([
   'opencode',
   'cursor',
   'copilot',
+  'kiro',
   'mock',
 ]);
 export const ProviderTypeSchema = ProviderProfileNameSchema;
@@ -172,9 +173,20 @@ export const RateLimitFallbackSchema = z.object({
 
 /** Provider permission profile schema */
 export const ProviderPermissionProfileSchema = z.object({
-  default_permission_mode: PermissionModeSchema,
+  type: ProviderProfileNameSchema.optional(),
+  default_permission_mode: PermissionModeSchema.optional(),
   step_permission_overrides: z.record(z.string(), PermissionModeSchema).optional(),
-}).strict();
+}).strict().superRefine((profile, ctx) => {
+  if (profile.type !== undefined || profile.default_permission_mode !== undefined) {
+    return;
+  }
+
+  ctx.addIssue({
+    code: 'custom',
+    path: ['default_permission_mode'],
+    message: 'provider profile must define either type or default_permission_mode.',
+  });
+});
 
 /** Provider permission profiles schema */
 export const ProviderPermissionProfilesSchema = z.object({
@@ -185,8 +197,19 @@ export const ProviderPermissionProfilesSchema = z.object({
   opencode: ProviderPermissionProfileSchema.optional(),
   cursor: ProviderPermissionProfileSchema.optional(),
   copilot: ProviderPermissionProfileSchema.optional(),
+  kiro: ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
-}).strict().optional();
+}).strict().superRefine((profiles, ctx) => {
+  for (const [provider, profile] of Object.entries(profiles)) {
+    if (profile?.type !== undefined && profile.type !== provider) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [provider, 'type'],
+        message: `provider profile type must match profile key '${provider}'.`,
+      });
+    }
+  }
+}).optional();
 
 /** Runtime prepare preset identifiers */
 export const RuntimePreparePresetSchema = z.enum(RUNTIME_PREPARE_PRESETS);

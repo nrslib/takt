@@ -13,7 +13,7 @@ Configure TAKT defaults in `~/.takt/config.yaml`. This file is created automatic
 language: en                  # UI language: 'en' or 'ja'
 logging:
   level: info                 # Log level: debug, info, warn, error
-provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, or copilot
+provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: sonnet                 # Default model (optional, passed to provider as-is)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
@@ -62,20 +62,22 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 #     default_permission_mode: edit
 
 # API Key configuration (optional)
-# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY / TAKT_COPILOT_GITHUB_TOKEN
+# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY / TAKT_CURSOR_API_KEY / TAKT_COPILOT_GITHUB_TOKEN / TAKT_KIRO_API_KEY
 # anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...         # For Codex (OpenAI)
 # opencode_api_key: ...          # For OpenCode
 # cursor_api_key: ...            # For Cursor Agent (optional; login session fallback is also supported)
 # copilot_github_token: ...      # For Copilot (GitHub token)
+# kiro_api_key: ...              # For Kiro CLI
 
 # CLI path overrides (optional)
 # Override provider CLI binaries (must be absolute paths to executable files)
-# Can be overridden by environment variables TAKT_CLAUDE_CLI_PATH / TAKT_CODEX_CLI_PATH / TAKT_CURSOR_CLI_PATH / TAKT_COPILOT_CLI_PATH
+# Can be overridden by environment variables TAKT_CLAUDE_CLI_PATH / TAKT_CODEX_CLI_PATH / TAKT_CURSOR_CLI_PATH / TAKT_COPILOT_CLI_PATH / TAKT_KIRO_CLI_PATH
 # claude_cli_path: /usr/local/bin/claude
 # codex_cli_path: /usr/local/bin/codex
 # cursor_cli_path: /usr/local/bin/cursor-agent
 # copilot_cli_path: /usr/local/bin/github-copilot-cli
+# kiro_cli_path: /usr/local/bin/kiro-cli
 
 # VCS provider (optional)
 # Auto-detected from git remote URL (github.com → github, gitlab.com → gitlab)
@@ -127,7 +129,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` | `"claude"` | Default AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
@@ -151,9 +153,11 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 | `opencode_api_key` | string | - | OpenCode API key |
 | `cursor_api_key` | string | - | Cursor API key (optional; login session fallback supported) |
 | `copilot_github_token` | string | - | GitHub token for Copilot CLI authentication |
+| `kiro_api_key` | string | - | Kiro API key |
 | `codex_cli_path` | string | - | Codex CLI binary path override (absolute) |
 | `cursor_cli_path` | string | - | Cursor Agent CLI binary path override (absolute) |
 | `copilot_cli_path` | string | - | Copilot CLI binary path override (absolute) |
+| `kiro_cli_path` | string | - | Kiro CLI binary path override (absolute) |
 | `enable_builtin_workflows` | boolean | `true` | Enable builtin workflows |
 | `disabled_builtins` | string[] | `[]` | Builtin workflows to disable, by workflow `name` |
 | `pipeline` | object | - | Pipeline template settings |
@@ -214,7 +218,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"mock"` | - | Override provider |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
@@ -237,7 +241,7 @@ Project config values override global config when both are set.
 
 ## API Key Configuration
 
-TAKT supports five providers. Claude/Codex/OpenCode use API keys, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
+TAKT supports Claude, Codex, OpenCode, Cursor, Copilot, and Kiro providers. Claude/Codex/OpenCode/Kiro use API keys, Cursor can use either API key or existing `cursor-agent login` session, and Copilot uses a GitHub token.
 
 ### Environment Variables (Recommended)
 
@@ -256,6 +260,9 @@ export TAKT_CURSOR_API_KEY=...
 
 # For GitHub Copilot CLI
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...
+
+# For Kiro CLI (`KIRO_API_KEY` is also accepted if TAKT_KIRO_API_KEY and kiro_api_key are unset)
+export TAKT_KIRO_API_KEY=...
 ```
 
 ### Config File
@@ -267,6 +274,7 @@ openai_api_key: sk-...         # For Codex
 opencode_api_key: ...          # For OpenCode
 cursor_api_key: ...            # For Cursor Agent (optional)
 copilot_github_token: ghp_...  # For GitHub Copilot CLI
+kiro_api_key: ...              # For Kiro CLI
 ```
 
 ### Priority
@@ -280,6 +288,7 @@ Environment variables take precedence over `config.yaml` settings.
 | OpenCode | `TAKT_OPENCODE_API_KEY` | `opencode_api_key` |
 | Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
 | GitHub Copilot CLI | `TAKT_COPILOT_GITHUB_TOKEN` | `copilot_github_token` |
+| Kiro CLI | `TAKT_KIRO_API_KEY` (`KIRO_API_KEY` fallback) | `kiro_api_key` |
 
 ### Security
 
@@ -289,6 +298,7 @@ Environment variables take precedence over `config.yaml` settings.
 - Cursor provider can run without API key when `cursor-agent login` is already configured.
 - If you set an API key, installing the corresponding CLI tool (Claude Code, Codex, OpenCode) is not necessary. TAKT directly calls the respective API.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
+- Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
 
 ### CLI Path Overrides
 
@@ -299,6 +309,7 @@ export TAKT_CLAUDE_CLI_PATH=/usr/local/bin/claude
 export TAKT_CODEX_CLI_PATH=/usr/local/bin/codex
 export TAKT_CURSOR_CLI_PATH=/usr/local/bin/cursor-agent
 export TAKT_COPILOT_CLI_PATH=/usr/local/bin/github-copilot-cli
+export TAKT_KIRO_CLI_PATH=/usr/local/bin/kiro-cli
 ```
 
 ```yaml
@@ -307,6 +318,7 @@ claude_cli_path: /usr/local/bin/claude
 codex_cli_path: /usr/local/bin/codex
 cursor_cli_path: /usr/local/bin/cursor-agent
 copilot_cli_path: /usr/local/bin/github-copilot-cli
+kiro_cli_path: /usr/local/bin/kiro-cli
 ```
 
 | Provider | Environment Variable | Config Key |
@@ -315,8 +327,9 @@ copilot_cli_path: /usr/local/bin/github-copilot-cli
 | Codex | `TAKT_CODEX_CLI_PATH` | `codex_cli_path` |
 | Cursor Agent | `TAKT_CURSOR_CLI_PATH` | `cursor_cli_path` |
 | Copilot | `TAKT_COPILOT_CLI_PATH` | `copilot_cli_path` |
+| Kiro CLI | `TAKT_KIRO_CLI_PATH` | `kiro_cli_path` |
 
-Paths must be absolute paths to executable files. Environment variables take precedence over config file values. These can also be set at the project level in `.takt/config.yaml`.
+Paths must be absolute paths to executable files. Environment variables take precedence over config file values. CLI path overrides are global-only config values; set them in `~/.takt/config.yaml` or the corresponding environment variable, not project-level `.takt/config.yaml`.
 
 ## Model Resolution
 
@@ -336,6 +349,8 @@ TAKT resolves model selection in two stages:
 **Cursor Agent** forwards `model` directly to `cursor-agent --model <model>`. If omitted, Cursor CLI default is used.
 
 **GitHub Copilot CLI** forwards `model` directly to `copilot --model <model>`. If omitted, Copilot CLI default is used.
+
+**Kiro CLI** does not receive `model` as a CLI flag in the initial implementation. Configure Kiro's default model on the Kiro side.
 
 ### Example
 
@@ -364,11 +379,11 @@ Provider profiles allow you to set default permission modes and per-step permiss
 
 TAKT uses three provider-independent permission modes:
 
-| Mode | Description | Claude | Codex | OpenCode | Cursor Agent | Copilot |
-|------|-------------|--------|-------|----------|--------------|---------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | default flags (no `--force`) | no permission flags |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` |
-| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` | `--yolo` |
+| Mode | Description | Claude | Codex | OpenCode | Cursor Agent | Copilot | Kiro CLI |
+|------|-------------|--------|-------|----------|--------------|---------|----------|
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
+| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | `--force` | `--yolo` | `--trust-all-tools` |
 
 ### Configuration
 

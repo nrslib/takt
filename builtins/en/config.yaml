@@ -7,7 +7,7 @@
 language: en        # UI language: en | ja
 
 # Default provider and model
-# provider: claude                    # Default provider: claude | codex | opencode | cursor | copilot | mock
+# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
 # model: sonnet                       # Default model (passed directly to provider)
 
 # Execution control
@@ -122,12 +122,14 @@ language: en        # UI language: en | ja
 # openrouter_api_key: "..."        # OpenRouter API key
 # opencode_api_key: "..."          # OpenCode API key
 # cursor_api_key: "..."            # Cursor API key
+# kiro_api_key: "..."              # Kiro API key
 
 # CLI paths
 # codex_cli_path: "/absolute/path/to/codex"    # Absolute path to Codex CLI
 # claude_cli_path: "/absolute/path/to/claude"  # Absolute path to Claude Code CLI
 # cursor_cli_path: "/absolute/path/to/cursor"  # Absolute path to cursor-agent CLI
 # copilot_cli_path: "/absolute/path/to/copilot" # Absolute path to Copilot CLI
+# kiro_cli_path: "/absolute/path/to/kiro-cli"   # Absolute path to Kiro CLI
 # copilot_github_token: "ghp_..."              # Copilot GitHub token
 
 # Misc

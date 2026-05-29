@@ -98,8 +98,14 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.copilotCliPath) {
     raw.copilot_cli_path = config.copilotCliPath;
   }
+  if (config.kiroCliPath) {
+    raw.kiro_cli_path = config.kiroCliPath;
+  }
   if (config.copilotGithubToken) {
     raw.copilot_github_token = config.copilotGithubToken;
+  }
+  if (config.kiroApiKey) {
+    raw.kiro_api_key = config.kiroApiKey;
   }
   if (config.opencodeApiKey) {
     raw.opencode_api_key = config.opencodeApiKey;

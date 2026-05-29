@@ -4,7 +4,7 @@
 
 **T**AKT **A**gent **K**oordination **T**opology — 複数の AI エージェントをオーケストレーションし、レビューループ・プロンプト管理・ガードレールを与えるツールです。
 
-AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の workflow ファイルで定義されており、エージェント任せにはしません。TAKT は Claude Code、Codex、OpenCode、Cursor、GitHub Copilot CLI を、役割・権限・文脈の異なるエージェントとして協調させます。
+AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の workflow ファイルで定義されており、エージェント任せにはしません。TAKT は Claude Code、Codex、OpenCode、Cursor、GitHub Copilot CLI、Kiro CLI を、役割・権限・文脈の異なるエージェントとして協調させます。
 
 TAKT は AI コーディングワークフローを主な用途として提供していますが、コーディング以外でも、複数の AI エージェントを協調させたいタスクや、レビュー・判定・フィードバックループによってタスクの精度を高めたい場面で活用できます。
 
@@ -42,6 +42,7 @@ workflow で工程を定義し、persona・policy・knowledge・instruction・ou
 - `claude-terminal` — [Claude Code](https://claude.ai/code) を対話型ターミナルセッションで駆動（[`tmux`](https://github.com/tmux/tmux) も必要）
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
+- `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
 
 任意:
 
@@ -187,7 +188,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: codex    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, or copilot
+provider: codex    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: gpt-5.5       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
@@ -200,6 +201,7 @@ export TAKT_OPENAI_API_KEY=sk-...          # OpenAI (Codex)
 export TAKT_OPENCODE_API_KEY=...           # OpenCode
 export TAKT_CURSOR_API_KEY=...             # Cursor Agent（login 済みなら省略可）
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
+export TAKT_KIRO_API_KEY=...               # Kiro CLI
 ```
 
 全設定項目・プロバイダープロファイル・モデル解決の詳細は [Configuration Guide](./configuration.ja.md) を参照してください。

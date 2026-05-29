@@ -5,7 +5,11 @@ import type {
   StepProviderOptions,
   WorkflowRuntimeConfig,
 } from '../../core/models/workflow-types.js';
-import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
+import type { PermissionMode } from '../../core/models/status.js';
+import {
+  DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE,
+  type ProviderPermissionProfiles,
+} from '../../core/models/provider-profiles.js';
 import type {
   AssistantConfig,
   WorkflowOverrides,
@@ -122,7 +126,8 @@ export function denormalizeRateLimitFallback(
 
 export function normalizeProviderProfiles(
   raw: Record<string, {
-    default_permission_mode: string;
+    type?: string;
+    default_permission_mode?: PermissionMode;
     step_permission_overrides?: Record<string, string>;
   }> | undefined,
 ): ProviderPermissionProfiles | undefined {
@@ -131,7 +136,7 @@ export function normalizeProviderProfiles(
   const entries = Object.entries(raw).map(([provider, profile]) => [
     provider,
     {
-      defaultPermissionMode: profile.default_permission_mode,
+      defaultPermissionMode: profile.default_permission_mode ?? DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE,
       stepPermissionOverrides: profile.step_permission_overrides,
     },
   ]);
