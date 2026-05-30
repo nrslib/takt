@@ -10,6 +10,7 @@ import type {
   WorkflowStep,
   WorkflowState,
   AgentResponse,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import type { ArpeggioStepConfig, BatchResult, DataBatch } from '../arpeggio/types.js';
 import { createDataSource } from '../arpeggio/data-source-factory.js';
@@ -39,6 +40,7 @@ export interface ArpeggioRunnerDeps {
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
@@ -99,6 +101,7 @@ interface ArpeggioBatchObservability {
   readonly step: WorkflowStep;
   readonly iteration: number;
   readonly phaseExecutionId: string;
+  readonly workflowStack?: WorkflowResumePointEntry[];
   readonly sanitizeText?: (text: string) => string;
   readonly providerInfo?: StepProviderInfo;
   readonly getPromptParts?: () => PhasePromptParts | undefined;
@@ -135,6 +138,7 @@ async function executeBatchWithRetry(
     phaseName: 'execute',
     instruction: prompt,
     phaseExecutionId: observability.phaseExecutionId,
+    workflowStack: observability.workflowStack,
     sanitizeText: observability.sanitizeText,
     providerInfo: observability.providerInfo,
     getPromptParts: observability.getPromptParts,
@@ -390,6 +394,7 @@ export class ArpeggioRunner {
             step,
             iteration,
             phaseExecutionId,
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo,
             getPromptParts: () => resolvedPromptParts,

@@ -10,6 +10,7 @@ import type {
   WorkflowState,
   AgentResponse,
   WorkflowMaxSteps,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
@@ -84,6 +85,7 @@ export interface ParallelRunnerDeps {
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly runQualityGates: (options: {
@@ -238,6 +240,7 @@ export class ParallelRunner {
           phaseName: 'execute',
           instruction: subInstruction,
           phaseExecutionId,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
           sanitizeText: this.deps.sanitizeObservabilityText,
           providerInfo: subPm,
           getPromptParts: () => resolvedPromptParts,

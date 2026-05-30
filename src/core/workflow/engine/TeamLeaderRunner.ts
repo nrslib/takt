@@ -5,6 +5,7 @@ import type {
   PartDefinition,
   PartResult,
   WorkflowMaxSteps,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
@@ -40,6 +41,7 @@ export interface TeamLeaderRunnerDeps {
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -126,6 +128,7 @@ export class TeamLeaderRunner {
         phaseName: 'execute',
         instruction,
         phaseExecutionId,
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
         sanitizeText: this.deps.sanitizeObservabilityText,
         providerInfo: leaderProviderInfo,
         getPromptParts: () => resolvedPromptParts,
@@ -402,6 +405,7 @@ export class TeamLeaderRunner {
         runId: this.deps.observabilityRunId,
         workflowName: this.deps.getWorkflowName(),
         iteration: parentIteration,
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
         sanitizeText: this.deps.sanitizeObservabilityText,
       },
       runtime,

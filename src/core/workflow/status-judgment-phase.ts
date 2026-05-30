@@ -133,6 +133,7 @@ export async function runStatusJudgmentPhase(
         phaseName: 'judge',
         instruction: structuredInstruction,
         phaseExecutionId,
+        workflowStack: ctx.getCurrentWorkflowStack?.(),
         sanitizeText: ctx.sanitizeObservabilityText,
         providerInfo: stepProvider,
         getPromptParts: () => resolvedPromptParts,
@@ -159,6 +160,7 @@ export async function runStatusJudgmentPhase(
             step,
             iteration: ctx.iteration,
             phaseExecutionId,
+            workflowStack: ctx.getCurrentWorkflowStack?.(),
             entry,
             sanitizeText: ctx.sanitizeObservabilityText,
           });

@@ -238,6 +238,7 @@ async function runSingleReportAttempt(
       phaseName: 'report',
       instruction,
       phaseExecutionId,
+      workflowStack: ctx.getCurrentWorkflowStack?.(),
       sanitizeText: ctx.sanitizeObservabilityText,
       providerInfo: ctx.resolveStepProviderModel?.(step),
       getPromptParts: () => resolvedPromptParts,

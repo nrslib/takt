@@ -76,6 +76,7 @@ export interface PhaseSpanParams {
   phaseName: PhaseName;
   instruction?: string;
   phaseExecutionId?: string;
+  workflowStack?: WorkflowResumePointEntry[];
   sanitizeText?: (text: string) => string;
   providerInfo?: StepProviderInfo;
   getPromptParts?: () => PhasePromptParts | undefined;
@@ -96,6 +97,7 @@ export interface JudgeStageSpanParams {
   step: WorkflowStep;
   iteration?: number;
   phaseExecutionId?: string;
+  workflowStack?: WorkflowResumePointEntry[];
   entry: JudgeStageEntry;
   sanitizeText?: (text: string) => string;
 }
@@ -236,6 +238,7 @@ function buildPhaseAttributes(params: PhaseSpanParams): Attributes {
   return compactAttributes({
     'takt.run.id': params.runId,
     'takt.workflow.name': params.workflowName,
+    ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
     'takt.step.type': getWorkflowStepKind(params.step),
@@ -252,6 +255,7 @@ function buildJudgeStageAttributes(params: JudgeStageSpanParams): Attributes {
   return compactAttributes({
     'takt.run.id': params.runId,
     'takt.workflow.name': params.workflowName,
+    ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
     'takt.step.type': getWorkflowStepKind(params.step),

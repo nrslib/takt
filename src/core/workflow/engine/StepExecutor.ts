@@ -14,6 +14,7 @@ import type {
   AgentResponse,
   Language,
   FallbackContext,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepRunResult } from '../types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
@@ -61,6 +62,7 @@ export interface StepExecutorDeps {
   readonly getObservabilityRunId?: () => string | undefined;
   readonly observabilityEnabled?: () => boolean;
   readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
@@ -563,6 +565,7 @@ export class StepExecutor {
       phaseName: 'execute',
       instruction: phase1Instruction,
       phaseExecutionId,
+      workflowStack: this.deps.getCurrentWorkflowStack?.(),
       sanitizeText: this.deps.sanitizeObservabilityText,
       providerInfo,
       getPromptParts: () => resolvedPromptParts,

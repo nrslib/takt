@@ -1,6 +1,6 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
-import type { PartDefinition, PartResult, WorkflowStep, AgentResponse } from '../../models/types.js';
+import type { PartDefinition, PartResult, WorkflowStep, AgentResponse, WorkflowResumePointEntry } from '../../models/types.js';
 import type { RuntimeStepResolution } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { buildAbortSignal } from './abort-signal.js';
@@ -18,6 +18,7 @@ export interface TeamLeaderPartObservability {
   readonly runId?: string;
   readonly workflowName: string;
   readonly iteration: number;
+  readonly workflowStack?: WorkflowResumePointEntry[];
   readonly sanitizeText?: (text: string) => string;
 }
 
@@ -88,6 +89,7 @@ export async function runTeamLeaderPart(
       phase: 1,
       phaseName: 'execute',
       instruction: partInstruction,
+      workflowStack: observability.workflowStack,
       sanitizeText: observability.sanitizeText,
       providerInfo: partProviderInfo,
     }, () => executeAgent(partStep.persona, partInstruction, options), (result) => ({

@@ -387,6 +387,61 @@ describe('workflow OpenTelemetry spans', () => {
     }));
   });
 
+  it('attaches the workflow stack to phase and judge spans for parity', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({ personaDisplayName: 'coder' });
+    const workflowStack = [
+      { workflow: 'parent', step: 'review', kind: 'workflow_call' as const },
+      { workflow: 'child', step: 'implement', kind: 'agent' as const },
+    ];
+    const expectedStackJson = JSON.stringify([
+      { workflow: 'parent', step: 'review', kind: 'workflow_call' },
+      { workflow: 'child', step: 'implement', kind: 'agent' },
+    ]);
+
+    await module.runWithPhaseSpan({
+      enabled: true,
+      workflowName: 'child',
+      step,
+      iteration: 1,
+      phase: 1,
+      phaseName: 'execute',
+      phaseExecutionId: 'implement:1:1:1',
+      workflowStack,
+      getPromptParts: () => ({ systemPrompt: 's', userInstruction: 'u' }),
+    }, async () => ({ status: 'done', content: 'ok' }), (result: { status: string; content: string }) => ({
+      status: result.status,
+      content: result.content,
+    }));
+
+    module.recordJudgeStageSpan({
+      enabled: true,
+      workflowName: 'child',
+      step,
+      iteration: 1,
+      phaseExecutionId: 'implement:3:1:1',
+      workflowStack,
+      entry: {
+        stage: 1,
+        method: 'structured_output',
+        status: 'done',
+        instruction: 'judge instruction',
+        response: 'judge response',
+      },
+    });
+
+    const phaseSpan = spans.find((span) => span.name === 'phase.implement.execute');
+    const judgeSpan = spans.find((span) => span.name.startsWith('judge_stage.'));
+    expect(phaseSpan?.attributes).toMatchObject({
+      'takt.workflow.current_name': 'child',
+      'takt.workflow.stack': expectedStackJson,
+    });
+    expect(judgeSpan?.attributes).toMatchObject({
+      'takt.workflow.current_name': 'child',
+      'takt.workflow.stack': expectedStackJson,
+    });
+  });
+
   it('creates judge stage sub-spans under the active phase span', async () => {
     const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep({ personaDisplayName: 'conductor' });
