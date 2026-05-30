@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -97,6 +97,23 @@ describe('hasCardinalityOverflow', () => {
 });
 
 describe('MonitorJsonMetricExporter', () => {
+  it('ignores a duplicate runId registration and keeps the first monitor path', async () => {
+    const firstPath = createTempMonitorPath();
+    const secondPath = createTempMonitorPath();
+    const exporter = new MonitorJsonMetricExporter();
+
+    exporter.register({ runId: 'run-1', monitorPath: firstPath });
+    // Collision: same runId, different path -> must be ignored (no-op disposer).
+    const disposeDuplicate = exporter.register({ runId: 'run-1', monitorPath: secondPath });
+    disposeDuplicate();
+
+    exporter.export(makeResourceMetrics(['run-1']), () => {});
+    await exporter.forceFlush();
+
+    expect(existsSync(firstPath)).toBe(true);
+    expect(existsSync(secondPath)).toBe(false);
+  });
+
   it('writes the latest resource metrics as monitor.json', async () => {
     const monitorPath = createTempMonitorPath();
     const exporter = new MonitorJsonMetricExporter({ runId: 'run-1', monitorPath });
