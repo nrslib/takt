@@ -71,6 +71,29 @@ describe('span-to-ndjson mapper', () => {
     });
   });
 
+  it('parses provider options from the step span into step_start', () => {
+    const span: SpanSnapshot = {
+      name: 'step.implement',
+      startTime: [1_778_777_200, 0],
+      attributes: {
+        'takt.step.name': 'implement',
+        'takt.step.persona': 'coder',
+        'takt.step.iteration': 1,
+        'takt.provider.name': 'codex',
+        'takt.provider.source': 'project',
+        'takt.provider.options': JSON.stringify({ codex: { reasoningEffort: 'high' } }),
+        'takt.provider.options_sources': JSON.stringify({ 'codex.reasoningEffort': 'project' }),
+      },
+    };
+
+    expect(mapSpanStartToNdjson(span)).toMatchObject({
+      type: 'step_start',
+      provider: 'codex',
+      providerOptions: { codex: { reasoningEffort: 'high' } },
+      providerOptionsSources: { 'codex.reasoningEffort': 'project' },
+    });
+  });
+
   it('omits invalid failureCategory values from mapped records', () => {
     expect(mapSpanEndToNdjson({
       name: 'step.implement',

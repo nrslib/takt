@@ -86,6 +86,8 @@ function mapStepStart(span: SpanSnapshot): NdjsonStepStart | undefined {
     return undefined;
   }
 
+  const providerOptions = parseJsonValue(getString(span.attributes, 'takt.provider.options'));
+  const providerOptionsSources = parseJsonRecord(getString(span.attributes, 'takt.provider.options_sources'));
   return {
     type: 'step_start',
     step,
@@ -98,6 +100,8 @@ function mapStepStart(span: SpanSnapshot): NdjsonStepStart | undefined {
     ...optionalString('providerSource', getString(span.attributes, 'takt.provider.source')),
     ...optionalString('model', getString(span.attributes, 'takt.model.name')),
     ...optionalString('modelSource', getString(span.attributes, 'takt.model.source')),
+    ...(providerOptions !== undefined ? { providerOptions } : {}),
+    ...(providerOptionsSources !== undefined ? { providerOptionsSources } : {}),
   };
 }
 
@@ -259,6 +263,31 @@ function parseWorkflowStack(value: string | undefined): NdjsonWorkflowStackEntry
   } catch {
     return undefined;
   }
+}
+
+function parseJsonValue(value: string | undefined): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseJsonRecord(value: string | undefined): Record<string, string> | undefined {
+  const parsed = parseJsonValue(value);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const result: Record<string, string> = {};
+  for (const [key, item] of Object.entries(parsed)) {
+    if (typeof item === 'string') {
+      result[key] = item;
+    }
+  }
+  return result;
 }
 
 function isWorkflowStackEntry(value: unknown): value is NdjsonWorkflowStackEntry {

@@ -290,6 +290,30 @@ describe('workflow OpenTelemetry spans', () => {
     }));
   });
 
+  it('serializes provider options onto step spans for session-log parity', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step: makeStep(),
+      iteration: 1,
+      providerInfo: {
+        provider: 'codex',
+        model: 'gpt-5',
+        providerSource: 'project',
+        modelSource: 'global',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+        providerOptionsSources: { 'codex.reasoningEffort': 'project' },
+      },
+    }, async () => makeDoneResult());
+
+    expect(spans[0]?.attributes).toMatchObject({
+      'takt.provider.options': JSON.stringify({ codex: { reasoningEffort: 'high' } }),
+      'takt.provider.options_sources': JSON.stringify({ 'codex.reasoningEffort': 'project' }),
+    });
+  });
+
   it('sanitizes text before attaching session-log parity attributes to step spans', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
 

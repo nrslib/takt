@@ -231,6 +231,7 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
     'takt.step.local_iteration': params.stepIteration,
     'takt.step.instruction': sanitizeSpanText(params.sanitizeText, params.instruction),
     ...providerAttributes(params.providerInfo),
+    ...providerOptionsAttributes(params.providerInfo),
   });
 }
 
@@ -445,6 +446,21 @@ function providerAttributes(providerInfo: StepProviderInfo | undefined): Attribu
     'takt.provider.source': providerInfo?.providerSource,
     'takt.model.name': providerInfo?.model,
     'takt.model.source': providerInfo?.modelSource,
+  };
+}
+
+// Step-span only: the canonical step_start record carries providerOptions /
+// providerOptionsSources. Span attributes cannot hold objects, so serialize
+// them as JSON and parse back in the mapper. Kept out of providerAttributes()
+// so metric attributes (which feed cardinality) never get a JSON blob.
+function providerOptionsAttributes(providerInfo: StepProviderInfo | undefined): AttributeInput {
+  return {
+    'takt.provider.options': providerInfo?.providerOptions !== undefined
+      ? JSON.stringify(providerInfo.providerOptions)
+      : undefined,
+    'takt.provider.options_sources': providerInfo?.providerOptionsSources !== undefined
+      ? JSON.stringify(providerInfo.providerOptionsSources)
+      : undefined,
   };
 }
 
