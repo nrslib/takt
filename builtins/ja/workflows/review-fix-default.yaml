@@ -1,5 +1,5 @@
 name: review-fix-default
-description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・要件の5観点から並列レビューし、指摘を修正する）
+description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・要件・コーディングの6観点から並列レビューし、指摘を修正する）
 workflow_config:
   provider_options:
     codex:
@@ -167,6 +167,28 @@ steps:
           report:
             - name: requirements-review.md
               format: requirements-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
         rules:
           - condition: approved
           - condition: needs_fix

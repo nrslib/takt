@@ -1,5 +1,5 @@
 name: review-default
-description: Multi-perspective Code Review - reviews changes in parallel from 5 perspectives and outputs consolidated results
+description: Multi-perspective Code Review - reviews changes in parallel from 6 perspectives (including coding review) and outputs consolidated results
 workflow_config:
   provider_options:
     codex:
@@ -158,6 +158,28 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
     rules:
       - condition: all("approved")
         next: supervise
@@ -195,7 +217,8 @@ steps:
          - `03-qa-review.md` (QA review)
          - `04-testing-review.md` (Testing review)
          - `05-requirements-review.md` (Requirements review)
-      2. Synthesize the 5 review results
+         - `06-coding-review.md` (Coding review)
+      2. Synthesize the 6 review results
       3. Produce a consolidated review summary with overall verdict
 
       **Review Summary output contract:**
@@ -215,6 +238,7 @@ steps:
       | QA | APPROVE/REJECT | {Brief finding} |
       | Testing | APPROVE/REJECT | {Brief finding} |
       | Requirements | APPROVE/REJECT | {Brief finding} |
+      | Coding | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
       | # | Severity | Source | Location | Issue |
@@ -244,6 +268,7 @@ steps:
             | QA | APPROVE/REJECT | {Overview} |
             | Testing | APPROVE/REJECT | {Overview} |
             | Requirements | APPROVE/REJECT | {Overview} |
+            | Coding | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)
             | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |

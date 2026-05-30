@@ -1,5 +1,5 @@
 name: review-takt-default
-description: TAKT開発向け多角レビュー（AIアンチパターン含む6観点レビュー）
+description: TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む7観点レビュー）
 workflow_config:
   provider_options:
     codex:
@@ -184,6 +184,28 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
     rules:
       - condition: all("approved")
         next: supervise
@@ -222,7 +244,8 @@ steps:
          - `04-testing-review.md`（テストレビュー）
          - `05-ai-antipattern-review.md`（AIアンチパターンレビュー）
          - `06-requirements-review.md`（要件充足レビュー）
-      2. 5つのレビュー結果を統合
+         - `07-coding-review.md`（コーディングレビュー）
+      2. 7つのレビュー結果を統合
       3. 統合レビューサマリーと総合判定を作成
     output_contracts:
       report:
@@ -245,6 +268,7 @@ steps:
             | テスト | APPROVE/REJECT | {概要} |
             | AIアンチパターン | APPROVE/REJECT | {概要} |
             | 要件充足 | APPROVE/REJECT | {概要} |
+            | コーディング | APPROVE/REJECT | {概要} |
 
             ## 今回の指摘（new）
             | # | finding_id | 重大度 | ソース | 場所 | 問題 | 修正案 |

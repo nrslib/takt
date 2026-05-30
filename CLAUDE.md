@@ -195,4 +195,4 @@ builtins/               Bundled defaults (read from dist/ at runtime)
 - Filenames mostly `kebab-case`, focused module names like `workflowLoader.ts`.
 - Conventional Commit style with occasional `(#issue)` suffix.
 - Don't commit secrets; provider keys live in env vars or `~/.takt/config.yaml`.
-- PRs need a TAKT review pass: `takt -t "#<PR>" -w review` (or branch/current-diff variants). Paste `.takt/runs/*/reports/review-summary.md` into the PR — maintainers gate on it.
+- A TAKT review pass is recommended (not required) before a PR: `takt -t "#<PR>" -w review-takt-default` (or branch/current-diff variants); pasting `.takt/runs/*/reports/review-summary.md` into the PR helps reviewers. For CodeRabbit comments, judge whether each should be addressed, act on those that should, and resolve every thread.

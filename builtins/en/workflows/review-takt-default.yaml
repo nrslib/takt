@@ -1,5 +1,5 @@
 name: review-takt-default
-description: "TAKT-focused multi-perspective review (6 reviewers including AI antipattern review)"
+description: "TAKT-focused multi-perspective review (7 reviewers including AI antipattern and coding review)"
 workflow_config:
   provider_options:
     codex:
@@ -184,6 +184,28 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
     rules:
       - condition: all("approved")
         next: supervise
@@ -222,7 +244,8 @@ steps:
          - `04-testing-review.md` (Testing review)
          - `05-ai-antipattern-review.md` (AI antipattern review)
          - `06-requirements-review.md` (Requirements review)
-      2. Synthesize the 6 review results
+         - `07-coding-review.md` (Coding review)
+      2. Synthesize the 7 review results
       3. Produce a consolidated review summary with overall verdict
 
       **Review Summary output contract:**
@@ -243,6 +266,7 @@ steps:
       | Testing | APPROVE/REJECT | {Brief finding} |
       | AI Antipattern | APPROVE/REJECT | {Brief finding} |
       | Requirements | APPROVE/REJECT | {Brief finding} |
+      | Coding | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
       | # | Severity | Source | Location | Issue |
@@ -273,6 +297,7 @@ steps:
             | Testing | APPROVE/REJECT | {Overview} |
             | AI Antipattern | APPROVE/REJECT | {Overview} |
             | Requirements | APPROVE/REJECT | {Overview} |
+            | Coding | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)
             | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |

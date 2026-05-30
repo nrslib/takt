@@ -411,6 +411,7 @@ describe('Workflow Patterns IT: review workflow', () => {
       { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
       { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
       { persona: 'requirements-reviewer', status: 'done', content: '[REQUIREMENTS-REVIEW:1]\n\napproved' },
+      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
       // Supervisor: synthesis complete
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nReview synthesis complete' },
     ]);
@@ -470,6 +471,8 @@ describe('Workflow Patterns IT: dual workflow (2-stage parallel reviewers)', () 
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
       { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
       { persona: 'requirements-reviewer', status: 'done', content: '[REQUIREMENTS-REVIEW:1]\n\napproved' },
+      // coding-review is the last sub-step of stage 2 (reviewers_2)
+      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
       // Supervisor
       { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations pass.' },
     ]);
@@ -506,6 +509,7 @@ describe('Workflow Patterns IT: review-fix workflow', () => {
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
       { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       { persona: 'requirements-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor: ready to merge
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations complete, ready to merge.' },
     ]);
@@ -528,6 +532,7 @@ describe('Workflow Patterns IT: review-fix workflow', () => {
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
       { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       { persona: 'requirements-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Fix
       { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFixes complete.' },
       // Re-review: all approved
@@ -536,6 +541,7 @@ describe('Workflow Patterns IT: review-fix workflow', () => {
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
       { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       { persona: 'requirements-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations complete, ready to merge.' },
     ]);
@@ -558,6 +564,7 @@ describe('Workflow Patterns IT: review-fix workflow', () => {
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
       { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       { persona: 'requirements-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor: issues detected → fix_supervisor
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nIssues detected.' },
       // fix_supervisor: fixes complete → back to supervise
@@ -617,6 +624,7 @@ describe('Workflow Patterns IT: review-fix workflow', () => {
       { persona: 'testing-reviewer', status: 'done', content: 'approved' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: 'approved' },
       { persona: 'requirements-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor: issues detected -> fix_supervisor
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nRequirements unmet, tests failing, build errors.' },
       // fix_supervisor: fixes complete -> back to supervise
@@ -651,11 +659,12 @@ describe('Workflow Patterns IT: frontend-review-fix workflow (fix loop)', () => 
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[GATHER:1]\n\nReview target gathered.' },
-      // 4 parallel reviewers: frontend needs_fix
+      // 5 parallel reviewers: frontend needs_fix
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'frontend-reviewer', status: 'done', content: 'needs_fix' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Fix
       { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFixes complete.' },
       // Re-review: all approved
@@ -663,6 +672,7 @@ describe('Workflow Patterns IT: frontend-review-fix workflow (fix loop)', () => 
       { persona: 'frontend-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations complete, ready to merge.' },
     ]);
@@ -693,16 +703,18 @@ describe('Workflow Patterns IT: backend-review-fix workflow (fix loop)', () => {
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[GATHER:1]\n\nReview target gathered.' },
-      // 3 parallel reviewers: security needs_fix
+      // 4 parallel reviewers: security needs_fix
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'needs_fix' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Fix
       { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFixes complete.' },
       // Re-review: all approved
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations complete, ready to merge.' },
     ]);
@@ -733,11 +745,12 @@ describe('Workflow Patterns IT: dual-review-fix workflow (fix loop)', () => {
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[GATHER:1]\n\nReview target gathered.' },
-      // 4 parallel reviewers: qa needs_fix
+      // 5 parallel reviewers: qa needs_fix
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'frontend-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'needs_fix' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Fix
       { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFixes complete.' },
       // Re-review: all approved
@@ -745,6 +758,7 @@ describe('Workflow Patterns IT: dual-review-fix workflow (fix loop)', () => {
       { persona: 'frontend-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations complete, ready to merge.' },
     ]);
@@ -775,12 +789,13 @@ describe('Workflow Patterns IT: dual-cqrs-review-fix workflow (fix loop)', () =>
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[GATHER:1]\n\nReview target gathered.' },
-      // 5 parallel reviewers: cqrs-es needs_fix
+      // 6 parallel reviewers: cqrs-es needs_fix
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'cqrs-es-reviewer', status: 'done', content: 'needs_fix' },
       { persona: 'frontend-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Fix
       { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFixes complete.' },
       // Re-review: all approved
@@ -789,6 +804,7 @@ describe('Workflow Patterns IT: dual-cqrs-review-fix workflow (fix loop)', () =>
       { persona: 'frontend-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations complete, ready to merge.' },
     ]);
@@ -819,11 +835,12 @@ describe('Workflow Patterns IT: backend-cqrs-review-fix workflow (fix loop)', ()
 
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[GATHER:1]\n\nReview target gathered.' },
-      // 4 parallel reviewers: cqrs-es needs_fix
+      // 5 parallel reviewers: cqrs-es needs_fix
       { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
       { persona: 'cqrs-es-reviewer', status: 'done', content: 'needs_fix' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Fix
       { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFixes complete.' },
       // Re-review: all approved
@@ -831,6 +848,7 @@ describe('Workflow Patterns IT: backend-cqrs-review-fix workflow (fix loop)', ()
       { persona: 'cqrs-es-reviewer', status: 'done', content: 'approved' },
       { persona: 'security-reviewer', status: 'done', content: 'approved' },
       { persona: 'qa-reviewer', status: 'done', content: 'approved' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
       // Supervisor
       { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll validations complete, ready to merge.' },
     ]);

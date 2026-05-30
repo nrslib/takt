@@ -1,5 +1,5 @@
 name: review-default
-description: 多角レビュー - 5つの観点から並列にコード変更をレビューし、統合結果を出力する
+description: 多角レビュー - 6つの観点（コーディングレビュー含む）から並列にコード変更をレビューし、統合結果を出力する
 workflow_config:
   provider_options:
     codex:
@@ -158,6 +158,28 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
     rules:
       - condition: all("approved")
         next: supervise
@@ -195,7 +217,8 @@ steps:
          - `03-qa-review.md`（QAレビュー）
          - `04-testing-review.md`（テストレビュー）
          - `05-requirements-review.md`（要件充足レビュー）
-      2. 5つのレビュー結果を統合
+         - `06-coding-review.md`（コーディングレビュー）
+      2. 6つのレビュー結果を統合
       3. 統合レビューサマリーと総合判定を作成
     output_contracts:
       report:
@@ -217,6 +240,7 @@ steps:
             | QA | APPROVE/REJECT | {概要} |
             | テスト | APPROVE/REJECT | {概要} |
             | 要件充足 | APPROVE/REJECT | {概要} |
+            | コーディング | APPROVE/REJECT | {概要} |
 
             ## 今回の指摘（new）
             | # | finding_id | 重大度 | ソース | 場所 | 問題 | 修正案 |

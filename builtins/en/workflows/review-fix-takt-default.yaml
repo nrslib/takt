@@ -1,5 +1,5 @@
 name: review-fix-takt-default
-description: "TAKT-focused multi-perspective review + fix loop (6-parallel initial review, AI antipattern pre-review on fix iterations, supervisor-finding fixes)"
+description: "TAKT-focused multi-perspective review + fix loop (7-parallel initial review including coding review, AI antipattern pre-review on fix iterations, supervisor-finding fixes)"
 workflow_config:
   provider_options:
     codex:
@@ -205,6 +205,28 @@ steps:
           report:
             - name: requirements-review.md
               format: requirements-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
         rules:
           - condition: approved
           - condition: needs_fix

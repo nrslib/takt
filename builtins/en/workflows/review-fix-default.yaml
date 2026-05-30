@@ -1,5 +1,5 @@
 name: review-fix-default
-description: Multi-perspective review + fix loop (architecture, security, QA, testing, requirements — 5 parallel reviewers with iterative fixes)
+description: Multi-perspective review + fix loop (architecture, security, QA, testing, requirements, coding — 6 parallel reviewers with iterative fixes)
 workflow_config:
   provider_options:
     codex:
@@ -167,6 +167,28 @@ steps:
           report:
             - name: requirements-review.md
               format: requirements-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
         rules:
           - condition: approved
           - condition: needs_fix

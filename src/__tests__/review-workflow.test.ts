@@ -72,10 +72,10 @@ describe('review-default workflow (EN)', () => {
     }
   });
 
-  it('should have reviewers step with 5 parallel sub-steps', () => {
+  it('should have reviewers step with 6 parallel sub-steps', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers).toBeDefined();
-    expect(reviewers.parallel).toHaveLength(5);
+    expect(reviewers.parallel).toHaveLength(6);
 
     const subNames = reviewers.parallel.map((s: { name: string }) => s.name);
     expect(subNames).toEqual([
@@ -84,6 +84,7 @@ describe('review-default workflow (EN)', () => {
       'qa-review',
       'testing-review',
       'requirements-review',
+      'coding-review',
     ]);
   });
 
@@ -124,7 +125,7 @@ describe('review-default workflow (EN)', () => {
     }
   });
 
-  it('should have Bash in provider_options.claude.allowed_tools for all 5 reviewers', () => {
+  it('should have Bash in provider_options.claude.allowed_tools for all 6 reviewers', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     for (const sub of reviewers.parallel) {
       expect(sub.provider_options?.claude?.allowed_tools).toContain('Bash');
@@ -165,9 +166,9 @@ describe('review-default workflow (JA)', () => {
     expect(stepNames).toEqual(['gather', 'reviewers', 'supervise']);
   });
 
-  it('should have reviewers step with 5 parallel sub-steps', () => {
+  it('should have reviewers step with 6 parallel sub-steps', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
-    expect(reviewers.parallel).toHaveLength(5);
+    expect(reviewers.parallel).toHaveLength(6);
 
     const subNames = reviewers.parallel.map((s: { name: string }) => s.name);
     expect(subNames).toEqual([
@@ -176,6 +177,7 @@ describe('review-default workflow (JA)', () => {
       'qa-review',
       'testing-review',
       'requirements-review',
+      'coding-review',
     ]);
   });
 
@@ -190,7 +192,7 @@ describe('review-default workflow (JA)', () => {
     }
   });
 
-  it('should have Bash in provider_options.claude.allowed_tools for all 5 reviewers', () => {
+  it('should have Bash in provider_options.claude.allowed_tools for all 6 reviewers', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     for (const sub of reviewers.parallel) {
       expect(sub.provider_options?.claude?.allowed_tools).toContain('Bash');

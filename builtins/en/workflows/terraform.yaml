@@ -119,10 +119,31 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
+      - name: coding-review
+        edit: false
+        persona: coding-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-coding
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
     rules:
-      - condition: all("Complies with Terraform conventions", "No AI-specific issues")
+      - condition: all("Complies with Terraform conventions", "No AI-specific issues", "approved")
         next: supervise
-      - condition: any("Convention violations found", "AI-specific issues found")
+      - condition: any("Convention violations found", "AI-specific issues found", "needs_fix")
         next: supervise
   - name: supervise
     edit: false

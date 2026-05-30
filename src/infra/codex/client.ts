@@ -41,6 +41,7 @@ const CODEX_STREAM_ABORTED_MESSAGE = 'Codex execution aborted';
 const CODEX_TIMEOUT_MAX_RETRIES = 2;
 const CODEX_RETRY_MAX_RETRIES = 8;
 const CODEX_RETRY_BASE_DELAY_MS = 1000;
+const CODEX_RETRY_MAX_DELAY_MS = 30_000;
 const CODEX_RECONNECT_ERROR_PATTERNS = [
   'reconnecting...',
   'timeout waiting for child process to exit',
@@ -151,7 +152,10 @@ export class CodexClient {
   }
 
   private async waitForRetryDelay(attempt: number, signal?: AbortSignal): Promise<void> {
-    const delayMs = CODEX_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1));
+    const delayMs = Math.min(
+      CODEX_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
+      CODEX_RETRY_MAX_DELAY_MS,
+    );
     await new Promise<void>((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         if (signal) {
@@ -351,6 +355,8 @@ export class CodexClient {
         let success = true;
         let failureMessage = '';
         let providerUsage: ProviderUsageSnapshot | undefined;
+        let sawTurnCompleted = false;
+        let lastStreamErrorMessage: string | undefined;
 
         for await (const event of events as AsyncGenerator<CodexEvent>) {
           resetIdleTimeout();
@@ -364,6 +370,7 @@ export class CodexClient {
           }
 
           if (event.type === 'turn.completed') {
+            sawTurnCompleted = true;
             providerUsage = extractProviderUsageFromTurnCompleted(event);
             continue;
           }
@@ -378,10 +385,9 @@ export class CodexClient {
           }
 
           if (event.type === 'error') {
-            success = false;
-            failureMessage = typeof event.message === 'string' ? event.message : 'Unknown error';
-            diag.onStreamError('error', failureMessage);
-            break;
+            lastStreamErrorMessage = typeof event.message === 'string' ? event.message : 'Unknown error';
+            diag.onStreamError('error', lastStreamErrorMessage);
+            continue;
           }
 
           if (event.type === 'item.started') {
@@ -443,6 +449,18 @@ export class CodexClient {
           }
         }
 
+        const trimmed = content.trim();
+        const streamErrorFailureMessage = success
+          && !sawTurnCompleted
+          && trimmed.length === 0
+          ? lastStreamErrorMessage
+          : undefined;
+        const failedAfterStreamError = streamErrorFailureMessage !== undefined;
+        if (failedAfterStreamError) {
+          success = false;
+          failureMessage = streamErrorFailureMessage;
+        }
+
         diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
 
         if (!success) {
@@ -459,7 +477,7 @@ export class CodexClient {
             abortCause,
             timeoutMessage,
           );
-          if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+          if (!failedAfterStreamError && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
             log.info('Retrying Codex call after transient failure', { agentType, attempt, message: failure.reason });
             threadId = currentThreadId;
             const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
@@ -481,7 +499,6 @@ export class CodexClient {
           return errorResponse;
         }
 
-        const trimmed = content.trim();
         const structuredOutput = parseStructuredOutput(lastAgentMessageText.trim(), !!options.outputSchema);
         emitResult(options.onStream, true, trimmed, currentThreadId);
 

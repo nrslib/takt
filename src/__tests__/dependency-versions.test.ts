@@ -172,6 +172,18 @@ describe('dependency versions', () => {
     expect(packageLock.packages?.['node_modules/yaml']?.version).toBe('2.8.3');
   });
 
+  it('locks runtime transitive dependencies to patched security releases', () => {
+    const packageLock = readPackageLock();
+
+    expect(getLockedPackage(packageLock, 'node_modules/ajv').version).toBe('6.15.0');
+    expect(getLockedPackage(packageLock, 'node_modules/express-rate-limit').version).toBe('8.5.2');
+    expect(getLockedPackage(packageLock, 'node_modules/fast-uri').version).toBe('3.1.2');
+    expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.23');
+    expect(getLockedPackage(packageLock, 'node_modules/ip-address').version).toBe('10.2.0');
+    expect(getLockedPackage(packageLock, 'node_modules/protobufjs').version).toBe('7.6.1');
+    expect(getLockedPackage(packageLock, 'node_modules/qs').version).toBe('6.15.2');
+  });
+
   it('resolves traced-config through its public entrypoint', () => {
     const stdout = execFileSync(
       process.execPath,
