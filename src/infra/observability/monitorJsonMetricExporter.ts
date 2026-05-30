@@ -22,6 +22,7 @@ type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string
 export class MonitorJsonMetricExporter implements PushMetricExporter {
   private readonly registrations = new Map<string, MonitorJsonMetricExporterOptions>();
   private shutdownRequested = false;
+  private overflowWarned = false;
 
   constructor(options?: MonitorJsonMetricExporterOptions) {
     if (options) {
@@ -49,6 +50,19 @@ export class MonitorJsonMetricExporter implements PushMetricExporter {
     if (this.shutdownRequested) {
       resultCallback({ code: 1, error: new Error('MonitorJsonMetricExporter is shut down') });
       return;
+    }
+
+    // The metric SDK caps each instrument at a fixed cardinality (2000 distinct
+    // attribute sets). Because every metric is keyed by takt.run.id, a very
+    // long-lived process with many overlapping runs eventually overflows: new
+    // runs' series merge into an attribute-less overflow bucket, so their
+    // run-scoped monitor.json filters to empty. Surface this once instead of
+    // letting late runs silently get no monitor.json.
+    if (!this.overflowWarned && hasCardinalityOverflow(metrics)) {
+      this.overflowWarned = true;
+      log.warn(
+        'OpenTelemetry metric cardinality limit reached; per-run monitor.json metrics may be incomplete for long-lived processes',
+      );
     }
 
     for (const options of this.registrations.values()) {
@@ -79,6 +93,14 @@ export class MonitorJsonMetricExporter implements PushMetricExporter {
     this.shutdownRequested = true;
     this.registrations.clear();
   }
+}
+
+export function hasCardinalityOverflow(metrics: ResourceMetrics): boolean {
+  return metrics.scopeMetrics.some((scopeMetrics) =>
+    scopeMetrics.metrics.some((metric) =>
+      metric.dataPoints.some((point) => point.attributes['otel.metric.overflow'] === true),
+    ),
+  );
 }
 
 function filterResourceMetricsByRun(metrics: ResourceMetrics, runId: string): ResourceMetrics {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AggregationTemporality, DataPointType, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
-import { MonitorJsonMetricExporter } from '../infra/observability/monitorJsonMetricExporter.js';
+import { hasCardinalityOverflow, MonitorJsonMetricExporter } from '../infra/observability/monitorJsonMetricExporter.js';
 
 const tempDirs = new Set<string>();
 
@@ -57,6 +57,43 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
   tempDirs.clear();
+});
+
+function makeOverflowMetrics(): ResourceMetrics {
+  return {
+    resource: { attributes: { 'service.name': 'takt' } },
+    scopeMetrics: [
+      {
+        scope: { name: 'takt.workflow' },
+        metrics: [
+          {
+            descriptor: { name: 'takt.workflow.runs', description: '', unit: '', valueType: 1 },
+            dataPointType: DataPointType.SUM,
+            aggregationTemporality: AggregationTemporality.CUMULATIVE,
+            isMonotonic: true,
+            dataPoints: [
+              {
+                startTime: [1_778_777_200, 0],
+                endTime: [1_778_777_205, 0],
+                attributes: { 'otel.metric.overflow': true },
+                value: 9,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  } as unknown as ResourceMetrics;
+}
+
+describe('hasCardinalityOverflow', () => {
+  it('is false for normal run-scoped metrics', () => {
+    expect(hasCardinalityOverflow(makeResourceMetrics(['run-1', 'run-2']))).toBe(false);
+  });
+
+  it('is true when a data point carries the otel.metric.overflow marker', () => {
+    expect(hasCardinalityOverflow(makeOverflowMetrics())).toBe(true);
+  });
 });
 
 describe('MonitorJsonMetricExporter', () => {
