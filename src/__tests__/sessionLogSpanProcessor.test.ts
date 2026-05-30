@@ -161,6 +161,60 @@ describe('SessionLogSpanProcessor', () => {
     ]);
   });
 
+  it('orders judge stage records after phase_start even though their spans end first', () => {
+    const shadowLogPath = createTempLogPath();
+    const processor = new SessionLogSpanProcessor({
+      runId: 'run-1',
+      shadowLogPath,
+      sanitizedTask: 'task',
+      workflowName: 'default',
+    });
+    const judgePhaseSpan = {
+      name: 'phase.implement.judge',
+      startTime: [1_778_777_200, 0],
+      endTime: [1_778_777_205, 0],
+      attributes: {
+        'takt.run.id': 'run-1',
+        'takt.step.name': 'implement',
+        'takt.step.iteration': 1,
+        'takt.phase.number': 3,
+        'takt.phase.name': 'judge',
+        'takt.phase.execution_id': 'implement:3:1:1',
+        'takt.phase.system_prompt': 'Judge system',
+        'takt.phase.user_instruction': 'Judge user',
+        'takt.phase.status': 'done',
+      },
+    };
+    const judgeStageSpan = {
+      name: 'judge_stage.implement.1.structured_output',
+      endTime: [1_778_777_203, 0],
+      attributes: {
+        'takt.run.id': 'run-1',
+        'takt.step.name': 'implement',
+        'takt.step.iteration': 1,
+        'takt.phase.execution_id': 'implement:3:1:1',
+        'takt.judge.stage': 1,
+        'takt.judge.method': 'structured_output',
+        'takt.judge.status': 'done',
+        'takt.judge.instruction': 'Judge it',
+        'takt.judge.response': 'ok',
+      },
+    };
+
+    // Real lifecycle: the phase span starts, the judge-stage child span ends
+    // while the phase span is still open, then the phase span ends.
+    processor.onStart(judgePhaseSpan as unknown as Span, {} as Context);
+    processor.onEnd(judgeStageSpan as unknown as ReadableSpan);
+    processor.onEnd(judgePhaseSpan as unknown as ReadableSpan);
+
+    expect(readRecords(shadowLogPath).map((record) => record.type)).toEqual([
+      'workflow_start',
+      'phase_start',
+      'phase_judge_stage',
+      'phase_complete',
+    ]);
+  });
+
   it('writes phase start and complete records from the completed phase span snapshot', () => {
     const shadowLogPath = createTempLogPath();
     const processor = new SessionLogSpanProcessor({
