@@ -173,10 +173,6 @@ function mapPhaseComplete(span: SpanSnapshot): NdjsonPhaseComplete | undefined {
   const phaseName = getPhaseName(span.attributes, 'takt.phase.name');
   const phaseExecutionId = getString(span.attributes, 'takt.phase.execution_id');
   const status = getString(span.attributes, 'takt.phase.status');
-  // Do NOT gate on system_prompt / user_instruction: those are not part of
-  // NdjsonPhaseComplete and may be absent on the judge error path (when
-  // prompt parts were never resolved). The canonical log still emits a
-  // phase_complete(status=error) there, so requiring them would drop it.
   if (
     !step
     || phase === undefined
@@ -185,6 +181,20 @@ function mapPhaseComplete(span: SpanSnapshot): NdjsonPhaseComplete | undefined {
     || !status
   ) {
     return undefined;
+  }
+  // Parity gate, scoped by phase: the canonical log emits phase_complete
+  // unconditionally ONLY for the judge phase (its catch fires onPhaseComplete
+  // even when prompts never resolved). For execute/report the canonical
+  // onPhaseComplete is reached only after prompt parts resolved, so requiring
+  // them here avoids emitting an orphaned phase_complete (no preceding
+  // phase_start) when the agent throws early. system_prompt/user_instruction
+  // are not part of NdjsonPhaseComplete — they are used only as the gate.
+  if (phaseName !== 'judge') {
+    const systemPrompt = getString(span.attributes, 'takt.phase.system_prompt');
+    const userInstruction = getString(span.attributes, 'takt.phase.user_instruction');
+    if (systemPrompt === undefined || userInstruction === undefined) {
+      return undefined;
+    }
   }
 
   return {

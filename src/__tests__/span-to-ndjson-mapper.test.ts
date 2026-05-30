@@ -252,6 +252,32 @@ describe('span-to-ndjson mapper', () => {
     });
   });
 
+  it.each(['execute', 'report'] as const)(
+    'drops phase_complete for a %s phase that errored before prompt parts resolved',
+    (phaseName) => {
+      const span: SpanSnapshot = {
+        name: `phase.implement.${phaseName}`,
+        endTime: [1_778_777_210, 0],
+        attributes: {
+          'takt.step.name': 'implement',
+          'takt.step.iteration': 1,
+          'takt.phase.number': phaseName === 'execute' ? 1 : 2,
+          'takt.phase.name': phaseName,
+          'takt.phase.execution_id': `implement:${phaseName === 'execute' ? 1 : 2}:1:1`,
+          'takt.phase.status': 'error',
+          'takt.phase.result.error': 'agent failed to start',
+        },
+      };
+
+      // Canonical emits NO phase_complete for execute/report when the agent
+      // throws before prompts resolve (StepExecutor has no try/catch; report
+      // guards onPhaseComplete with didEmitPhaseStart). The shadow log must
+      // not emit an orphaned phase_complete with no preceding phase_start.
+      expect(mapSpanStartToNdjson(span)).toBeUndefined();
+      expect(mapSpanEndToNdjson(span)).toBeUndefined();
+    },
+  );
+
   it('maps judge stage spans into session log compatible judge records', () => {
     expect(mapSpanEndToNdjson({
       name: 'judge_stage.implement.1.structured_output',
