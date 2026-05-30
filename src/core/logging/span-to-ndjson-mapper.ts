@@ -168,16 +168,16 @@ function mapPhaseComplete(span: SpanSnapshot): NdjsonPhaseComplete | undefined {
   const phase = getPhaseNumber(span.attributes, 'takt.phase.number');
   const phaseName = getPhaseName(span.attributes, 'takt.phase.name');
   const phaseExecutionId = getString(span.attributes, 'takt.phase.execution_id');
-  const systemPrompt = getString(span.attributes, 'takt.phase.system_prompt');
-  const userInstruction = getString(span.attributes, 'takt.phase.user_instruction');
   const status = getString(span.attributes, 'takt.phase.status');
+  // Do NOT gate on system_prompt / user_instruction: those are not part of
+  // NdjsonPhaseComplete and may be absent on the judge error path (when
+  // prompt parts were never resolved). The canonical log still emits a
+  // phase_complete(status=error) there, so requiring them would drop it.
   if (
     !step
     || phase === undefined
     || phaseName === undefined
     || !phaseExecutionId
-    || systemPrompt === undefined
-    || userInstruction === undefined
     || !status
   ) {
     return undefined;

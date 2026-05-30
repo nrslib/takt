@@ -196,20 +196,37 @@ describe('span-to-ndjson mapper', () => {
     expect(mapSpanEndToNdjson(span)).toBeUndefined();
   });
 
-  it('skips phase spans without resolved prompt parts to avoid shadow-only phase records', () => {
+  it('omits phase_start but keeps phase_complete when prompt parts were never resolved (judge error path)', () => {
     const span: SpanSnapshot = {
-      name: 'phase.implement.execute',
+      name: 'phase.implement.judge',
+      endTime: [1_778_777_210, 0],
       attributes: {
         'takt.step.name': 'implement',
-        'takt.phase.number': 1,
-        'takt.phase.name': 'execute',
-        'takt.phase.execution_id': 'implement:1:1:1',
-        'takt.phase.status': 'done',
+        'takt.step.iteration': 2,
+        'takt.phase.number': 3,
+        'takt.phase.name': 'judge',
+        'takt.phase.execution_id': 'implement:3:2:1',
+        'takt.phase.status': 'error',
+        'takt.phase.result.error': 'provider connection failed',
       },
     };
 
+    // phase_start legitimately needs resolved prompt parts (parity: canonical
+    // only emits phase_start once onStructuredPromptResolved fired).
     expect(mapSpanStartToNdjson(span)).toBeUndefined();
-    expect(mapSpanEndToNdjson(span)).toBeUndefined();
+    // phase_complete must still be emitted: the canonical log writes a
+    // phase_complete(status=error) unconditionally in the judge catch block.
+    expect(mapSpanEndToNdjson(span)).toEqual({
+      type: 'phase_complete',
+      step: 'implement',
+      iteration: 2,
+      phase: 3,
+      phaseName: 'judge',
+      phaseExecutionId: 'implement:3:2:1',
+      status: 'error',
+      error: 'provider connection failed',
+      timestamp: '2026-05-14T16:46:50.000Z',
+    });
   });
 
   it('maps judge stage spans into session log compatible judge records', () => {
