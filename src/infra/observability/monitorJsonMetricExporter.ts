@@ -30,6 +30,15 @@ export class MonitorJsonMetricExporter implements PushMetricExporter {
   }
 
   register(options: MonitorJsonMetricExporterOptions): () => void {
+    if (this.registrations.has(options.runId)) {
+      // A live run already owns this runId; keep it rather than redirect its
+      // monitor.json output to a colliding path.
+      log.warn('Ignoring duplicate monitor.json metric registration', {
+        runId: options.runId,
+        monitorPath: options.monitorPath,
+      });
+      return () => {};
+    }
     this.registrations.set(options.runId, options);
     return () => {
       this.registrations.delete(options.runId);

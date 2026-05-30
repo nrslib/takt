@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -102,6 +102,42 @@ describe('SessionLogSpanProcessor', () => {
         },
       } as unknown as ReadableSpan);
     }).not.toThrow();
+  });
+
+  it('ignores a duplicate runId registration instead of emitting a second workflow_start', () => {
+    const firstLogPath = createTempLogPath();
+    const secondLogPath = createTempLogPath();
+    const processor = new SessionLogSpanProcessor();
+
+    processor.register({
+      runId: 'run-1',
+      shadowLogPath: firstLogPath,
+      sanitizedTask: 'first task',
+      workflowName: 'default',
+    });
+    // Collision: same runId, different path. Must not clobber the live run.
+    processor.register({
+      runId: 'run-1',
+      shadowLogPath: secondLogPath,
+      sanitizedTask: 'second task',
+      workflowName: 'default',
+    });
+
+    processor.onEnd({
+      name: 'workflow.default',
+      attributes: {
+        'takt.run.id': 'run-1',
+        'takt.workflow.status': 'completed',
+        'takt.workflow.iterations': 1,
+      },
+    } as unknown as ReadableSpan);
+
+    // Only the first registration is active: one workflow_start, records routed to it.
+    expect(readRecords(firstLogPath).map((record) => record.type)).toEqual([
+      'workflow_start',
+      'workflow_complete',
+    ]);
+    expect(existsSync(secondLogPath)).toBe(false);
   });
 
   it('routes span records to the matching registered run', () => {

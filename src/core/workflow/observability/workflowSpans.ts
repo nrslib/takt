@@ -418,11 +418,16 @@ function recordJudgeStageMetrics(params: JudgeStageSpanParams): void {
   }));
 }
 
+const REDACTED_PLACEHOLDER = '[redacted]';
+
 function sanitizeSpanText(sanitizeText: ((text: string) => string) | undefined, text: string | undefined): string | undefined {
   if (text === undefined) {
     return undefined;
   }
-  return sanitizeText ? sanitizeText(text) : text;
+  // Fail closed: observability span attributes must never carry raw text when
+  // no sanitizer was threaded to the call site. Returning the raw text here was
+  // a silent leak if any future call site forgot to pass sanitizeText.
+  return sanitizeText ? sanitizeText(text) : REDACTED_PLACEHOLDER;
 }
 
 function workflowStackAttributes(stack: WorkflowResumePointEntry[] | undefined): AttributeInput {

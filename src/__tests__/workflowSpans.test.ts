@@ -314,6 +314,28 @@ describe('workflow OpenTelemetry spans', () => {
     });
   });
 
+  it('redacts span text when observability is enabled but no sanitizer is threaded (fail closed)', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step: makeStep(),
+      iteration: 1,
+      instruction: 'secret instruction',
+      // intentionally no sanitizeText
+    }, async () => ({
+      ...makeDoneResult(),
+      response: {
+        ...makeDoneResult().response,
+        content: 'secret content',
+      },
+    }));
+
+    expect(spans[0]?.attributes['takt.step.instruction']).toBe('[redacted]');
+    expect(spans[0]?.attributes['takt.step.result.content']).toBe('[redacted]');
+  });
+
   it('sanitizes text before attaching session-log parity attributes to step spans', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
 
@@ -485,6 +507,7 @@ describe('workflow OpenTelemetry spans', () => {
         step,
         iteration: 4,
         phaseExecutionId: 'implement:3:4:1',
+        sanitizeText: (text: string) => text,
         entry: {
           stage: 1,
           method: 'structured_output',
