@@ -310,6 +310,7 @@ export class WorkflowEngine extends EventEmitter {
       maxSteps: this.maxSteps,
       runMode,
       resumeDepth: this.resumeStackPrefix.length,
+      sanitizeText: this.options.sanitizeObservabilityText,
     };
   }
 

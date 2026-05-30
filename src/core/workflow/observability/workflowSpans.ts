@@ -41,6 +41,7 @@ export interface WorkflowSpanParams {
   maxSteps: WorkflowMaxSteps;
   runMode: 'full' | 'single_iteration';
   resumeDepth: number;
+  sanitizeText?: (text: string) => string;
 }
 
 export interface WorkflowSpanOutcome {
@@ -116,7 +117,7 @@ export async function runWithWorkflowSpan<T>(
       try {
         const result = await execute();
         const outcome = getOutcome(result);
-        recordWorkflowOutcome(span, outcome);
+        recordWorkflowOutcome(span, params, outcome);
         recordWorkflowMetrics(params, outcome, Date.now() - startedAt);
         return result;
       } catch (error) {
@@ -284,11 +285,11 @@ async function runInSpan<T>(
   });
 }
 
-function recordWorkflowOutcome(span: Span, outcome: WorkflowSpanOutcome): void {
+function recordWorkflowOutcome(span: Span, params: WorkflowSpanParams, outcome: WorkflowSpanOutcome): void {
   const attributes = compactAttributes({
     'takt.workflow.status': outcome.status,
     'takt.workflow.abort.kind': outcome.abortKind,
-    'takt.workflow.abort.reason': outcome.abortReason,
+    'takt.workflow.abort.reason': sanitizeSpanText(params.sanitizeText, outcome.abortReason),
     'takt.workflow.next_step': outcome.nextStep,
     'takt.workflow.iterations': outcome.iterations,
   });

@@ -207,6 +207,33 @@ describe('workflow OpenTelemetry spans', () => {
     ]);
   });
 
+  it('sanitizes the workflow abort reason before recording it on the span', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithWorkflowSpan({
+      enabled: true,
+      runId: 'run-1',
+      workflowName: 'test-workflow',
+      initialStep: 'implement',
+      stepCount: 1,
+      maxSteps: 3,
+      runMode: 'full',
+      resumeDepth: 0,
+      sanitizeText: (text: string) => text.replaceAll('secret', '[REDACTED]'),
+    }, async () => ({ aborted: true }), () => ({
+      status: 'aborted',
+      abortKind: 'step_error',
+      abortReason: 'Step "implement" failed: secret content',
+    }));
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.attributes).toMatchObject({
+      'takt.workflow.status': 'aborted',
+      'takt.workflow.abort.kind': 'step_error',
+      'takt.workflow.abort.reason': 'Step "implement" failed: [REDACTED] content',
+    });
+  });
+
   it('creates step spans as workflow children with provider and step attributes', async () => {
     const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep();
