@@ -536,7 +536,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     step,
     iteration: activeIteration,
     stepIteration,
-    instruction: prebuiltInstruction
+    instruction: deps.options.observability?.enabled === true && prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '',
     workflowStack: deps.getCurrentWorkflowStack(),
