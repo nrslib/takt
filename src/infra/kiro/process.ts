@@ -5,14 +5,21 @@ const KIRO_COMMAND = 'kiro-cli';
 const KIRO_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 const KIRO_FORCE_KILL_DELAY_MS_DEFAULT = 1_000;
 const KIRO_ENV_ALLOWLIST = [
+  'ALL_PROXY',
   'APPDATA',
   'HOME',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
   'LANG',
   'LC_ALL',
   'LOCALAPPDATA',
+  'NO_PROXY',
+  'NODE_EXTRA_CA_CERTS',
   'PATH',
   'Path',
   'SHELL',
+  'SSL_CERT_DIR',
+  'SSL_CERT_FILE',
   'SystemRoot',
   'TEMP',
   'TERM',
@@ -22,6 +29,11 @@ const KIRO_ENV_ALLOWLIST = [
   'XDG_CACHE_HOME',
   'XDG_CONFIG_HOME',
   'XDG_DATA_HOME',
+  'all_proxy',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'KIRO_HOME',
 ];
 
 export type KiroExecResult = {
@@ -45,8 +57,9 @@ function buildEnv(kiroApiKey?: string): NodeJS.ProcessEnv {
     }
   }
 
-  if (kiroApiKey !== undefined) {
-    env.KIRO_API_KEY = kiroApiKey;
+  const resolvedKiroApiKey = kiroApiKey !== undefined ? kiroApiKey : process.env.KIRO_API_KEY;
+  if (resolvedKiroApiKey !== undefined) {
+    env.KIRO_API_KEY = resolvedKiroApiKey;
   }
 
   return env;
@@ -101,22 +114,41 @@ export function execKiro(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
-    let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    let terminationTimer: ReturnType<typeof setTimeout> | undefined;
+    let childClosed = false;
+
+    const clearTerminationTimer = (): void => {
+      if (terminationTimer !== undefined) {
+        clearTimeout(terminationTimer);
+        terminationTimer = undefined;
+      }
+    };
+
+    const scheduleForceKill = (): void => {
+      if (terminationTimer === undefined) {
+        terminationTimer = setTimeout(() => {
+          if (!childClosed) {
+            child.kill('SIGKILL');
+          }
+          terminationTimer = undefined;
+        }, KIRO_FORCE_KILL_DELAY_MS_DEFAULT);
+        terminationTimer.unref?.();
+      }
+    };
+
+    const terminateChild = (): void => {
+      child.kill('SIGTERM');
+      scheduleForceKill();
+    };
 
     const abortHandler = (): void => {
       if (settled) return;
-      child.kill('SIGTERM');
-      abortTimer = setTimeout(() => {
-        if (!settled) {
-          child.kill('SIGKILL');
-        }
-      }, KIRO_FORCE_KILL_DELAY_MS_DEFAULT);
-      abortTimer.unref?.();
+      terminateChild();
     };
 
     const cleanup = (): void => {
-      if (abortTimer !== undefined) {
-        clearTimeout(abortTimer);
+      if (childClosed) {
+        clearTerminationTimer();
       }
       if (options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
@@ -125,6 +157,14 @@ export function execKiro(
 
     const rejectOnce = (error: KiroExecError): void => {
       if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const rejectAfterTermination = (error: KiroExecError): void => {
+      if (settled) return;
+      terminateChild();
       settled = true;
       cleanup();
       reject(error);
@@ -144,8 +184,7 @@ export function execKiro(
       if (target === 'stdout') {
         stdoutBytes += byteLength;
         if (stdoutBytes > KIRO_MAX_BUFFER_BYTES) {
-          child.kill('SIGTERM');
-          rejectOnce(createExecError('kiro-cli stdout exceeded buffer limit', {
+          rejectAfterTermination(createExecError('kiro-cli stdout exceeded buffer limit', {
             code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
             stdout,
             stderr,
@@ -158,8 +197,7 @@ export function execKiro(
 
       stderrBytes += byteLength;
       if (stderrBytes > KIRO_MAX_BUFFER_BYTES) {
-        child.kill('SIGTERM');
-        rejectOnce(createExecError('kiro-cli stderr exceeded buffer limit', {
+        rejectAfterTermination(createExecError('kiro-cli stderr exceeded buffer limit', {
           code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
           stdout,
           stderr,
@@ -181,6 +219,8 @@ export function execKiro(
     });
 
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      childClosed = true;
+      clearTerminationTimer();
       if (settled) return;
 
       if (options.abortSignal?.aborted) {

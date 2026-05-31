@@ -11,7 +11,6 @@ import {
   ProviderTypeSchema,
 } from '../core/models/schema-base.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { normalizeProviderProfiles } from '../infra/config/configNormalizers.js';
 import {
   providerSupportsAllowedTools,
   providerSupportsMaxTurns,
@@ -77,38 +76,32 @@ describe('Kiro provider schema', () => {
     expect(parsed?.kiro?.step_permission_overrides?.inspect).toBe('readonly');
   });
 
-  it('Given provider_profiles.kiro type profile, When parsed and normalized, Then the order.md contract is accepted', () => {
-    const parsed = ProviderPermissionProfilesSchema.parse({
-      kiro: {
-        type: 'kiro',
-      },
-    });
-
-    expect(parsed?.kiro?.type).toBe('kiro');
-    expect(normalizeProviderProfiles(parsed)).toEqual({
-      kiro: {
-        defaultPermissionMode: 'edit',
-        stepPermissionOverrides: undefined,
-      },
-    });
-  });
-
-  it('Given provider profile type does not match its key, When parsed, Then it fails fast', () => {
+  it('Given provider_profiles.kiro type field, When parsed, Then it fails fast as an unsupported contract', () => {
     expect(() =>
       ProviderPermissionProfilesSchema.parse({
         kiro: {
-          type: 'codex',
+          type: 'kiro',
         },
       }),
-    ).toThrow(/must match profile key 'kiro'/i);
+    ).toThrow(/type/i);
+  });
+
+  it('Given unknown provider profile key, When parsed, Then it fails fast', () => {
+    expect(() =>
+      ProviderPermissionProfilesSchema.parse({
+        unknown_provider: {
+          default_permission_mode: 'edit',
+        },
+      }),
+    ).toThrow(/unknown_provider|unrecognized/i);
   });
 
   it('Given empty provider profile, When parsed, Then it fails fast instead of defaulting permissions', () => {
     expect(() =>
       ProviderPermissionProfilesSchema.parse({
-        kiro: {},
-      }),
-    ).toThrow(/provider profile must define either type or default_permission_mode/i);
+          kiro: {},
+        }),
+    ).toThrow(/default_permission_mode/i);
   });
 
   it('Given workflow and step provider kiro, When normalized, Then Kiro provider is preserved', () => {
@@ -206,23 +199,6 @@ describe('Kiro global config', () => {
     expect(config.provider).toBe('kiro');
     expect(config.kiroCliPath).toBe(kiroPath);
     expect(config.kiroApiKey).toBe('kiro-from-yaml');
-  });
-
-  it('Given provider_profiles.kiro.type in YAML, When loaded, Then it becomes a Kiro permission profile', () => {
-    writeFileSync(
-      configPath,
-      [
-        'language: en',
-        'provider_profiles:',
-        '  kiro:',
-        '    type: kiro',
-      ].join('\n'),
-      'utf-8',
-    );
-
-    const config = loadGlobalConfig();
-
-    expect(config.providerProfiles?.kiro?.defaultPermissionMode).toBe('edit');
   });
 
   it('Given Kiro fields in config object, When saved and reloaded, Then YAML round-trips canonical snake_case keys', () => {

@@ -165,8 +165,7 @@ export class GlobalConfigManager {
       rateLimitFallback: normalizeRateLimitFallback(parsed.rate_limit_fallback),
       providerProfiles: normalizeProviderProfiles(
         parsed.provider_profiles as Record<string, {
-          type?: string;
-          default_permission_mode?: 'readonly' | 'edit' | 'full';
+          default_permission_mode: 'readonly' | 'edit' | 'full';
           step_permission_overrides?: Record<string, string>;
         }> | undefined,
       ),

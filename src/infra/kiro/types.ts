@@ -11,4 +11,3 @@ export interface KiroCallOptions {
   kiroApiKey?: string;
   kiroCliPath?: string;
 }
-

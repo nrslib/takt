@@ -63,11 +63,11 @@
     "builtins/"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.119",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.141",
     "@openai/codex-sdk": "^0.125.0",
     "@opencode-ai/sdk": "^1.14.24",
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/sdk-node": "^0.217.0",
+    "@opentelemetry/sdk-node": "^0.218.0",
     "ajv": "^6.12.6",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",

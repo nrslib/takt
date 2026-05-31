@@ -35,15 +35,12 @@ function validateSessionId(sessionId: string): void {
   }
 }
 
-function validatePromptArgument(prompt: string): void {
-  if (prompt.startsWith('-')) {
-    throw new Error('Invalid Kiro prompt. Prompt must not start with a hyphen because Kiro CLI may parse it as an option.');
-  }
+function buildInputArg(prompt: string): string {
+  // Kiro documents the prompt as positional INPUT, but does not document a `--` separator.
+  return prompt.startsWith('-') ? `\n${prompt}` : prompt;
 }
 
 function buildArgs(options: KiroCallOptions, prompt: string): string[] {
-  validatePromptArgument(prompt);
-
   const args = [
     'chat',
     '--no-interactive',
@@ -55,15 +52,15 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
     args.push('--resume-id', options.sessionId);
   }
 
-  args.push(prompt);
+  args.push(buildInputArg(prompt));
 
   return args;
 }
 
-function trimDetail(value: string | undefined, fallback = ''): string {
+function trimDetail(value: string | undefined): string {
   const normalized = (value ?? '').trim();
   if (!normalized) {
-    return fallback;
+    return '';
   }
   return normalized.length > KIRO_ERROR_DETAIL_MAX_LENGTH
     ? `${normalized.slice(0, KIRO_ERROR_DETAIL_MAX_LENGTH)}...`
@@ -79,6 +76,10 @@ function redactDetail(value: string, kiroApiKey: string | undefined): string {
 
 function redactedTrimmedDetail(value: string | undefined, kiroApiKey: string | undefined): string {
   return trimDetail(redactDetail(value ?? '', kiroApiKey));
+}
+
+function resolveEffectiveKiroApiKey(kiroApiKey: string | undefined): string | undefined {
+  return kiroApiKey ?? process.env.KIRO_API_KEY;
 }
 
 function selectErrorDetail(error: KiroExecError): string {
@@ -159,10 +160,14 @@ function emitResult(
 export class KiroClient {
   async call(agentType: string, prompt: string, options: KiroCallOptions): Promise<AgentResponse> {
     const promptText = buildPrompt(prompt, options.systemPrompt);
+    const effectiveKiroApiKey = resolveEffectiveKiroApiKey(options.kiroApiKey);
+    const effectiveOptions = effectiveKiroApiKey === options.kiroApiKey
+      ? options
+      : { ...options, kiroApiKey: effectiveKiroApiKey };
 
     try {
-      const args = buildArgs(options, promptText);
-      const { stdout } = await execKiro(args, options);
+      const args = buildArgs(effectiveOptions, promptText);
+      const { stdout } = await execKiro(args, effectiveOptions);
       const content = stdout.trim();
       if (!content) {
         const message = 'kiro-cli returned empty output';
@@ -189,7 +194,7 @@ export class KiroClient {
       };
     } catch (rawError) {
       const error = rawError as KiroExecError;
-      const message = classifyExecutionError(error, options);
+      const message = classifyExecutionError(error, effectiveOptions);
       emitResult(options, '', false, message);
       return {
         persona: agentType,
