@@ -34,6 +34,7 @@ const SLASH_COMMAND_REGISTRY: readonly {
 export interface CommandAvailability {
   readonly enableRetryCommand?: boolean;
   readonly hasPreviousOrder?: boolean;
+  readonly enableResumeCommand?: boolean;
 }
 
 /**
@@ -52,6 +53,7 @@ export const filterSlashCommands = (
     if (!availability) return true;
     if (entry.command === SlashCommand.Retry && !availability.enableRetryCommand) return false;
     if (entry.command === SlashCommand.Replay && !availability.hasPreviousOrder) return false;
+    if (entry.command === SlashCommand.Resume && availability.enableResumeCommand === false) return false;
     return true;
   });
 };

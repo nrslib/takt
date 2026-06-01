@@ -76,5 +76,6 @@ steps:
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('init');
     expect(result.stdout).toContain('doctor');
+    expect(result.stdout).toContain('builder');
   });
 });

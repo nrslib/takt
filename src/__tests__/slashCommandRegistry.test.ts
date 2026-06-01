@@ -65,6 +65,18 @@ describe('filterSlashCommands', () => {
     expect(commands.length).toBe(3);
   });
 
+  it('should omit "/resume" from completion when resume is disabled', () => {
+    const result = filterSlashCommands('/re', {
+      enableRetryCommand: true,
+      hasPreviousOrder: true,
+      enableResumeCommand: false,
+    });
+    const commands = result.map((e) => e.command);
+    expect(commands).toContain('/retry');
+    expect(commands).toContain('/replay');
+    expect(commands).not.toContain('/resume');
+  });
+
   it('should include labelKey for i18n lookup', () => {
     const result = filterSlashCommands('/play');
     expect(result[0]!.labelKey).toBe('interactive.commands.play');
