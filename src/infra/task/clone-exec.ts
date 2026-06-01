@@ -42,9 +42,10 @@ function resolveMainRepo(projectDir: string): string {
       const content = fs.readFileSync(gitPath, 'utf-8');
       const match = content.match(/^gitdir:\s*(.+)$/m);
       if (match && match[1]) {
-        const worktreePath = match[1].trim();
-        const gitDir = path.resolve(worktreePath, '..', '..');
-        const mainRepoPath = path.dirname(gitDir);
+        const gitDirPath = match[1].trim();
+        const gitDir = path.resolve(path.dirname(gitPath), gitDirPath);
+        const commonGitDir = path.resolve(gitDir, '..', '..');
+        const mainRepoPath = path.dirname(commonGitDir);
         log.info('Detected worktree, using main repo', { worktree: projectDir, mainRepo: mainRepoPath });
         return mainRepoPath;
       }

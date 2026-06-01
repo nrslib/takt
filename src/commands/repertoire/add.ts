@@ -6,7 +6,7 @@
  *   takt repertoire add github:{owner}/{repo}          (uses default branch)
  */
 
-import { mkdirSync, copyFileSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, copyFileSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -68,10 +68,10 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
 
   const ref = resolveRef(specRef, owner, repo, execGh);
 
-  const tmpBase = join(tmpdir(), `takt-import-${Date.now()}`);
-  const tmpTarPath = `${tmpBase}.tar.gz`;
-  const tmpExtractDir = `${tmpBase}-extract`;
-  const tmpIncludeFile = `${tmpBase}-include.txt`;
+  const tmpBase = mkdtempSync(join(tmpdir(), 'takt-import-'));
+  const tmpTarPath = join(tmpBase, 'archive.tar.gz');
+  const tmpExtractDir = join(tmpBase, 'extract');
+  const tmpIncludeFile = join(tmpBase, 'include.txt');
 
   try {
     mkdirSync(tmpExtractDir, { recursive: true });
@@ -204,8 +204,6 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
 
     success(`✅ ${owner}/${repo} @${ref} をインストールしました`);
   } finally {
-    if (existsSync(tmpTarPath)) rmSync(tmpTarPath, { force: true });
-    if (existsSync(tmpExtractDir)) rmSync(tmpExtractDir, { recursive: true, force: true });
-    if (existsSync(tmpIncludeFile)) rmSync(tmpIncludeFile, { force: true });
+    if (existsSync(tmpBase)) rmSync(tmpBase, { recursive: true, force: true });
   }
 }

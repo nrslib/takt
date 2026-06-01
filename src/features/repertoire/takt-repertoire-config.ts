@@ -13,6 +13,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { isPathInside } from '../../shared/utils/index.js';
 import { TAKT_REPERTOIRE_MANIFEST_FILENAME } from './constants.js';
 
 export interface TaktRepertoireConfig {
@@ -191,7 +192,7 @@ export function validateRealpathInsideRoot(resolvedPath: string, repoRoot: strin
     throw new Error(`Path "${resolvedPath}" does not exist or cannot be resolved`);
   }
   const realRoot = realpathSync(repoRoot);
-  if (realPath !== realRoot && !realPath.startsWith(realRoot + '/')) {
+  if (!isPathInside(realRoot, realPath)) {
     throw new Error(
       `Security: path resolves to "${realPath}" which is outside the package root "${realRoot}"`,
     );

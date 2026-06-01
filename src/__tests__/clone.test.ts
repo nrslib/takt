@@ -19,6 +19,7 @@ vi.mock('node:fs', () => ({
     mkdtempSync: vi.fn(),
     writeFileSync: vi.fn(),
     readFileSync: vi.fn(),
+    statSync: vi.fn(() => ({ isFile: () => false })),
     realpathSync: vi.fn((value: string) => value),
     existsSync: vi.fn(),
     rmSync: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('node:fs', () => ({
   mkdtempSync: vi.fn(),
   writeFileSync: vi.fn(),
   readFileSync: vi.fn(),
+  statSync: vi.fn(() => ({ isFile: () => false })),
   realpathSync: vi.fn((value: string) => value),
   existsSync: vi.fn(),
   rmSync: vi.fn(),
@@ -65,7 +67,13 @@ import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { loadProjectConfig, resolveConfigValue } from '../infra/config/index.js';
-import { CloneManager, createSharedClone, createTempCloneForBranch, cleanupOrphanedClone } from '../infra/task/clone.js';
+import {
+  CloneManager,
+  createSharedClone,
+  createSharedCloneAbortable,
+  createTempCloneForBranch,
+  cleanupOrphanedClone,
+} from '../infra/task/clone.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockSpawn = vi.mocked(spawn);
@@ -74,6 +82,8 @@ const mockResolveConfigValue = vi.mocked(resolveConfigValue);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(fs.statSync).mockImplementation(() => ({ isFile: () => false }) as unknown as fs.Stats);
+  vi.mocked(fs.readFileSync).mockReset();
   mockLoadProjectConfig.mockReturnValue({});
   mockResolveConfigValue.mockReturnValue(undefined);
 });
@@ -100,6 +110,115 @@ function mockGitSpawn(
     return child as never;
   });
 }
+
+describe('worktree reference resolution', () => {
+  const linkedWorktreePath = path.resolve('workspace', 'linked');
+  const mainRepoPath = path.resolve('workspace', 'main');
+
+  function setupWorktreeCloneCapture(): string[][] {
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/main\n';
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'fetch') return Buffer.from('');
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push([...argsArr]);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'show-ref') {
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+
+      return Buffer.from('');
+    });
+
+    return cloneCalls;
+  }
+
+  it('should resolve a relative worktree gitdir from the .git file directory', () => {
+    const cloneCalls = setupWorktreeCloneCapture();
+    vi.mocked(fs.statSync).mockReturnValue({ isFile: () => true } as unknown as fs.Stats);
+    vi.mocked(fs.readFileSync).mockReturnValue('gitdir: ../main/.git/worktrees/linked\n');
+
+    createSharedClone(linkedWorktreePath, {
+      worktree: '/tmp/clone-dest',
+      taskSlug: 'relative-gitdir',
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    const referenceIndex = cloneCalls[0]!.indexOf('--reference');
+    expect(referenceIndex).toBeGreaterThanOrEqual(0);
+    expect(cloneCalls[0]![referenceIndex + 1]).toBe(mainRepoPath);
+  });
+
+  it('should use the same relative worktree gitdir resolution for abortable clone', async () => {
+    const cloneCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/main\n';
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+    vi.mocked(fs.statSync).mockReturnValue({ isFile: () => true } as unknown as fs.Stats);
+    vi.mocked(fs.readFileSync).mockReturnValue('gitdir: ../main/.git/worktrees/linked\n');
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push([...argsArr]);
+      }
+
+      setImmediate(() => {
+        const exitCode = argsArr[0] === 'show-ref' ? 1 : 0;
+        child.emit('close', exitCode);
+      });
+
+      return child as never;
+    });
+
+    await createSharedCloneAbortable(linkedWorktreePath, {
+      worktree: '/tmp/abortable-clone-dest',
+      taskSlug: 'relative-gitdir-abortable',
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    const referenceIndex = cloneCalls[0]!.indexOf('--reference');
+    expect(referenceIndex).toBeGreaterThanOrEqual(0);
+    expect(cloneCalls[0]![referenceIndex + 1]).toBe(mainRepoPath);
+  });
+});
 
 describe('cloneAndIsolate git config propagation', () => {
   /**
