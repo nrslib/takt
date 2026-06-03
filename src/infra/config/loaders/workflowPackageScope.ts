@@ -6,6 +6,7 @@ import {
   getProjectFacetDir,
   getRepertoireFacetDir,
 } from '../paths.js';
+import { isProjectConfigEnabled } from '../project/projectConfigGuards.js';
 import type { Language } from '../../../core/models/index.js';
 
 export interface FacetResolutionContext {
@@ -68,7 +69,7 @@ export function buildCandidateDirsWithPackage(
     }
   }
 
-  if (context.projectDir) {
+  if (context.projectDir && isProjectConfigEnabled(context.projectDir)) {
     dirs.push(getProjectFacetDir(context.projectDir, facetType));
   }
   dirs.push(getGlobalFacetDir(facetType));

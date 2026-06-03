@@ -5,7 +5,6 @@
  * For initialization with language selection, use initialization.ts.
  */
 
-import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
@@ -13,26 +12,28 @@ import { LanguageSchema } from '../../core/models/schema-base.js';
 import { getLanguageResourcesDir } from '../resources/index.js';
 
 import type { FacetKind } from 'faceted-prompting';
-import { REPERTOIRE_DIR_NAME } from './constants.js';
 import {
   getProjectConfigDir as resolveProjectConfigDir,
   getProjectConfigPath as resolveProjectConfigPath,
 } from './project/projectConfigPaths.js';
+import {
+  getGlobalConfigDir,
+  getRepertoireDir,
+} from './global/globalConfigPaths.js';
 
 /** Facet types used in layer resolution */
 export type { FacetKind as FacetType } from 'faceted-prompting';
+export {
+  getGlobalConfigDir,
+  getGlobalConfigPath,
+  getGlobalFacetDir,
+  getGlobalLogsDir,
+  getGlobalPersonasDir,
+  getRepertoireDir,
+  getRepertoirePackageDir,
+} from './global/globalConfigPaths.js';
 
 type FacetType = FacetKind;
-
-/** Get takt global config directory (~/.takt or TAKT_CONFIG_DIR) */
-export function getGlobalConfigDir(): string {
-  return process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
-}
-
-/** Get takt global personas directory (~/.takt/personas) */
-export function getGlobalPersonasDir(): string {
-  return join(getGlobalConfigDir(), 'personas');
-}
 
 /** Get takt global workflows directory (~/.takt/workflows) */
 export function getGlobalWorkflowsDir(): string {
@@ -42,16 +43,6 @@ export function getGlobalWorkflowsDir(): string {
 /** Get takt global schemas directory (~/.takt/schemas) */
 export function getGlobalSchemasDir(): string {
   return join(getGlobalConfigDir(), 'schemas');
-}
-
-/** Get takt global logs directory */
-export function getGlobalLogsDir(): string {
-  return join(getGlobalConfigDir(), 'logs');
-}
-
-/** Get takt global config file path */
-export function getGlobalConfigPath(): string {
-  return join(getGlobalConfigDir(), 'config.yaml');
 }
 
 /** Get builtin workflows directory (builtins/{lang}/workflows) */
@@ -116,24 +107,9 @@ export function getProjectFacetDir(projectDir: string, facetType: FacetType): st
   return join(getProjectConfigDir(projectDir), 'facets', facetType);
 }
 
-/** Get global facet directory (~/.takt/facets/{facetType}) */
-export function getGlobalFacetDir(facetType: FacetType): string {
-  return join(getGlobalConfigDir(), 'facets', facetType);
-}
-
 /** Get builtin facet directory (builtins/{lang}/facets/{facetType}) */
 export function getBuiltinFacetDir(lang: Language, facetType: FacetType): string {
   return join(getLanguageResourcesDir(lang), 'facets', facetType);
-}
-
-/** Get repertoire directory (~/.takt/repertoire/) */
-export function getRepertoireDir(): string {
-  return join(getGlobalConfigDir(), REPERTOIRE_DIR_NAME);
-}
-
-/** Get repertoire package directory (~/.takt/repertoire/@{owner}/{repo}/) */
-export function getRepertoirePackageDir(owner: string, repo: string): string {
-  return join(getRepertoireDir(), `@${owner}`, repo);
 }
 
 /**
