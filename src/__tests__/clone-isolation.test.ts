@@ -44,8 +44,13 @@ function rewriteGitFileToRelativeGitdir(worktreeDir: string): void {
   }
 
   const gitdir = content.slice(prefix.length);
-  const absoluteGitdir = path.resolve(worktreeDir, gitdir);
-  fs.writeFileSync(gitFile, `${prefix}${path.relative(worktreeDir, absoluteGitdir)}\n`);
+  const absoluteGitdir = path.isAbsolute(gitdir)
+    ? gitdir
+    : path.resolve(worktreeDir, gitdir);
+  fs.writeFileSync(
+    gitFile,
+    `${prefix}${path.relative(fs.realpathSync(worktreeDir), fs.realpathSync(absoluteGitdir))}\n`,
+  );
 }
 
 function filesContaining(rootDir: string, needle: string): string[] {
