@@ -4,7 +4,7 @@
  * Exposes shared phase context plus Phase 2/3 entry points.
  */
 
-import type { WorkflowStep, Language } from '../models/types.js';
+import type { WorkflowStep, Language, WorkflowResumePointEntry } from '../models/types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
@@ -23,6 +23,16 @@ export interface PhaseRunnerContext {
   interactive?: boolean;
   /** Last response from Phase 1 */
   lastResponse?: string;
+  /** Workflow name for observability spans */
+  workflowName: string;
+  /** Run-local identifier for observability artifact routing */
+  observabilityRunId?: string;
+  /** Whether OpenTelemetry shadow spans are enabled */
+  observabilityEnabled?: boolean;
+  /** Optional text sanitizer for observability span attributes */
+  sanitizeObservabilityText?: (text: string) => string;
+  /** Current workflow stack for observability span parity (phase/judge records) */
+  getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Parent workflow iteration for sub-step phase events */
   iteration?: number;
   /** Get persona session ID */

@@ -15,7 +15,7 @@ import { decrementStepIteration, incrementStepIteration } from './state-manager.
 import { handleBlocked } from './blocked-handler.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
-import { runWithStepSpan } from '../observability/workflowSpans.js';
+import { runWithStepSpan, type StepSpanParams } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 
 const log = createLogger('workflow-run-loop');
@@ -24,6 +24,7 @@ interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
   getWorkflowName: () => string;
+  getCurrentWorkflowStack: () => StepSpanParams['workflowStack'];
   getCwd: () => string;
   getMaxSteps: () => WorkflowMaxSteps;
   getReportDir: () => string;
@@ -327,10 +328,14 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     try {
       const result = await runWithStepSpan({
         enabled: deps.options.observability?.enabled === true,
+        runId: deps.options.observabilityRunId,
         workflowName: deps.getWorkflowName(),
         step,
         iteration: activeIteration,
         stepIteration,
+        instruction: stepInstruction,
+        workflowStack: deps.getCurrentWorkflowStack(),
+        sanitizeText: deps.options.sanitizeObservabilityText,
         providerInfo,
         getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
       }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
@@ -526,10 +531,16 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
   const result = await runWithStepSpan({
     enabled: deps.options.observability?.enabled === true,
+    runId: deps.options.observabilityRunId,
     workflowName: deps.getWorkflowName(),
     step,
     iteration: activeIteration,
     stepIteration,
+    instruction: deps.options.observability?.enabled === true && prebuiltInstruction
+      ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
+      : '',
+    workflowStack: deps.getCurrentWorkflowStack(),
+    sanitizeText: deps.options.sanitizeObservabilityText,
     providerInfo,
     getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
   }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));

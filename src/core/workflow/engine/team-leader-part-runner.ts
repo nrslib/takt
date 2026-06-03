@@ -1,6 +1,6 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
-import type { PartDefinition, PartResult, WorkflowStep, AgentResponse } from '../../models/types.js';
+import type { PartDefinition, PartResult, WorkflowStep, AgentResponse, WorkflowResumePointEntry } from '../../models/types.js';
 import type { RuntimeStepResolution } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import { buildAbortSignal } from './abort-signal.js';
@@ -11,6 +11,16 @@ import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import { classifyAbortSignalReason } from '../../../shared/types/agent-failure.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+
+export interface TeamLeaderPartObservability {
+  readonly enabled: boolean;
+  readonly runId?: string;
+  readonly workflowName: string;
+  readonly iteration: number;
+  readonly workflowStack?: WorkflowResumePointEntry[];
+  readonly sanitizeText?: (text: string) => string;
+}
 
 function buildTeamLeaderPartInstruction(
   partStep: WorkflowStep,
@@ -36,6 +46,7 @@ export async function runTeamLeaderPart(
   defaultTimeoutMs: number,
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   parallelLogger: ParallelLogger | undefined,
+  observability: TeamLeaderPartObservability,
   runtime?: RuntimeStepResolution,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
@@ -69,7 +80,23 @@ export async function runTeamLeaderPart(
       options.language ?? 'en',
       runtime,
     );
-    const response = await executeAgent(partStep.persona, partInstruction, options);
+    const response = await runWithPhaseSpan({
+      enabled: observability.enabled,
+      runId: observability.runId,
+      workflowName: observability.workflowName,
+      step: partStep,
+      iteration: observability.iteration,
+      phase: 1,
+      phaseName: 'execute',
+      instruction: partInstruction,
+      workflowStack: observability.workflowStack,
+      sanitizeText: observability.sanitizeText,
+      providerInfo: partProviderInfo,
+    }, () => executeAgent(partStep.persona, partInstruction, options), (result) => ({
+      status: result.status,
+      content: result.content,
+      error: result.error,
+    }));
     updatePersonaSession(buildSessionKey(partStep, partProviderInfo.provider), response.sessionId);
     return {
       part,

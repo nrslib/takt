@@ -188,6 +188,7 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,
           getReportDir: () => this.runPaths.reportsAbs,
@@ -224,6 +225,8 @@ export class WorkflowEngine extends EventEmitter {
         (result) => ({
           status: result.state.status,
           abortKind: result.abort?.kind,
+          abortReason: result.abort?.reason,
+          iterations: result.state.iteration,
         }),
       ),
       () => true,
@@ -300,12 +303,14 @@ export class WorkflowEngine extends EventEmitter {
   private buildWorkflowSpanParams(runMode: WorkflowSpanParams['runMode']): WorkflowSpanParams {
     return {
       enabled: this.options.observability?.enabled === true,
+      runId: this.options.observabilityRunId,
       workflowName: this.config.name,
       initialStep: this.config.initialStep,
       stepCount: this.config.steps.length,
       maxSteps: this.maxSteps,
       runMode,
       resumeDepth: this.resumeStackPrefix.length,
+      sanitizeText: this.options.sanitizeObservabilityText,
     };
   }
 
@@ -347,6 +352,7 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,
           getReportDir: () => this.runPaths.reportsAbs,
@@ -380,6 +386,7 @@ export class WorkflowEngine extends EventEmitter {
         (result) => ({
           status: result.isComplete ? this.state.status : 'running',
           nextStep: result.nextStep,
+          iterations: this.state.iteration,
         }),
       ),
       (result, error) => error !== undefined || result?.isComplete === true || this.state.status !== 'running',

@@ -596,12 +596,12 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           systemPrompt: expect.any(String),
           userInstruction: expect.any(String),
         }),
-        undefined,
+        'plan:1:1:1',
         1,
       );
       expect(phaseCompleteFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
-        1, 'execute', expect.any(String), 'done', undefined, undefined, 1,
+        1, 'execute', expect.any(String), 'done', undefined, 'plan:1:1:1', 1,
       );
     });
 

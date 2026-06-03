@@ -10,6 +10,7 @@ import type {
   WorkflowState,
   AgentResponse,
   WorkflowMaxSteps,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
@@ -25,7 +26,9 @@ import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntr
 import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
+import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
 const log = createLogger('parallel-runner');
@@ -77,7 +80,12 @@ export interface ParallelRunnerDeps {
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
   readonly getReportDir: () => string;
+  readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
+  readonly observabilityEnabled: boolean;
+  readonly observabilityRunId?: string;
+  readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly runQualityGates: (options: {
@@ -205,21 +213,47 @@ export class ParallelRunner {
         // Phase 1: main execution (Write excluded if sub-step has report)
         const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subStep, runtime);
         let didEmitPhaseStart = false;
+        let resolvedPromptParts: PhasePromptParts | undefined;
+        const phaseExecutionId = buildPhaseExecutionId({
+          step: subStep.name,
+          iteration: parentIteration,
+          phase: 1,
+          sequence: 1,
+        });
 
         // Override onStream with parallel logger's prefixed handler (immutable)
         const agentOptions = parallelLogger
           ? { ...baseOptions, onStream: parallelLogger.createStreamHandler(subStep.name, index) }
           : { ...baseOptions };
         agentOptions.onPromptResolved = (promptParts: PhasePromptParts) => {
-          this.deps.onPhaseStart?.(subStep, 1, 'execute', subInstruction, promptParts, undefined, parentIteration);
+          resolvedPromptParts = promptParts;
+          this.deps.onPhaseStart?.(subStep, 1, 'execute', subInstruction, promptParts, phaseExecutionId, parentIteration);
           didEmitPhaseStart = true;
         };
-        const subResponse = await executeAgent(subStep.persona, subInstruction, agentOptions);
+        const subResponse = await runWithPhaseSpan({
+          enabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
+          step: subStep,
+          iteration: parentIteration,
+          phase: 1,
+          phaseName: 'execute',
+          instruction: subInstruction,
+          phaseExecutionId,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          sanitizeText: this.deps.sanitizeObservabilityText,
+          providerInfo: subPm,
+          getPromptParts: () => resolvedPromptParts,
+        }, () => executeAgent(subStep.persona, subInstruction, agentOptions), (result) => ({
+          status: result.status,
+          content: result.content,
+          error: result.error,
+        }));
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }
         updatePersonaSession(subSessionKey, subResponse.sessionId);
-        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, undefined, parentIteration);
+        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
           return { subStep, response: subResponse, instruction: subInstruction, providerInfo: subPm };

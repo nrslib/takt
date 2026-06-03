@@ -143,6 +143,8 @@ async function executeWorkflowInternal(
       ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
       projectCwd: options.projectCwd,
       observability: bootstrap.observability,
+      observabilityRunId: bootstrap.runSlug,
+      sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
       language: options.language,
       provider: bootstrap.currentProvider,
       providerSource: bootstrap.currentProviderSource,

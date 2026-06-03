@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { WorkflowStep, WorkflowState, Language } from '../../models/types.js';
+import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
@@ -44,6 +44,7 @@ export class OptionsBuilder {
     private readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>,
     private readonly getWorkflowName: () => string,
     private readonly getWorkflowDescription: () => string | undefined,
+    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
   ) {}
 
   private resolveEngineProviderModel(): StepProviderInfo {
@@ -304,6 +305,11 @@ export class OptionsBuilder {
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,
       lastResponse,
+      workflowName: this.getWorkflowName(),
+      observabilityRunId: this.engineOptions.observabilityRunId,
+      observabilityEnabled: this.engineOptions.observability?.enabled === true,
+      sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
+      getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       onStream: this.engineOptions.onStream,
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),

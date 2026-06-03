@@ -98,7 +98,9 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
     },
     getCwd: () => '/tmp/project',
     getReportDir: () => '.takt/runs/test/reports',
+    getWorkflowName: () => 'test-workflow',
     getInteractive: () => false,
+    observabilityEnabled: false,
     detectRuleIndex: vi.fn(),
     structuredCaller: {
       evaluateCondition: vi.fn(),

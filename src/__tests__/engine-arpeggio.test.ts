@@ -47,6 +47,22 @@ import {
 } from './engine-test-helpers.js';
 import type { RuleMatch } from '../core/workflow/index.js';
 
+const {
+  mockRunWithPhaseSpan,
+} = vi.hoisted(() => ({
+  mockRunWithPhaseSpan: vi.fn(),
+}));
+
+vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
+  const actual = await vi.importActual<typeof import('../core/workflow/observability/workflowSpans.js')>(
+    '../core/workflow/observability/workflowSpans.js',
+  );
+  return {
+    ...actual,
+    runWithPhaseSpan: mockRunWithPhaseSpan,
+  };
+});
+
 function createArpeggioTestDir(): { tmpDir: string; csvPath: string; templatePath: string } {
   const tmpDir = createTestTmpDir();
   const csvPath = join(tmpDir, 'data.csv');
@@ -119,6 +135,7 @@ describe('ArpeggioRunner integration', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
     vi.mocked(detectMatchedRule).mockResolvedValue(undefined);
   });
 
@@ -321,6 +338,45 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts.length).toBe(3);
     expect(phaseStarts.every((instruction) => !instruction.startsWith('[Arpeggio batch'))).toBe(true);
     expect(phaseStarts.some((instruction) => instruction.includes('Process '))).toBe(true);
+  });
+
+  it('wraps arpeggio batch executions in phase spans', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath, { concurrency: 2 });
+    const config = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
+
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'A' }),
+      makeResponse({ content: 'B' }),
+      makeResponse({ content: 'C' }),
+    );
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      ...createEngineOptions(tmpDir),
+      observability: { enabled: true },
+      observabilityRunId: 'run-1',
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const batchPhaseSpans = mockRunWithPhaseSpan.mock.calls
+      .map(([params]) => params)
+      .filter((params) =>
+        params.step.name === 'process'
+        && params.phase === 1
+        && params.phaseName === 'execute'
+        && params.phaseExecutionId !== undefined
+      );
+    expect(batchPhaseSpans).toHaveLength(3);
+    expect(batchPhaseSpans.map((params) => params.phaseExecutionId).sort()).toEqual([
+      'process:1:1:0',
+      'process:1:1:1',
+      'process:1:1:2',
+    ]);
+    expect(batchPhaseSpans.every((params) => params.enabled === true)).toBe(true);
+    expect(batchPhaseSpans.every((params) => params.runId === 'run-1')).toBe(true);
+    expect(batchPhaseSpans.every((params) => params.workflowName === 'test-arpeggio')).toBe(true);
   });
 
   it.each([

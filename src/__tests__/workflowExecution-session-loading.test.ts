@@ -437,9 +437,65 @@ describe('executeWorkflow session loading', () => {
       projectCwd: '/tmp/project',
     });
 
-    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toBe(observability);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
+  });
+
+  it('should pass shadow session log exporter options when observability exporter is enabled', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: true,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(
+      observability,
+      {
+        sessionLogExporter: {
+          runId: 'test-report-dir',
+          shadowLogPath: '/tmp/project/.takt/runs/test-report-dir/logs/test-session-id-otel-session-shadow.jsonl',
+          sanitizedTask: 'task',
+          workflowName: 'test-workflow',
+        },
+      },
+    );
+  });
+
+  it('should pass monitor JSON exporter options when observability monitor is enabled', async () => {
+    const observability = {
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(
+      observability,
+      {
+        monitorJsonExporter: {
+          runId: 'test-report-dir',
+          monitorPath: '/tmp/project/.takt/runs/test-report-dir/monitor.json',
+        },
+      },
+    );
   });
 
   it('should shutdown observability when workflow execution throws', async () => {
@@ -461,7 +517,7 @@ describe('executeWorkflow session loading', () => {
       }),
     ).rejects.toThrow('workflow engine failed');
 
-    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 
@@ -485,7 +541,7 @@ describe('executeWorkflow session loading', () => {
       }),
     ).rejects.toThrow('workflow engine failed');
 
-    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 

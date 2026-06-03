@@ -13,17 +13,30 @@ function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions[
 
 const {
   mockExecuteAgent,
+  mockRunWithPhaseSpan,
 } = vi.hoisted(() => ({
   mockExecuteAgent: vi.fn(),
+  mockRunWithPhaseSpan: vi.fn(),
 }));
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: mockExecuteAgent,
 }));
 
+vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
+  const actual = await vi.importActual<typeof import('../core/workflow/observability/workflowSpans.js')>(
+    '../core/workflow/observability/workflowSpans.js',
+  );
+  return {
+    ...actual,
+    runWithPhaseSpan: mockRunWithPhaseSpan,
+  };
+});
+
 describe('TeamLeaderRunner with structuredCaller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
   });
 
   it('should delegate decomposition and feedback to structuredCaller instead of legacy usecases', async () => {
@@ -73,7 +86,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         structuredCaller,
       },
       getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
       getInteractive: () => false,
+      observabilityEnabled: true,
+      observabilityRunId: 'run-1',
+      sanitizeObservabilityText: (text: string) => text,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });
@@ -173,6 +190,20 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         persona: 'team-leader',
       }),
     );
+    expect(mockRunWithPhaseSpan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabled: true,
+        runId: 'run-1',
+        workflowName: 'workflow',
+        step: expect.objectContaining({ name: 'implement.part-1' }),
+        iteration: 1,
+        phase: 1,
+        phaseName: 'execute',
+        instruction: expect.stringContaining('Implement API'),
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
   });
 
   it('takt-default の implement では process safety を leader prompt に渡す', async () => {
@@ -236,6 +267,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         structuredCaller,
       },
       getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
@@ -353,6 +385,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         phase1ProcessSafetyByStep: createProcessSafetyByStep(4242),
       },
       getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'takt-default',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: {
@@ -466,6 +499,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         structuredCaller,
       },
       getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
@@ -607,6 +641,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         structuredCaller,
       },
       getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
@@ -708,6 +743,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         structuredCaller,
       },
       getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
@@ -814,6 +850,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         structuredCaller,
       },
       getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
@@ -903,6 +940,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         },
         onPhaseStart,
         getCwd: () => '/tmp/project',
+        getWorkflowName: () => 'workflow',
         getInteractive: () => false,
       } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
         engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
@@ -1068,7 +1106,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           structuredCaller,
         },
         getCwd: () => '/tmp/project',
+        getWorkflowName: () => 'workflow',
         getInteractive: () => false,
+        observabilityEnabled: false,
       } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
         engineOptions: { projectCwd: string; language: 'en'; structuredCaller: typeof structuredCaller };
       });

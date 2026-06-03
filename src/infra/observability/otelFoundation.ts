@@ -1,5 +1,9 @@
 import { createRequire } from 'node:module';
+import type { SpanProcessor } from '@opentelemetry/sdk-trace-base';
+import type { IMetricReader } from '@opentelemetry/sdk-metrics';
 import type { ResolvedObservabilityConfig } from '../../core/models/config-types.js';
+import { SessionLogSpanProcessor, type SessionLogSpanProcessorOptions } from './sessionLogSpanProcessor.js';
+import { MonitorJsonMetricExporter, type MonitorJsonMetricExporterOptions } from './monitorJsonMetricExporter.js';
 
 const require = createRequire(import.meta.url);
 const { version: TAKT_VERSION } = require('../../../package.json') as { version: string };
@@ -12,11 +16,23 @@ type OtelSdk = {
 type SharedOtelSdk = {
   sdk: OtelSdk;
   refCount: number;
+  metricReaders: IMetricReader[];
+  sessionLogSpanProcessor?: SessionLogSpanProcessor;
+  monitorJsonMetricExporter?: MonitorJsonMetricExporter;
 };
+
+type StartedOtelSdk = Omit<SharedOtelSdk, 'refCount'>;
 
 export type OtelFoundationHandle = {
   shutdown(): Promise<void>;
 };
+
+export interface OtelFoundationOptions {
+  sessionLogExporter?: SessionLogSpanProcessorOptions;
+  monitorJsonExporter?: MonitorJsonMetricExporterOptions;
+}
+
+type OtelRegistration = () => void;
 
 let activeSdk: SharedOtelSdk | undefined;
 let startingSdk: Promise<SharedOtelSdk> | undefined;
@@ -24,12 +40,14 @@ let stoppingSdk: Promise<void> | undefined;
 
 export async function initializeOtelFoundation(
   config: ResolvedObservabilityConfig,
+  options: OtelFoundationOptions | undefined = undefined,
 ): Promise<OtelFoundationHandle> {
   if (!config.enabled) {
     return createNoopHandle();
   }
 
   const shared = await acquireSdk();
+  const registrations = registerRunExporters(shared, options);
 
   let released = false;
   return {
@@ -38,7 +56,16 @@ export async function initializeOtelFoundation(
         return;
       }
       released = true;
-      await releaseSdk(shared);
+      try {
+        if (shared.metricReaders.length > 0) {
+          await forceFlushMetricReaders(shared.metricReaders);
+        }
+      } finally {
+        for (const unregister of registrations.splice(0).reverse()) {
+          unregister();
+        }
+        await releaseSdk(shared);
+      }
     },
   };
 }
@@ -70,8 +97,8 @@ async function getOrStartSdk(): Promise<SharedOtelSdk> {
   }
   if (!startingSdk) {
     startingSdk = startSdk().then(
-      (sdk) => {
-        const shared = { sdk, refCount: 0 };
+      (started) => {
+        const shared = { ...started, refCount: 0 };
         activeSdk = shared;
         startingSdk = undefined;
         return shared;
@@ -85,21 +112,65 @@ async function getOrStartSdk(): Promise<SharedOtelSdk> {
   return startingSdk;
 }
 
-async function startSdk(): Promise<OtelSdk> {
+function registerRunExporters(
+  shared: SharedOtelSdk,
+  options: OtelFoundationOptions | undefined,
+): OtelRegistration[] {
+  const registrations: OtelRegistration[] = [];
+  if (options?.sessionLogExporter && shared.sessionLogSpanProcessor) {
+    registrations.push(shared.sessionLogSpanProcessor.register(options.sessionLogExporter));
+  }
+  if (options?.monitorJsonExporter && shared.monitorJsonMetricExporter) {
+    registrations.push(shared.monitorJsonMetricExporter.register(options.monitorJsonExporter));
+  }
+  return registrations;
+}
+
+function createSpanProcessorState(): { spanProcessors: SpanProcessor[]; sessionLogSpanProcessor: SessionLogSpanProcessor } {
+  const sessionLogSpanProcessor = new SessionLogSpanProcessor();
+  return { spanProcessors: [sessionLogSpanProcessor], sessionLogSpanProcessor };
+}
+
+async function createMetricReaders(): Promise<{ metricReaders: IMetricReader[]; monitorJsonMetricExporter: MonitorJsonMetricExporter }> {
+  const { PeriodicExportingMetricReader } = await import('@opentelemetry/sdk-metrics');
+  const monitorJsonMetricExporter = new MonitorJsonMetricExporter();
+  return {
+    metricReaders: [
+      new PeriodicExportingMetricReader({
+        exporter: monitorJsonMetricExporter,
+        exportIntervalMillis: 1000,
+      }),
+    ],
+    monitorJsonMetricExporter,
+  };
+}
+
+async function startSdk(): Promise<StartedOtelSdk> {
+  const { spanProcessors, sessionLogSpanProcessor } = createSpanProcessorState();
+  const { metricReaders, monitorJsonMetricExporter } = await createMetricReaders();
   const { NodeSDK, resources } = await import('@opentelemetry/sdk-node');
   const sdk = new NodeSDK({
     autoDetectResources: false,
     instrumentations: [],
     logRecordProcessors: [],
-    metricReaders: [],
+    metricReaders,
     resource: resources.resourceFromAttributes({
       'service.name': 'takt',
       'service.version': TAKT_VERSION,
     }),
-    spanProcessors: [],
+    spanProcessors,
   });
   sdk.start();
-  return sdk;
+  return {
+    sdk,
+    metricReaders,
+    sessionLogSpanProcessor,
+    monitorJsonMetricExporter,
+  };
+}
+
+async function forceFlushMetricReaders(metricReaders: IMetricReader[]): Promise<void> {
+  await Promise.all(metricReaders.map((reader) => reader.forceFlush()));
 }
 
 async function releaseSdk(shared: SharedOtelSdk): Promise<void> {

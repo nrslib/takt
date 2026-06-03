@@ -252,6 +252,10 @@ export interface WorkflowEngineOptions {
   projectCwd: string;
   /** Resolved observability opt-in config for workflow instrumentation. */
   observability?: ResolvedObservabilityConfig;
+  /** Run-local identifier used to route observability artifacts in the shared SDK. */
+  observabilityRunId?: string;
+  /** Redacts text before it is attached to observability spans. */
+  sanitizeObservabilityText?: (text: string) => string;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;

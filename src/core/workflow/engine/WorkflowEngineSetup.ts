@@ -126,6 +126,7 @@ export function applyRuntimeEnvironment(
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
   const phaseRelay = createWorkflowPhaseRelay((event, ...args) => params.emitEvent(event, ...args));
+  const getCurrentWorkflowStack = () => params.sharedRuntime.activeResumePoint?.stack;
 
   const optionsBuilder = new OptionsBuilder(
     params.options,
@@ -137,6 +138,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     () => params.config.name,
     () => params.config.description,
+    getCurrentWorkflowStack,
   );
 
   const stepExecutor = new StepExecutor({
@@ -152,6 +154,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowName: () => params.config.name,
     getWorkflowDescription: () => params.config.description,
     getRetryNote: () => params.options.retryNote,
+    getObservabilityRunId: () => params.options.observabilityRunId,
+    observabilityEnabled: () => params.options.observability?.enabled === true,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
@@ -164,7 +170,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     engineOptions: params.options,
     getCwd: params.getCwd,
     getReportDir: params.getReportDir,
+    getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
+    observabilityEnabled: params.options.observability?.enabled === true,
+    observabilityRunId: params.options.observabilityRunId,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
     runQualityGates,
@@ -175,7 +186,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     getCwd: params.getCwd,
+    getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
+    observabilityEnabled: params.options.observability?.enabled === true,
+    observabilityRunId: params.options.observabilityRunId,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
     onPhaseStart: phaseRelay.onPhaseStart,
@@ -187,7 +203,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     engineOptions: params.options,
     getCwd: params.getCwd,
+    getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
+    observabilityEnabled: params.options.observability?.enabled === true,
+    observabilityRunId: params.options.observabilityRunId,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     onPhaseStart: phaseRelay.onPhaseStart,
     onPhaseComplete: phaseRelay.onPhaseComplete,
   });

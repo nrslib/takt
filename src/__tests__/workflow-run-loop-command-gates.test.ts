@@ -42,6 +42,7 @@ function makeDeps(
     state,
     options: {},
     getWorkflowName: () => 'command-gate-workflow',
+    getCurrentWorkflowStack: () => undefined,
     getCwd: () => '/worktree',
     getMaxSteps: () => 5,
     getReportDir: () => '/worktree/.takt/runs/test/reports',
@@ -214,6 +215,30 @@ describe('WorkflowRunLoop command quality gates', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('does not build the phase-1 instruction for the step span when observability is disabled', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValue({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+
+    await runSingleWorkflowIteration(deps);
+
+    // options.observability is undefined (disabled): the shadow-span instruction
+    // must not be built — it is only consumed by the (disabled) span and would be
+    // a redundant second buildPhase1Instruction call.
+    expect(deps.buildPhase1Instruction).not.toHaveBeenCalled();
   });
 
   it('should return the current step from runSingleIteration when a command gate fails', async () => {
