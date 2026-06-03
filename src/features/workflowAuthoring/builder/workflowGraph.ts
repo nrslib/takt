@@ -120,25 +120,17 @@ function resolveWorkflowCallPaths(
 ): { paths: Set<string>; diagnostics: string[] } {
   const paths = new Set<string>();
   const diagnostics: string[] = [];
-  let parentWorkflow: WorkflowConfig | null;
-  try {
-    parentWorkflow = loadWorkflowForBuilderCallGraph(scope, workflowPath);
-  } catch {
-    return {
-      paths,
-      diagnostics: [formatWorkflowCallDiagnostic(scope, workflowPath)],
-    };
+  const refs = collectWorkflowCallReferences(raw);
+  if (refs.length === 0) {
+    return { paths, diagnostics };
   }
+  const parentWorkflow = loadWorkflowForBuilderCallGraph(scope, workflowPath);
   if (parentWorkflow) {
-    for (const ref of collectWorkflowCallReferences(raw)) {
-      try {
-        const callPath = resolveWorkflowCallPath(scope, workflowPath, parentWorkflow, ref.call, ref.stepName);
-        if (callPath) {
-          paths.add(resolve(callPath));
-        } else {
-          diagnostics.push(formatWorkflowCallDiagnostic(scope, workflowPath, ref.stepName, ref.call));
-        }
-      } catch {
+    for (const ref of refs) {
+      const callPath = resolveWorkflowCallPath(scope, workflowPath, parentWorkflow, ref.call, ref.stepName);
+      if (callPath) {
+        paths.add(resolve(callPath));
+      } else {
         diagnostics.push(formatWorkflowCallDiagnostic(scope, workflowPath, ref.stepName, ref.call));
       }
     }

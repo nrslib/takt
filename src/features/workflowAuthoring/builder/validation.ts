@@ -30,7 +30,10 @@ export function resolveBuilderValidationTargets(options: {
 
   if (changedFacets.size > 0) {
     for (const workflow of listBuilderTargetWorkflows(options.scope)) {
-      const raw = WorkflowConfigRawSchema.parse(parseYamlContent(workflow.path));
+      const raw = parseWorkflowForApprovalScope(workflow.path);
+      if (!raw) {
+        continue;
+      }
       const usedFacets = resolveUsedFacetPaths(options.scope, raw, workflow.path);
       if (usedFacets.some((facetPath) => changedFacets.has(resolve(facetPath)))) {
         targets.add(resolve(workflow.path));
@@ -219,12 +222,36 @@ function collectFacetPathsReferencedByUnapprovedWorkflows(
 }
 
 function parseWorkflowForApprovalScope(workflowPath: string): ReturnType<typeof WorkflowConfigRawSchema.parse> | undefined {
-  const document = parseDocument(readFileSync(workflowPath, 'utf-8'));
+  const content = readFileSync(workflowPath, 'utf-8');
+  const document = parseDocument(content);
   if (document.errors.length > 0) {
     return undefined;
   }
-  const result = WorkflowConfigRawSchema.safeParse(document.toJS());
+  const yamlValue = convertYamlDocumentForApprovalScope(document);
+  if (yamlValue === undefined) {
+    return undefined;
+  }
+  const result = WorkflowConfigRawSchema.safeParse(yamlValue);
   return result.success ? result.data : undefined;
+}
+
+function convertYamlDocumentForApprovalScope(document: ReturnType<typeof parseDocument>): unknown | undefined {
+  try {
+    return document.toJS();
+  } catch (yamlConversionError) {
+    if (isSkippableYamlConversionError(yamlConversionError)) {
+      return undefined;
+    }
+    throw yamlConversionError;
+  }
+}
+
+function isSkippableYamlConversionError(error: unknown): boolean {
+  return error instanceof ReferenceError
+    && (
+      error.message.startsWith('Unresolved alias ')
+      || error.message.startsWith('Excessive alias count ')
+    );
 }
 
 function findDualLanguageChangeViolation(
@@ -273,8 +300,4 @@ function isAllowedBuilderChange(
     return allowedFacetPaths.has(resolvedFilePath);
   }
   return isFacetMarkdownFile(resolvedFilePath) && allowedDirectFacetPaths.has(resolvedFilePath);
-}
-
-function parseYamlContent(filePath: string): unknown {
-  return parseYaml(readFileSync(filePath, 'utf-8'));
 }

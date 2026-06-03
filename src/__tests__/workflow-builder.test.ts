@@ -5,7 +5,11 @@ import type { ConversationGoContext } from '../features/interactive/conversation
 import { tmpdir } from 'node:os';
 import { getResourcesDir } from '../infra/resources/index.js';
 import { buildBuilderChangeApproval } from '../features/workflowAuthoring/builder/approval.js';
-import { buildBuilderPromptContext } from '../features/workflowAuthoring/builder/promptContext.js';
+import { listFilesRecursive } from '../features/workflowAuthoring/builder/files.js';
+import {
+  buildBuilderPromptContext,
+  buildBuilderSystemPrompt,
+} from '../features/workflowAuthoring/builder/promptContext.js';
 import {
   buildBuilderScopeChoices,
   listBuilderTargetWorkflows,
@@ -155,6 +159,13 @@ describe('workflow builder authoring helpers', () => {
     expect(listBuilderTargetWorkflows(scope)).toEqual([]);
     expect(context.assetInventory).not.toContain('secret.yaml');
     expect(context.assetInventory).not.toContain('secret.md');
+  });
+
+  it('returns an empty file list when the recursive list root is a regular file', () => {
+    const rootFile = join(projectDir, '.takt', 'workflows');
+    writeText(rootFile, 'not a directory\n');
+
+    expect(listFilesRecursive(rootFile, ['.yaml'])).toEqual([]);
   });
 
   it('rejects prompt context when the selected scope root is a symlink', () => {
@@ -438,7 +449,7 @@ steps:
     ]));
   });
 
-  it('does not add workflow_call related candidates when the call contract is invalid', () => {
+  it('throws when a workflow_call contract is invalid', () => {
     const scope = resolveBuilderScope({ projectDir, scope: 'project' });
     const workflowsDir = join(projectDir, '.takt', 'workflows');
     const targetPath = join(workflowsDir, 'review-main.yaml');
@@ -463,11 +474,8 @@ steps:
         next: COMPLETE
 `);
 
-    const candidates = relatedWorkflowCandidates({ scope, targetWorkflowPath: targetPath });
-
-    expect(candidates).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ relation: 'workflow_call_child', workflowPath: childPath }),
-    ]));
+    expect(() => relatedWorkflowCandidates({ scope, targetWorkflowPath: targetPath }))
+      .toThrow('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"');
   });
 
   it('includes workflow_call diagnostics in related graph context when call resolution fails', () => {
@@ -529,7 +537,7 @@ steps:
     ]));
   });
 
-  it('injects related workflow candidate bodies as untrusted context data', () => {
+  it('injects related workflow candidate metadata without related file bodies', () => {
     const scope = resolveBuilderScope({ projectDir, scope: 'project' });
     const targetPath = join(projectDir, '.takt', 'workflows', 'review-main.yaml');
     const relatedPath = join(projectDir, '.takt', 'workflows', 'review-extra.yaml');
@@ -558,8 +566,28 @@ steps:
     });
 
     expect(context.relatedGraph).toContain('similar_name: workflows/review-extra.yaml');
-    expect(context.relatedGraph).toContain('Related workflow body: workflows/review-extra.yaml');
-    expect(context.relatedGraph).toContain('name: review-extra');
+    expect(context.relatedGraph).toContain('reason:');
+    expect(context.relatedGraph).not.toContain('Related workflow body: workflows/review-extra.yaml');
+    expect(context.relatedGraph).not.toContain('name: review-extra');
+  });
+
+  it('builds builder system prompts from language-matched style guide resources', () => {
+    const context = {
+      scopeSummary: '',
+      assetInventory: '',
+      targetContext: '',
+      relatedGraph: '',
+    };
+
+    const englishPrompt = buildBuilderSystemPrompt('en', context);
+    const japanesePrompt = buildBuilderSystemPrompt('ja', context);
+
+    expect(englishPrompt).not.toContain('# STYLE_GUIDE.md');
+    expect(japanesePrompt).toContain('# STYLE_GUIDE.md');
+    expect(japanesePrompt).toContain('# スタイルガイド');
+    expect(englishPrompt).toContain('Workflow YAML Schema Reference');
+    expect(englishPrompt).not.toContain('ワークフローYAML スキーマリファレンス');
+    expect(japanesePrompt).toContain('ワークフローYAML スキーマリファレンス');
   });
 
   it('detects workflow_call related candidates when the call uses a home-relative workflow path', () => {
@@ -842,7 +870,7 @@ steps:
     expect(approval.approvedWorkflowPaths).toEqual([workflowPath]);
   });
 
-  it('approves candidates mentioned by the previous assistant message on a bare approval response', () => {
+  it('does not approve candidates mentioned by a previous assistant listing on a bare approval response', () => {
     const scope = resolveBuilderScope({ projectDir, scope: 'project' });
     const workflowPath = join(projectDir, '.takt', 'workflows', 'review-extra.yaml');
     writeText(workflowPath, `name: review-extra
@@ -859,7 +887,55 @@ steps:
       ]),
     });
 
+    expect(approval.approvedWorkflowPaths).toEqual([]);
+  });
+
+  it('approves candidates mentioned by a previous assistant approval request on a bare approval response', () => {
+    const scope = resolveBuilderScope({ projectDir, scope: 'project' });
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'review-extra.yaml');
+    writeText(workflowPath, `name: review-extra
+steps:
+  - name: review
+`);
+
+    const approval = buildBuilderChangeApproval({
+      scope,
+      target: { mode: 'unspecified' },
+      goContext: createGoContextFromHistory([
+        { role: 'assistant', content: 'Please approve editing review-extra.' },
+        { role: 'user', content: 'はい' },
+      ]),
+    });
+
     expect(approval.approvedWorkflowPaths).toEqual([workflowPath]);
+  });
+
+  it('approves candidates from assistant questions about whether they should be edited', () => {
+    const scope = resolveBuilderScope({ projectDir, scope: 'project' });
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'review-extra.yaml');
+    writeText(workflowPath, `name: review-extra
+steps:
+  - name: review
+`);
+
+    for (const content of [
+      'Should review-extra be edited?',
+      'Should review-extra.yaml be changed?',
+      'Do you want me to edit review-extra?',
+      'review-extra を編集すべきですか？',
+      'review-extra.yaml を変更しますか？',
+    ]) {
+      const approval = buildBuilderChangeApproval({
+        scope,
+        target: { mode: 'unspecified' },
+        goContext: createGoContextFromHistory([
+          { role: 'assistant', content },
+          { role: 'user', content: 'yes' },
+        ]),
+      });
+
+      expect(approval.approvedWorkflowPaths).toEqual([workflowPath]);
+    }
   });
 
   it('does not approve previous assistant candidates from clarification requests', () => {
@@ -1023,6 +1099,30 @@ steps:
         content: 'name: review\nsteps: []\n',
       },
     ]);
+  });
+
+  it('prefers json manifest fences and allows only a single untyped full-response fence', () => {
+    const jsonAfterYaml = parseBuilderChangeManifest(`Example:
+\`\`\`yaml
+summary: not json
+\`\`\`
+
+\`\`\`json
+{"summary":"json manifest","changes":[]}
+\`\`\``);
+    const untyped = parseBuilderChangeManifest(`\`\`\`
+{"summary":"untyped manifest","changes":[]}
+\`\`\``);
+
+    expect(jsonAfterYaml.summary).toBe('json manifest');
+    expect(untyped.summary).toBe('untyped manifest');
+    expect(() => parseBuilderChangeManifest(`\`\`\`
+{"summary":"first","changes":[]}
+\`\`\`
+
+\`\`\`
+{"summary":"second","changes":[]}
+\`\`\``)).toThrow();
   });
 
   it('rejects absolute paths in project, global, and builtin manifests', () => {
@@ -1387,6 +1487,7 @@ steps:
     const facetPath = join(projectDir, '.takt', 'facets', 'personas', 'reviewer.md');
     const changedWorkflowPath = join(workflowsDir, 'review-main.yaml');
     const affectedWorkflowPath = join(workflowsDir, 'review-extra.yaml');
+    const brokenWorkflowPath = join(workflowsDir, 'broken.yaml');
     writeText(facetPath, 'reviewer\n');
     writeText(changedWorkflowPath, `name: review-main
 max_steps: 10
@@ -1409,6 +1510,7 @@ steps:
       - condition: done
         next: COMPLETE
 `);
+    writeText(brokenWorkflowPath, 'name: *missing\n');
 
     const targets = resolveBuilderValidationTargets({
       scope,

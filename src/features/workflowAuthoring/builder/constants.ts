@@ -12,4 +12,4 @@ export const BUILDER_READ_TOOLS = ['Read', 'Glob', 'Grep'];
 export const BUILDER_GO_TOOLS = BUILDER_READ_TOOLS;
 
 export const PATH_MENTION_PREFIX = "(?:^|\\s|[\"'([{<（「『【])";
-export const PATH_MENTION_TERMINATOR = "(?=$|\\s|[.,;、。；:\"')\\]}）>」』】])";
+export const PATH_MENTION_TERMINATOR = "(?=$|\\s|[.,;、。；:?？\"')\\]}）>」』】])";

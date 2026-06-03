@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getLanguageResourcesDir, getResourcesDir } from '../../../infra/resources/index.js';
+import { getLanguageResourcesDir } from '../../../infra/resources/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import {
   assertBuilderRootIsNotSymlink,
@@ -44,8 +44,8 @@ export function buildBuilderSystemPrompt(
   context: BuilderPromptContext,
 ): string {
   return loadTemplate('builder_system_prompt', lang, {
-    styleGuide: loadStyleGuide(),
-    yamlSchema: loadYamlSchema(),
+    styleGuide: loadStyleGuide(lang),
+    yamlSchema: loadYamlSchema(lang),
     scopeSummary: formatUntrustedReferenceBlock('Scope summary', context.scopeSummary),
     assetInventory: formatUntrustedReferenceBlock('Existing assets', context.assetInventory),
     targetContext: formatUntrustedReferenceBlock('Selected target context', context.targetContext),
@@ -105,8 +105,8 @@ function buildSafeMarkdownFence(content: string): string {
   return '`'.repeat(longest + 1);
 }
 
-function loadStyleGuide(): string {
-  const builtinsJaDir = getLanguageResourcesDir('ja');
+function loadStyleGuide(lang: 'en' | 'ja'): string {
+  const languageResourcesDir = getLanguageResourcesDir(lang);
   const styleGuideFiles = [
     'STYLE_GUIDE.md',
     'PERSONA_STYLE_GUIDE.md',
@@ -117,7 +117,7 @@ function loadStyleGuide(): string {
   ];
   return styleGuideFiles
     .map((fileName) => {
-      const filePath = join(builtinsJaDir, fileName);
+      const filePath = join(languageResourcesDir, fileName);
       return existsSync(filePath)
         ? `## ${fileName}\n${readFileSync(filePath, 'utf-8')}`
         : '';
@@ -126,9 +126,16 @@ function loadStyleGuide(): string {
     .join('\n\n');
 }
 
-function loadYamlSchema(): string {
-  const schemaPath = join(getResourcesDir(), 'skill', 'references', 'yaml-schema.md');
-  return existsSync(schemaPath) ? readFileSync(schemaPath, 'utf-8') : '';
+function loadYamlSchema(lang: 'en' | 'ja'): string {
+  const schemaPath = resolveYamlSchemaPath(lang);
+  if (!existsSync(schemaPath)) {
+    throw new Error(`Builder YAML schema resource not found for ${lang}: ${schemaPath}`);
+  }
+  return readFileSync(schemaPath, 'utf-8');
+}
+
+function resolveYamlSchemaPath(lang: 'en' | 'ja'): string {
+  return join(getLanguageResourcesDir(lang), 'skill', 'references', 'yaml-schema.md');
 }
 
 function buildAssetInventory(scope: ResolvedBuilderScope): string {
@@ -167,8 +174,6 @@ function formatRelatedCandidates(scope: ResolvedBuilderScope, candidates: Relate
     .map((candidate) => [
       `- ${candidate.relation}: ${formatScopedPath(scope, candidate.workflowPath)}`,
       `  reason: ${candidate.reason}`,
-      indentReferenceBlock(formatScopedReference(scope, 'Related workflow body', candidate.workflowPath)),
-      ...formatRelatedCandidateFacets(scope, candidate.workflowPath).map(indentReferenceBlock),
     ].join('\n'))
     .join('\n');
 }
@@ -181,23 +186,6 @@ function formatRelatedDiagnostics(diagnostics: string[]): string {
     'Workflow call diagnostics:',
     ...diagnostics.map((diagnostic) => `- ${diagnostic}`),
   ].join('\n');
-}
-
-function formatRelatedCandidateFacets(scope: ResolvedBuilderScope, workflowPath: string): string[] {
-  if (!isScopedReadableFile(scope, workflowPath)) {
-    return [];
-  }
-  const raw = loadRawWorkflow(workflowPath);
-  return resolveUsedFacetPaths(scope, raw, workflowPath)
-    .filter((facetPath) => existsSync(facetPath))
-    .map((facetPath) => formatScopedReference(scope, 'Related referenced facet', facetPath));
-}
-
-function indentReferenceBlock(content: string): string {
-  return content
-    .split('\n')
-    .map((line) => `  ${line}`)
-    .join('\n');
 }
 
 function formatScopedReference(scope: ResolvedBuilderScope, label: string, filePath: string): string {

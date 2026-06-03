@@ -37,6 +37,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { runConversationLoop, type ConversationStrategy } from '../features/interactive/conversationLoop.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 type ConversationGoContext = {
   history: ConversationMessage[];
@@ -48,14 +49,14 @@ type ConversationGoContext = {
   ctx: SessionContext;
 };
 
-function createSessionContext(): SessionContext {
+function createSessionContext(lang: 'en' | 'ja' = 'en'): SessionContext {
   return {
     provider: {
       setup: vi.fn(),
     } as unknown as SessionContext['provider'],
     providerType: 'mock',
     model: undefined,
-    lang: 'en',
+    lang,
     personaName: 'workflow-builder',
     sessionId: 'session-1',
   };
@@ -188,6 +189,29 @@ describe('runConversationLoop builder /go hook', () => {
 
     expect(result).toEqual({ action: 'execute', task: 'applied' });
     expect(handleGo).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.directExecuteUnavailable', 'en'));
+  });
+
+  it('shows the localized /accept refusal when direct execution is disabled', async () => {
+    const handleGo = vi.fn(async (): Promise<InteractiveModeResult> => ({ action: 'execute', task: 'applied' }));
+    const strategy: ConversationStrategy = {
+      systemPrompt: 'builder system prompt',
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      transformPrompt: (message) => message,
+      introMessage: 'builder intro',
+      disableDirectExecuteCommands: true,
+      handleGo,
+    };
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/accept')
+      .mockResolvedValueOnce('/go');
+
+    const result = await runConversationLoop('/project', createSessionContext('ja'), strategy, undefined, undefined);
+
+    expect(result).toEqual({ action: 'execute', task: 'applied' });
+    expect(handleGo).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.directExecuteUnavailable', 'ja'));
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
   it('does not let /play bypass a strategy that requires /go', async () => {
@@ -208,6 +232,29 @@ describe('runConversationLoop builder /go hook', () => {
 
     expect(result).toEqual({ action: 'execute', task: 'applied' });
     expect(handleGo).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.directExecuteUnavailable', 'en'));
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+  });
+
+  it('shows the localized /play refusal when direct execution is disabled', async () => {
+    const handleGo = vi.fn(async (): Promise<InteractiveModeResult> => ({ action: 'execute', task: 'applied' }));
+    const strategy: ConversationStrategy = {
+      systemPrompt: 'builder system prompt',
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      transformPrompt: (message) => message,
+      introMessage: 'builder intro',
+      disableDirectExecuteCommands: true,
+      handleGo,
+    };
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/play skip manifest')
+      .mockResolvedValueOnce('/go');
+
+    const result = await runConversationLoop('/project', createSessionContext('ja'), strategy, undefined, undefined);
+
+    expect(result).toEqual({ action: 'execute', task: 'applied' });
+    expect(handleGo).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.directExecuteUnavailable', 'ja'));
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
@@ -228,6 +275,28 @@ describe('runConversationLoop builder /go hook', () => {
     const result = await runConversationLoop('/project', createSessionContext(), strategy, undefined, undefined);
 
     expect(result).toEqual({ action: 'execute', task: 'applied' });
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.resumeUnavailable', 'en'));
+    expect(mockSelectRecentSession).not.toHaveBeenCalled();
+  });
+
+  it('shows the localized /resume refusal when resume is disabled', async () => {
+    const handleGo = vi.fn(async (): Promise<InteractiveModeResult> => ({ action: 'execute', task: 'applied' }));
+    const strategy: ConversationStrategy = {
+      systemPrompt: 'builder system prompt',
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      transformPrompt: (message) => message,
+      introMessage: 'builder intro',
+      enableResumeCommand: false,
+      handleGo,
+    };
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/resume')
+      .mockResolvedValueOnce('/go');
+
+    const result = await runConversationLoop('/project', createSessionContext('ja'), strategy, undefined, undefined);
+
+    expect(result).toEqual({ action: 'execute', task: 'applied' });
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.resumeUnavailable', 'ja'));
     expect(mockSelectRecentSession).not.toHaveBeenCalled();
   });
 });

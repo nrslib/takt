@@ -18,7 +18,8 @@ import type {
   ResolvedBuilderScope,
 } from './types.js';
 
-const BUILDER_MANIFEST_JSON_BLOCK = /```(?:json)?\s*([\s\S]*?)```/i;
+const BUILDER_MANIFEST_JSON_BLOCK = /```json\s*([\s\S]*?)```/i;
+const SINGLE_UNTYPED_CODE_BLOCK = /^```\s*\r?\n([\s\S]*?)```$/;
 
 export function parseBuilderChangeManifest(content: string): BuilderChangeManifest {
   const jsonText = extractBuilderManifestJson(content);
@@ -76,7 +77,9 @@ function extractBuilderManifestJson(content: string): string {
   if (fenced?.[1]) {
     return fenced[1].trim();
   }
-  return content.trim();
+  const trimmed = content.trim();
+  const untyped = SINGLE_UNTYPED_CODE_BLOCK.exec(trimmed);
+  return untyped?.[1]?.trim() ?? trimmed;
 }
 
 function parseBuilderManifestChange(change: unknown): BuilderManifestChange {

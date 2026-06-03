@@ -80,4 +80,3 @@ export interface BuilderChangeApproval {
   approvedWorkflowFacetPaths: string[];
   approvedFacetPaths: string[];
 }
-

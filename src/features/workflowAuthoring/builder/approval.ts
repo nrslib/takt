@@ -47,6 +47,7 @@ function collectExplicitlyApprovedChangePaths(
   const approvedFacetPaths = new Set<string>();
   const candidates = listBuilderApprovalCandidates(scope);
   let latestAssistantCandidatePaths = new Set<string>();
+  let latestAssistantAskedForApproval = false;
   const messages = goContext.inlineText
     ? [...goContext.history, { role: 'user' as const, content: goContext.inlineText }]
     : goContext.history;
@@ -54,6 +55,8 @@ function collectExplicitlyApprovedChangePaths(
   for (const message of messages) {
     if (message.role === 'assistant') {
       latestAssistantCandidatePaths = findMentionedApprovalCandidatePaths(scope, candidates, message.content);
+      latestAssistantAskedForApproval = latestAssistantCandidatePaths.size > 0
+        && isApprovalRequestMessage(message.content);
       continue;
     }
     if (message.role !== 'user') {
@@ -62,7 +65,9 @@ function collectExplicitlyApprovedChangePaths(
     for (const segment of splitApprovalTextSegments(message.content)) {
       const mentioned = findMentionedApprovalCandidatePaths(scope, candidates, segment);
       if (isExplicitRejectionLine(segment.trim().toLowerCase())) {
-        const rejected = mentioned.size > 0 ? mentioned : latestAssistantCandidatePaths;
+        const rejected = mentioned.size > 0
+          ? mentioned
+          : latestAssistantAskedForApproval ? latestAssistantCandidatePaths : new Set<string>();
         removeApprovedBuilderCandidatePaths(scope, candidates, approvedWorkflowPaths, approvedFacetPaths, rejected);
         continue;
       }
@@ -70,7 +75,9 @@ function collectExplicitlyApprovedChangePaths(
       if (!isExplicitApprovalLine(segment, hasMentionedCandidate)) {
         continue;
       }
-      const approved = hasMentionedCandidate ? mentioned : latestAssistantCandidatePaths;
+      const approved = hasMentionedCandidate
+        ? mentioned
+        : latestAssistantAskedForApproval ? latestAssistantCandidatePaths : new Set<string>();
       for (const candidate of candidates) {
         if (!approved.has(candidate.filePath)) {
           continue;
@@ -84,6 +91,29 @@ function collectExplicitlyApprovedChangePaths(
     }
   }
   return { workflowPaths: approvedWorkflowPaths, facetPaths: approvedFacetPaths };
+}
+
+function isApprovalRequestMessage(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return [
+    /\bplease\s+(?:approve|confirm)\b/,
+    /\b(?:approve|confirm)\s+(?:this|these|the)\b/,
+    /\bok\s+to\s+(?:edit|change|modify)\b/,
+    /\bmay\s+i\s+(?:edit|change|modify)\b/,
+    /\bshould\b.+\bbe\s+(?:edited|changed|modified)\b/,
+    /\bdo\s+you\s+want\b.+\b(?:edit|change|modify)\b/,
+    /承認してください/,
+    /確認してください/,
+    /許可してください/,
+    /編集してよいですか/,
+    /変更してよいですか/,
+    /編集すべきですか/,
+    /変更すべきですか/,
+    /修正すべきですか/,
+    /編集しますか/,
+    /変更しますか/,
+    /修正しますか/,
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function findMentionedApprovalCandidatePaths(

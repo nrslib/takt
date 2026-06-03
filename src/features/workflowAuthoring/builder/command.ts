@@ -45,8 +45,14 @@ export async function builderWorkflowCommand(options: { projectDir: string }): P
   displayAndClearSessionState(options.projectDir, ctx.lang);
 
   const scopeKind = await selectRequiredOption('Select output scope:', buildBuilderScopeChoices(options.projectDir));
+  if (!scopeKind) {
+    return;
+  }
   const scope = resolveBuilderScope({ projectDir: options.projectDir, scope: scopeKind });
   const target = await selectBuilderTarget(scope);
+  if (!target) {
+    return;
+  }
   const promptContext = buildBuilderPromptContext({ scope, target });
   const systemPrompt = buildBuilderSystemPrompt(ctx.lang, promptContext);
 
@@ -67,12 +73,15 @@ export async function builderWorkflowCommand(options: { projectDir: string }): P
   }, undefined, undefined);
 }
 
-async function selectBuilderTarget(scope: ResolvedBuilderScope): Promise<BuilderTarget> {
+async function selectBuilderTarget(scope: ResolvedBuilderScope): Promise<BuilderTarget | undefined> {
   const mode = await selectRequiredOption<BuilderTargetMode>('Select target:', [
     { label: 'Create a new workflow', value: 'create' },
     { label: 'Modify an existing workflow', value: 'modify' },
     { label: 'Do not narrow yet', value: 'unspecified' },
   ]);
+  if (!mode) {
+    return undefined;
+  }
   if (mode !== 'modify') {
     return { mode };
   }
@@ -85,18 +94,18 @@ async function selectBuilderTarget(scope: ResolvedBuilderScope): Promise<Builder
     label: workflow.lang ? `${workflow.lang}: ${workflow.name}` : workflow.name,
     value: workflow.path,
   })));
+  if (!selectedPath) {
+    return undefined;
+  }
   return { mode: 'modify', workflowPath: selectedPath };
 }
 
 async function selectRequiredOption<T extends string>(
   message: string,
   choices: SelectOptionItem<T>[],
-): Promise<T> {
+): Promise<T | undefined> {
   const selected = await selectOption<T>(message, choices);
-  if (!selected) {
-    throw new Error('Workflow builder cancelled before conversation started.');
-  }
-  return selected;
+  return selected ?? undefined;
 }
 
 async function handleBuilderGo(options: {
@@ -129,7 +138,7 @@ async function handleBuilderGo(options: {
     return { action: 'cancel' as const, task: '' };
   }
 
-  const parsed = parseBuilderManifestForGo(options.projectDir, options.scope, result.content);
+  const parsed = parseBuilderManifestForGo(options.projectDir, options.scope, result.content, options.goContext);
   if (!parsed) {
     return null;
   }
@@ -137,6 +146,10 @@ async function handleBuilderGo(options: {
   const plannedViolation = findBuilderChangeViolation(options.scope, manifestChanges, approval);
   if (plannedViolation) {
     error(plannedViolation);
+    options.goContext.history.push({
+      role: 'assistant',
+      content: buildBuilderValidationFeedback([plannedViolation]),
+    });
     info('Workflow builder did not apply changes. Confirm the target scope and run /go again.');
     return null;
   }
@@ -178,6 +191,10 @@ function applyAndValidateBuilderManifest(options: {
     if (violation) {
       rollbackBuilderFileChanges(toRollbackChanges(changes));
       error(violation);
+      options.goContext.history.push({
+        role: 'assistant',
+        content: buildBuilderValidationFeedback([violation]),
+      });
       info('Workflow builder changes were rolled back. Confirm the target scope and run /go again.');
       return null;
     }
@@ -214,13 +231,19 @@ function parseBuilderManifestForGo(
   projectDir: string,
   scope: ResolvedBuilderScope,
   content: string,
+  goContext: ConversationGoContext,
 ): { manifest: BuilderChangeManifest; manifestChanges: ReturnType<typeof resolveBuilderManifestChanges> } | undefined {
   try {
     const manifest = parseBuilderChangeManifest(content);
     const manifestChanges = resolveBuilderManifestChanges(projectDir, scope, manifest);
     return { manifest, manifestChanges };
   } catch (parseError) {
-    error(sanitizeTerminalText(parseError instanceof Error ? parseError.message : String(parseError)));
+    const message = sanitizeTerminalText(parseError instanceof Error ? parseError.message : String(parseError));
+    error(message);
+    goContext.history.push({
+      role: 'assistant',
+      content: buildBuilderValidationFeedback([message]),
+    });
     info('Workflow builder did not apply changes. Return a valid change manifest and run /go again.');
     return undefined;
   }

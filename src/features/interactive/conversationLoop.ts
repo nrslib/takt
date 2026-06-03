@@ -240,7 +240,7 @@ export async function runConversationLoop(
     switch (match.command) {
       case SlashCommand.Accept: {
         if (strategy.disableDirectExecuteCommands) {
-          info('Use /go to apply confirmed changes.');
+          info(ui.directExecuteUnavailable);
           continue;
         }
         const assistantMessage = findLatestAssistantMessage(history);
@@ -253,7 +253,7 @@ export async function runConversationLoop(
 
       case SlashCommand.Play: {
         if (strategy.disableDirectExecuteCommands) {
-          info('Use /go to apply confirmed changes.');
+          info(ui.directExecuteUnavailable);
           continue;
         }
         if (!match.text) {
@@ -362,7 +362,7 @@ export async function runConversationLoop(
 
       case SlashCommand.Resume: {
         if (strategy.enableResumeCommand === false) {
-          info(ui.retryUnavailable);
+          info(ui.resumeUnavailable);
           continue;
         }
         const selectedId = await selectRecentSession(cwd, ctx.lang);

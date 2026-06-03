@@ -145,6 +145,26 @@ describe('builderWorkflowCommand', () => {
     expect(capturedStrategy.systemPrompt).toContain('Target workflow: workflows/review.yaml');
   });
 
+  it('exits the startup wizard without starting conversation when selection is cancelled', async () => {
+    await builderWorkflowCommand({ projectDir });
+    expect(mocks.runConversationLoop).not.toHaveBeenCalled();
+
+    mocks.selectOption
+      .mockResolvedValueOnce('project')
+      .mockResolvedValueOnce(undefined);
+    await builderWorkflowCommand({ projectDir });
+    expect(mocks.runConversationLoop).not.toHaveBeenCalled();
+
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'review.yaml');
+    writeText(workflowPath, workflowBody('review'));
+    mocks.selectOption
+      .mockResolvedValueOnce('project')
+      .mockResolvedValueOnce('modify')
+      .mockResolvedValueOnce(undefined);
+    await builderWorkflowCommand({ projectDir });
+    expect(mocks.runConversationLoop).not.toHaveBeenCalled();
+  });
+
   it('applies a /go manifest, writes files, and validates changed workflows', async () => {
     mocks.selectOption
       .mockResolvedValueOnce('project')
@@ -216,6 +236,57 @@ describe('builderWorkflowCommand', () => {
     }));
   });
 
+  it('adds manifest parse failures to conversation history for the next /go', async () => {
+    mocks.selectOption
+      .mockResolvedValueOnce('project')
+      .mockResolvedValueOnce('create');
+    await builderWorkflowCommand({ projectDir });
+    mocks.callAIWithRetry.mockResolvedValueOnce({
+      result: {
+        success: true,
+        content: 'not json',
+      },
+      sessionId: 'session-1',
+    });
+
+    const goContext = createGoContext(projectDir);
+    const result = await capturedStrategy.handleGo?.(goContext);
+
+    expect(result).toBeNull();
+    expect(goContext.history.at(-1)).toEqual(expect.objectContaining({
+      role: 'assistant',
+      content: expect.stringContaining('Fix these diagnostics'),
+    }));
+  });
+
+  it('adds planned approval violations to conversation history for the next /go', async () => {
+    mocks.selectOption
+      .mockResolvedValueOnce('project')
+      .mockResolvedValueOnce('create');
+    await builderWorkflowCommand({ projectDir });
+    mocks.callAIWithRetry.mockResolvedValueOnce({
+      result: {
+        success: true,
+        content: JSON.stringify({
+          summary: 'updated unapproved facet',
+          changes: [
+            { path: 'facets/personas/reviewer.md', content: 'updated reviewer\n' },
+          ],
+        }),
+      },
+      sessionId: 'session-1',
+    });
+
+    const goContext = createGoContext(projectDir);
+    const result = await capturedStrategy.handleGo?.(goContext);
+
+    expect(result).toBeNull();
+    expect(goContext.history.at(-1)).toEqual(expect.objectContaining({
+      role: 'assistant',
+      content: expect.stringContaining('outside the approved workflow/facet scope'),
+    }));
+  });
+
   it('does not roll back files outside the manifest target set', async () => {
     const workflowPath = join(projectDir, '.takt', 'workflows', 'review.yaml');
     const outsidePath = join(projectDir, 'src', 'outside.ts');
@@ -252,7 +323,7 @@ describe('builderWorkflowCommand', () => {
     expect(readFileSync(outsidePath, 'utf-8')).toBe('external change\n');
   });
 
-  it('rolls back /go manifest changes when affected workflow target resolution throws', async () => {
+  it('skips broken existing workflows when resolving validation targets for facet changes', async () => {
     const workflowPath = join(projectDir, '.takt', 'workflows', 'review.yaml');
     const brokenWorkflowPath = join(projectDir, '.takt', 'workflows', 'broken.yaml');
     const facetPath = join(projectDir, '.takt', 'facets', 'personas', 'reviewer.md');
@@ -274,7 +345,7 @@ steps:
       .mockResolvedValueOnce('modify')
       .mockResolvedValueOnce(workflowPath);
     await builderWorkflowCommand({ projectDir });
-    writeText(brokenWorkflowPath, 'name: [invalid\n');
+    writeText(brokenWorkflowPath, 'name: *missing\n');
     mocks.callAIWithRetry.mockResolvedValueOnce({
       result: {
         success: true,
@@ -291,12 +362,10 @@ steps:
     const goContext = createGoContext(projectDir);
     const result = await capturedStrategy.handleGo?.(goContext);
 
-    expect(result).toBeNull();
-    expect(readFileSync(facetPath, 'utf-8')).toBe('original reviewer\n');
-    expect(goContext.history.at(-1)).toEqual(expect.objectContaining({
-      role: 'assistant',
-      content: expect.stringContaining('rolled back'),
-    }));
+    expect(result).toEqual({ action: 'execute', task: 'updated reviewer facet' });
+    expect(readFileSync(facetPath, 'utf-8')).toBe('updated reviewer\n');
+    expect(mocks.inspectWorkflowFile).toHaveBeenCalledWith(workflowPath, projectDir);
+    expect(mocks.inspectWorkflowFile).not.toHaveBeenCalledWith(brokenWorkflowPath, projectDir);
   });
 
   it('does not trust project-local builtin reference files in the builder system prompt', async () => {

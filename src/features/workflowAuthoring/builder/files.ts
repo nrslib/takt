@@ -19,7 +19,8 @@ export function listFilesRecursive(rootDir: string, extensions?: string[]): stri
   if (!existsSync(rootDir)) {
     return [];
   }
-  if (lstatSync(rootDir).isSymbolicLink()) {
+  const rootStat = lstatSync(rootDir);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
     return [];
   }
   const files: string[] = [];
