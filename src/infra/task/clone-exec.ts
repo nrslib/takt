@@ -1,10 +1,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { loadProjectConfig } from '../config/index.js';
+import { isTaskAbortError, TASK_EXECUTION_ABORTED_MESSAGE } from './clone-errors.js';
 
 const log = createLogger('clone');
+const CLONE_FAILED_MESSAGE = 'Git clone failed';
+const REMOTE_BRANCH_FETCH_FAILED_MESSAGE = 'Git remote branch fetch failed';
+const ISOLATED_GIT_ENV = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'core.logAllRefUpdates',
+  GIT_CONFIG_VALUE_0: 'false',
+} as const;
 
 export function resolveCloneSubmoduleOptions(projectDir: string): { args: string[]; label: string; targets: string } {
   const config = loadProjectConfig(projectDir);
@@ -33,33 +41,102 @@ export function resolveCloneSubmoduleOptions(projectDir: string): { args: string
   };
 }
 
-function resolveMainRepo(projectDir: string): string {
-  const gitPath = path.join(projectDir, '.git');
-
+function isLinkedWorktree(projectDir: string): boolean {
   try {
-    const stats = fs.statSync(gitPath);
-    if (stats.isFile()) {
-      const content = fs.readFileSync(gitPath, 'utf-8');
-      const match = content.match(/^gitdir:\s*(.+)$/m);
-      if (match && match[1]) {
-        const gitDirPath = match[1].trim();
-        const gitDir = path.resolve(path.dirname(gitPath), gitDirPath);
-        const commonGitDir = path.resolve(gitDir, '..', '..');
-        const mainRepoPath = path.dirname(commonGitDir);
-        log.info('Detected worktree, using main repo', { worktree: projectDir, mainRepo: mainRepoPath });
-        return mainRepoPath;
-      }
-    }
-  } catch (err) {
-    log.debug('Failed to resolve main repo, using projectDir as-is', { error: String(err) });
+    return fs.statSync(path.join(projectDir, '.git')).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function getExecErrorStderr(error: unknown): string {
+  if (typeof error !== 'object' || error === null || !('stderr' in error)) {
+    return '';
   }
 
-  return projectDir;
+  const stderr = (error as { stderr?: unknown }).stderr;
+  if (Buffer.isBuffer(stderr)) {
+    return stderr.toString();
+  }
+  if (typeof stderr === 'string') {
+    return stderr;
+  }
+  return '';
+}
+
+function isShallowReferenceError(message: string): boolean {
+  return message.includes('reference repository is shallow');
+}
+
+function cloneFailedError(): Error {
+  return new Error(CLONE_FAILED_MESSAGE);
+}
+
+function isolatedGitEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, ...ISOLATED_GIT_ENV };
+}
+
+function runIsolatedGitCommandSync(gitCwd: string, args: string[]): Buffer {
+  return execFileSync('git', args, {
+    cwd: gitCwd,
+    stdio: 'pipe',
+    env: isolatedGitEnv(),
+  });
+}
+
+function runIsolatedGitCommandAbortable(
+  gitCwd: string,
+  args: string[],
+  abortSignal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string }> {
+  return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv());
+}
+
+function cleanupPartialClone(clonePath: string): void {
+  try {
+    fs.rmSync(clonePath, { recursive: true, force: true });
+  } catch {
+    log.debug('Failed to cleanup partial clone before retry');
+  }
+}
+
+export function fetchRemoteBranchIntoIsolatedClone(projectDir: string, clonePath: string, branch: string): void {
+  try {
+    runIsolatedGitCommandSync(clonePath, [
+      'fetch',
+      '--no-write-fetch-head',
+      projectDir,
+      `refs/remotes/origin/${branch}:refs/heads/${branch}`,
+    ]);
+  } catch {
+    throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+  }
+}
+
+export async function fetchRemoteBranchIntoIsolatedCloneAbortable(
+  projectDir: string,
+  clonePath: string,
+  branch: string,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  try {
+    await runIsolatedGitCommandAbortable(clonePath, [
+      'fetch',
+      '--no-write-fetch-head',
+      projectDir,
+      `refs/remotes/origin/${branch}:refs/heads/${branch}`,
+    ], abortSignal);
+  } catch (err) {
+    if (isTaskAbortError(err)) {
+      throw err;
+    }
+    throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+  }
 }
 
 export function cloneAndIsolate(projectDir: string, clonePath: string, branch?: string): void {
-  const referenceRepo = resolveMainRepo(projectDir);
   const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
+  const useReferenceClone = !isLinkedWorktree(projectDir);
 
   fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
@@ -71,25 +148,25 @@ export function cloneAndIsolate(projectDir: string, clonePath: string, branch?: 
     clonePath,
   ];
 
-  const referenceCloneArgs = ['clone', '--reference', referenceRepo, '--dissociate', ...commonArgs];
   const fallbackCloneArgs = ['clone', ...commonArgs];
+  const referenceCloneArgs = useReferenceClone
+    ? ['clone', '--reference', projectDir, '--dissociate', ...commonArgs]
+    : fallbackCloneArgs;
 
   try {
-    execFileSync('git', referenceCloneArgs, {
-      cwd: projectDir,
-      stdio: 'pipe',
-    });
+    runIsolatedGitCommandSync(projectDir, referenceCloneArgs);
   } catch (err) {
-    const stderr = ((err as { stderr?: Buffer }).stderr ?? Buffer.alloc(0)).toString();
-    if (stderr.includes('reference repository is shallow')) {
-      log.info('Reference repository is shallow, retrying clone without --reference', { referenceRepo });
-      try { fs.rmSync(clonePath, { recursive: true, force: true }); } catch (e) { log.debug('Failed to cleanup partial clone before retry', { clonePath, error: String(e) }); }
-      execFileSync('git', fallbackCloneArgs, {
-        cwd: projectDir,
-        stdio: 'pipe',
-      });
+    const stderr = getExecErrorStderr(err);
+    if (isShallowReferenceError(stderr)) {
+      log.info('Reference repository is shallow, retrying clone without --reference');
+      cleanupPartialClone(clonePath);
+      try {
+        runIsolatedGitCommandSync(projectDir, fallbackCloneArgs);
+      } catch {
+        throw cloneFailedError();
+      }
     } else {
-      throw err;
+      throw cloneFailedError();
     }
   }
 
@@ -132,10 +209,11 @@ export function runGitCommandAbortable(
   gitCwd: string,
   args: string[],
   abortSignal?: AbortSignal,
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
-      reject(new Error('Task execution aborted'));
+      reject(new Error(TASK_EXECUTION_ABORTED_MESSAGE));
       return;
     }
 
@@ -143,6 +221,7 @@ export function runGitCommandAbortable(
       cwd: gitCwd,
       stdio: 'pipe',
       detached: true,
+      env,
     });
 
     let stdout = '';
@@ -181,7 +260,7 @@ export function runGitCommandAbortable(
         }
       }, 500);
       killTimer.unref?.();
-      rejectOnce(new Error('Task execution aborted'));
+      rejectOnce(new Error(TASK_EXECUTION_ABORTED_MESSAGE));
     };
 
     abortSignal?.addEventListener('abort', onAbort, { once: true });
@@ -196,7 +275,7 @@ export function runGitCommandAbortable(
     });
     child.on('close', (code) => {
       if (abortSignal?.aborted) {
-        rejectOnce(new Error('Task execution aborted'));
+        rejectOnce(new Error(TASK_EXECUTION_ABORTED_MESSAGE));
         return;
       }
       if (code === 0) {
@@ -214,7 +293,7 @@ function runGitCloneAbortable(
   args: string[],
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  return runGitCommandAbortable(gitCwd, args, abortSignal).then(() => undefined);
+  return runIsolatedGitCommandAbortable(gitCwd, args, abortSignal).then(() => undefined);
 }
 
 export async function cloneAndIsolateAbortable(
@@ -223,8 +302,8 @@ export async function cloneAndIsolateAbortable(
   branch?: string,
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  const referenceRepo = resolveMainRepo(projectDir);
   const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
+  const useReferenceClone = !isLinkedWorktree(projectDir);
 
   fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
@@ -236,23 +315,32 @@ export async function cloneAndIsolateAbortable(
     clonePath,
   ];
 
-  const referenceCloneArgs = ['clone', '--reference', referenceRepo, '--dissociate', ...commonArgs];
   const fallbackCloneArgs = ['clone', ...commonArgs];
+  const referenceCloneArgs = useReferenceClone
+    ? ['clone', '--reference', projectDir, '--dissociate', ...commonArgs]
+    : fallbackCloneArgs;
 
   try {
     await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal);
   } catch (err) {
-    const stderr = err instanceof Error ? err.message : String(err);
-    if (stderr.includes('reference repository is shallow')) {
-      log.info('Reference repository is shallow, retrying clone without --reference', { referenceRepo });
-      try {
-        fs.rmSync(clonePath, { recursive: true, force: true });
-      } catch (cleanupErr) {
-        log.debug('Failed to cleanup partial clone before retry', { clonePath, error: String(cleanupErr) });
-      }
-      await runGitCloneAbortable(projectDir, fallbackCloneArgs, abortSignal);
-    } else {
+    if (isTaskAbortError(err)) {
       throw err;
+    }
+
+    const stderr = getErrorMessage(err);
+    if (isShallowReferenceError(stderr)) {
+      log.info('Reference repository is shallow, retrying clone without --reference');
+      cleanupPartialClone(clonePath);
+      try {
+        await runGitCloneAbortable(projectDir, fallbackCloneArgs, abortSignal);
+      } catch (fallbackErr) {
+        if (isTaskAbortError(fallbackErr)) {
+          throw fallbackErr;
+        }
+        throw cloneFailedError();
+      }
+    } else {
+      throw cloneFailedError();
     }
   }
 

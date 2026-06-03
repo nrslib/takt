@@ -111,6 +111,14 @@ function mockGitSpawn(
   });
 }
 
+function serializedCloneLogs(): string {
+  return JSON.stringify({
+    info: mockLogInfo.mock.calls,
+    debug: mockLogDebug.mock.calls,
+    error: mockLogError.mock.calls,
+  });
+}
+
 describe('worktree reference resolution', () => {
   const linkedWorktreePath = path.resolve('workspace', 'linked');
   const mainRepoPath = path.resolve('workspace', 'main');
@@ -129,6 +137,9 @@ describe('worktree reference resolution', () => {
       }
       if (argsArr[0] === 'fetch') return Buffer.from('');
       if (argsArr[0] === 'clone') {
+        if (argsArr.includes('--reference')) {
+          throw new Error('fatal: reference repository is a linked checkout and is not supported yet');
+        }
         cloneCalls.push([...argsArr]);
         return Buffer.from('');
       }
@@ -148,7 +159,7 @@ describe('worktree reference resolution', () => {
     return cloneCalls;
   }
 
-  it('should resolve a relative worktree gitdir from the .git file directory', () => {
+  it('should let git resolve a relative worktree gitdir without exposing the main repo path', () => {
     const cloneCalls = setupWorktreeCloneCapture();
     vi.mocked(fs.statSync).mockReturnValue({ isFile: () => true } as unknown as fs.Stats);
     vi.mocked(fs.readFileSync).mockReturnValue('gitdir: ../main/.git/worktrees/linked\n');
@@ -159,12 +170,14 @@ describe('worktree reference resolution', () => {
     });
 
     expect(cloneCalls).toHaveLength(1);
-    const referenceIndex = cloneCalls[0]!.indexOf('--reference');
-    expect(referenceIndex).toBeGreaterThanOrEqual(0);
-    expect(cloneCalls[0]![referenceIndex + 1]).toBe(mainRepoPath);
+    expect(cloneCalls[0]).not.toContain('--reference');
+    expect(cloneCalls[0]).not.toContain('--dissociate');
+    expect(cloneCalls[0]).toContain(linkedWorktreePath);
+    expect(vi.mocked(fs.readFileSync)).not.toHaveBeenCalled();
+    expect(serializedCloneLogs()).not.toContain(mainRepoPath);
   });
 
-  it('should use the same relative worktree gitdir resolution for abortable clone', async () => {
+  it('should use the same git-owned worktree resolution for abortable clone without exposing the main repo path', async () => {
     const cloneCalls: string[][] = [];
 
     mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -197,6 +210,13 @@ describe('worktree reference resolution', () => {
       child.kill = vi.fn();
 
       if (argsArr[0] === 'clone') {
+        if (argsArr.includes('--reference')) {
+          child.stderr.emit('data', 'fatal: reference repository is a linked checkout and is not supported yet');
+          setImmediate(() => {
+            child.emit('close', 1);
+          });
+          return child as never;
+        }
         cloneCalls.push([...argsArr]);
       }
 
@@ -214,9 +234,11 @@ describe('worktree reference resolution', () => {
     });
 
     expect(cloneCalls).toHaveLength(1);
-    const referenceIndex = cloneCalls[0]!.indexOf('--reference');
-    expect(referenceIndex).toBeGreaterThanOrEqual(0);
-    expect(cloneCalls[0]![referenceIndex + 1]).toBe(mainRepoPath);
+    expect(cloneCalls[0]).not.toContain('--reference');
+    expect(cloneCalls[0]).not.toContain('--dissociate');
+    expect(cloneCalls[0]).toContain(linkedWorktreePath);
+    expect(vi.mocked(fs.readFileSync)).not.toHaveBeenCalled();
+    expect(serializedCloneLogs()).not.toContain(mainRepoPath);
   });
 });
 
@@ -844,6 +866,108 @@ describe('branchExists remote tracking branch fallback', () => {
     expect(checkoutCalls[0]).toEqual(['checkout', 'feature/remote-only']);
   });
 
+  it('should sanitize remote branch fetch errors before throwing', () => {
+    const hiddenProjectDir = '/hidden/main';
+    const branch = 'feature/remote-fetch-failure';
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'fetch' && argsArr.includes('--no-write-fetch-head') && argsArr.includes(hiddenProjectDir)) {
+        const error = new Error(`fatal: fetch from ${hiddenProjectDir} failed`);
+        (error as Error & { stderr: Buffer }).stderr = Buffer.from(`fatal: ${hiddenProjectDir} is not accessible`);
+        throw error;
+      }
+      if (argsArr[0] === 'fetch') return Buffer.from('');
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/remotes/origin/')) {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    let thrown: Error | undefined;
+    try {
+      createSharedClone(hiddenProjectDir, {
+        worktree: '/tmp/remote-fetch-failure',
+        taskSlug: 'remote-fetch-failure',
+        branch,
+      });
+    } catch (err) {
+      thrown = err as Error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toBe('Git remote branch fetch failed');
+    expect(thrown?.message).not.toContain(hiddenProjectDir);
+    expect(serializedCloneLogs()).not.toContain(hiddenProjectDir);
+  });
+
+  it('should sanitize abortable remote branch fetch errors before throwing', async () => {
+    const hiddenProjectDir = '/hidden/main';
+    const branch = 'feature/abortable-remote-fetch-failure';
+
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      setImmediate(() => {
+        if (argsArr[0] === 'fetch' && argsArr.includes('--no-write-fetch-head') && argsArr.includes(hiddenProjectDir)) {
+          child.stderr.emit('data', `fatal: fetch from ${hiddenProjectDir} failed`);
+          child.emit('close', 1);
+          return;
+        }
+        child.emit('close', 0);
+      });
+
+      return child as never;
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      return Buffer.from('');
+    });
+
+    let thrown: Error | undefined;
+    try {
+      await createSharedCloneAbortable(hiddenProjectDir, {
+        worktree: '/tmp/abortable-remote-fetch-failure',
+        taskSlug: 'abortable-remote-fetch-failure',
+        branch,
+      });
+    } catch (err) {
+      thrown = err as Error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toBe('Git remote branch fetch failed');
+    expect(thrown?.message).not.toContain(hiddenProjectDir);
+    expect(serializedCloneLogs()).not.toContain(hiddenProjectDir);
+  });
+
   it('should create new branch when neither local nor remote tracking branch exists', () => {
     const cloneCalls: string[][] = [];
     const checkoutCalls: string[][] = [];
@@ -1013,6 +1137,102 @@ describe('branchExists remote tracking branch fallback', () => {
 });
 
 describe('prefetch existing branch on origin before clone (#557)', () => {
+  it('should not expose the source path when sync prefetch fails', () => {
+    const hiddenProjectDir = '/hidden/main';
+    const branch = 'feature/prefetch-failure';
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'fetch' && cwd === hiddenProjectDir && argsArr[1] === 'origin') {
+        throw new Error(`fatal: ${hiddenProjectDir} was not found`);
+      }
+      if (argsArr[0] === 'fetch') return Buffer.from('');
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/main\n';
+      }
+      if (argsArr[0] === 'show-ref') {
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+
+      return Buffer.from('');
+    });
+
+    createSharedClone(hiddenProjectDir, {
+      worktree: '/tmp/prefetch-failure',
+      taskSlug: 'prefetch-failure',
+      branch,
+    });
+
+    expect(serializedCloneLogs()).not.toContain(hiddenProjectDir);
+  });
+
+  it('should not expose the source path when abortable prefetch fails', async () => {
+    const hiddenProjectDir = '/hidden/main';
+    const branch = 'feature/abortable-prefetch-failure';
+
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      setImmediate(() => {
+        if (argsArr[0] === 'fetch' && argsArr[1] === 'origin') {
+          child.stderr.emit('data', `fatal: ${hiddenProjectDir} was not found`);
+          child.emit('close', 1);
+          return;
+        }
+        if (argsArr[0] === 'show-ref' && String(argsArr[3]).startsWith('refs/remotes/origin/')) {
+          child.emit('close', 1);
+          return;
+        }
+        if (argsArr[0] === 'show-ref' && String(argsArr[3]).startsWith('refs/heads/')) {
+          child.emit('close', 0);
+          return;
+        }
+        child.emit('close', 0);
+      });
+
+      return child as never;
+    });
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      return Buffer.from('');
+    });
+
+    await createSharedCloneAbortable(hiddenProjectDir, {
+      worktree: '/tmp/abortable-prefetch-failure',
+      taskSlug: 'abortable-prefetch-failure',
+      branch,
+    });
+
+    expect(serializedCloneLogs()).not.toContain(hiddenProjectDir);
+  });
+
   it('should run fetch on project repo before clone when explicit branch is set (auto_fetch off)', () => {
     const opSequence: string[] = [];
 
@@ -1207,6 +1427,9 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
 });
 
 describe('shallow clone fallback', () => {
+  const hiddenMainRepoPath = path.resolve('workspace', 'main');
+  const linkedWorktreePath = path.resolve('workspace', 'linked');
+
   function setupShallowCloneMock(options: {
     shallowError: boolean;
     otherError?: string;
@@ -1219,6 +1442,10 @@ describe('shallow clone fallback', () => {
       // git rev-parse --abbrev-ref HEAD
       if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
         return 'main\n';
+      }
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/main\n';
       }
 
       // git clone
@@ -1272,10 +1499,122 @@ describe('shallow clone fallback', () => {
     return { cloneCalls };
   }
 
+  function setupAbortableShallowCloneMock(): { cloneCalls: string[][] } {
+    const cloneCalls: string[][] = [];
+
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push([...argsArr]);
+      }
+
+      setImmediate(() => {
+        if (argsArr[0] === 'fetch') {
+          child.emit('close', 1);
+          return;
+        }
+        if (argsArr[0] === 'show-ref' && String(argsArr[3]).startsWith('refs/remotes/origin/')) {
+          child.emit('close', 1);
+          return;
+        }
+        if (argsArr[0] === 'show-ref' && String(argsArr[3]).startsWith('refs/heads/')) {
+          child.emit('close', 0);
+          return;
+        }
+        if (argsArr[0] === 'clone' && argsArr.includes('--reference')) {
+          child.stderr.emit('data', 'fatal: reference repository is shallow');
+          child.emit('close', 1);
+          return;
+        }
+
+        child.emit('close', 0);
+      });
+
+      return child as never;
+    });
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    return { cloneCalls };
+  }
+
+  function setupAbortableCloneFailureMock(stderr: string): { cloneCalls: string[][] } {
+    const cloneCalls: string[][] = [];
+
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push([...argsArr]);
+      }
+
+      setImmediate(() => {
+        if (argsArr[0] === 'fetch') {
+          child.emit('close', 1);
+          return;
+        }
+        if (argsArr[0] === 'show-ref' && String(argsArr[3]).startsWith('refs/remotes/origin/')) {
+          child.emit('close', 1);
+          return;
+        }
+        if (argsArr[0] === 'show-ref' && String(argsArr[3]).startsWith('refs/heads/')) {
+          child.emit('close', 0);
+          return;
+        }
+        if (argsArr[0] === 'clone') {
+          child.stderr.emit('data', stderr);
+          child.emit('close', 1);
+          return;
+        }
+
+        child.emit('close', 0);
+      });
+
+      return child as never;
+    });
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config' && argsArr[1] === '--local') throw new Error('not set');
+      if (argsArr[0] === 'config') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    return { cloneCalls };
+  }
+
   it('should fall back to clone without --reference when reference repository is shallow', () => {
     const { cloneCalls } = setupShallowCloneMock({ shallowError: true });
 
-    createSharedClone('/project', {
+    createSharedClone(linkedWorktreePath, {
       worktree: '/tmp/shallow-test',
       taskSlug: 'shallow-fallback',
     });
@@ -1295,11 +1634,76 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls[0][cloneCalls[0].length - 1]).toBe('/tmp/shallow-test');
     expect(cloneCalls[1][cloneCalls[1].length - 1]).toBe('/tmp/shallow-test');
 
-    // Fallback was logged
-    expect(mockLogInfo).toHaveBeenCalledWith(
-      'Reference repository is shallow, retrying clone without --reference',
-      expect.objectContaining({ referenceRepo: expect.any(String) }),
+    expect(mockLogInfo).toHaveBeenCalledWith('Reference repository is shallow, retrying clone without --reference');
+    expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+  });
+
+  it('should not expose the main repo path when abortable clone falls back from shallow reference', async () => {
+    const { cloneCalls } = setupAbortableShallowCloneMock();
+
+    await createSharedCloneAbortable(linkedWorktreePath, {
+      worktree: '/tmp/abortable-shallow-test',
+      taskSlug: 'shallow-fallback',
+      branch: 'feature/local-branch',
+    });
+
+    expect(cloneCalls).toHaveLength(2);
+    expect(cloneCalls[0]).toContain('--reference');
+    expect(cloneCalls[0]).toContain('--dissociate');
+    expect(cloneCalls[1]).not.toContain('--reference');
+    expect(cloneCalls[1]).not.toContain('--dissociate');
+    expect(mockLogInfo).toHaveBeenCalledWith('Reference repository is shallow, retrying clone without --reference');
+    expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+  });
+
+  it('should sanitize non-shallow clone errors before throwing', () => {
+    const hiddenClonePath = '/tmp/sanitized-sync-clone';
+    const { cloneCalls } = setupShallowCloneMock({
+      shallowError: false,
+      otherError: `fatal: repository '${hiddenMainRepoPath}' does not exist while cloning ${hiddenClonePath}`,
+    });
+
+    let thrown: Error | undefined;
+    try {
+      createSharedClone(hiddenMainRepoPath, {
+        worktree: hiddenClonePath,
+        taskSlug: 'other-error',
+      });
+    } catch (err) {
+      thrown = err as Error;
+    }
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toBe('Git clone failed');
+    expect(thrown?.message).not.toContain(hiddenMainRepoPath);
+    expect(thrown?.message).not.toContain(hiddenClonePath);
+    expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+  });
+
+  it('should sanitize abortable non-shallow clone errors before throwing', async () => {
+    const hiddenClonePath = '/tmp/sanitized-abortable-clone';
+    const { cloneCalls } = setupAbortableCloneFailureMock(
+      `fatal: repository '${hiddenMainRepoPath}' does not exist while cloning ${hiddenClonePath}`,
     );
+
+    let thrown: Error | undefined;
+    try {
+      await createSharedCloneAbortable(hiddenMainRepoPath, {
+        worktree: hiddenClonePath,
+        taskSlug: 'other-error',
+        branch: 'feature/local-branch',
+      });
+    } catch (err) {
+      thrown = err as Error;
+    }
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toBe('Git clone failed');
+    expect(thrown?.message).not.toContain(hiddenMainRepoPath);
+    expect(thrown?.message).not.toContain(hiddenClonePath);
+    expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
   });
 
   it('should not fall back on non-shallow clone errors', () => {
@@ -1313,7 +1717,7 @@ describe('shallow clone fallback', () => {
         worktree: '/tmp/other-error-test',
         taskSlug: 'other-error',
       });
-    }).toThrow('clone failed');
+    }).toThrow('Git clone failed');
   });
 
   it('should attempt --reference --dissociate clone first', () => {
