@@ -4,7 +4,7 @@ import {
   type UsageMissingReason,
 } from './contracts.js';
 import type { StepType } from './providerEvent.js';
-import type { ProviderType } from '../../shared/types/provider.js';
+import { isProviderType, type ProviderType } from '../../shared/types/provider.js';
 
 export type PhaseUsageType =
   | 'phase1_execute'
@@ -252,17 +252,7 @@ function getNumber(attributes: Record<string, unknown>, key: string): number | u
 
 function getProvider(attributes: Record<string, unknown>, key: string): ProviderType | undefined {
   const value = getString(attributes, key);
-  return value === 'claude'
-    || value === 'claude-sdk'
-    || value === 'claude-terminal'
-    || value === 'codex'
-    || value === 'opencode'
-    || value === 'cursor'
-    || value === 'copilot'
-    || value === 'kiro'
-    || value === 'mock'
-    ? value
-    : undefined;
+  return isProviderType(value) ? value : undefined;
 }
 
 function getStepType(attributes: Record<string, unknown>, key: string): StepType | undefined {

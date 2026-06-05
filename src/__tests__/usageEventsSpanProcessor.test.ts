@@ -63,7 +63,7 @@ describe('UsageEventsSpanProcessor', () => {
     ]);
   });
 
-  it('ignores duplicate runId registrations', () => {
+  it('rejects duplicate runId registrations', () => {
     const firstLogPath = createTempLogPath('first-usage-events.phase.jsonl');
     const secondLogPath = createTempLogPath('second-usage-events.phase.jsonl');
     const processor = new UsageEventsSpanProcessor();
@@ -73,17 +73,11 @@ describe('UsageEventsSpanProcessor', () => {
       sessionId: 'session-1',
       phaseUsageLogPath: firstLogPath,
     });
-    processor.register({
+    expect(() => processor.register({
       runId: 'run-1',
       sessionId: 'session-duplicate',
       phaseUsageLogPath: secondLogPath,
-    });
-
-    processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
-
-    expect(readRecords(firstLogPath)[0]).toEqual(expect.objectContaining({
-      session_id: 'session-1',
-    }));
+    })).toThrow('Phase usage event exporter is already registered for runId: run-1');
     expect(existsSync(secondLogPath)).toBe(false);
   });
 

@@ -119,7 +119,12 @@ export function resolvePhaseUsageFiles(inputs: string[]): string[] {
       for (const file of listPhaseUsageFilesInDirectory(target)) {
         files.add(file);
       }
-    } else if (stat.isFile() && isPhaseUsageFile(target)) {
+      continue;
+    }
+    if (stat.isFile()) {
+      if (!isPhaseUsageFile(target)) {
+        throw new Error(`Input file is not a phase usage event file: ${input}`);
+      }
       files.add(target);
     }
   }

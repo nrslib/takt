@@ -119,6 +119,14 @@ describe('analyze usage command', () => {
     expect(() => analyzeUsage([file])).toThrow(`Invalid JSON in ${file}:1`);
     expect(readFileSync(file, 'utf-8')).toBe('{bad json}\n');
   });
+
+  it('rejects explicit files that are not phase usage event files', () => {
+    const root = createTempDir();
+    const file = join(root, 'session-usage-events.jsonl');
+    writeFileSync(file, '', 'utf-8');
+
+    expect(() => resolvePhaseUsageFiles([file])).toThrow(`Input file is not a phase usage event file: ${file}`);
+  });
 });
 
 function record(overrides: Record<string, unknown>): string {

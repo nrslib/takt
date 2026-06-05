@@ -1,5 +1,5 @@
 import type { ReadableSpan, SpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { appendNdjsonLine, type NdjsonRecord } from '../fs/index.js';
+import { appendJsonLine } from '../fs/index.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import {
   mapSpanEndToPhaseUsageEvent,
@@ -27,11 +27,7 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
 
   register(options: UsageEventsSpanProcessorOptions): () => void {
     if (this.registrations.has(options.runId)) {
-      log.warn('Ignoring duplicate phase usage event registration', {
-        runId: options.runId,
-        phaseUsageLogPath: options.phaseUsageLogPath,
-      });
-      return () => {};
+      throw new Error(`Phase usage event exporter is already registered for runId: ${options.runId}`);
     }
     this.registrations.set(options.runId, options);
     return () => {
@@ -63,7 +59,7 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
       return;
     }
     try {
-      appendNdjsonLine(options.phaseUsageLogPath, record as unknown as NdjsonRecord);
+      appendJsonLine(options.phaseUsageLogPath, record);
     } catch (error) {
       if (this.hasReportedWriteFailure) {
         return;
