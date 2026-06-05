@@ -3,6 +3,7 @@
 [English](./configuration.md)
 
 このドキュメントは TAKT の全設定オプションのリファレンスです。クイックスタートについては [README](../README.md) を参照してください。
+phase 粒度の usage events と集計方法は [Observability Guide](./observability.ja.md) を参照してください。
 
 ## グローバル設定
 

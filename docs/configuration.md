@@ -3,6 +3,7 @@
 [日本語](./configuration.ja.md)
 
 This document is a reference for all TAKT configuration options. For a quick start, see the main [README](../README.md).
+For phase-level usage events and analysis, see the [Observability Guide](./observability.md).
 
 ## Global Configuration
 

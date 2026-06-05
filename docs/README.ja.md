@@ -287,6 +287,7 @@ npx create-takt-sdd
 | [チュートリアル](./tutorial.ja.md) | 3 フェーズで題材を改良しながら、タスクを積み、実行し、結果を確認する流れ |
 | [CLI Reference](./cli-reference.ja.md) | 全コマンド・オプション |
 | [Configuration](./configuration.ja.md) | グローバル設定・プロジェクト設定 |
+| [Observability](./observability.ja.md) | phase 粒度の usage events と集計 workflow |
 | [設計思想](./design-philosophy.ja.md) | TAKT が workflow、facet、フィードバックループ、追跡性を重視する理由 |
 | [Workflow Guide](./workflows.ja.md) | workflow の作成・カスタマイズ |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン workflow・persona の一覧 |
