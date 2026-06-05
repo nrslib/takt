@@ -246,6 +246,7 @@ async function runSingleReportAttempt(
       status: result.status,
       content: result.content,
       error: result.error,
+      providerUsage: result.providerUsage,
     }));
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:2`);

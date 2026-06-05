@@ -1,4 +1,5 @@
 import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
+import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
@@ -64,6 +65,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       status: structuredResponse.status === 'done' ? 'done' : 'error',
       instruction: structuredInstruction,
       response: structuredResponse.content,
+      providerUsage: structuredResponse.providerUsage,
     });
 
     let structuredParseError: string | undefined;
@@ -103,6 +105,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       let stage3Status: 'done' | 'error' | 'skipped' = 'skipped';
       let stage3Instruction = '';
       let stage3Response = '';
+      let stage3ProviderUsage: ProviderUsageSnapshot | undefined;
       const fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
         cwd: options.cwd,
         provider: options.provider,
@@ -112,6 +115,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
           stage3Status = entry.status;
           stage3Instruction = entry.instruction;
           stage3Response = entry.response;
+          stage3ProviderUsage = entry.providerUsage;
         },
       });
 
@@ -121,6 +125,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         status: stage3Status,
         instruction: stage3Instruction,
         response: stage3Response,
+        providerUsage: stage3ProviderUsage,
       });
 
       if (isValidRuleIndex(fallbackIndex, rules, interactiveEnabled)) {
@@ -153,6 +158,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       instruction: prompt,
       status: response.status === 'done' ? 'done' : 'error',
       response: response.content,
+      providerUsage: response.providerUsage,
     });
 
     if (response.status !== 'done') {

@@ -163,6 +163,7 @@ async function executeBatchWithRetry(
             content: '',
             success: false,
             error: lastError,
+            providerUsage: response.providerUsage,
           };
         }
         if (response.status === 'rate_limited') {
@@ -172,12 +173,14 @@ async function executeBatchWithRetry(
             success: false,
             error: response.error ?? response.content,
             rateLimitedResponse: response,
+            providerUsage: response.providerUsage,
           };
         }
         return {
           batchIndex: batch.batchIndex,
           content: response.content,
           success: true,
+          providerUsage: response.providerUsage,
         };
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
@@ -204,6 +207,7 @@ async function executeBatchWithRetry(
     status: getBatchResultStatus(result),
     content: result.content,
     error: result.error,
+    providerUsage: result.providerUsage,
   }));
 }
 

@@ -47,11 +47,18 @@ const enabledMonitorObservability: ObservabilityConfigForTest = {
   usageEventsPhase: false,
 };
 
+const enabledUsageEventsPhaseObservability: ObservabilityConfigForTest = {
+  enabled: true,
+  monitor: false,
+  sessionLogExporter: false,
+  usageEventsPhase: true,
+};
+
 const enabledAllObservability: ObservabilityConfigForTest = {
   enabled: true,
   monitor: true,
   sessionLogExporter: true,
-  usageEventsPhase: false,
+  usageEventsPhase: true,
 };
 
 async function loadFoundationWithMockedSdk(): Promise<{
@@ -67,6 +74,11 @@ async function loadFoundationWithMockedSdk(): Promise<{
       monitorJsonExporter?: {
         runId: string;
         monitorPath: string;
+      };
+      usageEventsExporter?: {
+        runId: string;
+        sessionId: string;
+        phaseUsageLogPath: string;
       };
     },
   ) => Promise<{ shutdown(): Promise<void> }>;
@@ -147,6 +159,11 @@ async function loadFoundationWithMockedSdk(): Promise<{
           runId: string;
           monitorPath: string;
         };
+        usageEventsExporter?: {
+          runId: string;
+          sessionId: string;
+          phaseUsageLogPath: string;
+        };
       },
     ) => Promise<{ shutdown(): Promise<void> }>;
   };
@@ -198,7 +215,7 @@ describe('otel foundation', () => {
       'service.name': 'takt',
       'service.version': packageJson.version,
     });
-    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(1);
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.constructedOptions[0]).not.toHaveProperty('traceExporter');
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
@@ -223,7 +240,7 @@ describe('otel foundation', () => {
       );
       await handle.shutdown();
 
-      expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(1);
+      expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
       const records = readFileSync(shadowLogPath, 'utf-8')
         .trim()
         .split('\n')
@@ -262,6 +279,61 @@ describe('otel foundation', () => {
       expect(foundation.metricReaderOptions[0]?.exportIntervalMillis).toBe(1000);
       expect(foundation.metricReaderOptions[0]?.exporter).toBeDefined();
       expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should attach the phase usage events span processor when usage events phase is enabled', async () => {
+    const foundation = await loadFoundationWithMockedSdk();
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-otel-usage-events-'));
+    const phaseUsageLogPath = join(tempDir, 'session-usage-events.phase.jsonl');
+
+    try {
+      const handle = await foundation.initializeOtelFoundation(
+        enabledUsageEventsPhaseObservability,
+        {
+          usageEventsExporter: {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            phaseUsageLogPath,
+          },
+        },
+      );
+
+      const processor = foundation.constructedOptions[0]?.spanProcessors?.[1] as {
+        onEnd(span: unknown): void;
+      };
+      processor.onEnd({
+        name: 'phase.implement.execute',
+        endTime: [1_778_777_205, 0],
+        attributes: {
+          'takt.run.id': 'run-1',
+          'takt.provider.name': 'mock',
+          'takt.model.name': 'mock-model',
+          'takt.step.name': 'implement',
+          'takt.step.type': 'normal',
+          'takt.phase.number': 1,
+          'takt.phase.name': 'execute',
+          'takt.phase.status': 'done',
+          'gen_ai.usage.input_tokens': 3,
+          'gen_ai.usage.output_tokens': 2,
+          'gen_ai.usage.total_tokens': 5,
+        },
+      });
+      await handle.shutdown();
+
+      const records = readFileSync(phaseUsageLogPath, 'utf-8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(records).toEqual([
+        expect.objectContaining({
+          run_id: 'run-1',
+          session_id: 'session-1',
+          phase: 'phase1_execute',
+        }),
+      ]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

@@ -395,6 +395,15 @@ describe('workflow OpenTelemetry spans', () => {
       }, async () => ({ status: 'done', content: 'secret content' }), (result: { status: string; content: string }) => ({
         status: result.status,
         content: result.content,
+        providerUsage: {
+          usageMissing: false,
+          inputTokens: 11,
+          outputTokens: 7,
+          totalTokens: 18,
+          cachedInputTokens: 3,
+          cacheCreationInputTokens: 2,
+          cacheReadInputTokens: 1,
+        },
       }));
       return makeDoneResult();
     });
@@ -419,6 +428,13 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.phase.result.content': '[REDACTED] content',
       'takt.provider.name': 'codex',
       'takt.model.name': 'gpt-5',
+      'takt.usage.missing': false,
+      'gen_ai.usage.input_tokens': 11,
+      'gen_ai.usage.output_tokens': 7,
+      'gen_ai.usage.total_tokens': 18,
+      'gen_ai.usage.cached_input_tokens': 3,
+      'gen_ai.usage.cache_creation_input_tokens': 2,
+      'gen_ai.usage.cache_read_input_tokens': 1,
     });
     expect(spans[1]?.ended).toBe(true);
     expect(metricRecords).toContainEqual(expect.objectContaining({
@@ -514,6 +530,16 @@ describe('workflow OpenTelemetry spans', () => {
           status: 'done',
           instruction: 'judge instruction',
           response: 'judge response',
+          providerUsage: {
+            usageMissing: false,
+            inputTokens: 5,
+            outputTokens: 4,
+            totalTokens: 9,
+          },
+        },
+        providerInfo: {
+          provider: 'claude-sdk',
+          model: 'claude-sonnet-4',
         },
       });
       return { ruleIndex: 1, method: 'structured_output' };
@@ -535,6 +561,12 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.judge.status': 'done',
       'takt.judge.instruction': 'judge instruction',
       'takt.judge.response': 'judge response',
+      'takt.provider.name': 'claude-sdk',
+      'takt.model.name': 'claude-sonnet-4',
+      'takt.usage.missing': false,
+      'gen_ai.usage.input_tokens': 5,
+      'gen_ai.usage.output_tokens': 4,
+      'gen_ai.usage.total_tokens': 9,
     });
     expect(spans[0]?.attributes).toMatchObject({
       'takt.phase.status': 'done',

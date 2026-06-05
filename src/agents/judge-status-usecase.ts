@@ -1,4 +1,5 @@
 import type { WorkflowRule, RuleMatchMethod, Language } from '../core/models/types.js';
+import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type StreamCallback } from './runner.js';
 import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditions } from './judge-utils.js';
@@ -21,6 +22,7 @@ export interface JudgeStatusOptions {
     status: 'done' | 'error' | 'skipped';
     instruction: string;
     response: string;
+    providerUsage?: ProviderUsageSnapshot;
   }) => void;
   onStructuredPromptResolved?: (promptParts: {
     systemPrompt: string;
@@ -62,6 +64,7 @@ export async function runTagJudgeStage(
     status: tagResponse.status === 'done' ? 'done' : 'error',
     instruction: tagInstruction,
     response: tagResponse.content,
+    providerUsage: tagResponse.providerUsage,
   });
 
   if (tagResponse.status === 'done') {
@@ -88,6 +91,7 @@ export interface EvaluateConditionOptions {
     instruction: string;
     status: 'done' | 'error';
     response: string;
+    providerUsage?: ProviderUsageSnapshot;
   }) => void;
 }
 
@@ -111,6 +115,7 @@ export async function evaluateCondition(
     instruction: prompt,
     status: response.status === 'done' ? 'done' : 'error',
     response: response.content,
+    providerUsage: response.providerUsage,
   });
 
   if (response.status !== 'done') {
@@ -167,6 +172,7 @@ export async function judgeStatus(
     status: structuredResponse.status === 'done' ? 'done' : 'error',
     instruction: structuredInstruction,
     response: structuredResponse.content,
+    providerUsage: structuredResponse.providerUsage,
   });
 
   if (structuredResponse.status === 'done') {
@@ -204,6 +210,7 @@ export async function judgeStatus(
     let stage3Status: 'done' | 'error' | 'skipped' = 'skipped';
     let stage3Instruction = '';
     let stage3Response = '';
+    let stage3ProviderUsage: ProviderUsageSnapshot | undefined;
     const normalizedConditions = conditions.map((c, pos) => ({ index: pos, text: c.text }));
     const fallbackPosition = await evaluateCondition(structuredInstruction, normalizedConditions, {
       cwd: options.cwd,
@@ -214,6 +221,7 @@ export async function judgeStatus(
         stage3Status = entry.status;
         stage3Instruction = entry.instruction;
         stage3Response = entry.response;
+        stage3ProviderUsage = entry.providerUsage;
       },
     });
 
@@ -223,6 +231,7 @@ export async function judgeStatus(
       status: stage3Status,
       instruction: stage3Instruction,
       response: stage3Response,
+      providerUsage: stage3ProviderUsage,
     });
 
     if (fallbackPosition >= 0 && fallbackPosition < conditions.length) {
