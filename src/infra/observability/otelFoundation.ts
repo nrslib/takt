@@ -50,7 +50,13 @@ export async function initializeOtelFoundation(
   }
 
   const shared = await acquireSdk();
-  const registrations = registerRunExporters(shared, options);
+  let registrations: OtelRegistration[];
+  try {
+    registrations = registerRunExporters(shared, options);
+  } catch (error) {
+    await releaseSdk(shared);
+    throw error;
+  }
 
   let released = false;
   return {
@@ -120,16 +126,27 @@ function registerRunExporters(
   options: OtelFoundationOptions | undefined,
 ): OtelRegistration[] {
   const registrations: OtelRegistration[] = [];
-  if (options?.sessionLogExporter && shared.sessionLogSpanProcessor) {
-    registrations.push(shared.sessionLogSpanProcessor.register(options.sessionLogExporter));
-  }
-  if (options?.usageEventsExporter && shared.usageEventsSpanProcessor) {
-    registrations.push(shared.usageEventsSpanProcessor.register(options.usageEventsExporter));
-  }
-  if (options?.monitorJsonExporter && shared.monitorJsonMetricExporter) {
-    registrations.push(shared.monitorJsonMetricExporter.register(options.monitorJsonExporter));
+  try {
+    if (options?.sessionLogExporter && shared.sessionLogSpanProcessor) {
+      registrations.push(shared.sessionLogSpanProcessor.register(options.sessionLogExporter));
+    }
+    if (options?.usageEventsExporter && shared.usageEventsSpanProcessor) {
+      registrations.push(shared.usageEventsSpanProcessor.register(options.usageEventsExporter));
+    }
+    if (options?.monitorJsonExporter && shared.monitorJsonMetricExporter) {
+      registrations.push(shared.monitorJsonMetricExporter.register(options.monitorJsonExporter));
+    }
+  } catch (error) {
+    unregisterAll(registrations);
+    throw error;
   }
   return registrations;
+}
+
+function unregisterAll(registrations: OtelRegistration[]): void {
+  for (const unregister of registrations.splice(0).reverse()) {
+    unregister();
+  }
 }
 
 function createSpanProcessorState(): {
