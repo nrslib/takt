@@ -3,7 +3,6 @@ import {
   USAGE_MISSING_REASONS,
   type UsageMissingReason,
 } from './contracts.js';
-import type { StepType } from './providerEvent.js';
 import { isProviderType, type ProviderType } from '../../shared/types/provider.js';
 
 export type PhaseUsageType =
@@ -13,6 +12,7 @@ export type PhaseUsageType =
   | 'phase3_tag'
   | 'phase3_fallback';
 
+export type PhaseUsageStepType = 'agent' | 'system' | 'workflow_call';
 type PhaseName = 'execute' | 'report' | 'judge';
 type JudgeMethod = 'structured_output' | 'phase3_tag' | 'ai_judge';
 type JudgeStage = 1 | 2 | 3;
@@ -23,7 +23,7 @@ export interface PhaseUsageEventLogRecord {
   provider: ProviderType;
   provider_model: string;
   step: string;
-  step_type: StepType;
+  step_type: PhaseUsageStepType;
   phase: PhaseUsageType;
   phase_name: PhaseName;
   phase_execution_id?: string;
@@ -52,7 +52,7 @@ interface PhaseUsageMeta {
   provider: ProviderType;
   providerModel: string;
   step: string;
-  stepType: StepType;
+  stepType: PhaseUsageStepType;
   phase: PhaseUsageType;
   phaseName: PhaseName;
   phaseExecutionId?: string;
@@ -255,12 +255,10 @@ function getProvider(attributes: Record<string, unknown>, key: string): Provider
   return isProviderType(value) ? value : undefined;
 }
 
-function getStepType(attributes: Record<string, unknown>, key: string): StepType | undefined {
+function getStepType(attributes: Record<string, unknown>, key: string): PhaseUsageStepType | undefined {
   const value = getString(attributes, key);
-  return value === 'normal'
-    || value === 'parallel'
-    || value === 'arpeggio'
-    || value === 'team_leader'
+  return value === 'agent'
+    || value === 'system'
     || value === 'workflow_call'
     ? value
     : undefined;

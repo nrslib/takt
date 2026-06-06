@@ -104,7 +104,7 @@ function makePhaseSpan(runId: string): Record<string, unknown> {
       'takt.provider.name': 'mock',
       'takt.model.name': 'mock-model',
       'takt.step.name': 'implement',
-      'takt.step.type': 'normal',
+      'takt.step.type': 'agent',
       'takt.phase.number': 1,
       'takt.phase.name': 'execute',
       'takt.phase.status': 'done',
