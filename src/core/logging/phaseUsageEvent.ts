@@ -3,6 +3,8 @@ import {
   USAGE_MISSING_REASONS,
   type UsageMissingReason,
 } from './contracts.js';
+import { buildUsageEventPayload } from './providerEvent.js';
+import type { ProviderUsageSnapshot } from '../models/response.js';
 import { isProviderType, type ProviderType } from '../../shared/types/provider.js';
 
 export type PhaseUsageType =
@@ -171,12 +173,19 @@ function buildRecord(
 function extractUsage(attributes: Record<string, unknown>): Pick<PhaseUsageEventLogRecord, 'usage_missing' | 'reason' | 'usage'> & {
   missing: boolean;
 } {
+  const snapshot = usageSnapshotFromAttributes(attributes);
+  const payload = buildUsageEventPayload(snapshot);
+  return {
+    missing: payload.usage_missing,
+    ...payload,
+  };
+}
+
+function usageSnapshotFromAttributes(attributes: Record<string, unknown>): ProviderUsageSnapshot {
   if (attributes['takt.usage.missing'] === true) {
     return {
-      missing: true,
-      usage_missing: true,
+      usageMissing: true,
       reason: getUsageMissingReason(attributes['takt.usage.missing_reason']),
-      usage: {},
     };
   }
 
@@ -187,26 +196,21 @@ function extractUsage(attributes: Record<string, unknown>): Pick<PhaseUsageEvent
 
   if (inputTokens === undefined || outputTokens === undefined || totalTokens === undefined) {
     return {
-      missing: true,
-      usage_missing: true,
+      usageMissing: true,
       reason: hasAnyUsageAttribute(attributes)
         ? USAGE_MISSING_REASONS.TOKENS_MISSING
         : USAGE_MISSING_REASONS.NOT_AVAILABLE,
-      usage: {},
     };
   }
 
   return {
-    missing: false,
-    usage_missing: false,
-    usage: {
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-      total_tokens: totalTokens,
-      ...optionalNumber('cached_input_tokens', getNumber(attributes, 'gen_ai.usage.cached_input_tokens')),
-      ...optionalNumber('cache_creation_input_tokens', getNumber(attributes, 'gen_ai.usage.cache_creation_input_tokens')),
-      ...optionalNumber('cache_read_input_tokens', getNumber(attributes, 'gen_ai.usage.cache_read_input_tokens')),
-    },
+    usageMissing: false,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    cachedInputTokens: getNumber(attributes, 'gen_ai.usage.cached_input_tokens'),
+    cacheCreationInputTokens: getNumber(attributes, 'gen_ai.usage.cache_creation_input_tokens'),
+    cacheReadInputTokens: getNumber(attributes, 'gen_ai.usage.cache_read_input_tokens'),
   };
 }
 
@@ -285,10 +289,6 @@ function getUsageMissingReason(value: unknown): UsageMissingReason {
     || value === USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER
     ? value
     : USAGE_MISSING_REASONS.NOT_AVAILABLE;
-}
-
-function optionalNumber<K extends string>(key: K, value: number | undefined): Partial<Record<K, number>> {
-  return value !== undefined ? { [key]: value } as Partial<Record<K, number>> : {};
 }
 
 function hrTimeToIso(time: readonly [number, number] | undefined): string {

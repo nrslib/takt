@@ -16,19 +16,23 @@ export interface JudgeStatusOptions {
   language?: Language;
   interactive?: boolean;
   onStream?: StreamCallback;
-  onJudgeStage?: (entry: {
-    stage: 1 | 2 | 3;
-    method: 'structured_output' | 'phase3_tag' | 'ai_judge';
-    status: 'done' | 'error' | 'skipped';
-    instruction: string;
-    response: string;
-    providerUsage?: ProviderUsageSnapshot;
-  }) => void;
+  onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
 }
+
+export interface JudgeStageLogEntry {
+  stage: 1 | 2 | 3;
+  method: 'structured_output' | 'phase3_tag' | 'ai_judge';
+  status: 'done' | 'error' | 'skipped';
+  instruction: string;
+  response: string;
+  providerUsage?: ProviderUsageSnapshot;
+}
+
+type JudgeResponseEntry = Pick<JudgeStageLogEntry, 'instruction' | 'status' | 'response' | 'providerUsage'>;
 
 export interface TagJudgeRunOptions {
   cwd: string;
@@ -133,6 +137,28 @@ export async function evaluateCondition(
   return detectJudgeIndex(response.content);
 }
 
+export function createJudgeStageRecorder(): {
+  capture(entry: JudgeResponseEntry): void;
+  stage(entry: Pick<JudgeStageLogEntry, 'stage' | 'method'>): JudgeStageLogEntry;
+} {
+  let latest: JudgeResponseEntry = {
+    status: 'skipped',
+    instruction: '',
+    response: '',
+  };
+  return {
+    capture(entry): void {
+      latest = entry;
+    },
+    stage(entry): JudgeStageLogEntry {
+      return {
+        ...entry,
+        ...latest,
+      };
+    },
+  };
+}
+
 export async function judgeStatus(
   structuredInstruction: string,
   tagInstruction: string,
@@ -207,32 +233,20 @@ export async function judgeStatus(
   const conditions = buildJudgeConditions(rules, interactiveEnabled);
 
   if (conditions.length > 0) {
-    let stage3Status: 'done' | 'error' | 'skipped' = 'skipped';
-    let stage3Instruction = '';
-    let stage3Response = '';
-    let stage3ProviderUsage: ProviderUsageSnapshot | undefined;
+    const stage3 = createJudgeStageRecorder();
     const normalizedConditions = conditions.map((c, pos) => ({ index: pos, text: c.text }));
     const fallbackPosition = await evaluateCondition(structuredInstruction, normalizedConditions, {
       cwd: options.cwd,
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
-      onJudgeResponse: (entry) => {
-        stage3Status = entry.status;
-        stage3Instruction = entry.instruction;
-        stage3Response = entry.response;
-        stage3ProviderUsage = entry.providerUsage;
-      },
+      onJudgeResponse: stage3.capture,
     });
 
-    options.onJudgeStage?.({
+    options.onJudgeStage?.(stage3.stage({
       stage: 3,
       method: 'ai_judge',
-      status: stage3Status,
-      instruction: stage3Instruction,
-      response: stage3Response,
-      providerUsage: stage3ProviderUsage,
-    });
+    }));
 
     if (fallbackPosition >= 0 && fallbackPosition < conditions.length) {
       const originalIndex = conditions[fallbackPosition]?.index;

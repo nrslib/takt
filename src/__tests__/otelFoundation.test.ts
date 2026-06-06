@@ -339,66 +339,38 @@ describe('otel foundation', () => {
     }
   });
 
-  it('should release the shared SDK when run exporter registration fails', async () => {
+  it('should reject mismatched run-scoped exporter ids before starting the SDK', async () => {
     const foundation = await loadFoundationWithMockedSdk();
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-otel-registration-failure-'));
-    const firstPhaseUsageLogPath = join(tempDir, 'first-usage-events.phase.jsonl');
-    const secondShadowLogPath = join(tempDir, 'second-otel-session-shadow.jsonl');
-    const secondPhaseUsageLogPath = join(tempDir, 'second-usage-events.phase.jsonl');
-    let first: { shutdown(): Promise<void> } | undefined;
+    const shadowLogPath = join(tempDir, 'session-otel-session-shadow.jsonl');
+    const phaseUsageLogPath = join(tempDir, 'session-usage-events.phase.jsonl');
+    const monitorPath = join(tempDir, 'monitor.json');
 
     try {
-      first = await foundation.initializeOtelFoundation(
-        enabledUsageEventsPhaseObservability,
-        {
-          usageEventsExporter: {
-            runId: 'run-1',
-            sessionId: 'session-1',
-            phaseUsageLogPath: firstPhaseUsageLogPath,
-          },
-        },
-      );
-
       await expect(foundation.initializeOtelFoundation(
         enabledAllObservability,
         {
           sessionLogExporter: {
             runId: 'run-2',
-            shadowLogPath: secondShadowLogPath,
-            sanitizedTask: 'second task',
+            shadowLogPath,
+            sanitizedTask: 'task',
             workflowName: 'default',
           },
           usageEventsExporter: {
             runId: 'run-1',
-            sessionId: 'session-duplicate',
-            phaseUsageLogPath: secondPhaseUsageLogPath,
+            sessionId: 'session-1',
+            phaseUsageLogPath,
+          },
+          monitorJsonExporter: {
+            runId: 'run-2',
+            monitorPath,
           },
         },
-      )).rejects.toThrow('Phase usage event exporter is already registered for runId: run-1');
+      )).rejects.toThrow('Run-scoped OpenTelemetry exporters must share the same runId');
 
-      const sessionLogProcessor = foundation.constructedOptions[0]?.spanProcessors?.[0] as {
-        onStart(span: unknown, parentContext: unknown): void;
-      };
-      sessionLogProcessor.onStart({
-        name: 'step.implement',
-        startTime: [1_778_777_205, 0],
-        attributes: {
-          'takt.run.id': 'run-2',
-          'takt.step.name': 'implement',
-          'takt.step.persona': 'coder',
-          'takt.step.iteration': 1,
-        },
-      }, {});
-      const secondShadowRecords = readFileSync(secondShadowLogPath, 'utf-8').trim().split('\n');
-      expect(secondShadowRecords).toHaveLength(1);
-
-      await first.shutdown();
-
-      expect(foundation.shutdownMock).toHaveBeenCalledOnce();
+      expect(foundation.startMock).not.toHaveBeenCalled();
+      expect(foundation.constructedOptions).toEqual([]);
     } finally {
-      if (first) {
-        await first.shutdown();
-      }
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

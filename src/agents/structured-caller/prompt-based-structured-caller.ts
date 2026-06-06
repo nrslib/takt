@@ -1,5 +1,4 @@
 import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
-import type { ProviderUsageSnapshot } from '../../core/models/response.js';
 import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
@@ -8,6 +7,7 @@ import {
 import { buildJudgePrompt, detectJudgeIndex, isValidRuleIndex, buildJudgeConditions } from '../judge-utils.js';
 import { runAgent } from '../runner.js';
 import {
+  createJudgeStageRecorder,
   runTagJudgeStage,
   type EvaluateConditionOptions,
   type JudgeStatusOptions,
@@ -102,31 +102,19 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     const conditions = buildJudgeConditions(rules, interactiveEnabled);
 
     if (conditions.length > 0) {
-      let stage3Status: 'done' | 'error' | 'skipped' = 'skipped';
-      let stage3Instruction = '';
-      let stage3Response = '';
-      let stage3ProviderUsage: ProviderUsageSnapshot | undefined;
+      const stage3 = createJudgeStageRecorder();
       const fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
         cwd: options.cwd,
         provider: options.provider,
         resolvedProvider: options.resolvedProvider,
         resolvedModel: options.resolvedModel,
-        onJudgeResponse: (entry) => {
-          stage3Status = entry.status;
-          stage3Instruction = entry.instruction;
-          stage3Response = entry.response;
-          stage3ProviderUsage = entry.providerUsage;
-        },
+        onJudgeResponse: stage3.capture,
       });
 
-      options.onJudgeStage?.({
+      options.onJudgeStage?.(stage3.stage({
         stage: 3,
         method: 'ai_judge',
-        status: stage3Status,
-        instruction: stage3Instruction,
-        response: stage3Response,
-        providerUsage: stage3ProviderUsage,
-      });
+      }));
 
       if (isValidRuleIndex(fallbackIndex, rules, interactiveEnabled)) {
         return { ruleIndex: fallbackIndex, method: 'ai_judge' };

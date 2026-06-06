@@ -48,6 +48,7 @@ export async function initializeOtelFoundation(
   if (!config.enabled) {
     return createNoopHandle();
   }
+  validateRunScopedExporterIds(options);
 
   const shared = await acquireSdk();
   let registrations: OtelRegistration[];
@@ -141,6 +142,18 @@ function registerRunExporters(
     throw error;
   }
   return registrations;
+}
+
+function validateRunScopedExporterIds(options: OtelFoundationOptions | undefined): void {
+  const runIds = [
+    options?.sessionLogExporter?.runId,
+    options?.usageEventsExporter?.runId,
+    options?.monitorJsonExporter?.runId,
+  ].filter((runId): runId is string => typeof runId === 'string');
+  const uniqueRunIds = new Set(runIds);
+  if (uniqueRunIds.size > 1) {
+    throw new Error('Run-scoped OpenTelemetry exporters must share the same runId');
+  }
 }
 
 function unregisterAll(registrations: OtelRegistration[]): void {

@@ -27,7 +27,11 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
 
   register(options: UsageEventsSpanProcessorOptions): () => void {
     if (this.registrations.has(options.runId)) {
-      throw new Error(`Phase usage event exporter is already registered for runId: ${options.runId}`);
+      log.warn('Ignoring duplicate phase usage event registration', {
+        runId: options.runId,
+        phaseUsageLogPath: options.phaseUsageLogPath,
+      });
+      return () => {};
     }
     this.registrations.set(options.runId, options);
     return () => {
