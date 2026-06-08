@@ -27,6 +27,7 @@ type RawProviderOptions = {
   claude?: {
     allowed_tools?: string[];
     effort?: ClaudeEffort;
+    use_prompt_temp_file?: boolean;
     sandbox?: {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
@@ -38,8 +39,15 @@ type RawProviderOptions = {
     keep_session?: boolean;
     transcript_poll_interval_ms?: number;
   };
+  cursor?: {
+    use_prompt_temp_file?: boolean;
+  };
+  kiro?: {
+    use_prompt_temp_file?: boolean;
+  };
   copilot?: {
     effort?: CopilotEffort;
+    use_prompt_temp_file?: boolean;
   };
 };
 
@@ -76,6 +84,7 @@ export function normalizeProviderOptions(
   if (
     options.claude?.allowed_tools !== undefined
     || options.claude?.effort !== undefined
+    || options.claude?.use_prompt_temp_file !== undefined
     || options.claude?.sandbox
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
@@ -84,6 +93,9 @@ export function normalizeProviderOptions(
     }
     if (options.claude.effort !== undefined) {
       claude.effort = options.claude.effort;
+    }
+    if (options.claude.use_prompt_temp_file !== undefined) {
+      claude.usePromptTempFile = options.claude.use_prompt_temp_file;
     }
     if (options.claude.sandbox) {
       const sandbox = {
@@ -104,6 +116,18 @@ export function normalizeProviderOptions(
   }
   if (options.copilot?.effort !== undefined) {
     result.copilot = { effort: options.copilot.effort };
+  }
+  if (options.cursor?.use_prompt_temp_file !== undefined) {
+    result.cursor = { usePromptTempFile: options.cursor.use_prompt_temp_file };
+  }
+  if (options.kiro?.use_prompt_temp_file !== undefined) {
+    result.kiro = { usePromptTempFile: options.kiro.use_prompt_temp_file };
+  }
+  if (options.copilot?.use_prompt_temp_file !== undefined) {
+    result.copilot = {
+      ...result.copilot,
+      usePromptTempFile: options.copilot.use_prompt_temp_file,
+    };
   }
   if (
     options.claude_terminal?.backend !== undefined
@@ -152,6 +176,9 @@ export function mergeProviderOptions(
         ...(layer.claude.effort !== undefined
           ? { effort: layer.claude.effort }
           : {}),
+        ...(layer.claude.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.claude.usePromptTempFile }
+          : {}),
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
           : {}),
@@ -163,10 +190,19 @@ export function mergeProviderOptions(
         ...(layer.copilot.effort !== undefined
           ? { effort: layer.copilot.effort }
           : {}),
+        ...(layer.copilot.usePromptTempFile !== undefined
+          ? { usePromptTempFile: layer.copilot.usePromptTempFile }
+          : {}),
       };
     }
     if (layer.claudeTerminal) {
       result.claudeTerminal = { ...result.claudeTerminal, ...layer.claudeTerminal };
+    }
+    if (layer.cursor) {
+      result.cursor = { ...result.cursor, ...layer.cursor };
+    }
+    if (layer.kiro) {
+      result.kiro = { ...result.kiro, ...layer.kiro };
     }
   }
 
@@ -274,6 +310,12 @@ export function resolveEffectiveProviderOptions(
       stepOptions?.claude?.effort,
       resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
     ),
+    usePromptTempFile: selectProviderValue(
+      resolvedConfigOptions.claude?.usePromptTempFile,
+      personaOptions?.claude?.usePromptTempFile,
+      stepOptions?.claude?.usePromptTempFile,
+      resolveProviderOptionOrigin(originResolver, 'claude.usePromptTempFile', source),
+    ),
   };
 
   const codexNetworkAccess = selectProviderValue(
@@ -305,6 +347,24 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.copilot?.effort,
     stepOptions?.copilot?.effort,
     resolveProviderOptionOrigin(originResolver, 'copilot.effort', source),
+  );
+  const cursorUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.cursor?.usePromptTempFile,
+    personaOptions?.cursor?.usePromptTempFile,
+    stepOptions?.cursor?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'cursor.usePromptTempFile', source),
+  );
+  const kiroUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.kiro?.usePromptTempFile,
+    personaOptions?.kiro?.usePromptTempFile,
+    stepOptions?.kiro?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'kiro.usePromptTempFile', source),
+  );
+  const copilotUsePromptTempFile = selectProviderValue(
+    resolvedConfigOptions.copilot?.usePromptTempFile,
+    personaOptions?.copilot?.usePromptTempFile,
+    stepOptions?.copilot?.usePromptTempFile,
+    resolveProviderOptionOrigin(originResolver, 'copilot.usePromptTempFile', source),
   );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
@@ -347,10 +407,21 @@ export function resolveEffectiveProviderOptions(
           }
         : undefined,
     claude:
-      claude.sandbox !== undefined || claude.allowedTools !== undefined || claude.effort !== undefined
+      claude.sandbox !== undefined
+      || claude.allowedTools !== undefined
+      || claude.effort !== undefined
+      || claude.usePromptTempFile !== undefined
         ? claude
         : undefined,
-    copilot: copilotEffort !== undefined ? { effort: copilotEffort } : undefined,
+    cursor: cursorUsePromptTempFile !== undefined ? { usePromptTempFile: cursorUsePromptTempFile } : undefined,
+    kiro: kiroUsePromptTempFile !== undefined ? { usePromptTempFile: kiroUsePromptTempFile } : undefined,
+    copilot:
+      copilotEffort !== undefined || copilotUsePromptTempFile !== undefined
+        ? {
+            ...(copilotEffort !== undefined ? { effort: copilotEffort } : {}),
+            ...(copilotUsePromptTempFile !== undefined ? { usePromptTempFile: copilotUsePromptTempFile } : {}),
+          }
+        : undefined,
     claudeTerminal:
       claudeTerminalBackend !== undefined
       || claudeTerminalTimeoutMs !== undefined
@@ -367,7 +438,13 @@ export function resolveEffectiveProviderOptions(
         : undefined,
   };
 
-  return result.codex || result.opencode || result.claude || result.copilot || result.claudeTerminal
+  return result.codex
+    || result.opencode
+    || result.claude
+    || result.cursor
+    || result.kiro
+    || result.copilot
+    || result.claudeTerminal
     ? result
     : undefined;
 }
@@ -387,6 +464,9 @@ function stripClaudeAllowedTools(
         ...(providerOptions.claude.sandbox !== undefined
           ? { sandbox: { ...providerOptions.claude.sandbox } }
           : {}),
+        ...(providerOptions.claude.usePromptTempFile !== undefined
+          ? { usePromptTempFile: providerOptions.claude.usePromptTempFile }
+          : {}),
       }
     : undefined;
 
@@ -405,6 +485,12 @@ function stripClaudeAllowedTools(
       : {}),
     ...(providerOptions.claudeTerminal !== undefined
       ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
+      : {}),
+    ...(providerOptions.cursor !== undefined
+      ? { cursor: { ...providerOptions.cursor } }
+      : {}),
+    ...(providerOptions.kiro !== undefined
+      ? { kiro: { ...providerOptions.kiro } }
       : {}),
   };
 
@@ -445,13 +531,17 @@ export function resolveEffectiveTeamLeaderPartProviderOptions(
 export const PROVIDER_OPTION_PATHS = [
   'claude.effort',
   'claude.allowedTools',
+  'claude.usePromptTempFile',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
   'codex.networkAccess',
   'codex.reasoningEffort',
   'opencode.networkAccess',
   'opencode.variant',
+  'cursor.usePromptTempFile',
+  'kiro.usePromptTempFile',
   'copilot.effort',
+  'copilot.usePromptTempFile',
   'claudeTerminal.backend',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',

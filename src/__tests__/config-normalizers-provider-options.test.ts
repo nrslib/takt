@@ -119,6 +119,44 @@ describe('denormalizeProviderOptions', () => {
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
+
+  it('should round-trip CLI prompt temp file options through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      cursor: {
+        use_prompt_temp_file: true,
+      },
+      kiro: {
+        use_prompt_temp_file: true,
+      },
+      claude: {
+        use_prompt_temp_file: true,
+      },
+      copilot: {
+        effort: 'high',
+        use_prompt_temp_file: true,
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      cursor: {
+        usePromptTempFile: true,
+      },
+      kiro: {
+        usePromptTempFile: true,
+      },
+      claude: {
+        usePromptTempFile: true,
+      },
+      copilot: {
+        effort: 'high',
+        usePromptTempFile: true,
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
 });
 
 describe('buildRawTaktProvidersOrThrow', () => {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -77,6 +78,7 @@ async function buildSpawnArgs(
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const session = resolveSessionArgs(options);
   const preparedMcpConfig = await prepareClaudeMcpConfig(options.mcpServers);
+  let promptCleanup: (() => Promise<void>) | undefined;
   const args: string[] = [
     '-p',
     '--verbose',
@@ -117,11 +119,35 @@ async function buildSpawnArgs(
   }
 
   args.push(...session.args);
-  args.push('--', prompt);
+  try {
+    const preparedPrompt = await prepareCliPromptArgument(
+      options.cwd,
+      prompt,
+      options.usePromptTempFile,
+    );
+    promptCleanup = preparedPrompt.cleanup;
+    args.push('--', preparedPrompt.promptArgument);
+  } catch (error) {
+    try {
+      await preparedMcpConfig.cleanup();
+    } catch (raw) {
+      log.error('Failed to clean up Claude MCP config after prompt preparation failed', {
+        error: getErrorMessage(raw),
+      });
+    }
+    throw error;
+  }
+
   return {
     args,
     expectedSessionId: session.sessionId,
-    cleanup: preparedMcpConfig.cleanup,
+    cleanup: async () => {
+      try {
+        await promptCleanup?.();
+      } finally {
+        await preparedMcpConfig.cleanup();
+      }
+    },
   };
 }
 
@@ -192,18 +218,18 @@ export async function callClaudeHeadless(
           status: 'error' as const,
           content: message,
           error: message,
-        }),
+      }),
     };
-  }
-
-  try {
-    await cleanup?.();
-  } catch (raw) {
-    const cleanupError = raw as Error;
-    log.error('Failed to clean up Claude MCP config', {
-      agentName,
-      error: getErrorMessage(cleanupError),
-    });
+  } finally {
+    try {
+      await cleanup?.();
+    } catch (raw) {
+      const cleanupError = raw as Error;
+      log.error('Failed to clean up Claude temp files', {
+        agentName,
+        error: getErrorMessage(cleanupError),
+      });
+    }
   }
 
   return response;

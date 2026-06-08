@@ -196,6 +196,44 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('claude.effort')).toBe('env');
   });
 
+  it('provider_options の prompt temp file env override を source=env として返す', () => {
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  cursor:',
+        '    use_prompt_temp_file: false',
+        '  kiro:',
+        '    use_prompt_temp_file: false',
+        '  claude:',
+        '    use_prompt_temp_file: false',
+        '  copilot:',
+        '    use_prompt_temp_file: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CURSOR_USE_PROMPT_TEMP_FILE = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_KIRO_USE_PROMPT_TEMP_FILE = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_USE_PROMPT_TEMP_FILE = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_COPILOT_USE_PROMPT_TEMP_FILE = 'true';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.source).toBe('env');
+    expect(result.value).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+    });
+    expect(result.originResolver('cursor.usePromptTempFile')).toBe('env');
+    expect(result.originResolver('kiro.usePromptTempFile')).toBe('env');
+    expect(result.originResolver('claude.usePromptTempFile')).toBe('env');
+    expect(result.originResolver('copilot.usePromptTempFile')).toBe('env');
+  });
+
   it('opencode.variant の env override を source=env として返す', () => {
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });

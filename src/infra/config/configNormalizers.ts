@@ -452,6 +452,9 @@ export function denormalizeProviderOptions(
     if (providerOptions.claude.effort !== undefined) {
       claude.effort = providerOptions.claude.effort;
     }
+    if (providerOptions.claude.usePromptTempFile !== undefined) {
+      claude.use_prompt_temp_file = providerOptions.claude.usePromptTempFile;
+    }
     const sandbox: Record<string, unknown> = {};
     if (providerOptions.claude.sandbox?.allowUnsandboxedCommands !== undefined) {
       sandbox.allow_unsandboxed_commands = providerOptions.claude.sandbox.allowUnsandboxedCommands;
@@ -466,8 +469,24 @@ export function denormalizeProviderOptions(
       raw.claude = claude;
     }
   }
-  if (providerOptions.copilot?.effort !== undefined) {
-    raw.copilot = { effort: providerOptions.copilot.effort };
+  if (providerOptions.cursor?.usePromptTempFile !== undefined) {
+    raw.cursor = { use_prompt_temp_file: providerOptions.cursor.usePromptTempFile };
+  }
+  if (providerOptions.kiro?.usePromptTempFile !== undefined) {
+    raw.kiro = { use_prompt_temp_file: providerOptions.kiro.usePromptTempFile };
+  }
+  if (
+    providerOptions.copilot?.effort !== undefined
+    || providerOptions.copilot?.usePromptTempFile !== undefined
+  ) {
+    raw.copilot = {
+      ...(providerOptions.copilot.effort !== undefined
+        ? { effort: providerOptions.copilot.effort }
+        : {}),
+      ...(providerOptions.copilot.usePromptTempFile !== undefined
+        ? { use_prompt_temp_file: providerOptions.copilot.usePromptTempFile }
+        : {}),
+    };
   }
   if (providerOptions.claudeTerminal) {
     const claudeTerminal: Record<string, unknown> = {};

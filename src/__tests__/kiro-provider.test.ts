@@ -117,6 +117,30 @@ describe('KiroProvider', () => {
     );
   });
 
+  it('Given Kiro provider option enables prompt temp file, When agent is called, Then passes it to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        kiro: {
+          usePromptTempFile: true,
+        },
+      },
+    } as Parameters<typeof agent.call>[1]);
+
+    expect(mockCallKiro).toHaveBeenCalledWith(
+      'coder',
+      'implement',
+      expect.objectContaining({
+        usePromptTempFile: true,
+      }),
+    );
+  });
+
   it('Given unsupported provider options, When agent is called, Then does not pass model, allowedTools, mcpServers, maxTurns, or outputSchema to callKiro', async () => {
     mockCallKiro.mockResolvedValue(doneResponse('coder'));
 

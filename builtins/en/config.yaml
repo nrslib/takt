@@ -76,7 +76,14 @@ language: en        # UI language: en | ja
 #     network_access: true
 #   opencode:
 #     variant: high
+#   cursor:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing for Windows command line limits
+#   kiro:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing for Windows command line limits
+#   copilot:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing for Windows command line limits
 #   claude:
+#     use_prompt_temp_file: false  # Opt in to workspace temp-file prompt passing for Windows command line limits
 #     sandbox:
 #       allow_unsandboxed_commands: true
 

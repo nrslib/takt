@@ -31,6 +31,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     onStream: options.onStream,
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),
     copilotCliPath: resolveCopilotCliPath(),
+    usePromptTempFile: options.providerOptions?.copilot?.usePromptTempFile,
   };
 }
 

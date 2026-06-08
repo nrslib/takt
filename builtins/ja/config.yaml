@@ -76,7 +76,14 @@ language: ja         # 表示言語: ja | en
 #     network_access: true
 #   opencode:
 #     variant: high
+#   cursor:
+#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
+#   kiro:
+#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
+#   copilot:
+#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
 #   claude:
+#     use_prompt_temp_file: false  # Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in
 #     sandbox:
 #       allow_unsandboxed_commands: true
 

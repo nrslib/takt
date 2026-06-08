@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
 import { createLogger, crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { CopilotCallOptions } from './types.js';
 
 const log = createLogger('copilot-client');
@@ -55,10 +56,10 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
   return `${systemPrompt}\n\n${prompt}`;
 }
 
-function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath?: string }): string[] {
+function buildArgs(promptArgument: string, options: CopilotCallOptions & { shareFilePath?: string }): string[] {
   const args = [
     '-p',
-    buildPrompt(prompt, options.systemPrompt),
+    promptArgument,
     '--silent',
     '--no-color',
     '--no-auto-update',
@@ -114,7 +115,7 @@ function createExecError(
     stderr?: string;
     signal?: NodeJS.Signals | null;
     name?: string;
-  } = {},
+  },
 ): CopilotExecError {
   const error = new Error(message) as CopilotExecError;
   if (params.name) {
@@ -286,15 +287,20 @@ function redactCredentials(text: string): string {
   return result;
 }
 
-function trimDetail(value: string | undefined, fallback = ''): string {
-  const normalized = (value ?? '').trim();
+function trimDetail(value: string | undefined): string {
+  const normalized = value?.trim();
   if (!normalized) {
-    return fallback;
+    return '';
   }
   const redacted = redactCredentials(normalized);
   return redacted.length > COPILOT_ERROR_DETAIL_MAX_LENGTH
     ? `${redacted.slice(0, COPILOT_ERROR_DETAIL_MAX_LENGTH)}...`
     : redacted;
+}
+
+function trimDetailOrFallback(value: string | undefined, fallback: string): string {
+  const detail = trimDetail(value);
+  return detail.length > 0 ? detail : fallback;
 }
 
 function isAuthenticationError(error: CopilotExecError): boolean {
@@ -336,7 +342,7 @@ function classifyExecutionError(error: CopilotExecError, options: CopilotCallOpt
   }
 
   if (typeof error.code === 'number') {
-    const detail = trimDetail(error.stderr, trimDetail(error.stdout, getErrorMessage(error)));
+    const detail = trimDetailOrFallback(error.stderr, trimDetailOrFallback(error.stdout, getErrorMessage(error)));
     return `Copilot CLI exited with code ${error.code}: ${detail}`;
   }
 
@@ -398,6 +404,7 @@ export class CopilotClient {
   async call(agentType: string, prompt: string, options: CopilotCallOptions): Promise<AgentResponse> {
     let shareTmpDir: string | undefined;
     let shareFilePath: string | undefined;
+    let promptTempCleanup: (() => Promise<void>) | undefined;
     try {
       shareTmpDir = await mkdtemp(join(tmpdir(), 'takt-copilot-'));
       shareFilePath = join(shareTmpDir, 'session.md');
@@ -405,9 +412,15 @@ export class CopilotClient {
       log.debug('mkdtemp failed, skipping session extraction', { err });
     }
 
-    const args = buildArgs(prompt, { ...options, shareFilePath });
-
     try {
+      const promptText = buildPrompt(prompt, options.systemPrompt);
+      const preparedPrompt = await prepareCliPromptArgument(
+        options.cwd,
+        promptText,
+        options.usePromptTempFile,
+      );
+      promptTempCleanup = preparedPrompt.cleanup;
+      const args = buildArgs(preparedPrompt.promptArgument, { ...options, shareFilePath });
       const { stdout } = await execCopilot(args, options);
       const parsed = parseCopilotOutput(stdout);
       if ('error' in parsed) {
@@ -477,6 +490,8 @@ export class CopilotClient {
         timestamp: new Date(),
         sessionId: options.sessionId,
       };
+    } finally {
+      await promptTempCleanup?.();
     }
   }
 

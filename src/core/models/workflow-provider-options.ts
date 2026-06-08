@@ -60,6 +60,7 @@ export interface ClaudeProviderOptions {
   allowedTools?: string[];
   effort?: ClaudeEffort;
   sandbox?: ClaudeSandboxSettings;
+  usePromptTempFile?: boolean;
 }
 
 export interface ClaudeTerminalProviderOptions {
@@ -69,8 +70,17 @@ export interface ClaudeTerminalProviderOptions {
   transcriptPollIntervalMs?: number;
 }
 
+export interface CursorProviderOptions {
+  usePromptTempFile?: boolean;
+}
+
+export interface KiroProviderOptions {
+  usePromptTempFile?: boolean;
+}
+
 export interface CopilotProviderOptions {
   effort?: CopilotEffort;
+  usePromptTempFile?: boolean;
 }
 
 export interface StepProviderOptions {
@@ -78,6 +88,8 @@ export interface StepProviderOptions {
   opencode?: OpenCodeProviderOptions;
   claude?: ClaudeProviderOptions;
   claudeTerminal?: ClaudeTerminalProviderOptions;
+  cursor?: CursorProviderOptions;
+  kiro?: KiroProviderOptions;
   copilot?: CopilotProviderOptions;
 }
 

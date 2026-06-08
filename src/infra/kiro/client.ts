@@ -1,5 +1,6 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import { execKiro, type KiroExecError } from './process.js';
 import type { KiroCallOptions } from './types.js';
 
@@ -159,14 +160,21 @@ function emitResult(
 
 export class KiroClient {
   async call(agentType: string, prompt: string, options: KiroCallOptions): Promise<AgentResponse> {
-    const promptText = buildPrompt(prompt, options.systemPrompt);
+    let promptTempCleanup: (() => Promise<void>) | undefined;
     const effectiveKiroApiKey = resolveEffectiveKiroApiKey(options.kiroApiKey);
     const effectiveOptions = effectiveKiroApiKey === options.kiroApiKey
       ? options
       : { ...options, kiroApiKey: effectiveKiroApiKey };
 
     try {
-      const args = buildArgs(effectiveOptions, promptText);
+      const promptText = buildPrompt(prompt, effectiveOptions.systemPrompt);
+      const preparedPrompt = await prepareCliPromptArgument(
+        effectiveOptions.cwd,
+        promptText,
+        effectiveOptions.usePromptTempFile,
+      );
+      promptTempCleanup = preparedPrompt.cleanup;
+      const args = buildArgs(effectiveOptions, preparedPrompt.promptArgument);
       const { stdout } = await execKiro(args, effectiveOptions);
       const content = stdout.trim();
       if (!content) {
@@ -204,6 +212,8 @@ export class KiroClient {
         timestamp: new Date(),
         sessionId: options.sessionId,
       };
+    } finally {
+      await promptTempCleanup?.();
     }
   }
 }

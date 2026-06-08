@@ -145,6 +145,30 @@ describe('CursorProvider', () => {
     );
   });
 
+  it('Given cursor provider option enables prompt temp file, When agent is called, Then passes it to callCursor', async () => {
+    mockCallCursor.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new CursorProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        cursor: {
+          usePromptTempFile: true,
+        },
+      },
+    } as Parameters<typeof agent.call>[1]);
+
+    expect(mockCallCursor).toHaveBeenCalledWith(
+      'coder',
+      'implement',
+      expect.objectContaining({
+        usePromptTempFile: true,
+      }),
+    );
+  });
+
   it('should pass undefined cursorCliPath when resolver returns undefined', async () => {
     mockResolveCursorCliPath.mockReturnValue(undefined);
     mockCallCursor.mockResolvedValue(doneResponse('coder'));

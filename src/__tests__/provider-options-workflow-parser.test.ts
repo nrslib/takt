@@ -261,6 +261,59 @@ describe('normalizeWorkflowConfig provider_options', () => {
     });
   });
 
+  it('prompt temp file provider_options を workflow-level で設定し step で上書きできる', () => {
+    const raw = {
+      name: 'prompt-temp-file-options',
+      workflow_config: {
+        provider_options: {
+          cursor: { use_prompt_temp_file: true },
+          kiro: { use_prompt_temp_file: true },
+          copilot: { use_prompt_temp_file: true },
+          claude: { use_prompt_temp_file: true },
+        },
+      },
+      steps: [
+        {
+          name: 'inherit',
+          provider: 'cursor',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider: 'cursor',
+          provider_options: {
+            cursor: { use_prompt_temp_file: false },
+            kiro: { use_prompt_temp_file: false },
+            copilot: { use_prompt_temp_file: false },
+            claude: { use_prompt_temp_file: false },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+    });
+    expect(config.steps[0]?.providerOptions).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+    });
+    expect(config.steps[1]?.providerOptions).toEqual({
+      cursor: { usePromptTempFile: false },
+      kiro: { usePromptTempFile: false },
+      copilot: { usePromptTempFile: false },
+      claude: { usePromptTempFile: false },
+    });
+  });
+
   it('workflow-level runtime.prepare を正規化し重複を除去する', () => {
     const raw = {
       name: 'runtime-prepare',
