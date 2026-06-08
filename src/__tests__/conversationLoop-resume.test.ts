@@ -393,7 +393,9 @@ describe('/go command', () => {
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
     expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toContain('use [Image #1] please');
+    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
+    expect(capture.imageAttachments[0]).toBeUndefined();
+    expect(capture.imageAttachments[1]).toBeUndefined();
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Generated task using [Image #1].');
     expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
@@ -401,6 +403,37 @@ describe('/go command', () => {
     expect(result.attachments?.[0]?.tempPath).toBeDefined();
     trackAttachmentSession(result.attachments![0]!.tempPath);
     expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+  });
+
+  it('should pass image attachment bodies only to native image providers', async () => {
+    setupRawStdin([
+      `use ${createOscImagePaste()} please\r`,
+      '/go\r',
+    ]);
+
+    const { provider, capture } = createScenarioProvider([
+      { content: 'AI response using [Image #1].' },
+      { content: 'Generated task using [Image #1].' },
+    ], { supportsNativeImageInput: true });
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
+    expect(capture.imageAttachments[0]?.[0]?.placeholder).toBe('[Image #1]');
+    expect(capture.imageAttachments[0]?.[0]?.path).toBeDefined();
+    expect(capture.imageAttachments[1]?.[0]?.placeholder).toBe('[Image #1]');
+    expect(result.action).toBe('execute');
+    trackAttachmentSession(result.attachments![0]!.tempPath);
   });
 
   it('should not create formal task assets when image input is cancelled', async () => {

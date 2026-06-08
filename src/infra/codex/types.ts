@@ -4,6 +4,7 @@
 
 import type { PermissionMode } from '../../core/models/index.js';
 import type { CodexReasoningEffort } from '../../core/models/workflow-types.js';
+import type { ProviderImageAttachment } from '../providers/types.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Codex sandbox mode values */
@@ -39,4 +40,6 @@ export interface CodexCallOptions {
   codexPathOverride?: string;
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
+  /** Local images to attach to the Codex turn */
+  imageAttachments?: ProviderImageAttachment[];
 }

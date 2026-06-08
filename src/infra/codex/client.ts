@@ -4,7 +4,7 @@
  * Uses @openai/codex-sdk for native TypeScript integration.
  */
 
-import { Codex, type TurnOptions } from '@openai/codex-sdk';
+import { Codex, type Input, type TurnOptions } from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
@@ -20,6 +20,7 @@ import {
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
 import { mapToCodexSandboxMode, type CodexCallOptions } from './types.js';
+import { formatImageAttachmentPathReference } from '../providers/imageAttachmentPrompt.js';
 import {
   type CodexEvent,
   type CodexItem,
@@ -284,6 +285,15 @@ export class CodexClient {
     const fullPrompt = options.systemPrompt
       ? `${options.systemPrompt}\n\n${prompt}`
       : prompt;
+    const input: Input = options.imageAttachments && options.imageAttachments.length > 0
+      ? [
+        { type: 'text', text: fullPrompt },
+        ...options.imageAttachments.flatMap((attachment) => [
+          { type: 'text' as const, text: formatImageAttachmentPathReference(attachment) },
+          { type: 'local_image' as const, path: attachment.path },
+        ]),
+      ]
+      : fullPrompt;
     let standardRetryCount = 0;
     let timeoutRetryCount = 0;
 
@@ -345,7 +355,7 @@ export class CodexClient {
           signal: streamAbortController.signal,
           ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
         };
-        const { events } = await thread.runStreamed(fullPrompt, turnOptions);
+        const { events } = await thread.runStreamed(input, turnOptions);
         resetIdleTimeout();
         diag.onConnected();
 

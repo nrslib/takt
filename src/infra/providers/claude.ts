@@ -25,6 +25,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     bypassPermissions: options.bypassPermissions,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     outputSchema: options.outputSchema,
+    imageAttachments: options.imageAttachments,
     sandbox: claudeSandbox ? {
       allowUnsandboxedCommands: claudeSandbox.allowUnsandboxedCommands,
       excludedCommands: claudeSandbox.excludedCommands,
@@ -35,6 +36,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsNativeImageInput = true;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

@@ -8,7 +8,6 @@ import { isStaleRunningTask } from './process.js';
 import { readRetryMetadataByRunSlug } from '../../core/workflow/run/retry-metadata.js';
 import {
   buildClaimedTaskRecord,
-  buildRecoveredTaskRecordWithRetryMetadata,
   type ResolvedTaskRetryMetadata,
   buildTerminalTaskRecord,
   generateTaskName,
@@ -82,39 +81,26 @@ export class TaskLifecycleService {
     return claimed.map((task) => toTaskInfo(this.projectDir, this.tasksFile, task));
   }
 
-  recoverInterruptedRunningTasks(): number {
-    let recovered = 0;
+  failInterruptedRunningTasks(): number {
+    let failed = 0;
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
         if (task.status !== 'running' || !this.isRunningTaskStale(task)) {
           return task;
         }
-        recovered++;
-        return buildRecoveredTaskRecordWithRetryMetadata(
-          task,
-          this.readRecoveryRetryMetadata(task),
-        );
+        failed++;
+        return buildTerminalTaskRecord(task, {
+          status: 'failed',
+          completed_at: nowIso(),
+          owner_pid: null,
+          failure: {
+            error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
+          },
+        }, this.readTerminalRetryMetadata(task));
       });
       return { tasks };
     });
-    return recovered;
-  }
-
-  private readRecoveryRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
-    if (!task.run_slug) {
-      return { preserveExisting: true };
-    }
-
-    const retryMetadata = this.readTerminalRetryMetadata(task);
-    if (retryMetadata.preserveExisting) {
-      return retryMetadata;
-    }
-
-    if (!retryMetadata.startStep) {
-      return { preserveExisting: true };
-    }
-
-    return { startStep: retryMetadata.startStep };
+    return failed;
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {

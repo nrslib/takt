@@ -36,6 +36,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
 /** Cursor provider — delegates to Cursor Agent CLI */
 export class CursorProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsNativeImageInput = false;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

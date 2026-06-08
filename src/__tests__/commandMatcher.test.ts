@@ -56,6 +56,11 @@ describe('start-of-line detection', () => {
     const result = matchSlashCommand('/accept');
     expect(result).toEqual({ command: '/accept', text: '' });
   });
+
+  it('should detect /paste-image', () => {
+    const result = matchSlashCommand('/paste-image');
+    expect(result).toEqual({ command: '/paste-image', text: '' });
+  });
 });
 
 // =================================================================

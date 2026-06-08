@@ -12,9 +12,11 @@ import { readMultilineInput } from './lineEditor.js';
 import type { InteractiveModeResult } from './interactive.js';
 import {
   buildInteractiveResultWithAttachments,
+  createClipboardImagePasteHandler,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
 } from './imageAttachments.js';
+import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
 
 /**
  * Run passthrough mode: collect user input and return it as-is.
@@ -41,6 +43,8 @@ export async function passthroughMode(
 
   const input = await readMultilineInput(chalk.green('> '), {
     onImagePaste: createImagePasteHandler(attachmentStore),
+    onClipboardImagePaste: createClipboardImagePasteHandler(attachmentStore),
+    onClipboardImagePasteError: reportClipboardImagePasteError,
   });
 
   if (input === null) {

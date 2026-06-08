@@ -114,6 +114,7 @@ export interface MockProviderCapture {
   callCount: number;
   prompts: string[];
   sessionIds: Array<string | undefined>;
+  imageAttachments: Array<Array<{ placeholder: string; path: string }> | undefined>;
 }
 
 /**
@@ -132,20 +133,37 @@ export interface CallScenario {
   throws?: Error;
 }
 
+interface ScenarioProviderOptions {
+  supportsNativeImageInput?: boolean;
+}
+
 /**
  * Create a mock provider with per-call scenario control.
  *
  * Each scenario controls what the AI returns for that call index.
  * Captures system prompts, call arguments, and session IDs for assertions.
  */
-export function createScenarioProvider(scenarios: CallScenario[]): { provider: unknown; capture: MockProviderCapture } {
-  const capture: MockProviderCapture = { systemPrompts: [], callCount: 0, prompts: [], sessionIds: [] };
+export function createScenarioProvider(
+  scenarios: CallScenario[],
+  options: ScenarioProviderOptions = {},
+): { provider: unknown; capture: MockProviderCapture } {
+  const capture: MockProviderCapture = {
+    systemPrompts: [],
+    callCount: 0,
+    prompts: [],
+    sessionIds: [],
+    imageAttachments: [],
+  };
 
-  const mockCall = vi.fn(async (prompt: string, options?: { sessionId?: string }) => {
+  const mockCall = vi.fn(async (prompt: string, options?: {
+    sessionId?: string;
+    imageAttachments?: Array<{ placeholder: string; path: string }>;
+  }) => {
     const idx = capture.callCount;
     capture.callCount++;
     capture.prompts.push(prompt);
     capture.sessionIds.push(options?.sessionId);
+    capture.imageAttachments.push(options?.imageAttachments);
 
     const scenario = idx < scenarios.length
       ? scenarios[idx]!
@@ -165,6 +183,8 @@ export function createScenarioProvider(scenarios: CallScenario[]): { provider: u
   });
 
   const provider = {
+    supportsStructuredOutput: true,
+    supportsNativeImageInput: options.supportsNativeImageInput === true,
     setup: vi.fn(({ systemPrompt }: { systemPrompt: string }) => {
       capture.systemPrompts.push(systemPrompt);
       return { call: mockCall };

@@ -29,11 +29,12 @@ export function buildTaskOrderContent(
     return taskContent;
   }
 
+  const normalizedTaskContent = normalizeTaskAttachmentReferences(taskContent, attachments);
   const attachmentLines = attachments.map((attachment) =>
     `- ${attachment.placeholder}: \`${getTaskAttachmentRelativePath(attachment)}\``,
   );
   return [
-    taskContent.trimEnd(),
+    normalizedTaskContent.trimEnd(),
     '',
     '## 添付画像',
     '',
@@ -43,6 +44,26 @@ export function buildTaskOrderContent(
 
 function getTaskAttachmentRelativePath(attachment: TaskAttachment): string {
   return path.posix.join('attachments', attachment.fileName);
+}
+
+function normalizeTaskAttachmentReferences(
+  taskContent: string,
+  attachments: readonly TaskAttachment[],
+): string {
+  return attachments.reduce((content, attachment) => {
+    const relativePath = getTaskAttachmentRelativePath(attachment);
+    const pathVariants = new Set([
+      attachment.tempPath,
+      attachment.tempPath.replace(/\\/g, '/'),
+    ]);
+    let normalized = content;
+    for (const tempPath of pathVariants) {
+      normalized = normalized
+        .split(`\`${tempPath}\``).join(`\`${relativePath}\``)
+        .split(tempPath).join(`\`${relativePath}\``);
+    }
+    return normalized;
+  }, taskContent);
 }
 
 function validateTaskAttachment(attachment: TaskAttachment): void {

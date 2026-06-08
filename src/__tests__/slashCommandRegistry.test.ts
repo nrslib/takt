@@ -8,7 +8,7 @@ import { filterSlashCommands } from '../features/interactive/slashCommandRegistr
 describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
-    expect(result.length).toBe(7);
+    expect(result.length).toBe(8);
   });
 
   it('should filter by prefix "/a"', () => {
@@ -42,7 +42,7 @@ describe('filterSlashCommands', () => {
 
   it('should return all commands for empty string prefix', () => {
     const result = filterSlashCommands('');
-    expect(result.length).toBe(7);
+    expect(result.length).toBe(8);
   });
 
   it('should not match prefix without leading slash', () => {
@@ -73,5 +73,15 @@ describe('filterSlashCommands', () => {
   it('should include /accept labelKey for i18n lookup', () => {
     const result = filterSlashCommands('/accept');
     expect(result[0]!.labelKey).toBe('interactive.commands.accept');
+  });
+
+  it('should include /paste-image labelKey for i18n lookup', () => {
+    const result = filterSlashCommands('/paste');
+    expect(result).toEqual([
+      {
+        command: '/paste-image',
+        labelKey: 'interactive.commands.pasteImage',
+      },
+    ]);
   });
 });

@@ -1412,11 +1412,17 @@ describe('autoFetch: true — fetch, rev-parse origin/<branch>, reset --hard', (
       taskSlug: 'autofetch-task',
     });
 
-    expect(fetchCalls).toHaveLength(2);
+    expect(fetchCalls).toHaveLength(3);
     expect(fetchCalls[0]![0]).toBe('fetch');
     expect(fetchCalls[0]![1]).toBe('origin');
     expect(fetchCalls[0]![2]).toMatch(/^takt\/\d{8}T\d{4}-autofetch-task$/);
     expect(fetchCalls[1]).toEqual(['fetch', 'origin']);
+    expect(fetchCalls[2]).toEqual([
+      'fetch',
+      '--no-write-fetch-head',
+      '/project-autofetch-test',
+      'refs/remotes/origin/main:refs/takt/base/main',
+    ]);
 
     expect(revParseOriginCalls).toHaveLength(1);
     expect(revParseOriginCalls[0]).toEqual(['rev-parse', 'origin/main']);

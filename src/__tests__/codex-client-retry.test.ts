@@ -10,6 +10,7 @@ let runPlans: RunPlan[] = [];
 let runPlanIndex = 0;
 let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
+let runStreamedInputs: unknown[] = [];
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -82,7 +83,8 @@ function createReconnectCommandFailureEvents(message: string, command: string): 
 function createThread(id: string) {
   return {
     id,
-    runStreamed: async (_prompt: string, turnOptions?: { signal?: AbortSignal }) => {
+    runStreamed: async (input: unknown, turnOptions?: { signal?: AbortSignal }) => {
+      runStreamedInputs.push(input);
       const plan = runPlans[runPlanIndex];
       runPlanIndex += 1;
       if (!plan) {
@@ -125,6 +127,7 @@ describe('CodexClient retry', () => {
     runPlanIndex = 0;
     startThreadCalls = [];
     resumeThreadCalls = [];
+    runStreamedInputs = [];
   });
 
   afterEach(() => {
@@ -151,6 +154,33 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
+  });
+
+  it('imageAttachments がある場合は Codex SDK に local_image 入力として渡す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'msg-1', type: 'agent_message', text: 'saw image' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const client = new CodexClient();
+
+    const result = await client.call('coder', 'この画像を見て [Image #1]', {
+      cwd: '/tmp',
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+    });
+
+    expect(result.status).toBe('done');
+    expect(runStreamedInputs[0]).toEqual([
+      { type: 'text', text: 'この画像を見て [Image #1]' },
+      { type: 'text', text: '[Image #1] path: `/tmp/image-1.png`' },
+      { type: 'local_image', path: '/tmp/image-1.png' },
+    ]);
   });
 
   it('turn.failed の at capacity を 1 秒後に retry して成功を返す', async () => {

@@ -134,6 +134,40 @@ export async function fetchRemoteBranchIntoIsolatedCloneAbortable(
   }
 }
 
+export function fetchBaseBranchIntoIsolatedClone(projectDir: string, clonePath: string, branch: string): void {
+  try {
+    runIsolatedGitCommandSync(clonePath, [
+      'fetch',
+      '--no-write-fetch-head',
+      projectDir,
+      `refs/remotes/origin/${branch}:refs/takt/base/${branch}`,
+    ]);
+  } catch {
+    throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+  }
+}
+
+export async function fetchBaseBranchIntoIsolatedCloneAbortable(
+  projectDir: string,
+  clonePath: string,
+  branch: string,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  try {
+    await runIsolatedGitCommandAbortable(clonePath, [
+      'fetch',
+      '--no-write-fetch-head',
+      projectDir,
+      `refs/remotes/origin/${branch}:refs/takt/base/${branch}`,
+    ], abortSignal);
+  } catch (err) {
+    if (isTaskAbortError(err)) {
+      throw err;
+    }
+    throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+  }
+}
+
 export function cloneAndIsolate(projectDir: string, clonePath: string, branch?: string): void {
   const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
   const useReferenceClone = !isLinkedWorktree(projectDir);

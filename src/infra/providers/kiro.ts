@@ -37,6 +37,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
 
 export class KiroProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsNativeImageInput = false;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

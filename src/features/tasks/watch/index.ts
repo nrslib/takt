@@ -47,7 +47,7 @@ function resolveWatchExecutionOptions(options?: RunAllTasksOptions): {
 export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Promise<void> {
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   const watcher = new TaskWatcher(cwd);
-  const recovered = taskRunner.recoverInterruptedRunningTasks();
+  const failedInterrupted = taskRunner.failInterruptedRunningTasks();
   const { agentOverrides, runContext } = resolveWatchExecutionOptions(options);
 
   let taskCount = 0;
@@ -56,8 +56,8 @@ export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Pro
 
   header('TAKT Watch Mode');
   info(`Watching: ${taskRunner.getTasksFilePath()}`);
-  if (recovered > 0) {
-    info(`Recovered ${recovered} interrupted running task(s) to pending.`);
+  if (failedInterrupted > 0) {
+    info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
   }
   info('Waiting for tasks... (Ctrl+C to stop)');
   blankLine();

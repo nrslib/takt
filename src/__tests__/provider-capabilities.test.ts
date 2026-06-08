@@ -5,6 +5,7 @@ import {
   providerSupportsClaudeAllowedTools,
   providerSupportsMaxTurns,
   providerSupportsMcpServers,
+  providerSupportsNativeImageInput,
 } from '../infra/providers/provider-capabilities.js';
 
 function readModuleSource(path: string): string {
@@ -20,6 +21,7 @@ describe('provider capabilities module boundary', () => {
     expect(source).toContain('export function providerSupportsMcpServers');
     expect(source).toContain('export function providerSupportsClaudeAllowedTools');
     expect(source).toContain('export function providerSupportsMaxTurns');
+    expect(source).toContain('export function providerSupportsNativeImageInput');
     expect(source).not.toContain('export interface ProviderCapabilities');
     expect(source).not.toContain('export function resolveProviderCapabilities');
   });
@@ -52,5 +54,13 @@ describe('provider capabilities module boundary', () => {
   it('maxTurns capability は claude-terminal を明示的に拒否する', () => {
     expect(providerSupportsMaxTurns('claude')).toBe(true);
     expect(providerSupportsMaxTurns('claude-terminal')).toBe(false);
+  });
+
+  it('native image input capability は SDK に実画像を渡せる provider だけを許可する', () => {
+    expect(providerSupportsNativeImageInput('codex')).toBe(true);
+    expect(providerSupportsNativeImageInput('claude-sdk')).toBe(true);
+    expect(providerSupportsNativeImageInput('claude')).toBe(false);
+    expect(providerSupportsNativeImageInput('claude-terminal')).toBe(false);
+    expect(providerSupportsNativeImageInput('opencode')).toBe(false);
   });
 });

@@ -34,6 +34,7 @@ const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
 
 interface ProviderCapabilities {
   supportsStructuredOutput: boolean;
+  supportsNativeImageInput: boolean;
   supportsMcpServers: boolean;
   supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
@@ -47,8 +48,11 @@ function resolveProviderCapabilities(
     return undefined;
   }
 
+  const providerImpl = getProvider(provider);
+
   return {
-    supportsStructuredOutput: getProvider(provider).supportsStructuredOutput,
+    supportsStructuredOutput: providerImpl.supportsStructuredOutput,
+    supportsNativeImageInput: providerImpl.supportsNativeImageInput,
     supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
@@ -60,6 +64,12 @@ export function providerSupportsStructuredOutput(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsStructuredOutput;
+}
+
+export function providerSupportsNativeImageInput(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsNativeImageInput;
 }
 
 export function providerSupportsMcpServers(

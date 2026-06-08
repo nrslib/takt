@@ -54,6 +54,7 @@ export class ClaudeClient {
       outputSchema: options.outputSchema,
       sandbox: options.sandbox,
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
+      imageAttachments: options.imageAttachments,
     };
   }
 

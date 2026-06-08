@@ -8,6 +8,7 @@ import { readTaskSpecFile } from '../taskSpecFile.js';
 export interface StagedTaskSpec {
   taskPrompt: string;
   orderContent: string;
+  stagedOrderContent: string;
   contextTaskDir: string;
   contextDir: string;
   runRootDir: string;
@@ -23,6 +24,35 @@ function removeEmptyDirectory(directory: string): void {
   }
 }
 
+function rewriteAttachmentPathsForRunContext(orderContent: string, contextTaskRel: string): string {
+  const contextTaskRelPosix = contextTaskRel.replace(/\\/g, '/');
+  const toRunContextPath = (attachmentPath: string): string => {
+    const segments = attachmentPath.split('/');
+    if (segments.some((segment) => segment === '..' || segment.length === 0)) {
+      throw new Error(`Invalid task attachment path: attachments/${attachmentPath}`);
+    }
+    return path.posix.join(contextTaskRelPosix, 'attachments', attachmentPath);
+  };
+  const splitTrailingPunctuation = (attachmentPath: string): { pathPart: string; suffix: string } => {
+    const match = attachmentPath.match(/^(.+?)([.!?,;:]*)$/);
+    return {
+      pathPart: match?.[1] ?? attachmentPath,
+      suffix: match?.[2] ?? '',
+    };
+  };
+  const backticked = orderContent.replace(/`attachments\/([^`\r\n]+)`/g, (_match, attachmentPath: string) =>
+    `\`${toRunContextPath(attachmentPath)}\``,
+  );
+  return backticked.replace(/(^|[\s([:])attachments\/([A-Za-z0-9._/-]+)/g, (
+    _match,
+    prefix: string,
+    attachmentPath: string,
+  ) => {
+    const { pathPart, suffix } = splitTrailingPunctuation(attachmentPath);
+    return `${prefix}\`${toRunContextPath(pathPart)}\`${suffix}`;
+  });
+}
+
 export function stageTaskSpecForExecution(
   projectCwd: string,
   execCwd: string,
@@ -33,10 +63,11 @@ export function stageTaskSpecForExecution(
   const sourceOrderPath = getTaskSpecPath(projectCwd, taskDir);
   const orderContent = readTaskSpecFile(sourceOrderPath);
   const runPaths = buildRunPaths(execCwd, reportDirName);
+  const stagedOrderContent = rewriteAttachmentPathsForRunContext(orderContent, runPaths.contextTaskRel);
 
   try {
     fs.mkdirSync(runPaths.contextTaskAbs, { recursive: true });
-    fs.writeFileSync(runPaths.contextTaskOrderAbs, orderContent, 'utf-8');
+    fs.writeFileSync(runPaths.contextTaskOrderAbs, stagedOrderContent, 'utf-8');
     copyTaskAttachmentsToRunContext(sourceTaskDir, runPaths.contextTaskAbs);
   } catch (error) {
     fs.rmSync(runPaths.contextTaskAbs, { recursive: true, force: true });
@@ -46,6 +77,7 @@ export function stageTaskSpecForExecution(
   return {
     taskPrompt: buildTaskInstruction(runPaths.contextTaskRel, runPaths.contextTaskOrderRel),
     orderContent,
+    stagedOrderContent,
     contextTaskDir: runPaths.contextTaskAbs,
     contextDir: runPaths.contextAbs,
     runRootDir: runPaths.runRootAbs,

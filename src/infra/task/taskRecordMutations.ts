@@ -30,22 +30,6 @@ export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
   };
 }
 
-export function buildRecoveredTaskRecordWithRetryMetadata(
-  task: TaskRecord,
-  retryMetadata: ResolvedTaskRetryMetadata,
-): TaskRecord {
-  const nextTask = retryMetadata.preserveExisting ? { ...task } : clearRetryMetadata(task);
-  return {
-    ...nextTask,
-    status: 'pending',
-    started_at: null,
-    completed_at: null,
-    owner_pid: null,
-    run_slug: undefined,
-    ...(retryMetadata.startStep ? { start_step: retryMetadata.startStep } : {}),
-  };
-}
-
 export function buildTerminalTaskRecord(
   task: TaskRecord,
   updates: TerminalTaskUpdates,

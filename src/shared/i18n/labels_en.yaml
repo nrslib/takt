@@ -11,7 +11,7 @@ interactive:
   conversationLabel: "Conversation:"
   noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
-    intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /resume (load session), /cancel (exit)"
+    intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
     introQuiet: "Quiet mode - describe your task. Instructions will be generated without further questions."
     introPassthrough: "Passthrough mode - describe your task. Your input will be passed directly as the task."
     resume: "Resuming previous session"
@@ -32,6 +32,7 @@ interactive:
     playNoTask: "Please specify task content: /play <task>"
     retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
     retryUnavailable: "/retry is only available in Retry mode from `takt list`."
+    pasteImageUnavailable: "/paste-image is only available for image attachment during interactive input."
     personaFallback: "No persona available for the first step. Falling back to assistant mode."
   modeSelection:
     prompt: "Select interactive mode:"
@@ -70,6 +71,7 @@ interactive:
     replay: "Rerun immediately with previous instructions"
     cancel: "Exit interactive mode"
     resume: "Load a previous session"
+    pasteImage: "Attach clipboard image"
 
 # ===== Workflow Execution UI =====
 workflow:

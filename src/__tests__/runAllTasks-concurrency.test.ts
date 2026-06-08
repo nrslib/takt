@@ -82,7 +82,7 @@ const {
   mockClaimNextTasks,
   mockCompleteTask,
   mockFailTask,
-  mockRecoverInterruptedRunningTasks,
+  mockFailInterruptedRunningTasks,
   mockListAllTaskItems,
   mockUpdateRunningTaskExecution,
   mockNotifySuccess,
@@ -93,7 +93,7 @@ const {
   mockClaimNextTasks: vi.fn(),
   mockCompleteTask: vi.fn(),
   mockFailTask: vi.fn(),
-  mockRecoverInterruptedRunningTasks: vi.fn(),
+  mockFailInterruptedRunningTasks: vi.fn(),
   mockListAllTaskItems: vi.fn().mockReturnValue([]),
   mockUpdateRunningTaskExecution: vi.fn(buildUpdatedTaskInfo),
   mockNotifySuccess: vi.fn(),
@@ -108,7 +108,7 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
     claimNextTasks: mockClaimNextTasks,
     completeTask: mockCompleteTask,
     failTask: mockFailTask,
-    recoverInterruptedRunningTasks: mockRecoverInterruptedRunningTasks,
+    failInterruptedRunningTasks: mockFailInterruptedRunningTasks,
     listAllTaskItems: mockListAllTaskItems,
     updateRunningTaskExecution: mockUpdateRunningTaskExecution,
   })),
@@ -226,7 +226,7 @@ function createTask(name: string): TaskInfo {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockRecoverInterruptedRunningTasks.mockReturnValue(0);
+  mockFailInterruptedRunningTasks.mockReturnValue(0);
   mockUpdateRunningTaskExecution.mockImplementation(buildUpdatedTaskInfo);
 });
 

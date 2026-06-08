@@ -28,6 +28,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
 
 export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsNativeImageInput = false;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

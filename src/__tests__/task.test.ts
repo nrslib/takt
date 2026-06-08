@@ -172,7 +172,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
   });
 
-  it('should recover interrupted running tasks to pending', () => {
+  it('should fail interrupted running tasks', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
     const current = loadTasksFile(testDir);
@@ -180,15 +180,19 @@ describe('TaskRunner (tasks.yaml)', () => {
     running.owner_pid = 999999999;
     writeFileSync(join(testDir, '.takt', 'tasks.yaml'), stringifyYaml(current), 'utf-8');
 
-    const recovered = runner.recoverInterruptedRunningTasks();
-    expect(recovered).toBe(1);
+    const failed = runner.failInterruptedRunningTasks();
+    expect(failed).toBe(1);
 
-    const tasks = runner.listTasks();
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.status).toBe('pending');
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.status).toBe('failed');
+    expect(file.tasks[0]?.owner_pid).toBeNull();
+    expect(file.tasks[0]?.completed_at).toEqual(expect.any(String));
+    expect(file.tasks[0]?.failure).toEqual({
+      error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
+    });
   });
 
-  it('should recover interrupted running tasks with start_movement from run meta', () => {
+  it('should fail interrupted running tasks with start_movement from run meta', () => {
     runner.addTask('Task A', {
       workflow: 'default',
       start_step: 'draft',
@@ -235,20 +239,23 @@ describe('TaskRunner (tasks.yaml)', () => {
     running.owner_pid = 999999999;
     writeFileSync(join(testDir, '.takt', 'tasks.yaml'), stringifyYaml(current), 'utf-8');
 
-    const recovered = runner.recoverInterruptedRunningTasks();
+    const failed = runner.failInterruptedRunningTasks();
 
-    expect(recovered).toBe(1);
+    expect(failed).toBe(1);
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.status).toBe('pending');
-    expect(file.tasks[0]?.run_slug).toBeUndefined();
+    expect(file.tasks[0]?.status).toBe('failed');
+    expect(file.tasks[0]?.run_slug).toBe('20260413-task-a');
     expect(file.tasks[0]?.start_movement).toBe('delegate');
     expect(file.tasks[0]?.start_step).toBeUndefined();
     expect(file.tasks[0]?.resume_point).toBeUndefined();
     expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
+    expect(file.tasks[0]?.failure).toEqual({
+      error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
+    });
   });
 
-  it('should preserve existing retry metadata when recovering a stale running task without run_slug', () => {
+  it('should clear existing retry metadata when failing a stale running task without run_slug', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
@@ -272,22 +279,21 @@ describe('TaskRunner (tasks.yaml)', () => {
     running.owner_pid = 999999999;
     writeFileSync(join(testDir, '.takt', 'tasks.yaml'), stringifyYaml(current), 'utf-8');
 
-    const recovered = runner.recoverInterruptedRunningTasks();
+    const failed = runner.failInterruptedRunningTasks();
 
-    expect(recovered).toBe(1);
+    expect(failed).toBe(1);
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.status).toBe('pending');
+    expect(file.tasks[0]?.status).toBe('failed');
     expect(file.tasks[0]?.run_slug).toBeUndefined();
-    expectRetryMetadataPreserved(file.tasks[0], {
-      startStep: 'delegate',
-      currentIteration: 4,
-      maxSteps: 30,
-      resumePoint: staleResumePoint,
-    });
+    expect(file.tasks[0]?.start_movement).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
+    expect(file.tasks[0]?.resume_point).toBeUndefined();
   });
 
-  it('should preserve existing retry metadata when recovering a stale running task without run meta', () => {
+  it('should clear existing retry metadata when failing a stale running task without run meta', () => {
     const staleResumePoint = {
       version: 1 as const,
       stack: [
@@ -314,27 +320,26 @@ describe('TaskRunner (tasks.yaml)', () => {
     running.owner_pid = 999999999;
     writeFileSync(join(testDir, '.takt', 'tasks.yaml'), stringifyYaml(current), 'utf-8');
 
-    const recovered = runner.recoverInterruptedRunningTasks();
+    const failed = runner.failInterruptedRunningTasks();
 
-    expect(recovered).toBe(1);
+    expect(failed).toBe(1);
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.status).toBe('pending');
-    expect(file.tasks[0]?.run_slug).toBeUndefined();
-    expectRetryMetadataPreserved(file.tasks[0], {
-      startStep: 'delegate',
-      currentIteration: 4,
-      maxSteps: 30,
-      resumePoint: staleResumePoint,
-    });
+    expect(file.tasks[0]?.status).toBe('failed');
+    expect(file.tasks[0]?.run_slug).toBe('20260413-task-a');
+    expect(file.tasks[0]?.start_movement).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
+    expect(file.tasks[0]?.resume_point).toBeUndefined();
   });
 
   it('should keep running tasks owned by a live process', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
 
-    const recovered = runner.recoverInterruptedRunningTasks();
-    expect(recovered).toBe(0);
+    const failed = runner.failInterruptedRunningTasks();
+    expect(failed).toBe(0);
   });
 
   it('should preserve corrupted tasks.yaml and throw', () => {

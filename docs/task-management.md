@@ -133,9 +133,9 @@ When concurrency is greater than 1, TAKT uses a worker pool that:
 - Displays color-coded prefixed output per task for readability
 - Supports graceful shutdown on Ctrl+C (waits for in-flight tasks to complete)
 
-### Interrupted Task Recovery
+### Interrupted Task Cleanup
 
-If `takt run` is interrupted (e.g., process crash, Ctrl+C), tasks left in `running` status are automatically recovered to `pending` on the next `takt run` or `takt watch` invocation.
+If `takt run` is interrupted (e.g., process crash, Ctrl+C), tasks left in `running` status are automatically marked as `failed` on the next `takt run` or `takt watch` invocation. Requeue them explicitly to run them again.
 
 ## Watching Tasks (`takt watch`)
 
@@ -150,7 +150,7 @@ The watch command:
 - Stays running until Ctrl+C (SIGINT)
 - Monitors `tasks.yaml` for new `pending` tasks
 - Executes each task as it appears
-- Recovers interrupted `running` tasks on startup
+- Marks interrupted `running` tasks as `failed` on startup
 - Displays a summary of total/success/failed tasks on exit
 
 This is useful for a "producer-consumer" workflow where you add tasks with `takt add` in one terminal and let `takt watch` execute them automatically in another.

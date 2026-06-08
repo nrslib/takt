@@ -20,5 +20,6 @@ export const SlashCommand = {
   Replay: '/replay',
   Cancel: '/cancel',
   Resume: '/resume',
+  PasteImage: '/paste-image',
 } as const;
 export type SlashCommand = typeof SlashCommand[keyof typeof SlashCommand];

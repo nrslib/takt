@@ -10,6 +10,7 @@
 import * as readline from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 import { stripAnsi, getDisplayWidth } from '../../shared/utils/text.js';
+import { SlashCommand } from '../../shared/constants.js';
 import { createCompletionController } from './completionController.js';
 import type { CompletionProvider } from './completionMenu.js';
 import {
@@ -32,8 +33,12 @@ const KITTY_KB_DISABLE = '\x1B[<u';
 const ESC_PASTE_START = '[200~';
 const ESC_PASTE_END = '[201~';
 const ESC_SHIFT_ENTER = '[13;2u';
+const CTRL_V = '\x16';
+const PASTE_START_SEQUENCE = `\x1B${ESC_PASTE_START}`;
+const PASTE_END_SEQUENCE = `\x1B${ESC_PASTE_END}`;
 
 type InputState = 'normal' | 'paste';
+type InputCallbackResult = void | Promise<void>;
 
 function splitTrailingInlineImagePrefix(input: string): { ready: string; pending: string } {
   const maxCandidateLength = Math.min(OSC_IMAGE_PREFIX.length - 1, input.length);
@@ -92,19 +97,19 @@ function decodeCtrlKey(rest: string): { ch: string; consumed: number } | null {
 
 /** Callbacks for parsed input events */
 export interface InputCallbacks {
-  onPasteStart: () => void;
-  onPasteEnd: () => void;
-  onShiftEnter: () => void;
-  onArrowLeft: () => void;
-  onArrowRight: () => void;
-  onArrowUp: () => void;
-  onArrowDown: () => void;
-  onWordLeft: () => void;
-  onWordRight: () => void;
-  onHome: () => void;
-  onEnd: () => void;
-  onEsc: () => void;
-  onChar: (ch: string) => void;
+  onPasteStart: () => InputCallbackResult;
+  onPasteEnd: () => InputCallbackResult;
+  onShiftEnter: () => InputCallbackResult;
+  onArrowLeft: () => InputCallbackResult;
+  onArrowRight: () => InputCallbackResult;
+  onArrowUp: () => InputCallbackResult;
+  onArrowDown: () => InputCallbackResult;
+  onWordLeft: () => InputCallbackResult;
+  onWordRight: () => InputCallbackResult;
+  onHome: () => InputCallbackResult;
+  onEnd: () => InputCallbackResult;
+  onEsc: () => InputCallbackResult;
+  onChar: (ch: string) => InputCallbackResult;
 }
 
 /**
@@ -181,6 +186,61 @@ const tryConsumeEscapeSequence = (
   return 0;
 };
 
+const tryConsumeEscapeSequenceAsync = async (
+  rest: string,
+  callbacks: InputCallbacks,
+): Promise<number> => {
+  if (rest.startsWith(ESC_PASTE_START)) {
+    await callbacks.onPasteStart();
+    return ESC_PASTE_START.length;
+  }
+  if (rest.startsWith(ESC_PASTE_END)) {
+    await callbacks.onPasteEnd();
+    return ESC_PASTE_END.length;
+  }
+  if (rest.startsWith(ESC_SHIFT_ENTER)) {
+    await callbacks.onShiftEnter();
+    return ESC_SHIFT_ENTER.length;
+  }
+  const ctrlKey = decodeCtrlKey(rest);
+  if (ctrlKey) {
+    await callbacks.onChar(ctrlKey.ch);
+    return ctrlKey.consumed;
+  }
+
+  if (rest.startsWith('[D')) { await callbacks.onArrowLeft(); return 2; }
+  if (rest.startsWith('[C')) { await callbacks.onArrowRight(); return 2; }
+  if (rest.startsWith('[A')) { await callbacks.onArrowUp(); return 2; }
+  if (rest.startsWith('[B')) { await callbacks.onArrowDown(); return 2; }
+
+  if (rest.startsWith('[1;3D')) { await callbacks.onWordLeft(); return 5; }
+  if (rest.startsWith('[1;3C')) { await callbacks.onWordRight(); return 5; }
+
+  if (rest.startsWith('b')) { await callbacks.onWordLeft(); return 1; }
+  if (rest.startsWith('f')) { await callbacks.onWordRight(); return 1; }
+
+  if (rest.startsWith('[H') || rest.startsWith('OH')) { await callbacks.onHome(); return 2; }
+  if (rest.startsWith('[F') || rest.startsWith('OF')) { await callbacks.onEnd(); return 2; }
+
+  const kittyEscMatch = rest.match(/^\[27(?:;1)?u/);
+  if (kittyEscMatch) {
+    await callbacks.onEsc();
+    return kittyEscMatch[0].length;
+  }
+
+  if (rest.startsWith('[')) {
+    const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
+    if (csiMatch) return csiMatch[0].length;
+    return -1;
+  }
+
+  if (rest.startsWith('O') && rest.length === 1) return -1;
+  if (rest.length === 0) return -1;
+
+  await callbacks.onEsc();
+  return 0;
+};
+
 /**
  * Parse raw stdin data into semantic input events.
  *
@@ -222,7 +282,7 @@ const ESC_AMBIGUITY_TIMEOUT_MS = 50 as const;
  */
 export const createEscapeParser = (
   callbacks: InputCallbacks,
-): { feed: (data: string) => void; flush: () => void } => {
+): { feed: (data: string) => Promise<void>; flush: () => void } => {
   let pendingFragment = '';
   let escTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -241,7 +301,7 @@ export const createEscapeParser = (
     }
   };
 
-  const feed = (data: string): void => {
+  const feed = async (data: string): Promise<void> => {
     let input = data;
 
     if (pendingFragment.length > 0) {
@@ -263,7 +323,7 @@ export const createEscapeParser = (
           return;
         }
 
-        const consumed = tryConsumeEscapeSequence(rest, callbacks);
+        const consumed = await tryConsumeEscapeSequenceAsync(rest, callbacks);
         if (consumed === -1) {
           pendingFragment = input.slice(i);
           escTimer = setTimeout(flush, ESC_AMBIGUITY_TIMEOUT_MS);
@@ -274,7 +334,7 @@ export const createEscapeParser = (
         continue;
       }
 
-      callbacks.onChar(ch);
+      await callbacks.onChar(ch);
       i++;
     }
   };
@@ -299,6 +359,8 @@ export function readMultilineInput(
   options?: {
     completionProvider?: CompletionProvider;
     onImagePaste?: ImagePasteHandler;
+    onClipboardImagePaste?: () => Promise<string>;
+    onClipboardImagePasteError?: (error: unknown) => void;
   },
 ): Promise<string | null> {
   if (!process.stdin.isTTY) {
@@ -687,6 +749,7 @@ export function readMultilineInput(
     let pendingInlineImage = '';
     let inlineImagePrefixTimer: ReturnType<typeof setTimeout> | null = null;
     let inputQueue = Promise.resolve();
+    let pendingEditorOperation = Promise.resolve();
     let settled = false;
 
     function clearInlineImagePrefixTimer(): void {
@@ -743,6 +806,18 @@ export function readMultilineInput(
       rerenderFromCursor();
     }
 
+    function enqueueEditorOperation(operation: () => Promise<void>): void {
+      pendingEditorOperation = pendingEditorOperation.then(async () => {
+        if (!settled) {
+          await operation();
+        }
+      });
+    }
+
+    async function drainPendingEditorOperation(): Promise<void> {
+      await pendingEditorOperation;
+    }
+
     async function handleInlineImage(image: PastedImage): Promise<void> {
       if (!options?.onImagePaste) {
         return;
@@ -759,6 +834,57 @@ export function readMultilineInput(
       completion.update();
     }
 
+    async function handleClipboardImagePaste(): Promise<void> {
+      const pasteClipboardImage = options?.onClipboardImagePaste;
+      if (!pasteClipboardImage) {
+        return;
+      }
+      completion.hide();
+      const placeholder = await pasteClipboardImage().catch((error: unknown) => {
+        options?.onClipboardImagePasteError?.(error);
+        return null;
+      });
+      if (!placeholder) {
+        return;
+      }
+      if (settled) {
+        return;
+      }
+      insertText(placeholder);
+      completion.update();
+    }
+
+    function insertClipboardImagePlaceholder(pasteClipboardImage: () => Promise<string>): void {
+      completion.hide();
+      enqueueEditorOperation(async () => {
+        const placeholder = await pasteClipboardImage().catch((error: unknown) => {
+          options?.onClipboardImagePasteError?.(error);
+          return null;
+        });
+        if (!placeholder) {
+          return;
+        }
+        if (settled) {
+          return;
+        }
+        insertText(placeholder);
+        completion.update();
+      });
+    }
+
+    function tryHandleClipboardImageCommand(): boolean {
+      const pasteClipboardImage = options?.onClipboardImagePaste;
+      if (buffer.trim() !== SlashCommand.PasteImage || buffer.includes('\n') || !pasteClipboardImage) {
+        return false;
+      }
+
+      completion.hide();
+      moveCursorToLogicalLineStart();
+      deleteToLineEnd();
+      insertClipboardImagePlaceholder(pasteClipboardImage);
+      return true;
+    }
+
     async function feedInputWithImages(input: string): Promise<void> {
       clearInlineImagePrefixTimer();
       const currentInput = pendingInlineImage + input;
@@ -766,11 +892,48 @@ export function readMultilineInput(
       let offset = 0;
 
       while (offset < currentInput.length) {
+        if (state === 'paste') {
+          const pasteEnd = currentInput.indexOf(PASTE_END_SEQUENCE, offset);
+          if (pasteEnd === -1) {
+            await escParser.feed(currentInput.slice(offset));
+            return;
+          }
+          if (pasteEnd > offset) {
+            await escParser.feed(currentInput.slice(offset, pasteEnd));
+          }
+          await escParser.feed(PASTE_END_SEQUENCE);
+          offset = pasteEnd + PASTE_END_SEQUENCE.length;
+          continue;
+        }
+
+        const pasteStart = currentInput.indexOf(PASTE_START_SEQUENCE, offset);
         const imageStart = currentInput.indexOf(OSC_IMAGE_PREFIX, offset);
+        const clipboardImageStart = options?.onClipboardImagePaste
+          ? currentInput.indexOf(CTRL_V, offset)
+          : -1;
+        if (
+          pasteStart !== -1
+          && (imageStart === -1 || pasteStart < imageStart)
+          && (clipboardImageStart === -1 || pasteStart < clipboardImageStart)
+        ) {
+          await escParser.feed(currentInput.slice(offset, pasteStart + PASTE_START_SEQUENCE.length));
+          offset = pasteStart + PASTE_START_SEQUENCE.length;
+          continue;
+        }
+
+        if (clipboardImageStart !== -1 && (imageStart === -1 || clipboardImageStart < imageStart)) {
+          if (clipboardImageStart > offset) {
+            await escParser.feed(currentInput.slice(offset, clipboardImageStart));
+          }
+          await handleClipboardImagePaste();
+          offset = clipboardImageStart + CTRL_V.length;
+          continue;
+        }
+
         if (imageStart === -1) {
           const tail = splitTrailingInlineImagePrefix(currentInput.slice(offset));
           if (tail.ready.length > 0) {
-            escParser.feed(tail.ready);
+            await escParser.feed(tail.ready);
           }
           if (tail.pending.length > 0) {
             holdPendingInlineImage(tail.pending);
@@ -779,7 +942,7 @@ export function readMultilineInput(
         }
 
         if (imageStart > offset) {
-          escParser.feed(currentInput.slice(offset, imageStart));
+          await escParser.feed(currentInput.slice(offset, imageStart));
         }
 
         const sequence = parseInlineImageSequence(currentInput, imageStart);
@@ -792,7 +955,7 @@ export function readMultilineInput(
         if (sequence.status === 'image') {
           await handleInlineImage(sequence.image);
         } else {
-          escParser.feed(currentInput.slice(imageStart, sequence.sequenceEnd));
+          await escParser.feed(currentInput.slice(imageStart, sequence.sequenceEnd));
         }
         offset = sequence.sequenceEnd;
       }
@@ -931,7 +1094,7 @@ export function readMultilineInput(
           onEsc() {
             completion.hide();
           },
-          onChar(ch: string) {
+          onChar(ch: string): InputCallbackResult {
             if (state === 'paste') {
               if (ch === '\r' || ch === '\n') {
                 insertAt(cursorPos, '\n');
@@ -951,10 +1114,16 @@ export function readMultilineInput(
               }
               return;
             }
+            if (ch === CTRL_V && options?.onClipboardImagePaste) {
+              return handleClipboardImagePaste();
+            }
 
             // Submit
             if (ch === '\r' || ch === '\n') {
               completion.acceptSelection();
+              if (tryHandleClipboardImageCommand()) {
+                return;
+              }
               process.stdout.write('\n');
               finish(buffer);
               return;
@@ -1001,6 +1170,7 @@ export function readMultilineInput(
             }
             return feedInputWithImages(str);
           })
+          .then(drainPendingEditorOperation)
           .catch(fail);
       } catch (error) {
         fail(error);

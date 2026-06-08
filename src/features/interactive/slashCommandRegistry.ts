@@ -16,6 +16,7 @@ const SLASH_COMMAND_LABEL_KEYS: Readonly<Record<SlashCommand, string>> = {
   '/replay': 'interactive.commands.replay',
   '/cancel': 'interactive.commands.cancel',
   '/resume': 'interactive.commands.resume',
+  '/paste-image': 'interactive.commands.pasteImage',
 } as const;
 
 /**

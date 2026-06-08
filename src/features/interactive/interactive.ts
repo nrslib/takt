@@ -56,6 +56,7 @@ export interface InteractiveUIText {
   playNoTask: string;
   retryNoOrder: string;
   retryUnavailable: string;
+  pasteImageUnavailable: string;
 }
 
 /**

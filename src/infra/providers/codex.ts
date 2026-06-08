@@ -20,12 +20,14 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
     codexPathOverride: resolveCodexCliPath(),
     outputSchema: options.outputSchema,
+    imageAttachments: options.imageAttachments,
   };
 }
 
 /** Codex provider — delegates to OpenAI Codex SDK */
 export class CodexProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsNativeImageInput = true;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

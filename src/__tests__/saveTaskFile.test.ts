@@ -281,6 +281,37 @@ describe('saveTaskFile', () => {
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
   });
 
+  it('should replace pasted image temp paths in generated task content with task attachment paths', async () => {
+    const attachment = createTempAttachment(testDir, 'image-1.png', 'png-data');
+
+    await saveTaskFile(testDir, `Use [Image #1] (\`${attachment.tempPath}\`) as the visual reference.`, {
+      attachments: [attachment],
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
+
+    expect(orderContent).toContain('Use [Image #1] (`attachments/image-1.png`) as the visual reference.');
+    expect(orderContent).not.toContain(attachment.tempPath);
+    expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
+  });
+
+  it('should wrap bare pasted image temp paths when normalizing generated task content', async () => {
+    const attachment = createTempAttachment(testDir, 'image-1.png', 'png-data');
+
+    await saveTaskFile(testDir, `Use the visual reference at ${attachment.tempPath}.`, {
+      attachments: [attachment],
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    const orderContent = fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8');
+
+    expect(orderContent).toContain('Use the visual reference at `attachments/image-1.png`.');
+    expect(orderContent).not.toContain(attachment.tempPath);
+  });
+
   it('should not create task artifacts when attachment promotion fails', async () => {
     const attachment: TestTaskAttachment = {
       placeholder: '[Image #1]',

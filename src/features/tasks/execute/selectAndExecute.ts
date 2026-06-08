@@ -134,7 +134,6 @@ export async function selectAndExecuteTask(
     }
   }
   const preparedSpecTaskDirToCleanup = options?.skipTaskList === true ? preparedSpec?.taskDir : undefined;
-  const stagedSpecToCleanup = options?.skipTaskList === true ? stagedSpec : undefined;
   const startedAt = new Date().toISOString();
 
   statusLine.start('Running...');
@@ -160,7 +159,7 @@ export async function selectAndExecuteTask(
     throw err;
   } finally {
     statusLine.stop();
-    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup, stagedSpecToCleanup);
+    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup, undefined);
   }
 
   const completedAt = new Date().toISOString();

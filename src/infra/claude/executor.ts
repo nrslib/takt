@@ -36,6 +36,7 @@ import {
   containsRateLimitMarker,
   resolveRateLimitErrorMessage,
 } from '../rate-limit/detection.js';
+import { buildClaudePromptInput } from './image-input.js';
 
 const log = createLogger('claude-sdk');
 function toNumber(value: unknown): number | undefined {
@@ -250,7 +251,7 @@ export class QueryExecutor {
     };
 
     try {
-      const q = query({ prompt, options: sdkOptions });
+      const q = query({ prompt: buildClaudePromptInput(prompt, options.imageAttachments), options: sdkOptions });
       registerQuery(queryId, q);
       if (options.abortSignal) {
         const interruptQuery = () => {

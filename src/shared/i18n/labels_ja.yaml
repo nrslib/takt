@@ -11,7 +11,7 @@ interactive:
   conversationLabel: "会話:"
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   ui:
-    intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /play（即実行）, /accept（最新のアシスタント発言を採用）, /resume（セッション読込）, /cancel（終了）"
+    intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /play（即実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
     introQuiet: "クワイエットモード - タスク内容を入力してください。追加質問なしで指示書を生成します。"
     introPassthrough: "パススルーモード - タスク内容を入力してください。入力内容をそのまま実行します。"
     resume: "前回のセッションを再開します"
@@ -32,6 +32,7 @@ interactive:
     playNoTask: "タスク内容を指定してください: /play <タスク内容>"
     retryNoOrder: "前回の指示書（order.md）が見つかりません。/retry はリトライ時のみ使用できます。"
     retryUnavailable: "/retry は `takt list` の Retry モードでのみ使用できます。"
+    pasteImageUnavailable: "/paste-image は対話入力中の画像添付にのみ使用できます。"
     personaFallback: "先頭ステップにペルソナがありません。アシスタントモードにフォールバックします。"
   modeSelection:
     prompt: "対話モードを選択してください:"
@@ -70,6 +71,7 @@ interactive:
     replay: "前回の指示書で即再実行"
     cancel: "対話モードを終了"
     resume: "セッションを読み込む"
+    pasteImage: "クリップボード画像を添付"
 
 # ===== Workflow Execution UI =====
 workflow:

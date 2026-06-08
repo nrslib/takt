@@ -305,6 +305,7 @@ describe('readMultilineInput cursor navigation', () => {
   async function flushQueuedInput(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
+    await Promise.resolve();
   }
 
   async function callReadMultilineInput(
@@ -312,6 +313,8 @@ describe('readMultilineInput cursor navigation', () => {
     options?: {
       completionProvider?: CompletionProvider;
       onImagePaste?: (image: { mimeType: string; data: Buffer }) => Promise<string>;
+      onClipboardImagePaste?: () => Promise<string>;
+      onClipboardImagePasteError?: (error: unknown) => void;
     },
   ): Promise<string | null> {
     return readMultilineInput(prompt, options);
@@ -476,6 +479,101 @@ describe('readMultilineInput cursor navigation', () => {
       expect(onImagePaste).toHaveBeenCalledTimes(1);
     });
 
+    it('should replace /paste-image with a clipboard image placeholder and keep editing', async () => {
+      const onClipboardImagePaste = vi.fn(async () => {
+        await Promise.resolve();
+        return '[Image #1]';
+      });
+      setupRawStdin([
+        '/paste-image\r',
+        ' please\r',
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onClipboardImagePaste });
+
+      expect(result).toBe('[Image #1] please');
+      expect(onClipboardImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should insert a clipboard image placeholder on Ctrl+V and keep editing', async () => {
+      const onClipboardImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        'before \x16 after\r',
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onClipboardImagePaste });
+
+      expect(result).toBe('before [Image #1] after');
+      expect(onClipboardImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should insert a clipboard image placeholder on Kitty CSI-u Ctrl+V', async () => {
+      const onClipboardImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        'before \x1B[118;5u after\r',
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onClipboardImagePaste });
+
+      expect(result).toBe('before [Image #1] after');
+      expect(onClipboardImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should insert a clipboard image placeholder on xterm modifyOtherKeys Ctrl+V', async () => {
+      const onClipboardImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        'before \x1B[27;5;118~ after\r',
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onClipboardImagePaste });
+
+      expect(result).toBe('before [Image #1] after');
+      expect(onClipboardImagePaste).toHaveBeenCalledTimes(1);
+    });
+
+    it('should keep ignoring Ctrl+V when clipboard image handling is unavailable', async () => {
+      setupRawStdin(['before \x16 after\r']);
+
+      const result = await callReadMultilineInput('> ');
+
+      expect(result).toBe('before  after');
+    });
+
+    it('should keep bracketed paste Ctrl+V as pasted text', async () => {
+      const onClipboardImagePaste = vi.fn(async () => '[Image #1]');
+      setupRawStdin([
+        '\x1B[200~a\x16b\x1B[201~\r',
+      ]);
+
+      const result = await callReadMultilineInput('> ', { onClipboardImagePaste });
+
+      expect(result).toBe('a\x16b');
+      expect(onClipboardImagePaste).not.toHaveBeenCalled();
+    });
+
+    it('should keep editing when Ctrl+V clipboard image handling fails', async () => {
+      const pasteError = new Error('no image');
+      const onClipboardImagePaste = vi.fn(async () => {
+        throw pasteError;
+      });
+      const onClipboardImagePasteError = vi.fn();
+      setupRawStdin(['before \x16 after\r']);
+
+      const result = await callReadMultilineInput('> ', { onClipboardImagePaste, onClipboardImagePasteError });
+
+      expect(result).toBe('before  after');
+      expect(onClipboardImagePaste).toHaveBeenCalledTimes(1);
+      expect(onClipboardImagePasteError).toHaveBeenCalledWith(pasteError);
+    });
+
+    it('should submit /paste-image as text when clipboard image handling is unavailable', async () => {
+      setupRawStdin(['/paste-image\r']);
+
+      const result = await callReadMultilineInput('> ');
+
+      expect(result).toBe('/paste-image');
+    });
+
     it('should not keep a second Esc timeout after resolving a bare Esc with image paste enabled', async () => {
       vi.useFakeTimers();
       setupRawStdin([]);
@@ -489,6 +587,7 @@ describe('readMultilineInput cursor navigation', () => {
       await flushQueuedInput();
       emitRawInput?.('\x1B');
       await flushQueuedInput();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(vi.getTimerCount()).toBe(1);
       await vi.advanceTimersByTimeAsync(50);
@@ -1588,11 +1687,11 @@ describe('readMultilineInput cursor navigation', () => {
       expect(cb.calls).toEqual(['up']);
     });
 
-    it('should emit onEsc for bare Esc on flush', () => {
+    it('should emit onEsc for bare Esc on flush', async () => {
       const cb = createCallbacks();
       const parser = createEscapeParser(cb);
 
-      parser.feed('\x1B');
+      await parser.feed('\x1B');
       parser.flush();
 
       expect(cb.calls).toEqual(['esc']);
@@ -1602,58 +1701,58 @@ describe('readMultilineInput cursor navigation', () => {
       const cb = createCallbacks();
       const parser = createEscapeParser(cb);
 
-      parser.feed('\x1B');
+      await parser.feed('\x1B');
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(cb.calls).toEqual(['esc']);
     });
 
-    it('should handle normal characters without pending state', () => {
+    it('should handle normal characters without pending state', async () => {
       const cb = createCallbacks();
       const parser = createEscapeParser(cb);
 
-      parser.feed('abc');
+      await parser.feed('abc');
 
       expect(cb.calls).toEqual(['char:a', 'char:b', 'char:c']);
     });
 
-    it('should resolve CSI split across chunks (ESC+[ then A)', () => {
+    it('should resolve CSI split across chunks (ESC+[ then A)', async () => {
       const cb = createCallbacks();
       const parser = createEscapeParser(cb);
 
-      parser.feed('\x1B[');
-      parser.feed('A');
+      await parser.feed('\x1B[');
+      await parser.feed('A');
 
       expect(cb.calls).toEqual(['up']);
     });
 
-    it('should resolve CSI split across three chunks (ESC then [ then B)', () => {
+    it('should resolve CSI split across three chunks (ESC then [ then B)', async () => {
       const cb = createCallbacks();
       const parser = createEscapeParser(cb);
 
-      parser.feed('\x1B');
-      parser.feed('[');
-      parser.feed('B');
+      await parser.feed('\x1B');
+      await parser.feed('[');
+      await parser.feed('B');
 
       expect(cb.calls).toEqual(['down']);
     });
 
-    it('should handle text after resolved split escape sequence', () => {
+    it('should handle text after resolved split escape sequence', async () => {
       const cb = createCallbacks();
       const parser = createEscapeParser(cb);
 
-      parser.feed('\x1B[');
-      parser.feed('Cabc');
+      await parser.feed('\x1B[');
+      await parser.feed('Cabc');
 
       expect(cb.calls).toEqual(['right', 'char:a', 'char:b', 'char:c']);
     });
 
-    it('should flush incomplete CSI fragment as bare Esc', () => {
+    it('should flush incomplete CSI fragment as bare Esc', async () => {
       const cb = createCallbacks();
       const parser = createEscapeParser(cb);
 
-      parser.feed('\x1B[');
+      await parser.feed('\x1B[');
       parser.flush();
 
       expect(cb.calls).toEqual(['esc']);

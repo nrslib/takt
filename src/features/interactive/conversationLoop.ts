@@ -38,7 +38,11 @@ import {
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { prependInitialPromptContext } from './promptSections.js';
-import { buildInteractiveResultWithAttachments, createSessionImageAttachmentStore } from './imageAttachments.js';
+import {
+  buildInteractiveResultWithAttachments,
+  createSessionImageAttachmentStore,
+  resolvePromptImageAttachments,
+} from './imageAttachments.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
@@ -142,8 +146,9 @@ export async function runConversationLoop(
 
   /** Helper: call AI with current session and update session state */
   async function doCallAI(prompt: string, sysPrompt: string, tools: string[]): Promise<CallAIResult | null> {
+    const imageAttachments = resolvePromptImageAttachments(prompt, attachmentStore.listAttachments());
     const { result, sessionId: newSessionId } = await callAIWithRetry(
-      prompt, sysPrompt, tools, cwd, { ...ctx, sessionId },
+      prompt, sysPrompt, tools, cwd, { ...ctx, sessionId }, { imageAttachments },
     );
     sessionId = newSessionId;
     return result;
@@ -286,6 +291,7 @@ export async function runConversationLoop(
         const { result: summaryResult } = await callAIWithRetry(
           summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
           { ...ctx, sessionId: undefined },
+          { imageAttachments: resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments()) },
         );
         if (!summaryResult) {
           info(ui.summarizeFailed);
@@ -325,6 +331,11 @@ export async function runConversationLoop(
           sessionId = selectedId;
           info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
         }
+        continue;
+      }
+
+      case SlashCommand.PasteImage: {
+        info(ui.pasteImageUnavailable);
         continue;
       }
     }

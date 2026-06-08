@@ -37,6 +37,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
 /** Copilot provider — delegates to GitHub Copilot CLI */
 export class CopilotProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsNativeImageInput = false;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

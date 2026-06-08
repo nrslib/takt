@@ -69,6 +69,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
 
 export class ClaudeTerminalProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsNativeImageInput = false;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

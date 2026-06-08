@@ -19,6 +19,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 /** Mock provider — deterministic responses for testing */
 export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsNativeImageInput = false;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

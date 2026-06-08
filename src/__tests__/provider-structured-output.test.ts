@@ -165,6 +165,17 @@ describe('ClaudeProvider — structured output', () => {
     const opts = mockCallClaude.mock.calls[0]?.[2];
     expect(opts.outputSchema).toBeUndefined();
   });
+
+  it('imageAttachments を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const imageAttachments = [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }];
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp', imageAttachments });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('imageAttachments', imageAttachments);
+  });
 });
 
 // ---------- Codex ----------
