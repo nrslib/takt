@@ -36,11 +36,9 @@ import {
   containsRateLimitMarker,
   resolveRateLimitErrorMessage,
 } from '../rate-limit/detection.js';
+import { extractClaudeProviderUsage } from './usage.js';
 
 const log = createLogger('claude-sdk');
-function toNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
 
 function isRejectedRateLimitEvent(message: SDKRateLimitEvent): boolean {
   // SDK は rate_limit_event を情報イベントとして毎回流す。
@@ -83,45 +81,12 @@ function describeRateLimitSignal(message: SDKMessage): string | undefined {
 
 function extractProviderUsage(resultMsg: SDKResultMessage): ProviderUsageSnapshot {
   const rawUsage = (resultMsg as unknown as { usage?: unknown }).usage;
-  if (!rawUsage || typeof rawUsage !== 'object') {
+  const providerUsage = extractClaudeProviderUsage(rawUsage);
+  if (!providerUsage) {
     return {
       usageMissing: true,
       reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
     };
-  }
-
-  const usage = rawUsage as Record<string, unknown>;
-  const inputTokens = toNumber(usage.input_tokens);
-  const outputTokens = toNumber(usage.output_tokens);
-  const cacheCreationInputTokens = toNumber(usage.cache_creation_input_tokens);
-  const cacheReadInputTokens = toNumber(usage.cache_read_input_tokens);
-  if (inputTokens === undefined || outputTokens === undefined) {
-    return {
-      usageMissing: true,
-      reason: USAGE_MISSING_REASONS.TOKENS_MISSING,
-    };
-  }
-  const totalTokens = inputTokens + outputTokens;
-  const cachedInputTokens = (
-    cacheCreationInputTokens !== undefined && cacheReadInputTokens !== undefined
-      ? cacheCreationInputTokens + cacheReadInputTokens
-      : cacheReadInputTokens ?? cacheCreationInputTokens
-  );
-
-  const providerUsage: ProviderUsageSnapshot = {
-    inputTokens,
-    outputTokens,
-    totalTokens,
-    usageMissing: false,
-  };
-  if (cachedInputTokens !== undefined) {
-    providerUsage.cachedInputTokens = cachedInputTokens;
-  }
-  if (cacheCreationInputTokens !== undefined) {
-    providerUsage.cacheCreationInputTokens = cacheCreationInputTokens;
-  }
-  if (cacheReadInputTokens !== undefined) {
-    providerUsage.cacheReadInputTokens = cacheReadInputTokens;
   }
   return providerUsage;
 }

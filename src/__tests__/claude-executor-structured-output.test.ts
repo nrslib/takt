@@ -241,4 +241,25 @@ describe('QueryExecutor — structuredOutput 抽出', () => {
       reason: 'usage_not_available',
     });
   });
+
+  it('usage に必須 token が欠ける場合は usage_tokens_missing を返す', async () => {
+    mockQuery.mockReturnValue(createMockQuery([
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        usage: {
+          input_tokens: 12,
+        },
+      },
+    ]));
+
+    const executor = new QueryExecutor();
+    const result = await executor.execute('test', { cwd: '/tmp' });
+
+    expect(result.providerUsage).toEqual({
+      usageMissing: true,
+      reason: 'usage_tokens_missing',
+    });
+  });
 });
