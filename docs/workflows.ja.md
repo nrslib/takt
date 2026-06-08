@@ -315,7 +315,7 @@ promotion は並列サブ step ではサポートされません。
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`（`xhigh` は Opus 4.7 が必要） |
-| `provider_options.claude.use_prompt_temp_file` | - | Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in |
+| `provider_options.claude.use_prompt_temp_file` | - | Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in。Claude headless のみで使用され、Claude SDK provider では消費されない |
 | `provider_options.cursor.use_prompt_temp_file` | - | Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in |
 | `provider_options.kiro.use_prompt_temp_file` | - | Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in |
 | `provider_options.copilot.use_prompt_temp_file` | - | Windows のコマンドライン長制限対策として workspace 一時ファイル方式を opt-in |
