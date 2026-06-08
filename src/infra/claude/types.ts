@@ -130,7 +130,6 @@ export interface ClaudeCallOptions {
   sandbox?: SandboxSettings;
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
-  /** Local images to attach to the Claude SDK turn */
   imageAttachments?: ProviderImageAttachment[];
 }
 
@@ -168,6 +167,5 @@ export interface ClaudeSpawnOptions {
   sandbox?: SandboxSettings;
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
-  /** Local images to attach to the Claude SDK turn */
   imageAttachments?: ProviderImageAttachment[];
 }

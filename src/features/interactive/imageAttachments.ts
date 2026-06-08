@@ -25,6 +25,7 @@ export interface ImageAttachmentStoreOptions {
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
+const IMAGE_PLACEHOLDER_PATTERN = /\[Image #\d+\]/g;
 
 function extensionForMimeType(mimeType: string): string {
   switch (mimeType) {
@@ -121,8 +122,9 @@ export function resolvePromptImageAttachments(
   prompt: string,
   attachments: readonly InteractiveImageAttachment[],
 ): ProviderImageAttachment[] {
+  const referencedPlaceholders = new Set(prompt.match(IMAGE_PLACEHOLDER_PATTERN) ?? []);
   return attachments
-    .filter((attachment) => prompt.includes(attachment.placeholder))
+    .filter((attachment) => referencedPlaceholders.has(attachment.placeholder))
     .map((attachment) => ({
       placeholder: attachment.placeholder,
       path: attachment.tempPath,

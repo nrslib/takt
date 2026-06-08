@@ -207,7 +207,6 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
       expect(runningTask).toBeDefined();
       expect(runningTask?.owner_pid).toBeTypeOf('number');
 
-      // When: run is executed again
       const rerunResult = runTakt({
         args: ['run', '--provider', 'mock'],
         cwd: repo.path,
@@ -218,7 +217,6 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
         timeout: 240_000,
       });
 
-      // Then: stale running task is failed and the remaining pending task completes
       expect(rerunResult.exitCode, formatTaktRunResult(rerunResult)).toBe(0);
       const combined = rerunResult.stdout + rerunResult.stderr;
       expect(combined).toContain('Marked 1 interrupted running task(s) as failed.');
@@ -276,7 +274,6 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
       timeout: 240_000,
     });
 
-    // Then: all tasks complete and remain as completed history
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
     expect(result.stdout).toContain('Concurrency: 10');
     expect(result.stdout).toContain('Tasks Summary');
@@ -297,7 +294,6 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
     const envWithoutConfig = createEnvWithoutGlobalConfig();
 
     try {
-      // Given: global config.yaml is absent and project config uses the mock provider
       const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
       const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
       const projectConfigDir = join(repo.path, '.takt');

@@ -71,4 +71,19 @@ describe('buildClaudePromptInput', () => {
       },
     ]);
   });
+
+  it('should include the attachment path when reading an image fails', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-provider-image-missing-test-'));
+    tempRoots.add(root);
+    const missingPath = path.join(root, 'missing.png');
+    const input = buildClaudePromptInput('見て [Image #1]', [
+      { placeholder: '[Image #1]', path: missingPath },
+    ]);
+
+    await expect(async () => {
+      for await (const _message of input as AsyncIterable<unknown>) {
+        throw new Error('Expected image read failure before yielding Claude message');
+      }
+    }).rejects.toThrow(`Failed to read image attachment at ${missingPath}`);
+  });
 });

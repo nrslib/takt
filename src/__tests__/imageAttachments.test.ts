@@ -128,6 +128,25 @@ describe('resolvePromptImageAttachments', () => {
       { placeholder: '[Image #2]', path: '/tmp/image-2.png' },
     ]);
   });
+
+  it('should not match a prefix placeholder when only a later image is referenced', () => {
+    const first = {
+      placeholder: '[Image #1]',
+      tempPath: '/tmp/image-1.png',
+      fileName: 'image-1.png',
+    };
+    const tenth = {
+      placeholder: '[Image #10]',
+      tempPath: '/tmp/image-10.png',
+      fileName: 'image-10.png',
+    };
+
+    const result = resolvePromptImageAttachments('Please inspect [Image #10].', [first, tenth]);
+
+    expect(result).toEqual([
+      { placeholder: '[Image #10]', path: '/tmp/image-10.png' },
+    ]);
+  });
 });
 
 describe('buildInteractiveResultWithAttachments', () => {

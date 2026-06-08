@@ -4,6 +4,15 @@ const { mockCallKiro } = vi.hoisted(() => ({
   mockCallKiro: vi.fn(),
 }));
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 const {
   mockResolveKiroApiKey,
   mockResolveKiroCliPath,
@@ -20,6 +29,14 @@ vi.mock('../infra/config/index.js', () => ({
   resolveKiroApiKey: mockResolveKiroApiKey,
   resolveKiroCliPath: mockResolveKiroCliPath,
 }));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...actual,
+    createLogger: vi.fn(() => mockLogger),
+  };
+});
 
 import { KiroProvider } from '../infra/providers/kiro.js';
 import { ProviderRegistry } from '../infra/providers/index.js';
@@ -117,7 +134,7 @@ describe('KiroProvider', () => {
     );
   });
 
-  it('Given unsupported provider options, When agent is called, Then does not pass model, allowedTools, mcpServers, maxTurns, or outputSchema to callKiro', async () => {
+  it('Given unsupported provider options, When agent is called, Then does not pass them to callKiro', async () => {
     mockCallKiro.mockResolvedValue(doneResponse('coder'));
 
     const provider = new KiroProvider();
@@ -135,6 +152,7 @@ describe('KiroProvider', () => {
       },
       maxTurns: 5,
       outputSchema: { type: 'object' },
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
       permissionMode: 'edit',
     });
 
@@ -144,7 +162,26 @@ describe('KiroProvider', () => {
     expect(options.mcpServers).toBeUndefined();
     expect(options.maxTurns).toBeUndefined();
     expect(options.outputSchema).toBeUndefined();
+    expect(options.imageAttachments).toBeUndefined();
     expect(options.permissionMode).toBe('edit');
+    expect(mockLogger.info).toHaveBeenCalledWith('Kiro provider does not support imageAttachments; ignoring');
+  });
+
+  it('Given empty or missing image attachments, When agent is called, Then does not log unsupported image attachments', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      imageAttachments: [],
+    });
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+    });
+
+    expect(mockLogger.info).not.toHaveBeenCalledWith('Kiro provider does not support imageAttachments; ignoring');
   });
 });
 

@@ -39,6 +39,13 @@ const PASTE_END_SEQUENCE = `\x1B${ESC_PASTE_END}`;
 
 type InputState = 'normal' | 'paste';
 type InputCallbackResult = void | Promise<void>;
+type EscapeCallbackName = Exclude<keyof InputCallbacks, 'onChar'>;
+type DecodedEscapeSequence =
+  | { kind: 'callback'; callback: EscapeCallbackName; consumed: number }
+  | { kind: 'char'; ch: string; consumed: number }
+  | { kind: 'ignore'; consumed: number }
+  | { kind: 'bareEsc' }
+  | { kind: 'incomplete' };
 
 function splitTrailingInlineImagePrefix(input: string): { ready: string; pending: string } {
   const maxCandidateLength = Math.min(OSC_IMAGE_PREFIX.length - 1, input.length);
@@ -112,134 +119,101 @@ export interface InputCallbacks {
   onChar: (ch: string) => InputCallbackResult;
 }
 
-/**
- * Try to consume an escape sequence starting after the leading \x1B.
- *
- * Returns the number of characters consumed (excluding the \x1B itself),
- * or -1 if the rest is a potential incomplete CSI/SS3 prefix that needs
- * more data, or 0 if the \x1B is a bare Esc.
- */
-const tryConsumeEscapeSequence = (
-  rest: string,
-  callbacks: InputCallbacks,
-): number => {
+const decodeEscapeSequence = (rest: string): DecodedEscapeSequence => {
   if (rest.startsWith(ESC_PASTE_START)) {
-    callbacks.onPasteStart();
-    return ESC_PASTE_START.length;
+    return { kind: 'callback', callback: 'onPasteStart', consumed: ESC_PASTE_START.length };
   }
   if (rest.startsWith(ESC_PASTE_END)) {
-    callbacks.onPasteEnd();
-    return ESC_PASTE_END.length;
+    return { kind: 'callback', callback: 'onPasteEnd', consumed: ESC_PASTE_END.length };
   }
   if (rest.startsWith(ESC_SHIFT_ENTER)) {
-    callbacks.onShiftEnter();
-    return ESC_SHIFT_ENTER.length;
+    return { kind: 'callback', callback: 'onShiftEnter', consumed: ESC_SHIFT_ENTER.length };
   }
   const ctrlKey = decodeCtrlKey(rest);
   if (ctrlKey) {
-    callbacks.onChar(ctrlKey.ch);
-    return ctrlKey.consumed;
+    return { kind: 'char', ch: ctrlKey.ch, consumed: ctrlKey.consumed };
   }
 
-  // Arrow keys
-  if (rest.startsWith('[D')) { callbacks.onArrowLeft(); return 2; }
-  if (rest.startsWith('[C')) { callbacks.onArrowRight(); return 2; }
-  if (rest.startsWith('[A')) { callbacks.onArrowUp(); return 2; }
-  if (rest.startsWith('[B')) { callbacks.onArrowDown(); return 2; }
+  if (rest.startsWith('[D')) return { kind: 'callback', callback: 'onArrowLeft', consumed: 2 };
+  if (rest.startsWith('[C')) return { kind: 'callback', callback: 'onArrowRight', consumed: 2 };
+  if (rest.startsWith('[A')) return { kind: 'callback', callback: 'onArrowUp', consumed: 2 };
+  if (rest.startsWith('[B')) return { kind: 'callback', callback: 'onArrowDown', consumed: 2 };
 
-  // Option+Arrow (CSI modified): \x1B[1;3D (left), \x1B[1;3C (right)
-  if (rest.startsWith('[1;3D')) { callbacks.onWordLeft(); return 5; }
-  if (rest.startsWith('[1;3C')) { callbacks.onWordRight(); return 5; }
+  if (rest.startsWith('[1;3D')) return { kind: 'callback', callback: 'onWordLeft', consumed: 5 };
+  if (rest.startsWith('[1;3C')) return { kind: 'callback', callback: 'onWordRight', consumed: 5 };
 
-  // Option+Arrow (SS3/alt): \x1Bb (left), \x1Bf (right)
-  if (rest.startsWith('b')) { callbacks.onWordLeft(); return 1; }
-  if (rest.startsWith('f')) { callbacks.onWordRight(); return 1; }
+  if (rest.startsWith('b')) return { kind: 'callback', callback: 'onWordLeft', consumed: 1 };
+  if (rest.startsWith('f')) return { kind: 'callback', callback: 'onWordRight', consumed: 1 };
 
-  // Home: \x1B[H (CSI) or \x1BOH (SS3/application mode)
-  if (rest.startsWith('[H') || rest.startsWith('OH')) { callbacks.onHome(); return 2; }
+  if (rest.startsWith('[H') || rest.startsWith('OH')) return { kind: 'callback', callback: 'onHome', consumed: 2 };
 
-  // End: \x1B[F (CSI) or \x1BOF (SS3/application mode)
-  if (rest.startsWith('[F') || rest.startsWith('OF')) { callbacks.onEnd(); return 2; }
+  if (rest.startsWith('[F') || rest.startsWith('OF')) return { kind: 'callback', callback: 'onEnd', consumed: 2 };
 
-  // Kitty keyboard protocol: ESC key → \x1B[27u or \x1B[27;1u
   const kittyEscMatch = rest.match(/^\[27(?:;1)?u/);
   if (kittyEscMatch) {
-    callbacks.onEsc();
-    return kittyEscMatch[0].length;
+    return { kind: 'callback', callback: 'onEsc', consumed: kittyEscMatch[0].length };
   }
 
-  // Unknown CSI sequences: skip
   if (rest.startsWith('[')) {
     const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
-    if (csiMatch) return csiMatch[0].length;
-    // Incomplete CSI — need more data
-    return -1;
+    if (csiMatch) return { kind: 'ignore', consumed: csiMatch[0].length };
+    return { kind: 'incomplete' };
   }
 
-  // SS3 prefix ('O') without a recognized follower — could be incomplete
-  if (rest.startsWith('O') && rest.length === 1) return -1;
+  if (rest.startsWith('O') && rest.length === 1) return { kind: 'incomplete' };
+  if (rest.length === 0) return { kind: 'incomplete' };
 
-  // Bare Esc (followed by a non-sequence character or nothing)
-  if (rest.length === 0) return -1;
-
-  callbacks.onEsc();
-  return 0;
+  return { kind: 'bareEsc' };
 };
+
+const dispatchEscapeSequence = (decoded: DecodedEscapeSequence, callbacks: InputCallbacks): number => {
+  switch (decoded.kind) {
+    case 'callback':
+      callbacks[decoded.callback]();
+      return decoded.consumed;
+    case 'char':
+      callbacks.onChar(decoded.ch);
+      return decoded.consumed;
+    case 'ignore':
+      return decoded.consumed;
+    case 'bareEsc':
+      callbacks.onEsc();
+      return 0;
+    case 'incomplete':
+      return -1;
+  }
+};
+
+const dispatchEscapeSequenceAsync = async (
+  decoded: DecodedEscapeSequence,
+  callbacks: InputCallbacks,
+): Promise<number> => {
+  switch (decoded.kind) {
+    case 'callback':
+      await callbacks[decoded.callback]();
+      return decoded.consumed;
+    case 'char':
+      await callbacks.onChar(decoded.ch);
+      return decoded.consumed;
+    case 'ignore':
+      return decoded.consumed;
+    case 'bareEsc':
+      await callbacks.onEsc();
+      return 0;
+    case 'incomplete':
+      return -1;
+  }
+};
+
+const tryConsumeEscapeSequence = (
+  rest: string,
+  callbacks: InputCallbacks,
+): number => dispatchEscapeSequence(decodeEscapeSequence(rest), callbacks);
 
 const tryConsumeEscapeSequenceAsync = async (
   rest: string,
   callbacks: InputCallbacks,
-): Promise<number> => {
-  if (rest.startsWith(ESC_PASTE_START)) {
-    await callbacks.onPasteStart();
-    return ESC_PASTE_START.length;
-  }
-  if (rest.startsWith(ESC_PASTE_END)) {
-    await callbacks.onPasteEnd();
-    return ESC_PASTE_END.length;
-  }
-  if (rest.startsWith(ESC_SHIFT_ENTER)) {
-    await callbacks.onShiftEnter();
-    return ESC_SHIFT_ENTER.length;
-  }
-  const ctrlKey = decodeCtrlKey(rest);
-  if (ctrlKey) {
-    await callbacks.onChar(ctrlKey.ch);
-    return ctrlKey.consumed;
-  }
-
-  if (rest.startsWith('[D')) { await callbacks.onArrowLeft(); return 2; }
-  if (rest.startsWith('[C')) { await callbacks.onArrowRight(); return 2; }
-  if (rest.startsWith('[A')) { await callbacks.onArrowUp(); return 2; }
-  if (rest.startsWith('[B')) { await callbacks.onArrowDown(); return 2; }
-
-  if (rest.startsWith('[1;3D')) { await callbacks.onWordLeft(); return 5; }
-  if (rest.startsWith('[1;3C')) { await callbacks.onWordRight(); return 5; }
-
-  if (rest.startsWith('b')) { await callbacks.onWordLeft(); return 1; }
-  if (rest.startsWith('f')) { await callbacks.onWordRight(); return 1; }
-
-  if (rest.startsWith('[H') || rest.startsWith('OH')) { await callbacks.onHome(); return 2; }
-  if (rest.startsWith('[F') || rest.startsWith('OF')) { await callbacks.onEnd(); return 2; }
-
-  const kittyEscMatch = rest.match(/^\[27(?:;1)?u/);
-  if (kittyEscMatch) {
-    await callbacks.onEsc();
-    return kittyEscMatch[0].length;
-  }
-
-  if (rest.startsWith('[')) {
-    const csiMatch = rest.match(/^\[[0-9;]*[A-Za-z~]/);
-    if (csiMatch) return csiMatch[0].length;
-    return -1;
-  }
-
-  if (rest.startsWith('O') && rest.length === 1) return -1;
-  if (rest.length === 0) return -1;
-
-  await callbacks.onEsc();
-  return 0;
-};
+): Promise<number> => dispatchEscapeSequenceAsync(decodeEscapeSequence(rest), callbacks);
 
 /**
  * Parse raw stdin data into semantic input events.

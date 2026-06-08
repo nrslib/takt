@@ -40,6 +40,5 @@ export interface CodexCallOptions {
   codexPathOverride?: string;
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
-  /** Local images to attach to the Codex turn */
   imageAttachments?: ProviderImageAttachment[];
 }

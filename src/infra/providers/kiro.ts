@@ -22,6 +22,9 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
   if (options.model) {
     log.info('Kiro provider does not support model CLI flag; ignoring');
   }
+  if (options.imageAttachments && options.imageAttachments.length > 0) {
+    log.info('Kiro provider does not support imageAttachments; ignoring');
+  }
 
   return {
     cwd: options.cwd,

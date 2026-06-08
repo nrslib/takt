@@ -22,24 +22,38 @@ function inferMediaType(filePath: string): ClaudeImageMediaType {
   }
 }
 
-async function buildContentBlocks(
-  prompt: string,
-  imageAttachments: readonly ProviderImageAttachment[],
-): Promise<ContentBlockParam[]> {
-  const content: ContentBlockParam[] = [{ type: 'text', text: prompt }];
-  for (const attachment of imageAttachments) {
-    const data = await readFile(attachment.path);
-    content.push({ type: 'text', text: formatImageAttachmentPathReference(attachment) });
-    content.push({
+async function readImageAttachment(attachment: ProviderImageAttachment): Promise<Buffer> {
+  try {
+    return await readFile(attachment.path);
+  } catch (error) {
+    throw new Error(`Failed to read image attachment at ${attachment.path}`, { cause: error });
+  }
+}
+
+async function buildAttachmentContentBlocks(attachment: ProviderImageAttachment): Promise<ContentBlockParam[]> {
+  const data = await readImageAttachment(attachment);
+  return [
+    { type: 'text', text: formatImageAttachmentPathReference(attachment) },
+    {
       type: 'image',
       source: {
         type: 'base64',
         media_type: inferMediaType(attachment.path),
         data: data.toString('base64'),
       },
-    });
-  }
-  return content;
+    },
+  ];
+}
+
+async function buildContentBlocks(
+  prompt: string,
+  imageAttachments: readonly ProviderImageAttachment[],
+): Promise<ContentBlockParam[]> {
+  const attachmentBlocks = await Promise.all(imageAttachments.map(buildAttachmentContentBlocks));
+  return [
+    { type: 'text', text: prompt },
+    ...attachmentBlocks.flat(),
+  ];
 }
 
 async function* createClaudeUserMessageStream(
