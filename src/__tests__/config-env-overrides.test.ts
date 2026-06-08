@@ -160,6 +160,40 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は prompt temp file の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-prompt-temp-file-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  cursor:',
+        '    use_prompt_temp_file: false',
+        '  kiro:',
+        '    use_prompt_temp_file: false',
+        '  claude:',
+        '    use_prompt_temp_file: false',
+        '  copilot:',
+        '    use_prompt_temp_file: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CURSOR_USE_PROMPT_TEMP_FILE = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_KIRO_USE_PROMPT_TEMP_FILE = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_USE_PROMPT_TEMP_FILE = 'true';
+    process.env.TAKT_PROVIDER_OPTIONS_COPILOT_USE_PROMPT_TEMP_FILE = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+    });
+  });
+
   it('project config は root JSON env で subtree 全体を置き換える', () => {
     const projectDir = join(testRoot, 'project-root-json');
     const configDir = getProjectConfigDir(projectDir);

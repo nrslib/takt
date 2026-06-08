@@ -200,6 +200,14 @@ concurrency: 2                # Parallel task count for takt run in this project
 #     network_access: true
 #   opencode:
 #     variant: high
+#   cursor:
+#     use_prompt_temp_file: true
+#   kiro:
+#     use_prompt_temp_file: true
+#   copilot:
+#     use_prompt_temp_file: true
+#   claude:
+#     use_prompt_temp_file: true
 #   claude_terminal:
 #     backend: tmux
 #     timeout_ms: 900000
@@ -438,7 +446,7 @@ persona_providers:
 
 `provider_options` priority is resolved per leaf. An env-resolved config leaf overrides all other sources. Otherwise the order is: step `provider_options` > workflow `workflow_config.provider_options` > `persona_providers[persona].provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. Claude, Cursor, Kiro, and Copilot can opt in to prompt temp files with `TAKT_PROVIDER_OPTIONS_CLAUDE_USE_PROMPT_TEMP_FILE=true`, `TAKT_PROVIDER_OPTIONS_CURSOR_USE_PROMPT_TEMP_FILE=true`, `TAKT_PROVIDER_OPTIONS_KIRO_USE_PROMPT_TEMP_FILE=true`, or `TAKT_PROVIDER_OPTIONS_COPILOT_USE_PROMPT_TEMP_FILE=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`.
 
 This allows mixing providers and models within a single workflow. The persona name is matched against the `persona` key in the step definition.
 
@@ -465,6 +473,24 @@ provider_options:
 ```
 
 `network_access` can be set at step / `workflow_config` / `persona_providers` / project / global levels, with step having the highest priority. The environment variable `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.
+
+#### CLI prompt temp files (`use_prompt_temp_file`)
+
+Cursor, Kiro, Copilot, and Claude headless normally pass prompt content through CLI argv. On Windows environments that hit command line length limits, opt in to writing the full prompt to a temporary file under the workspace and passing a short file-reference prompt instead:
+
+```yaml
+provider_options:
+  cursor:
+    use_prompt_temp_file: true
+  kiro:
+    use_prompt_temp_file: true
+  copilot:
+    use_prompt_temp_file: true
+  claude:
+    use_prompt_temp_file: true
+```
+
+This option is disabled by default.
 
 #### Claude Code sandbox control (`allow_unsandboxed_commands`)
 

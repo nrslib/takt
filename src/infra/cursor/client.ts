@@ -4,6 +4,7 @@
 
 import type { AgentResponse } from '../../core/models/index.js';
 import { crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
+import { prepareCliPromptArgument } from '../cli-prompt-temp-file.js';
 import type { CursorCallOptions } from './types.js';
 
 export type { CursorCallOptions } from './types.js';
@@ -47,7 +48,7 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
   return `${systemPrompt}\n\n${prompt}`;
 }
 
-function buildArgs(prompt: string, options: CursorCallOptions): string[] {
+function buildArgs(promptArgument: string, options: CursorCallOptions): string[] {
   const args = ['-p', '--trust', '--output-format', 'json', '--workspace', options.cwd];
 
   if (options.model) {
@@ -62,7 +63,7 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
     args.push('--force');
   }
 
-  args.push('--', buildPrompt(prompt, options.systemPrompt));
+  args.push('--', promptArgument);
   return args;
 }
 
@@ -85,7 +86,7 @@ function createExecError(
     stderr?: string;
     signal?: NodeJS.Signals | null;
     name?: string;
-  } = {},
+  },
 ): CursorExecError {
   const error = new Error(message) as CursorExecError;
   if (params.name) {
@@ -319,14 +320,19 @@ function extractSessionId(payload: unknown): string | undefined {
   ]);
 }
 
-function trimDetail(value: string | undefined, fallback = ''): string {
-  const normalized = (value ?? '').trim();
+function trimDetail(value: string | undefined): string {
+  const normalized = value?.trim();
   if (!normalized) {
-    return fallback;
+    return '';
   }
   return normalized.length > CURSOR_ERROR_DETAIL_MAX_LENGTH
     ? `${normalized.slice(0, CURSOR_ERROR_DETAIL_MAX_LENGTH)}...`
     : normalized;
+}
+
+function trimDetailOrFallback(value: string | undefined, fallback: string): string {
+  const detail = trimDetail(value);
+  return detail.length > 0 ? detail : fallback;
 }
 
 function isAuthenticationError(error: CursorExecError): boolean {
@@ -366,7 +372,7 @@ function classifyExecutionError(error: CursorExecError, options: CursorCallOptio
   }
 
   if (typeof error.code === 'number') {
-    const detail = trimDetail(error.stderr, trimDetail(error.stdout, getErrorMessage(error)));
+    const detail = trimDetailOrFallback(error.stderr, trimDetailOrFallback(error.stdout, getErrorMessage(error)));
     return `Cursor Agent CLI exited with code ${error.code}: ${detail}`;
   }
 
@@ -384,14 +390,14 @@ function parseCursorOutput(stdout: string): { content: string; sessionId?: strin
     parsed = JSON.parse(trimmed);
   } catch {
     return {
-      error: `Failed to parse cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}`,
+      error: `Failed to parse cursor-agent JSON output: ${trimDetailOrFallback(trimmed, '<empty>')}`,
     };
   }
 
   const content = extractContent(parsed);
   if (!content) {
     return {
-      error: `Failed to extract assistant content from cursor-agent JSON output: ${trimDetail(trimmed, '<empty>')}`,
+      error: `Failed to extract assistant content from cursor-agent JSON output: ${trimDetailOrFallback(trimmed, '<empty>')}`,
     };
   }
 
@@ -404,9 +410,17 @@ function parseCursorOutput(stdout: string): { content: string; sessionId?: strin
  */
 export class CursorClient {
   async call(agentType: string, prompt: string, options: CursorCallOptions): Promise<AgentResponse> {
-    const args = buildArgs(prompt, options);
+    let promptTempCleanup: (() => Promise<void>) | undefined;
 
     try {
+      const promptText = buildPrompt(prompt, options.systemPrompt);
+      const preparedPrompt = await prepareCliPromptArgument(
+        options.cwd,
+        promptText,
+        options.usePromptTempFile,
+      );
+      promptTempCleanup = preparedPrompt.cleanup;
+      const args = buildArgs(preparedPrompt.promptArgument, options);
       const { stdout } = await execCursor(args, options);
       const parsed = parseCursorOutput(stdout);
       if ('error' in parsed) {
@@ -460,6 +474,8 @@ export class CursorClient {
         timestamp: new Date(),
         sessionId: options.sessionId,
       };
+    } finally {
+      await promptTempCleanup?.();
     }
   }
 

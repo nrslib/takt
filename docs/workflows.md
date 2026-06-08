@@ -316,6 +316,10 @@ Promotion is not supported on parallel sub-steps.
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` requires Opus 4.7) |
+| `provider_options.claude.use_prompt_temp_file` | - | Opt in to workspace temp-file prompt passing for Windows command line limits. Claude headless only; not consumed by the Claude SDK provider |
+| `provider_options.cursor.use_prompt_temp_file` | - | Opt in to workspace temp-file prompt passing for Windows command line limits |
+| `provider_options.kiro.use_prompt_temp_file` | - | Opt in to workspace temp-file prompt passing for Windows command line limits |
+| `provider_options.copilot.use_prompt_temp_file` | - | Opt in to workspace temp-file prompt passing for Windows command line limits |
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |

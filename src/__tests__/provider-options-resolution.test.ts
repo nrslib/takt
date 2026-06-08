@@ -95,6 +95,65 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('env origin は prompt temp file の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (
+        path === 'cursor.usePromptTempFile'
+        || path === 'kiro.usePromptTempFile'
+        || path === 'claude.usePromptTempFile'
+        || path === 'copilot.usePromptTempFile'
+          ? 'env'
+          : 'local'
+      ),
+      {
+        cursor: { usePromptTempFile: true },
+        kiro: { usePromptTempFile: true },
+        claude: { usePromptTempFile: true },
+        copilot: { usePromptTempFile: true },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[2],
+      {
+        cursor: { usePromptTempFile: false },
+        kiro: { usePromptTempFile: false },
+        claude: { usePromptTempFile: false },
+        copilot: { usePromptTempFile: false },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[3],
+    );
+
+    expect(result).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+    });
+  });
+
+  it('step の prompt temp file option は config より優先される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      {
+        cursor: { usePromptTempFile: false },
+        kiro: { usePromptTempFile: false },
+        claude: { usePromptTempFile: false },
+        copilot: { usePromptTempFile: false },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[2],
+      {
+        cursor: { usePromptTempFile: true },
+        kiro: { usePromptTempFile: true },
+        claude: { usePromptTempFile: true },
+        copilot: { usePromptTempFile: true },
+      } as Parameters<typeof resolveEffectiveProviderOptions>[3],
+    );
+
+    expect(result).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+    });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',

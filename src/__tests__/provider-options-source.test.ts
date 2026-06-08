@@ -135,5 +135,33 @@ describe('resolveProviderOptionsSources (all paths)', () => {
     expect(PROVIDER_OPTION_PATHS).toContain('codex.reasoningEffort');
     expect(PROVIDER_OPTION_PATHS).toContain('opencode.variant');
     expect(PROVIDER_OPTION_PATHS).toContain('copilot.effort');
+    expect(PROVIDER_OPTION_PATHS).toContain('cursor.usePromptTempFile');
+    expect(PROVIDER_OPTION_PATHS).toContain('kiro.usePromptTempFile');
+    expect(PROVIDER_OPTION_PATHS).toContain('claude.usePromptTempFile');
+    expect(PROVIDER_OPTION_PATHS).toContain('copilot.usePromptTempFile');
+  });
+
+  it('includes CLI prompt temp file option sources for configured providers', () => {
+    const result = resolveProviderOptionsSources(
+      {
+        cursor: { usePromptTempFile: true },
+      } as Parameters<typeof resolveProviderOptionsSources>[0],
+      {
+        kiro: { usePromptTempFile: true },
+        claude: { usePromptTempFile: true },
+      } as Parameters<typeof resolveProviderOptionsSources>[1],
+      {
+        copilot: { usePromptTempFile: true },
+      } as Parameters<typeof resolveProviderOptionsSources>[2],
+      undefined,
+      'global',
+    );
+
+    expect(result).toEqual({
+      'cursor.usePromptTempFile': 'step',
+      'kiro.usePromptTempFile': 'persona_providers',
+      'claude.usePromptTempFile': 'persona_providers',
+      'copilot.usePromptTempFile': 'global',
+    });
   });
 });

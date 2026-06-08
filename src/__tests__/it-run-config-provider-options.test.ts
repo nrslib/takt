@@ -101,7 +101,13 @@ describe('IT: runAllTasks provider_options reflection', () => {
     delete process.env.TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT;
     invalidateGlobalConfigCache();
 
-    vi.mocked(runAgent).mockResolvedValue(mockDoneResponse());
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return mockDoneResponse();
+    });
 
     const runner = new TaskRunner(env.projectDir);
     runner.addTask('test task', { workflow: 'run-config-it' });
@@ -154,6 +160,30 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       opencode: { variant: 'high' },
+    });
+  });
+
+  it('project prompt temp file provider_options should be passed in runAllTasks flow', async () => {
+    setProjectConfig(env.projectDir, [
+      'provider_options:',
+      '  cursor:',
+      '    use_prompt_temp_file: true',
+      '  kiro:',
+      '    use_prompt_temp_file: true',
+      '  copilot:',
+      '    use_prompt_temp_file: true',
+      '  claude:',
+      '    use_prompt_temp_file: true',
+    ].join('\n'));
+
+    await runAllTasksNoWorkflow(env.projectDir);
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toEqual({
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      copilot: { usePromptTempFile: true },
+      claude: { usePromptTempFile: true },
     });
   });
 

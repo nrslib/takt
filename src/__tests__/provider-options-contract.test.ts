@@ -16,7 +16,10 @@ describe('providerOptionsContract', () => {
       'provider_options.codex.reasoning_effort',
       'provider_options.opencode.network_access',
       'provider_options.opencode.variant',
+      'provider_options.cursor.use_prompt_temp_file',
+      'provider_options.kiro.use_prompt_temp_file',
       'provider_options.claude.effort',
+      'provider_options.claude.use_prompt_temp_file',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
       'provider_options.claude_terminal.backend',
@@ -24,11 +27,16 @@ describe('providerOptionsContract', () => {
       'provider_options.claude_terminal.keep_session',
       'provider_options.claude_terminal.transcript_poll_interval_ms',
       'provider_options.copilot.effort',
+      'provider_options.copilot.use_prompt_temp_file',
     ]));
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.use_prompt_temp_file');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.use_prompt_temp_file');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.use_prompt_temp_file');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.use_prompt_temp_file');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
   });
 
@@ -41,6 +49,14 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.codex.reasoning_effort');
     expect(toProviderOptionsTracePath('opencode.variant'))
       .toBe('provider_options.opencode.variant');
+    expect(toProviderOptionsTracePath('cursor.usePromptTempFile'))
+      .toBe('provider_options.cursor.use_prompt_temp_file');
+    expect(toProviderOptionsTracePath('kiro.usePromptTempFile'))
+      .toBe('provider_options.kiro.use_prompt_temp_file');
+    expect(toProviderOptionsTracePath('claude.usePromptTempFile'))
+      .toBe('provider_options.claude.use_prompt_temp_file');
+    expect(toProviderOptionsTracePath('copilot.usePromptTempFile'))
+      .toBe('provider_options.copilot.use_prompt_temp_file');
     expect(toProviderOptionsTracePath('claudeTerminal.transcriptPollIntervalMs'))
       .toBe('provider_options.claude_terminal.transcript_poll_interval_ms');
   });
@@ -49,18 +65,24 @@ describe('providerOptionsContract', () => {
     expect(getPresentProviderOptionPaths({
       codex: { networkAccess: true, reasoningEffort: 'high' },
       opencode: { variant: 'high' },
-      claude: { effort: 'medium', sandbox: { excludedCommands: ['rm -rf'] } },
+      cursor: { usePromptTempFile: true },
+      kiro: { usePromptTempFile: true },
+      claude: { effort: 'medium', usePromptTempFile: true, sandbox: { excludedCommands: ['rm -rf'] } },
       claudeTerminal: { backend: 'tmux', keepSession: false },
-      copilot: { effort: 'high' },
-    })).toEqual([
+      copilot: { effort: 'high', usePromptTempFile: true },
+    } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual([
       'codex.networkAccess',
       'codex.reasoningEffort',
       'opencode.variant',
+      'cursor.usePromptTempFile',
+      'kiro.usePromptTempFile',
       'claude.effort',
+      'claude.usePromptTempFile',
       'claude.sandbox.excludedCommands',
       'claudeTerminal.backend',
       'claudeTerminal.keepSession',
       'copilot.effort',
+      'copilot.usePromptTempFile',
     ]);
   });
 });

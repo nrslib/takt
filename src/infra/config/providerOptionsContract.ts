@@ -7,7 +7,10 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.codex.reasoning_effort', type: 'string' },
   { path: 'provider_options.opencode.network_access', type: 'boolean' },
   { path: 'provider_options.opencode.variant', type: 'string' },
+  { path: 'provider_options.cursor.use_prompt_temp_file', type: 'boolean' },
+  { path: 'provider_options.kiro.use_prompt_temp_file', type: 'boolean' },
   { path: 'provider_options.claude.effort', type: 'string' },
+  { path: 'provider_options.claude.use_prompt_temp_file', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
   { path: 'provider_options.claude_terminal.backend', type: 'string' },
@@ -15,6 +18,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.claude_terminal.keep_session', type: 'boolean' },
   { path: 'provider_options.claude_terminal.transcript_poll_interval_ms', type: 'number' },
   { path: 'provider_options.copilot.effort', type: 'string' },
+  { path: 'provider_options.copilot.use_prompt_temp_file', type: 'boolean' },
 ] as const satisfies readonly EnvSpec[];
 
 const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
@@ -25,9 +29,14 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.opencode',
   'provider_options.opencode.network_access',
   'provider_options.opencode.variant',
+  'provider_options.cursor',
+  'provider_options.cursor.use_prompt_temp_file',
+  'provider_options.kiro',
+  'provider_options.kiro.use_prompt_temp_file',
   'provider_options.claude',
   'provider_options.claude.allowed_tools',
   'provider_options.claude.effort',
+  'provider_options.claude.use_prompt_temp_file',
   'provider_options.claude.sandbox',
   'provider_options.claude.sandbox.allow_unsandboxed_commands',
   'provider_options.claude.sandbox.excluded_commands',
@@ -38,6 +47,7 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.claude_terminal.transcript_poll_interval_ms',
   'provider_options.copilot',
   'provider_options.copilot.effort',
+  'provider_options.copilot.use_prompt_temp_file',
 ] as const;
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
@@ -45,8 +55,11 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'codex.reasoningEffort',
   'opencode.networkAccess',
   'opencode.variant',
+  'cursor.usePromptTempFile',
+  'kiro.usePromptTempFile',
   'claude.allowedTools',
   'claude.effort',
+  'claude.usePromptTempFile',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
   'claudeTerminal.backend',
@@ -54,6 +67,7 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'claudeTerminal.keepSession',
   'claudeTerminal.transcriptPollIntervalMs',
   'copilot.effort',
+  'copilot.usePromptTempFile',
 ] as const;
 
 export type ProviderOptionsTracePath = (typeof PROVIDER_OPTIONS_TRACE_PATH_ENTRIES)[number];
@@ -65,6 +79,8 @@ export const PROVIDER_OPTIONS_TRACKED_KEYS = [
   'provider_options',
   'provider_options.codex',
   'provider_options.opencode',
+  'provider_options.cursor',
+  'provider_options.kiro',
   'provider_options.claude',
   'provider_options.claude.sandbox',
   'provider_options.claude_terminal',

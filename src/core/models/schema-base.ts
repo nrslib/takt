@@ -68,6 +68,7 @@ export const StepProviderOptionsSchema = z.object({
     allowed_tools: z.array(z.string()).optional(),
     effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
     sandbox: ClaudeSandboxSchema,
+    use_prompt_temp_file: z.boolean().optional(),
   }).optional(),
   claude_terminal: z.object({
     backend: z.enum(['tmux']).optional(),
@@ -75,8 +76,15 @@ export const StepProviderOptionsSchema = z.object({
     keep_session: z.boolean().optional(),
     transcript_poll_interval_ms: z.number().int().positive().optional(),
   }).strict().optional(),
+  cursor: z.object({
+    use_prompt_temp_file: z.boolean().optional(),
+  }).optional(),
+  kiro: z.object({
+    use_prompt_temp_file: z.boolean().optional(),
+  }).optional(),
   copilot: z.object({
     effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
+    use_prompt_temp_file: z.boolean().optional(),
   }).optional(),
 }).optional();
 
