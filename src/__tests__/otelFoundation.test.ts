@@ -19,6 +19,11 @@ type NodeSdkOptionsForTest = {
   traceExporter?: unknown;
 };
 
+type UsageEventsProcessorForTest = {
+  onEnd(span: unknown): void;
+  registrations?: Map<string, unknown>;
+};
+
 const disabledObservability: ObservabilityConfigForTest = {
   enabled: false,
   monitor: false,
@@ -206,6 +211,7 @@ describe('otel foundation', () => {
     };
 
     const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    const usageEventsProcessor = foundation.constructedOptions[0]?.spanProcessors?.[1] as UsageEventsProcessorForTest;
     await handle.shutdown();
 
     expect(foundation.sdkImportCount()).toBe(1);
@@ -215,7 +221,7 @@ describe('otel foundation', () => {
       'service.name': 'takt',
       'service.version': packageJson.version,
     });
-    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
+    expect(usageEventsProcessor.registrations?.size).toBe(0);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.constructedOptions[0]).not.toHaveProperty('traceExporter');
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
@@ -301,26 +307,9 @@ describe('otel foundation', () => {
         },
       );
 
-      const processor = foundation.constructedOptions[0]?.spanProcessors?.[1] as {
-        onEnd(span: unknown): void;
-      };
-      processor.onEnd({
-        name: 'phase.implement.execute',
-        endTime: [1_778_777_205, 0],
-        attributes: {
-          'takt.run.id': 'run-1',
-          'takt.provider.name': 'mock',
-          'takt.model.name': 'mock-model',
-          'takt.step.name': 'implement',
-          'takt.step.type': 'agent',
-          'takt.phase.number': 1,
-          'takt.phase.name': 'execute',
-          'takt.phase.status': 'done',
-          'gen_ai.usage.input_tokens': 3,
-          'gen_ai.usage.output_tokens': 2,
-          'gen_ai.usage.total_tokens': 5,
-        },
-      });
+      const processor = foundation.constructedOptions[0]?.spanProcessors?.[1] as UsageEventsProcessorForTest;
+      expect(processor.registrations?.size).toBe(1);
+      processor.onEnd(makePhaseSpan('run-1'));
       await handle.shutdown();
 
       const records = readFileSync(phaseUsageLogPath, 'utf-8')
@@ -689,3 +678,23 @@ describe('otel foundation', () => {
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
   });
 });
+
+function makePhaseSpan(runId: string): Record<string, unknown> {
+  return {
+    name: 'phase.implement.execute',
+    endTime: [1_778_777_205, 0],
+    attributes: {
+      'takt.run.id': runId,
+      'takt.provider.name': 'mock',
+      'takt.model.name': 'mock-model',
+      'takt.step.name': 'implement',
+      'takt.step.type': 'agent',
+      'takt.phase.number': 1,
+      'takt.phase.name': 'execute',
+      'takt.phase.status': 'done',
+      'gen_ai.usage.input_tokens': 3,
+      'gen_ai.usage.output_tokens': 2,
+      'gen_ai.usage.total_tokens': 5,
+    },
+  };
+}

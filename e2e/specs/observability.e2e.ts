@@ -24,6 +24,36 @@ function readJsonl(path: string): JsonRecord[] {
     .map((line) => JSON.parse(line) as JsonRecord);
 }
 
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function monitorHasRunIdAttribute(monitor: JsonRecord): boolean {
+  const scopeMetrics = monitor.scopeMetrics;
+  if (!Array.isArray(scopeMetrics)) {
+    return false;
+  }
+  return scopeMetrics.some((scopeMetric) => {
+    if (!isJsonRecord(scopeMetric) || !Array.isArray(scopeMetric.metrics)) {
+      return false;
+    }
+    return scopeMetric.metrics.some((metric) => {
+      if (!isJsonRecord(metric) || !Array.isArray(metric.points)) {
+        return false;
+      }
+      return metric.points.some((point) => {
+        if (!isJsonRecord(point) || !isJsonRecord(point.attributes)) {
+          return false;
+        }
+        return (
+          Object.prototype.hasOwnProperty.call(point.attributes, 'takt.run.id') &&
+          typeof point.attributes['takt.run.id'] === 'string'
+        );
+      });
+    });
+  });
+}
+
 function firstRunRoot(repoPath: string): string {
   const runsDir = join(repoPath, '.takt', 'runs');
   const runDirs = readdirSync(runsDir).sort();
@@ -122,8 +152,8 @@ describe('E2E: Observability file outputs (mock)', () => {
     expect(shadowRecords.some((record) => record.type === 'workflow_start')).toBe(true);
     expect(shadowRecords.some((record) => record.type === 'workflow_complete')).toBe(true);
 
-    const monitor = JSON.parse(readFileSync(monitorPath, 'utf-8')) as unknown;
+    const monitor = JSON.parse(readFileSync(monitorPath, 'utf-8')) as JsonRecord;
     expect(monitor).toBeTruthy();
-    expect(JSON.stringify(monitor)).toContain('"takt.run.id"');
+    expect(monitorHasRunIdAttribute(monitor)).toBe(true);
   }, 240_000);
 });

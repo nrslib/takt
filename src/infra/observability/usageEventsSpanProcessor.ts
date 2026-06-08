@@ -17,7 +17,7 @@ export interface UsageEventsSpanProcessorOptions {
 
 export class UsageEventsSpanProcessor implements SpanProcessor {
   private readonly registrations = new Map<string, UsageEventsSpanProcessorOptions>();
-  private hasReportedWriteFailure = false;
+  private readonly reportedWriteFailureRunIds = new Set<string>();
 
   constructor(options?: UsageEventsSpanProcessorOptions) {
     if (options) {
@@ -36,6 +36,7 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
     this.registrations.set(options.runId, options);
     return () => {
       this.registrations.delete(options.runId);
+      this.reportedWriteFailureRunIds.delete(options.runId);
     };
   }
 
@@ -65,12 +66,13 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
     try {
       appendJsonLine(options.phaseUsageLogPath, record);
     } catch (error) {
-      if (this.hasReportedWriteFailure) {
+      if (this.reportedWriteFailureRunIds.has(options.runId)) {
         return;
       }
-      this.hasReportedWriteFailure = true;
+      this.reportedWriteFailureRunIds.add(options.runId);
       const message = error instanceof Error ? error.message : String(error);
       log.error('Failed to append phase usage event log record', {
+        runId: options.runId,
         phaseUsageLogPath: options.phaseUsageLogPath,
         error: message,
       });
@@ -81,6 +83,7 @@ export class UsageEventsSpanProcessor implements SpanProcessor {
 
   async shutdown(): Promise<void> {
     this.registrations.clear();
+    this.reportedWriteFailureRunIds.clear();
   }
 }
 

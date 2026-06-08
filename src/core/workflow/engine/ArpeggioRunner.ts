@@ -28,6 +28,7 @@ import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -202,6 +203,10 @@ async function executeBatchWithRetry(
       content: '',
       success: false,
       error: lastError,
+      providerUsage: {
+        usageMissing: true,
+        reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+      },
     };
   }, (result) => ({
     status: getBatchResultStatus(result),

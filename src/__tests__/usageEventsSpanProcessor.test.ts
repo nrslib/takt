@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { UsageEventsSpanProcessor } from '../infra/observability/usageEventsSpanProcessor.js';
 
@@ -25,6 +25,10 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
   tempDirs.clear();
+  vi.doUnmock('../infra/fs/index.js');
+  vi.doUnmock('../shared/utils/debug.js');
+  vi.resetModules();
+  vi.restoreAllMocks();
 });
 
 describe('UsageEventsSpanProcessor', () => {
@@ -102,6 +106,60 @@ describe('UsageEventsSpanProcessor', () => {
     expect(() => {
       processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
     }).not.toThrow();
+  });
+
+  it('reports append failures once per run and clears the flag when unregistered', async () => {
+    const appendJsonLine = vi.fn(() => {
+      throw new Error('write failed');
+    });
+    const errorLog = vi.fn();
+
+    vi.doMock('../infra/fs/index.js', () => ({ appendJsonLine }));
+    vi.doMock('../shared/utils/debug.js', () => ({
+      createLogger: () => ({
+        error: errorLog,
+        warn: vi.fn(),
+      }),
+    }));
+
+    const { UsageEventsSpanProcessor: MockedUsageEventsSpanProcessor } = await import(
+      '../infra/observability/usageEventsSpanProcessor.js'
+    );
+    const processor = new MockedUsageEventsSpanProcessor();
+    const unregisterRun1 = processor.register({
+      runId: 'run-1',
+      sessionId: 'session-1',
+      phaseUsageLogPath: '/missing/run-1-usage-events.phase.jsonl',
+    });
+    processor.register({
+      runId: 'run-2',
+      sessionId: 'session-2',
+      phaseUsageLogPath: '/missing/run-2-usage-events.phase.jsonl',
+    });
+
+    processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
+    processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
+    processor.onEnd(makePhaseSpan('run-2') as unknown as ReadableSpan);
+    unregisterRun1();
+    processor.register({
+      runId: 'run-1',
+      sessionId: 'session-1',
+      phaseUsageLogPath: '/missing/run-1-usage-events.phase.jsonl',
+    });
+    processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
+    await processor.shutdown();
+
+    expect(appendJsonLine).toHaveBeenCalledTimes(4);
+    expect(errorLog).toHaveBeenCalledTimes(3);
+    expect(errorLog).toHaveBeenNthCalledWith(1, 'Failed to append phase usage event log record', expect.objectContaining({
+      runId: 'run-1',
+    }));
+    expect(errorLog).toHaveBeenNthCalledWith(2, 'Failed to append phase usage event log record', expect.objectContaining({
+      runId: 'run-2',
+    }));
+    expect(errorLog).toHaveBeenNthCalledWith(3, 'Failed to append phase usage event log record', expect.objectContaining({
+      runId: 'run-1',
+    }));
   });
 });
 
