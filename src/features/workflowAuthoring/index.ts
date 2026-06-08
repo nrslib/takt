@@ -4,3 +4,4 @@ export {
   type InitWorkflowOptions,
 } from './init.js';
 export { doctorWorkflowCommand } from './doctor.js';
+export { builderWorkflowCommand } from './builder.js';

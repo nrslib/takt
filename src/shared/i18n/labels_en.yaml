@@ -32,6 +32,8 @@ interactive:
     playNoTask: "Please specify task content: /play <task>"
     retryNoOrder: "No previous order (order.md) found. /retry is only available during retry."
     retryUnavailable: "/retry is only available in Retry mode from `takt list`."
+    resumeUnavailable: "/resume is not available in this mode."
+    directExecuteUnavailable: "Use /go to apply confirmed changes."
     personaFallback: "No persona available for the first step. Falling back to assistant mode."
   modeSelection:
     prompt: "Select interactive mode:"

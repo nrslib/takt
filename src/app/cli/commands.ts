@@ -23,7 +23,7 @@ import {
 import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
 import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents } from '../../features/analytics/index.js';
-import { doctorWorkflowCommand, initWorkflowCommand } from '../../features/workflowAuthoring/index.js';
+import { builderWorkflowCommand, doctorWorkflowCommand, initWorkflowCommand } from '../../features/workflowAuthoring/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { repertoireAddCommand } from '../../commands/repertoire/add.js';
@@ -225,6 +225,13 @@ workflow
   .argument('[targets...]', 'Workflow names or YAML paths')
   .action(async (targets: string[] | undefined) => {
     await doctorWorkflowCommand(targets ?? [], resolvedCwd);
+  });
+
+workflow
+  .command('builder')
+  .description('Design workflows interactively with an AI builder')
+  .action(async () => {
+    await builderWorkflowCommand({ projectDir: resolvedCwd });
   });
 
 const metrics = program
