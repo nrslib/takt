@@ -133,6 +133,38 @@ describe('callClaudeHeadless', () => {
     expect(res.content).toBe('ok');
   });
 
+  it('returns provider usage from the final stream-json result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'ok',
+          usage: {
+            input_tokens: 12,
+            output_tokens: 3,
+            cache_creation_input_tokens: 5,
+            cache_read_input_tokens: 7,
+          },
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+
+    expect(res.status).toBe('done');
+    expect(res.providerUsage).toEqual({
+      inputTokens: 12,
+      outputTokens: 3,
+      totalTokens: 15,
+      cachedInputTokens: 12,
+      cacheCreationInputTokens: 5,
+      cacheReadInputTokens: 7,
+      usageMissing: false,
+    });
+  });
+
   it('uses only the final result text when assistant content and result contain the same text', async () => {
     stubSpawn({
       stdoutChunks: [
