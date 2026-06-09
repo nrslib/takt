@@ -1,8 +1,10 @@
 import { context, metrics, SpanStatusCode, trace, type Attributes, type Span } from '@opentelemetry/api';
 import { getErrorMessage } from '../../../shared/utils/index.js';
+import type { ProviderUsageSnapshot } from '../../models/response.js';
 import type { WorkflowMaxSteps, WorkflowResumePointEntry, WorkflowStep } from '../../models/types.js';
 import type { JudgeStageEntry, PhaseName, PhasePromptParts, StepProviderInfo, StepRunResult } from '../types.js';
 import { getWorkflowStepKind } from '../step-kind.js';
+import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 
 const tracer = trace.getTracer('takt.workflow');
 const WORKFLOW_RUN_COUNTER_OPTIONS = {
@@ -88,6 +90,7 @@ export interface PhaseSpanOutcome {
   error?: string;
   matchedRuleIndex?: number;
   matchedRuleMethod?: string;
+  providerUsage?: ProviderUsageSnapshot;
 }
 
 export interface JudgeStageSpanParams {
@@ -100,6 +103,7 @@ export interface JudgeStageSpanParams {
   workflowStack?: WorkflowResumePointEntry[];
   entry: JudgeStageEntry;
   sanitizeText?: (text: string) => string;
+  providerInfo?: StepProviderInfo;
 }
 
 export async function runWithWorkflowSpan<T>(
@@ -180,7 +184,14 @@ export async function runWithPhaseSpan<T>(
         recordPhaseMetrics(params, outcome, Date.now() - startedAt);
         return result;
       } catch (error) {
-        const outcome = { status: 'error', error: getErrorMessage(error) };
+        const outcome = {
+          status: 'error',
+          error: getErrorMessage(error),
+          providerUsage: {
+            usageMissing: true,
+            reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+          },
+        };
         recordPhaseOutcome(span, params, outcome);
         recordPhaseMetrics(params, outcome, Date.now() - startedAt);
         throw error;
@@ -199,6 +210,10 @@ export function recordJudgeStageSpan(params: JudgeStageSpanParams): void {
   });
   try {
     recordJudgeStageMetrics(params);
+    span.setAttributes(compactAttributes({
+      ...providerAttributes(params.providerInfo),
+      ...usageAttributes(params.entry.providerUsage),
+    }));
     if (params.entry.status === 'error') {
       span.setStatus({ code: SpanStatusCode.ERROR, message: `judge stage ${params.entry.status}` });
     }
@@ -374,6 +389,7 @@ function recordPhaseOutcome(span: Span, params: PhaseSpanParams, outcome: PhaseS
     'takt.phase.result.error': sanitizeSpanText(params.sanitizeText, outcome.error),
     'takt.phase.result.matched_rule_index': outcome.matchedRuleIndex,
     'takt.phase.result.matched_rule_method': outcome.matchedRuleMethod,
+    ...usageAttributes(outcome.providerUsage),
   }));
 
   if (outcome.status === 'error' || outcome.status === 'rate_limited') {
@@ -451,6 +467,27 @@ function providerAttributes(providerInfo: StepProviderInfo | undefined): Attribu
     'takt.provider.source': providerInfo?.providerSource,
     'takt.model.name': providerInfo?.model,
     'takt.model.source': providerInfo?.modelSource,
+  };
+}
+
+function usageAttributes(usage: ProviderUsageSnapshot | undefined): AttributeInput {
+  if (!usage) {
+    return {};
+  }
+  if (usage.usageMissing) {
+    return {
+      'takt.usage.missing': true,
+      'takt.usage.missing_reason': usage.reason,
+    };
+  }
+  return {
+    'takt.usage.missing': false,
+    'gen_ai.usage.input_tokens': usage.inputTokens,
+    'gen_ai.usage.output_tokens': usage.outputTokens,
+    'gen_ai.usage.total_tokens': usage.totalTokens,
+    'gen_ai.usage.cached_input_tokens': usage.cachedInputTokens,
+    'gen_ai.usage.cache_creation_input_tokens': usage.cacheCreationInputTokens,
+    'gen_ai.usage.cache_read_input_tokens': usage.cacheReadInputTokens,
   };
 }
 

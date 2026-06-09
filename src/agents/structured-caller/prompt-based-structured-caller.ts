@@ -7,6 +7,7 @@ import {
 import { buildJudgePrompt, detectJudgeIndex, isValidRuleIndex, buildJudgeConditions } from '../judge-utils.js';
 import { runAgent } from '../runner.js';
 import {
+  createJudgeStageRecorder,
   runTagJudgeStage,
   type EvaluateConditionOptions,
   type JudgeStatusOptions,
@@ -64,6 +65,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       status: structuredResponse.status === 'done' ? 'done' : 'error',
       instruction: structuredInstruction,
       response: structuredResponse.content,
+      providerUsage: structuredResponse.providerUsage,
     });
 
     let structuredParseError: string | undefined;
@@ -100,28 +102,19 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     const conditions = buildJudgeConditions(rules, interactiveEnabled);
 
     if (conditions.length > 0) {
-      let stage3Status: 'done' | 'error' | 'skipped' = 'skipped';
-      let stage3Instruction = '';
-      let stage3Response = '';
+      const stage3 = createJudgeStageRecorder();
       const fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
         cwd: options.cwd,
         provider: options.provider,
         resolvedProvider: options.resolvedProvider,
         resolvedModel: options.resolvedModel,
-        onJudgeResponse: (entry) => {
-          stage3Status = entry.status;
-          stage3Instruction = entry.instruction;
-          stage3Response = entry.response;
-        },
+        onJudgeResponse: stage3.capture,
       });
 
-      options.onJudgeStage?.({
+      options.onJudgeStage?.(stage3.stage({
         stage: 3,
         method: 'ai_judge',
-        status: stage3Status,
-        instruction: stage3Instruction,
-        response: stage3Response,
-      });
+      }));
 
       if (isValidRuleIndex(fallbackIndex, rules, interactiveEnabled)) {
         return { ruleIndex: fallbackIndex, method: 'ai_judge' };
@@ -153,6 +146,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       instruction: prompt,
       status: response.status === 'done' ? 'done' : 'error',
       response: response.content,
+      providerUsage: response.providerUsage,
     });
 
     if (response.status !== 'done') {

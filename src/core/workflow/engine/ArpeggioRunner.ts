@@ -28,6 +28,7 @@ import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -163,6 +164,7 @@ async function executeBatchWithRetry(
             content: '',
             success: false,
             error: lastError,
+            providerUsage: response.providerUsage,
           };
         }
         if (response.status === 'rate_limited') {
@@ -172,12 +174,14 @@ async function executeBatchWithRetry(
             success: false,
             error: response.error ?? response.content,
             rateLimitedResponse: response,
+            providerUsage: response.providerUsage,
           };
         }
         return {
           batchIndex: batch.batchIndex,
           content: response.content,
           success: true,
+          providerUsage: response.providerUsage,
         };
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
@@ -199,11 +203,16 @@ async function executeBatchWithRetry(
       content: '',
       success: false,
       error: lastError,
+      providerUsage: {
+        usageMissing: true,
+        reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+      },
     };
   }, (result) => ({
     status: getBatchResultStatus(result),
     content: result.content,
     error: result.error,
+    providerUsage: result.providerUsage,
   }));
 }
 

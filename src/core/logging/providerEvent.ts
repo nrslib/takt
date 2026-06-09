@@ -33,8 +33,12 @@ export interface UsageEventLogRecord {
     output_tokens?: number;
     total_tokens?: number;
     cached_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
   };
 }
+
+export type UsageEventPayload = Pick<UsageEventLogRecord, 'usage_missing' | 'reason' | 'usage'>;
 
 interface UsageEventMeta {
   runId: string;
@@ -129,38 +133,7 @@ export function buildUsageEventRecord(
   meta: UsageEventMeta,
   params: BuildUsageRecordParams
 ): UsageEventLogRecord {
-  if (params.usage.usageMissing) {
-    if (typeof params.usage.reason !== 'string' || params.usage.reason.length === 0) {
-      throw new Error('[usage-events] reason is required when usageMissing=true');
-    }
-    return {
-      run_id: meta.runId,
-      session_id: meta.sessionId,
-      provider: meta.provider,
-      provider_model: meta.providerModel,
-      step: meta.step,
-      step_type: meta.stepType,
-      timestamp: (params.timestamp ?? new Date()).toISOString(),
-      success: params.success,
-      usage_missing: true,
-      reason: assertUsageMissingReason(params.usage.reason),
-      usage: {},
-    };
-  }
-
-  assertFiniteNumber(params.usage.inputTokens, 'usage.inputTokens');
-  assertFiniteNumber(params.usage.outputTokens, 'usage.outputTokens');
-  assertFiniteNumber(params.usage.totalTokens, 'usage.totalTokens');
-
-  const usage = {
-    input_tokens: params.usage.inputTokens,
-    output_tokens: params.usage.outputTokens,
-    total_tokens: params.usage.totalTokens,
-    ...(Number.isFinite(params.usage.cachedInputTokens)
-      ? { cached_input_tokens: params.usage.cachedInputTokens }
-      : {}),
-  };
-
+  const payload = buildUsageEventPayload(params.usage);
   return {
     run_id: meta.runId,
     session_id: meta.sessionId,
@@ -170,6 +143,42 @@ export function buildUsageEventRecord(
     step_type: meta.stepType,
     timestamp: (params.timestamp ?? new Date()).toISOString(),
     success: params.success,
+    ...payload,
+  };
+}
+
+export function buildUsageEventPayload(usageSnapshot: ProviderUsageSnapshot): UsageEventPayload {
+  if (usageSnapshot.usageMissing) {
+    if (typeof usageSnapshot.reason !== 'string' || usageSnapshot.reason.length === 0) {
+      throw new Error('[usage-events] reason is required when usageMissing=true');
+    }
+    return {
+      usage_missing: true,
+      reason: assertUsageMissingReason(usageSnapshot.reason),
+      usage: {},
+    };
+  }
+
+  assertFiniteNumber(usageSnapshot.inputTokens, 'usage.inputTokens');
+  assertFiniteNumber(usageSnapshot.outputTokens, 'usage.outputTokens');
+  assertFiniteNumber(usageSnapshot.totalTokens, 'usage.totalTokens');
+
+  const usage = {
+    input_tokens: usageSnapshot.inputTokens,
+    output_tokens: usageSnapshot.outputTokens,
+    total_tokens: usageSnapshot.totalTokens,
+    ...(Number.isFinite(usageSnapshot.cachedInputTokens)
+      ? { cached_input_tokens: usageSnapshot.cachedInputTokens }
+      : {}),
+    ...(Number.isFinite(usageSnapshot.cacheCreationInputTokens)
+      ? { cache_creation_input_tokens: usageSnapshot.cacheCreationInputTokens }
+      : {}),
+    ...(Number.isFinite(usageSnapshot.cacheReadInputTokens)
+      ? { cache_read_input_tokens: usageSnapshot.cacheReadInputTokens }
+      : {}),
+  };
+
+  return {
     usage_missing: false,
     usage,
   };

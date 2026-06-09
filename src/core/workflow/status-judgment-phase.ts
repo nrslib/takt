@@ -163,6 +163,7 @@ export async function runStatusJudgmentPhase(
             workflowStack: ctx.getCurrentWorkflowStack?.(),
             entry,
             sanitizeText: ctx.sanitizeObservabilityText,
+            providerInfo: stepProvider,
           });
           ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration);
         },

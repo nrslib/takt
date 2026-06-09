@@ -19,6 +19,11 @@ type NodeSdkOptionsForTest = {
   traceExporter?: unknown;
 };
 
+type UsageEventsProcessorForTest = {
+  onEnd(span: unknown): void;
+  registrations?: Map<string, unknown>;
+};
+
 const disabledObservability: ObservabilityConfigForTest = {
   enabled: false,
   monitor: false,
@@ -47,11 +52,18 @@ const enabledMonitorObservability: ObservabilityConfigForTest = {
   usageEventsPhase: false,
 };
 
+const enabledUsageEventsPhaseObservability: ObservabilityConfigForTest = {
+  enabled: true,
+  monitor: false,
+  sessionLogExporter: false,
+  usageEventsPhase: true,
+};
+
 const enabledAllObservability: ObservabilityConfigForTest = {
   enabled: true,
   monitor: true,
   sessionLogExporter: true,
-  usageEventsPhase: false,
+  usageEventsPhase: true,
 };
 
 async function loadFoundationWithMockedSdk(): Promise<{
@@ -67,6 +79,11 @@ async function loadFoundationWithMockedSdk(): Promise<{
       monitorJsonExporter?: {
         runId: string;
         monitorPath: string;
+      };
+      usageEventsExporter?: {
+        runId: string;
+        sessionId: string;
+        phaseUsageLogPath: string;
       };
     },
   ) => Promise<{ shutdown(): Promise<void> }>;
@@ -147,6 +164,11 @@ async function loadFoundationWithMockedSdk(): Promise<{
           runId: string;
           monitorPath: string;
         };
+        usageEventsExporter?: {
+          runId: string;
+          sessionId: string;
+          phaseUsageLogPath: string;
+        };
       },
     ) => Promise<{ shutdown(): Promise<void> }>;
   };
@@ -189,6 +211,7 @@ describe('otel foundation', () => {
     };
 
     const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    const usageEventsProcessor = foundation.constructedOptions[0]?.spanProcessors?.[1] as UsageEventsProcessorForTest;
     await handle.shutdown();
 
     expect(foundation.sdkImportCount()).toBe(1);
@@ -198,7 +221,7 @@ describe('otel foundation', () => {
       'service.name': 'takt',
       'service.version': packageJson.version,
     });
-    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(1);
+    expect(usageEventsProcessor.registrations?.size).toBe(0);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.constructedOptions[0]).not.toHaveProperty('traceExporter');
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
@@ -223,7 +246,7 @@ describe('otel foundation', () => {
       );
       await handle.shutdown();
 
-      expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(1);
+      expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
       const records = readFileSync(shadowLogPath, 'utf-8')
         .trim()
         .split('\n')
@@ -262,6 +285,80 @@ describe('otel foundation', () => {
       expect(foundation.metricReaderOptions[0]?.exportIntervalMillis).toBe(1000);
       expect(foundation.metricReaderOptions[0]?.exporter).toBeDefined();
       expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should attach the phase usage events span processor when usage events phase is enabled', async () => {
+    const foundation = await loadFoundationWithMockedSdk();
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-otel-usage-events-'));
+    const phaseUsageLogPath = join(tempDir, 'session-usage-events.phase.jsonl');
+
+    try {
+      const handle = await foundation.initializeOtelFoundation(
+        enabledUsageEventsPhaseObservability,
+        {
+          usageEventsExporter: {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            phaseUsageLogPath,
+          },
+        },
+      );
+
+      const processor = foundation.constructedOptions[0]?.spanProcessors?.[1] as UsageEventsProcessorForTest;
+      expect(processor.registrations?.size).toBe(1);
+      processor.onEnd(makePhaseSpan('run-1'));
+      await handle.shutdown();
+
+      const records = readFileSync(phaseUsageLogPath, 'utf-8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(records).toEqual([
+        expect.objectContaining({
+          run_id: 'run-1',
+          session_id: 'session-1',
+          phase: 'phase1_execute',
+        }),
+      ]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject mismatched run-scoped exporter ids before starting the SDK', async () => {
+    const foundation = await loadFoundationWithMockedSdk();
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-otel-registration-failure-'));
+    const shadowLogPath = join(tempDir, 'session-otel-session-shadow.jsonl');
+    const phaseUsageLogPath = join(tempDir, 'session-usage-events.phase.jsonl');
+    const monitorPath = join(tempDir, 'monitor.json');
+
+    try {
+      await expect(foundation.initializeOtelFoundation(
+        enabledAllObservability,
+        {
+          sessionLogExporter: {
+            runId: 'run-2',
+            shadowLogPath,
+            sanitizedTask: 'task',
+            workflowName: 'default',
+          },
+          usageEventsExporter: {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            phaseUsageLogPath,
+          },
+          monitorJsonExporter: {
+            runId: 'run-2',
+            monitorPath,
+          },
+        },
+      )).rejects.toThrow('Run-scoped OpenTelemetry exporters must share the same runId');
+
+      expect(foundation.startMock).not.toHaveBeenCalled();
+      expect(foundation.constructedOptions).toEqual([]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -581,3 +678,23 @@ describe('otel foundation', () => {
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
   });
 });
+
+function makePhaseSpan(runId: string): Record<string, unknown> {
+  return {
+    name: 'phase.implement.execute',
+    endTime: [1_778_777_205, 0],
+    attributes: {
+      'takt.run.id': runId,
+      'takt.provider.name': 'mock',
+      'takt.model.name': 'mock-model',
+      'takt.step.name': 'implement',
+      'takt.step.type': 'agent',
+      'takt.phase.number': 1,
+      'takt.phase.name': 'execute',
+      'takt.phase.status': 'done',
+      'gen_ai.usage.input_tokens': 3,
+      'gen_ai.usage.output_tokens': 2,
+      'gen_ai.usage.total_tokens': 5,
+    },
+  };
+}

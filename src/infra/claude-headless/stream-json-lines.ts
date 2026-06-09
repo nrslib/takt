@@ -1,3 +1,6 @@
+import type { ProviderUsageSnapshot } from '../../core/models/response.js';
+import { extractClaudeProviderUsage } from '../claude/usage.js';
+
 function toRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -180,6 +183,7 @@ export interface StreamJsonStdoutResult {
   success: boolean;
   error?: string;
   structuredOutput?: Record<string, unknown>;
+  providerUsage?: ProviderUsageSnapshot;
 }
 
 export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResult {
@@ -189,6 +193,7 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
   let success = false;
   let error: string | undefined;
   let structuredOutput: Record<string, unknown> | undefined;
+  let providerUsage: ProviderUsageSnapshot | undefined;
 
   for (const line of stdout.split('\n')) {
     const parsed = parseStreamJsonLine(line);
@@ -211,6 +216,7 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
     success = isSuccessfulResultEvent(root);
     error = success ? undefined : extractResultError(root, resultContent);
     structuredOutput = extractStructuredOutput(root);
+    providerUsage = extractClaudeProviderUsage(root.usage);
   }
 
   const normalizedDisplayText = displayText.trim();
@@ -223,6 +229,7 @@ export function aggregateResultFromStdout(stdout: string): StreamJsonStdoutResul
     success: fallbackSuccess,
     error,
     structuredOutput,
+    providerUsage,
   };
 }
 

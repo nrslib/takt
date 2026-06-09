@@ -573,6 +573,7 @@ export class StepExecutor {
       status: result.status,
       content: result.content,
       error: result.error,
+      providerUsage: result.providerUsage,
     }));
     response = this.normalizeStructuredOutput(step, response, runtime);
     if (!didEmitPhaseStart) {

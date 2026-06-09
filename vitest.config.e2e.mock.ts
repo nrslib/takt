@@ -9,6 +9,7 @@ export default defineConfig({
       'e2e/specs/pipeline-skip-git.e2e.ts',
       'e2e/specs/pipeline-local-repo.e2e.ts',
       'e2e/specs/report-judge.e2e.ts',
+      'e2e/specs/observability.e2e.ts',
       'e2e/specs/report-file-output.e2e.ts',
       'e2e/specs/team-leader-worker-pool.e2e.ts',
       'e2e/specs/add.e2e.ts',

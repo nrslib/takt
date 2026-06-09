@@ -31,6 +31,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
     expect(aggregateContentFromStdout(stdout)).toBe('ab');
   });
@@ -98,6 +99,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'partial answer',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -123,6 +125,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'final failure',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -148,6 +151,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -169,6 +173,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'explicit failure',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -188,6 +193,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -213,6 +219,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -237,6 +244,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -257,6 +265,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: false,
       error: 'explicit failure',
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 
@@ -277,6 +286,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: { decision: 'approved' },
+      providerUsage: undefined,
     });
   });
 
@@ -297,6 +307,83 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: { decision: 'approved' },
+      providerUsage: undefined,
+    });
+  });
+
+  it('captures provider usage from the final result event', () => {
+    const stdout = [
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        result: 'final answer',
+        usage: {
+          input_tokens: 2353,
+          output_tokens: 4,
+          cache_creation_input_tokens: 2021,
+          cache_read_input_tokens: 15821,
+        },
+      }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout)).toEqual({
+      content: 'final answer',
+      displayText: '',
+      hasResult: true,
+      success: true,
+      error: undefined,
+      structuredOutput: undefined,
+      providerUsage: {
+        inputTokens: 2353,
+        outputTokens: 4,
+        totalTokens: 2357,
+        cachedInputTokens: 17842,
+        cacheCreationInputTokens: 2021,
+        cacheReadInputTokens: 15821,
+        usageMissing: false,
+      },
+    });
+  });
+
+  it('captures provider usage when only one cache token field is present', () => {
+    const stdout = [
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        result: 'final answer',
+        usage: {
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_read_input_tokens: 7,
+        },
+      }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout).providerUsage).toEqual({
+      inputTokens: 20,
+      outputTokens: 5,
+      totalTokens: 25,
+      cachedInputTokens: 7,
+      cacheReadInputTokens: 7,
+      usageMissing: false,
+    });
+  });
+
+  it('marks provider usage missing when required token fields are absent', () => {
+    const stdout = [
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        result: 'final answer',
+        usage: {
+          input_tokens: 20,
+        },
+      }),
+    ].join('\n');
+
+    expect(aggregateResultFromStdout(stdout).providerUsage).toEqual({
+      usageMissing: true,
+      reason: 'usage_tokens_missing',
     });
   });
 
@@ -317,6 +404,7 @@ describe('claude-headless stream-json line parsing', () => {
       success: true,
       error: undefined,
       structuredOutput: undefined,
+      providerUsage: undefined,
     });
   });
 

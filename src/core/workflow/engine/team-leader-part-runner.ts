@@ -96,6 +96,7 @@ export async function runTeamLeaderPart(
       status: result.status,
       content: result.content,
       error: result.error,
+      providerUsage: result.providerUsage,
     }));
     updatePersonaSession(buildSessionKey(partStep, partProviderInfo.provider), response.sessionId);
     return {

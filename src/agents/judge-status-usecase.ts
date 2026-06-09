@@ -1,4 +1,5 @@
 import type { WorkflowRule, RuleMatchMethod, Language } from '../core/models/types.js';
+import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type StreamCallback } from './runner.js';
 import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditions } from './judge-utils.js';
@@ -15,18 +16,23 @@ export interface JudgeStatusOptions {
   language?: Language;
   interactive?: boolean;
   onStream?: StreamCallback;
-  onJudgeStage?: (entry: {
-    stage: 1 | 2 | 3;
-    method: 'structured_output' | 'phase3_tag' | 'ai_judge';
-    status: 'done' | 'error' | 'skipped';
-    instruction: string;
-    response: string;
-  }) => void;
+  onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
 }
+
+export interface JudgeStageLogEntry {
+  stage: 1 | 2 | 3;
+  method: 'structured_output' | 'phase3_tag' | 'ai_judge';
+  status: 'done' | 'error' | 'skipped';
+  instruction: string;
+  response: string;
+  providerUsage?: ProviderUsageSnapshot;
+}
+
+type JudgeResponseEntry = Pick<JudgeStageLogEntry, 'instruction' | 'status' | 'response' | 'providerUsage'>;
 
 export interface TagJudgeRunOptions {
   cwd: string;
@@ -62,6 +68,7 @@ export async function runTagJudgeStage(
     status: tagResponse.status === 'done' ? 'done' : 'error',
     instruction: tagInstruction,
     response: tagResponse.content,
+    providerUsage: tagResponse.providerUsage,
   });
 
   if (tagResponse.status === 'done') {
@@ -88,6 +95,7 @@ export interface EvaluateConditionOptions {
     instruction: string;
     status: 'done' | 'error';
     response: string;
+    providerUsage?: ProviderUsageSnapshot;
   }) => void;
 }
 
@@ -111,6 +119,7 @@ export async function evaluateCondition(
     instruction: prompt,
     status: response.status === 'done' ? 'done' : 'error',
     response: response.content,
+    providerUsage: response.providerUsage,
   });
 
   if (response.status !== 'done') {
@@ -126,6 +135,28 @@ export async function evaluateCondition(
   }
 
   return detectJudgeIndex(response.content);
+}
+
+export function createJudgeStageRecorder(): {
+  capture(entry: JudgeResponseEntry): void;
+  stage(entry: Pick<JudgeStageLogEntry, 'stage' | 'method'>): JudgeStageLogEntry;
+} {
+  let latest: JudgeResponseEntry = {
+    status: 'skipped',
+    instruction: '',
+    response: '',
+  };
+  return {
+    capture(entry): void {
+      latest = entry;
+    },
+    stage(entry): JudgeStageLogEntry {
+      return {
+        ...entry,
+        ...latest,
+      };
+    },
+  };
 }
 
 export async function judgeStatus(
@@ -167,6 +198,7 @@ export async function judgeStatus(
     status: structuredResponse.status === 'done' ? 'done' : 'error',
     instruction: structuredInstruction,
     response: structuredResponse.content,
+    providerUsage: structuredResponse.providerUsage,
   });
 
   if (structuredResponse.status === 'done') {
@@ -201,29 +233,20 @@ export async function judgeStatus(
   const conditions = buildJudgeConditions(rules, interactiveEnabled);
 
   if (conditions.length > 0) {
-    let stage3Status: 'done' | 'error' | 'skipped' = 'skipped';
-    let stage3Instruction = '';
-    let stage3Response = '';
+    const stage3 = createJudgeStageRecorder();
     const normalizedConditions = conditions.map((c, pos) => ({ index: pos, text: c.text }));
     const fallbackPosition = await evaluateCondition(structuredInstruction, normalizedConditions, {
       cwd: options.cwd,
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
-      onJudgeResponse: (entry) => {
-        stage3Status = entry.status;
-        stage3Instruction = entry.instruction;
-        stage3Response = entry.response;
-      },
+      onJudgeResponse: stage3.capture,
     });
 
-    options.onJudgeStage?.({
+    options.onJudgeStage?.(stage3.stage({
       stage: 3,
       method: 'ai_judge',
-      status: stage3Status,
-      instruction: stage3Instruction,
-      response: stage3Response,
-    });
+    }));
 
     if (fallbackPosition >= 0 && fallbackPosition < conditions.length) {
       const originalIndex = conditions[fallbackPosition]?.index;

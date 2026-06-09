@@ -14,6 +14,7 @@ import type {
 } from '../models/types.js';
 import type { PersonaProviderEntry, ResolvedObservabilityConfig } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
+import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
@@ -77,6 +78,7 @@ export interface JudgeStageEntry {
   status: 'done' | 'error' | 'skipped';
   instruction: string;
   response: string;
+  providerUsage?: ProviderUsageSnapshot;
 }
 
 export interface StepProviderInfo {

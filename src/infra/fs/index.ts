@@ -18,6 +18,10 @@ export type {
 } from './session.js';
 
 export {
+  appendJsonLine,
+} from './jsonl.js';
+
+export {
   SessionManager,
   appendNdjsonLine,
   initNdjsonLog,

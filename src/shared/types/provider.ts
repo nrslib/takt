@@ -1,15 +1,24 @@
 import type { AgentFailureCategory } from './agent-failure.js';
 
-export type ProviderType =
-  | 'claude'
-  | 'claude-sdk'
-  | 'claude-terminal'
-  | 'codex'
-  | 'opencode'
-  | 'cursor'
-  | 'copilot'
-  | 'kiro'
-  | 'mock';
+export const PROVIDER_TYPES = [
+  'claude',
+  'claude-sdk',
+  'claude-terminal',
+  'codex',
+  'opencode',
+  'cursor',
+  'copilot',
+  'kiro',
+  'mock',
+] as const;
+
+export type ProviderType = (typeof PROVIDER_TYPES)[number];
+
+const PROVIDER_TYPE_SET: ReadonlySet<string> = new Set(PROVIDER_TYPES);
+
+export function isProviderType(value: unknown): value is ProviderType {
+  return typeof value === 'string' && PROVIDER_TYPE_SET.has(value);
+}
 
 export interface StreamInitEventData {
   model: string;

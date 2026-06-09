@@ -26,6 +26,7 @@ import { createProviderEventLogger, isProviderEventsEnabled } from '../../../sha
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/utils/usageEventLogger.js';
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
+import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
@@ -228,7 +229,11 @@ export async function createWorkflowExecutionBootstrap(
     logger: log,
   });
   const observabilityOptions = globalConfig.observability.enabled
-    && (globalConfig.observability.sessionLogExporter || globalConfig.observability.monitor)
+    && (
+      globalConfig.observability.sessionLogExporter
+      || globalConfig.observability.monitor
+      || globalConfig.observability.usageEventsPhase
+    )
     ? {
         ...(globalConfig.observability.sessionLogExporter
           ? {
@@ -237,6 +242,15 @@ export async function createWorkflowExecutionBootstrap(
                 shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
                 sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
                 workflowName: workflowConfig.name,
+              },
+            }
+          : {}),
+        ...(globalConfig.observability.usageEventsPhase
+          ? {
+              usageEventsExporter: {
+                runId: runSlug,
+                sessionId: workflowSessionId,
+                phaseUsageLogPath: join(runPaths.logsAbs, `${workflowSessionId}${PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX}`),
               },
             }
           : {}),
