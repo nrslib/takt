@@ -13,7 +13,7 @@ import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructured
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {
   buildOpenCodePermissionRuleset,
-  mapToOpenCodePermissionReply,
+  resolveOpenCodePermissionReply,
   mapToOpenCodeTools,
   type OpenCodeCallOptions,
 } from './types.js';
@@ -529,9 +529,7 @@ export class OpenCodeClient {
             };
             if (permProps.sessionID === sessionId) {
               try {
-                const reply = options.permissionMode
-                  ? mapToOpenCodePermissionReply(options.permissionMode)
-                  : 'once';
+                const reply = resolveOpenCodePermissionReply(options.permissionMode, permProps.permission);
                 emitPermissionAsked(options.onStream, {
                   requestId: permProps.id,
                   sessionId: permProps.sessionID,

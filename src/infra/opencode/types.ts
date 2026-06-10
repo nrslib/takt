@@ -20,6 +20,18 @@ export function mapToOpenCodePermissionReply(mode: PermissionMode): OpenCodePerm
   return mapping[mode];
 }
 
+const OPEN_CODE_DOOM_LOOP_PERMISSION = 'doom_loop';
+
+export function resolveOpenCodePermissionReply(
+  mode: PermissionMode | undefined,
+  permission?: string,
+): OpenCodePermissionReply {
+  if (permission === OPEN_CODE_DOOM_LOOP_PERMISSION) {
+    return 'once';
+  }
+  return mode ? mapToOpenCodePermissionReply(mode) : 'once';
+}
+
 const OPEN_CODE_PERMISSION_KEYS = [
   'read',
   'glob',

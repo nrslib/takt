@@ -8,6 +8,7 @@ import {
   buildOpenCodePermissionRuleset,
   mapToOpenCodePermissionReply,
   mapToOpenCodeTools,
+  resolveOpenCodePermissionReply,
 } from '../infra/opencode/types.js';
 import type { PermissionMode } from '../core/models/index.js';
 
@@ -31,6 +32,20 @@ describe('mapToOpenCodePermissionReply', () => {
     modes.forEach((mode, index) => {
       expect(mapToOpenCodePermissionReply(mode)).toBe(expectedReplies[index]);
     });
+  });
+});
+
+describe('resolveOpenCodePermissionReply', () => {
+  it('should keep readonly tool permissions rejected', () => {
+    expect(resolveOpenCodePermissionReply('readonly', 'bash')).toBe('reject');
+  });
+
+  it('should allow OpenCode doom loop continuation once even in readonly mode', () => {
+    expect(resolveOpenCodePermissionReply('readonly', 'doom_loop')).toBe('once');
+  });
+
+  it('should default to once when permission mode is not configured', () => {
+    expect(resolveOpenCodePermissionReply(undefined, 'bash')).toBe('once');
   });
 });
 
