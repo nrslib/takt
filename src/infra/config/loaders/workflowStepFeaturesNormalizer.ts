@@ -10,6 +10,7 @@ import type {
 } from '../../../core/models/index.js';
 import type { FacetResolutionContext, ResolvedSectionMap, WorkflowSections } from './resource-resolver.js';
 import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
+import { DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../../shared/constants.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 
@@ -88,9 +89,10 @@ export function normalizeTeamLeader(
   return {
     persona: personaSpec,
     personaPath,
-    maxParts: raw.max_parts,
-    refillThreshold: raw.refill_threshold,
-    timeoutMs: raw.timeout_ms,
+    maxConcurrency: raw.max_concurrency ?? raw.max_parts ?? 3,
+    maxTotalParts: raw.max_total_parts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS,
+    refillThreshold: raw.refill_threshold ?? 0,
+    timeoutMs: raw.timeout_ms ?? 900000,
     partPersona,
     partPersonaPath,
     partAllowedTools: raw.part_allowed_tools,

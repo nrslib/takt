@@ -29,7 +29,8 @@ describe('createPartStep', () => {
       },
       teamLeader: {
         persona: 'leader',
-        maxParts: 3,
+        maxConcurrency: 3,
+        maxTotalParts: 20,
         refillThreshold: 0,
         timeoutMs: 900000,
       },
@@ -57,7 +58,8 @@ describe('createPartStep', () => {
       passPreviousResponse: false,
       teamLeader: {
         persona: 'leader',
-        maxParts: 3,
+        maxConcurrency: 3,
+        maxTotalParts: 20,
         refillThreshold: 0,
         timeoutMs: 600000,
         partPersona: 'coder',

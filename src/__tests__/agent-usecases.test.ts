@@ -21,7 +21,7 @@ vi.mock('../agents/runner.js', () => ({
 vi.mock('../infra/resources/schema-loader.js', () => ({
   loadJudgmentSchema: vi.fn(() => ({ type: 'judgment' })),
   loadEvaluationSchema: vi.fn(() => ({ type: 'evaluation' })),
-  loadDecompositionSchema: vi.fn((maxParts: number) => ({ type: 'decomposition', maxParts })),
+  loadDecompositionSchema: vi.fn((maxTotalParts: number) => ({ type: 'decomposition', maxTotalParts })),
   loadMorePartsSchema: vi.fn((maxAdditionalParts: number) => ({ type: 'more-parts', maxAdditionalParts })),
 }));
 
@@ -385,7 +385,7 @@ describe('agent-usecases', () => {
       allowedTools: [],
       permissionMode: 'readonly',
       maxTurns: 5,
-      outputSchema: { type: 'decomposition', maxParts: 3 },
+      outputSchema: { type: 'decomposition', maxTotalParts: 3 },
     }));
   });
 

@@ -25,6 +25,16 @@ describe('team leader decomposition guidance', () => {
     expect(prompt).toContain('parts.length === 1');
   });
 
+  it('Given structured decomposition, When building the Japanese prompt, Then it describes max parts as a total limit instead of concurrency', () => {
+    const prompt = buildDecomposePrompt('実装タスク', 5, 'ja');
+
+    expect(prompt).toContain('返してよい総 parts 数');
+    expect(prompt).toContain('1 以上 5 以下');
+    expect(prompt).toContain('同時実行数ではない');
+    expect(prompt).toContain('上限遵守');
+    expect(prompt).toContain('検証分離や責務分解より優先');
+  });
+
   it('Given prompt-based decomposition, When building the English prompt, Then it requires responsibility boundaries and staged verification', () => {
     const prompt = buildPromptBasedDecomposePrompt('implement feature', 4, 'en');
 
@@ -36,6 +46,16 @@ describe('team leader decomposition guidance', () => {
     expect(prompt).toContain('npm run test:e2e:mock');
     expect(prompt).toContain('Do not duplicate');
     expect(prompt).toContain('parts.length === 1');
+  });
+
+  it('Given prompt-based decomposition, When building the English prompt, Then it describes max parts as a total limit instead of concurrency', () => {
+    const prompt = buildPromptBasedDecomposePrompt('implement feature', 5, 'en');
+
+    expect(prompt).toContain('total number of parts');
+    expect(prompt).toContain('between 1 and 5');
+    expect(prompt).toContain('not a concurrency limit');
+    expect(prompt).toContain('Respecting this limit takes precedence');
+    expect(prompt).toContain('verification separation or responsibility boundaries');
   });
 
   it('Given feedback planning, When building more-parts prompts, Then it keeps heavy quality gates out of implementation continuations', () => {

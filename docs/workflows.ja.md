@@ -218,7 +218,8 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 ```yaml
   - name: implement
     team_leader:
-      max_parts: 3
+      max_concurrency: 2
+      max_total_parts: 8
       timeout_ms: 600000
       part_persona: coder
       part_edit: true
@@ -232,6 +233,8 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 ```
 
 大きなタスクを「事前にユニット境界を決めなくても並列で進められる単位」に分解したいときに便利です。
+
+`max_concurrency` は同時に実行する part 数、`max_total_parts` はその step 全体で計画できる総 part 数（最大 20）を制御します。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。
 
 ### Workflow Call Step（サブワークフロー）
 

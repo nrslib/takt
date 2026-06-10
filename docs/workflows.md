@@ -219,7 +219,8 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
 ```yaml
   - name: implement
     team_leader:
-      max_parts: 3
+      max_concurrency: 2
+      max_total_parts: 8
       timeout_ms: 600000
       part_persona: coder
       part_edit: true
@@ -233,6 +234,8 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
 ```
 
 Useful for breaking one large task into independent units that can run in parallel without you having to know the unit boundaries up-front.
+
+`max_concurrency` controls how many parts run at the same time. `max_total_parts` controls the total number of parts the leader may plan across the workflow step, up to 20. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`.
 
 ### Workflow Call Step (subworkflow)
 

@@ -27,9 +27,9 @@ import type { RuntimeStepResolution, StepRunResult } from '../types.js';
 import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
+import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 
 const log = createLogger('team-leader-runner');
-const MAX_TOTAL_PARTS = 20;
 
 export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
@@ -133,7 +133,7 @@ export class TeamLeaderRunner {
         providerInfo: leaderProviderInfo,
         getPromptParts: () => resolvedPromptParts,
       },
-      () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxParts, {
+      () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxTotalParts, {
         cwd: this.deps.getCwd(),
         persona: leaderStep.persona,
         personaPath: leaderStep.personaPath,
@@ -189,9 +189,9 @@ export class TeamLeaderRunner {
 
     const { plannedParts, partResults } = await runTeamLeaderExecution({
       initialParts: parts,
-      maxConcurrency: teamLeaderConfig.maxParts,
+      maxConcurrency: teamLeaderConfig.maxConcurrency,
       refillThreshold: teamLeaderConfig.refillThreshold,
-      maxTotalParts: MAX_TOTAL_PARTS,
+      maxTotalParts: teamLeaderConfig.maxTotalParts,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
@@ -263,6 +263,10 @@ export class TeamLeaderRunner {
             },
           );
         } catch (error) {
+          if (isPlanningBudgetError(error)) {
+            throw error;
+          }
+
           const timeoutFallback = createTimeoutContinuationFeedback({
             partResults: currentResults,
             scheduledIds,

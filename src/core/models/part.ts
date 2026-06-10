@@ -29,7 +29,8 @@ export interface TeamLeaderConfig {
   /** Resolved absolute path for team leader persona */
   personaPath?: string;
   /** Maximum number of parts to run in parallel */
-  maxParts: number;
+  maxConcurrency: number;
+  maxTotalParts: number;
   /** Trigger additional planning when queued parts drop to this threshold or below */
   refillThreshold: number;
   /** Default timeout for parts in milliseconds */

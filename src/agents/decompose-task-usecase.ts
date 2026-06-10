@@ -38,10 +38,10 @@ export const TEAM_LEADER_MAX_TURNS = 5;
 
 export async function decomposeTask(
   instruction: string,
-  maxParts: number,
+  maxTotalParts: number,
   options: DecomposeTaskOptions,
 ): Promise<PartDefinition[]> {
-  const response = await runAgent(options.persona, buildDecomposePrompt(instruction, maxParts, options.language), {
+  const response = await runAgent(options.persona, buildDecomposePrompt(instruction, maxTotalParts, options.language), {
     cwd: options.cwd,
     personaPath: options.personaPath,
     language: options.language,
@@ -52,7 +52,7 @@ export async function decomposeTask(
     allowedTools: [],
     permissionMode: 'readonly',
     ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
-    outputSchema: loadDecompositionSchema(maxParts),
+    outputSchema: loadDecompositionSchema(maxTotalParts),
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,
     onPromptResolved: options.onPromptResolved,
@@ -65,10 +65,10 @@ export async function decomposeTask(
 
   const parts = response.structuredOutput?.parts;
   if (parts != null) {
-    return toPartDefinitions(parts, maxParts);
+    return toPartDefinitions(parts, maxTotalParts);
   }
 
-  return parseParts(response.content, maxParts);
+  return parseParts(response.content, maxTotalParts);
 }
 
 export async function requestMoreParts(

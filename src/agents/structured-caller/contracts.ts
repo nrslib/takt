@@ -18,7 +18,7 @@ export interface StructuredCaller {
 
   decomposeTask(
     instruction: string,
-    maxParts: number,
+    maxTotalParts: number,
     options: DecomposeTaskOptions,
   ): Promise<PartDefinition[]>;
 

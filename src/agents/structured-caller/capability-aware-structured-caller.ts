@@ -59,15 +59,15 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxParts: number,
+    maxTotalParts: number,
     options: DecomposeTaskOptions,
   ): Promise<PartDefinition[]> {
     const provider = resolveProvider(options.provider, options.resolvedProvider);
     if (shouldUsePromptBased(provider)) {
-      return this.promptBased.decomposeTask(instruction, maxParts, options);
+      return this.promptBased.decomposeTask(instruction, maxTotalParts, options);
     }
 
-    return super.decomposeTask(instruction, maxParts, options);
+    return super.decomposeTask(instruction, maxTotalParts, options);
   }
 
   async requestMoreParts(

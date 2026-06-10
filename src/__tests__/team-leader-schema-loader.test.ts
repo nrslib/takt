@@ -19,6 +19,28 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('max_concurrency と max_total_parts の設定を受け付ける', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        persona: 'team-leader',
+        max_concurrency: 2,
+        max_total_parts: 5,
+        timeout_ms: 120000,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    const teamLeader = result.data.team_leader as Record<string, unknown>;
+    expect(teamLeader.max_concurrency).toBe(2);
+    expect(teamLeader.max_total_parts).toBe(5);
+  });
+
   it('max_parts > 3 は拒否する', () => {
     const raw = {
       name: 'implement',
@@ -32,11 +54,65 @@ describe('team_leader schema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('max_concurrency > 3 は拒否する', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        max_concurrency: 4,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
+  it('max_total_parts > 20 は拒否する', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        max_total_parts: 21,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
+  it('max_parts と max_concurrency の同時指定は拒否する', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        max_parts: 2,
+        max_concurrency: 2,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
   it('refill_threshold > max_parts は拒否する', () => {
     const raw = {
       name: 'implement',
       team_leader: {
         max_parts: 2,
+        refill_threshold: 3,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
+  it('refill_threshold > max_concurrency は拒否する', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        max_concurrency: 2,
         refill_threshold: 3,
       },
       instruction: 'decompose',
@@ -95,7 +171,7 @@ describe('team_leader schema', () => {
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
-  it('team_leader を内部形式へ正規化する', () => {
+  it('team_leader の新しい上限設定を内部形式へ正規化する', () => {
     const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {
       name: 'workflow',
@@ -105,7 +181,8 @@ describe('normalizeWorkflowConfig team_leader', () => {
           allow_git_commit: true,
           team_leader: {
             persona: 'team-leader',
-            max_parts: 2,
+            max_concurrency: 2,
+            max_total_parts: 5,
             timeout_ms: 90000,
             part_persona: 'coder',
             part_allowed_tools: ['Read', 'Edit'],
@@ -124,7 +201,8 @@ describe('normalizeWorkflowConfig team_leader', () => {
     expect(step!.teamLeader).toEqual({
       persona: 'team-leader',
       personaPath: undefined,
-      maxParts: 2,
+      maxConcurrency: 2,
+      maxTotalParts: 5,
       refillThreshold: 0,
       timeoutMs: 90000,
       partPersona: 'coder',
@@ -132,6 +210,39 @@ describe('normalizeWorkflowConfig team_leader', () => {
       partAllowedTools: ['Read', 'Edit'],
       partEdit: true,
       partPermissionMode: 'edit',
+    });
+  });
+
+  it('旧名 max_parts を maxConcurrency として正規化する', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const raw = {
+      name: 'workflow',
+      steps: [
+        {
+          name: 'implement',
+          team_leader: {
+            max_parts: 2,
+          },
+          instruction: 'decompose',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, workflowDir);
+    const step = config.steps[0];
+    expect(step).toBeDefined();
+    expect(step!.teamLeader).toEqual({
+      persona: undefined,
+      personaPath: undefined,
+      maxConcurrency: 2,
+      maxTotalParts: 20,
+      refillThreshold: 0,
+      timeoutMs: 900000,
+      partPersona: undefined,
+      partPersonaPath: undefined,
+      partAllowedTools: undefined,
+      partEdit: undefined,
+      partPermissionMode: undefined,
     });
   });
 });

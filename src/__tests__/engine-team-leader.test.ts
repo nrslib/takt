@@ -39,7 +39,8 @@ function buildTeamLeaderConfig(): WorkflowConfig {
         instruction: 'Task: {task}',
         teamLeader: {
           persona: '../personas/team-leader.md',
-          maxParts: 3,
+          maxConcurrency: 3,
+          maxTotalParts: 20,
           refillThreshold: 0,
           timeoutMs: 10000,
           partPersona: '../personas/coder.md',

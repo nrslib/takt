@@ -63,7 +63,7 @@ function createStructuredCaller(): StructuredCaller {
       }
       return -1;
     },
-    decomposeTask: async (instruction, _maxParts, options) => {
+    decomposeTask: async (instruction, _maxTotalParts, options) => {
       options.onPromptResolved?.({
         systemPrompt: options.persona ?? 'testing-reviewer',
         userInstruction: instruction,
@@ -98,7 +98,8 @@ function createConfig(): WorkflowConfig {
         instruction: 'Audit task: {task}',
         passPreviousResponse: false,
         teamLeader: {
-          maxParts: 1,
+          maxConcurrency: 1,
+          maxTotalParts: 20,
           refillThreshold: 0,
           timeoutMs: 1_000,
           partPersona: 'testing-reviewer',

@@ -124,7 +124,8 @@ function teamLeaderStepConfig(): WorkflowConfig {
         instruction: 'Implement feature',
         teamLeader: {
           persona: '../personas/team-leader.md',
-          maxParts: 1,
+          maxConcurrency: 1,
+          maxTotalParts: 20,
           refillThreshold: 0,
           timeoutMs: 10000,
           partPersona: '../personas/coder.md',
@@ -889,7 +890,8 @@ describe('WorkflowEngine rate limit fallback', () => {
           outputContracts: [{ name: 'implement.md', format: 'markdown' }],
           teamLeader: {
             persona: '../personas/team-leader.md',
-            maxParts: 1,
+            maxConcurrency: 1,
+            maxTotalParts: 20,
             refillThreshold: 0,
             timeoutMs: 10000,
             partPersona: '../personas/coder.md',

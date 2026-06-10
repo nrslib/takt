@@ -11,6 +11,9 @@ export const DEFAULT_WORKFLOW_NAME = 'default';
 /** Default language for new installations */
 export const DEFAULT_LANGUAGE: Language = 'en';
 
+export const DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS = 20;
+export const MAX_TEAM_LEADER_MAX_TOTAL_PARTS = 20;
+
 /** Slash commands recognized in interactive mode */
 export const SlashCommand = {
   Accept: '/accept',

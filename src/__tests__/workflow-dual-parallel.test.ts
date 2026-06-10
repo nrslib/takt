@@ -145,7 +145,8 @@ describe('dual workflow parallel structure', () => {
     const implement = workflow!.steps.find((s) => s.name === 'implement');
     expect(implement).toBeDefined();
     expect(implement!.teamLeader).toBeDefined();
-    expect(implement!.teamLeader!.maxParts).toBe(2);
+    expect(implement!.teamLeader!.maxConcurrency).toBe(2);
+    expect(implement!.teamLeader!.maxTotalParts).toBe(20);
   });
 
   it('should not have fix_supervisor step', () => {

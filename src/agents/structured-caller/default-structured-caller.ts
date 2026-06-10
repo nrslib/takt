@@ -43,10 +43,10 @@ export class DefaultStructuredCaller implements StructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxParts: number,
+    maxTotalParts: number,
     options: DecomposeTaskOptions,
   ): Promise<PartDefinition[]> {
-    return decomposeTask(instruction, maxParts, options);
+    return decomposeTask(instruction, maxTotalParts, options);
   }
 
   async requestMoreParts(

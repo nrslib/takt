@@ -26,6 +26,7 @@ import {
   isAggregateConditionExpression,
   isAiConditionExpression,
 } from './workflow-condition-expression.js';
+import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 
@@ -151,20 +152,34 @@ export const ArpeggioConfigRawSchema = z.object({
 /** Team leader configuration schema for dynamic part decomposition */
 export const TeamLeaderConfigRawSchema = z.object({
   persona: z.string().optional(),
-  max_parts: z.number().int().positive().max(3).optional().default(3),
-  refill_threshold: z.number().int().min(0).optional().default(0),
-  timeout_ms: z.number().int().positive().optional().default(900000),
+  max_parts: z.number().int().positive().max(3).optional(),
+  max_concurrency: z.number().int().positive().max(3).optional(),
+  max_total_parts: z.number().int().positive().max(MAX_TEAM_LEADER_MAX_TOTAL_PARTS).optional(),
+  refill_threshold: z.number().int().min(0).optional(),
+  timeout_ms: z.number().int().positive().optional(),
   part_persona: z.string().optional(),
   part_allowed_tools: z.array(z.string()).optional(),
   part_edit: z.boolean().optional(),
   part_permission_mode: PermissionModeSchema.optional(),
-}).refine(
-  (data) => data.refill_threshold <= data.max_parts,
-  {
-    message: "'refill_threshold' must be less than or equal to 'max_parts'",
-    path: ['refill_threshold'],
-  },
-);
+}).superRefine((data, ctx) => {
+  if (data.max_parts !== undefined && data.max_concurrency !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['max_concurrency'],
+      message: "'max_parts' and 'max_concurrency' cannot be specified together",
+    });
+  }
+
+  const maxConcurrency = data.max_concurrency ?? data.max_parts ?? 3;
+  const refillThreshold = data.refill_threshold ?? 0;
+  if (refillThreshold > maxConcurrency) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['refill_threshold'],
+      message: "'refill_threshold' must be less than or equal to team leader concurrency",
+    });
+  }
+});
 
 /** Sub-step schema for parallel execution */
 export const ParallelSubStepRawSchema = z.object({

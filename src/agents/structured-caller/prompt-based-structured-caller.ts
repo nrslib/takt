@@ -158,10 +158,10 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxParts: number,
+    maxTotalParts: number,
     options: DecomposeTaskOptions,
   ): Promise<PartDefinition[]> {
-    const prompt = buildPromptBasedDecomposePrompt(instruction, maxParts, options.language);
+    const prompt = buildPromptBasedDecomposePrompt(instruction, maxTotalParts, options.language);
 
     return withRetry(async () => {
       const response = await runAgent(options.persona, prompt, {
@@ -185,7 +185,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         throw new Error(`Team leader failed: ${detail}`);
       }
 
-      return parseParts(response.content, maxParts);
+      return parseParts(response.content, maxTotalParts);
     });
   }
 

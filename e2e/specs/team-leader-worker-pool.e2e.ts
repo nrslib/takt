@@ -82,7 +82,7 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
     expect(stepComplete).toBeDefined();
 
     const initialContent = String(initialDecomposition?.content ?? '');
-    expect(countPartsFromJson(initialContent)).toBe(2);
+    expect(countPartsFromJson(initialContent)).toBe(5);
 
     const content = String(stepComplete?.content ?? '');
     expect(countPartSections(content)).toBeGreaterThanOrEqual(5);

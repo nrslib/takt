@@ -11,15 +11,15 @@ function summarizePartContent(content: string): string {
   return `${content.slice(0, maxLength)}\n...[truncated]`;
 }
 
-export function toPartDefinitions(raw: unknown, maxParts: number): PartDefinition[] {
+export function toPartDefinitions(raw: unknown, maxTotalParts: number): PartDefinition[] {
   if (!Array.isArray(raw)) {
     throw new Error('Structured output "parts" must be an array');
   }
   if (raw.length === 0) {
     throw new Error('Structured output "parts" must not be empty');
   }
-  if (raw.length > maxParts) {
-    throw new Error(`Structured output produced too many parts: ${raw.length} > ${maxParts}`);
+  if (raw.length > maxTotalParts) {
+    throw new Error(`Structured output produced too many total parts: ${raw.length} > max_total_parts ${maxTotalParts}`);
   }
 
   const parts = raw.map((entry, index) => parsePartDefinitionEntry(entry, index));
@@ -56,12 +56,14 @@ export function toMorePartsResponse(raw: unknown, maxAdditionalParts: number): M
   };
 }
 
-function buildDecomposeBasePrompt(instruction: string, maxParts: number, language?: Language): string {
+function buildDecomposeBasePrompt(instruction: string, maxTotalParts: number, language?: Language): string {
   if (language === 'ja') {
     return [
       '以下はタスク分解専用の指示です。タスクを実行せず、分解だけを行ってください。',
       '- ツールは使用しない',
-      `- パート数は 1 以上 ${maxParts} 以下`,
+      `- 返してよい総 parts 数は 1 以上 ${maxTotalParts} 以下`,
+      '- この上限は同時実行数ではない',
+      '- 上限遵守を、検証分離や責務分解より優先する',
       '- パートは互いに独立させる',
       '- まず並行可能な責務境界を探す',
       '- 「実装と検証」のような巨大な単一 part を避ける',
@@ -79,7 +81,9 @@ function buildDecomposeBasePrompt(instruction: string, maxParts: number, languag
   return [
     'This is decomposition-only planning. Do not execute the task.',
     '- Do not use any tool',
-    `- Produce between 1 and ${maxParts} independent parts`,
+    `- Produce a total number of parts between 1 and ${maxTotalParts}`,
+    '- This limit is not a concurrency limit',
+    '- Respecting this limit takes precedence over verification separation or responsibility boundaries',
     '- Keep each part self-contained',
     '- First look for parallelizable responsibility boundaries',
     '- Avoid oversized single parts such as "implementation and verification"',
@@ -154,15 +158,15 @@ function buildMorePartsBasePrompt(
 
 export function buildDecomposePrompt(
   instruction: string,
-  maxParts: number,
+  maxTotalParts: number,
   language?: Language,
 ): string {
-  return buildDecomposeBasePrompt(instruction, maxParts, language);
+  return buildDecomposeBasePrompt(instruction, maxTotalParts, language);
 }
 
 export function buildPromptBasedDecomposePrompt(
   instruction: string,
-  maxParts: number,
+  maxTotalParts: number,
   language?: Language,
 ): string {
   const outputInstruction = language === 'ja'
@@ -181,7 +185,7 @@ export function buildPromptBasedDecomposePrompt(
         '- Each item must include {"id","title","instruction"}',
       ];
 
-  return `${buildDecomposeBasePrompt(instruction, maxParts, language)}\n${outputInstruction.join('\n')}`;
+  return `${buildDecomposeBasePrompt(instruction, maxTotalParts, language)}\n${outputInstruction.join('\n')}`;
 }
 
 export function buildMorePartsPrompt(
