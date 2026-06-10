@@ -727,6 +727,69 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.content).toContain('permission reply timed out');
   });
 
+  it('should emit permission_asked stream event before replying to OpenCode permission request', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      {
+        type: 'permission.asked',
+        properties: {
+          id: 'perm-1',
+          sessionID: 'session-permission',
+          permission: 'bash',
+          patterns: ['**'],
+          metadata: { command: 'npm test' },
+          always: [],
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-permission' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-permission' } });
+    const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const permissionReply = vi.fn().mockResolvedValue({ data: {} });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: disposeInstance },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: permissionReply },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const onStream = vi.fn();
+    const client = new OpenCodeClient();
+    await client.call('coder', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      permissionMode: 'readonly',
+      onStream,
+    });
+
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'permission_asked',
+      data: {
+        requestId: 'perm-1',
+        sessionId: 'session-permission',
+        permission: 'bash',
+        patterns: ['**'],
+        always: [],
+        reply: 'reject',
+      },
+    });
+    expect(permissionReply).toHaveBeenCalledWith({
+      requestID: 'perm-1',
+      directory: '/tmp',
+      reply: 'reject',
+    }, expect.any(Object));
+  });
+
   it('should reuse shared server for parallel calls with same config', async () => {
     const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
     resetSharedServer();

@@ -24,6 +24,7 @@ import {
   createStreamTrackingState,
   emitInit,
   emitText,
+  emitPermissionAsked,
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
@@ -522,12 +523,23 @@ export class OpenCodeClient {
             const permProps = sseEvent.properties as {
               id: string;
               sessionID: string;
+              permission?: string;
+              patterns?: string[];
+              always?: string[];
             };
             if (permProps.sessionID === sessionId) {
               try {
                 const reply = options.permissionMode
                   ? mapToOpenCodePermissionReply(options.permissionMode)
                   : 'once';
+                emitPermissionAsked(options.onStream, {
+                  requestId: permProps.id,
+                  sessionId: permProps.sessionID,
+                  permission: permProps.permission ?? '',
+                  patterns: Array.isArray(permProps.patterns) ? permProps.patterns : [],
+                  always: Array.isArray(permProps.always) ? permProps.always : [],
+                  reply,
+                });
                 await withTimeout(
                   (signal) => opencodeApiClient!.permission.reply({
                     requestID: permProps.id,

@@ -41,6 +41,15 @@ export interface StreamToolOutputEventData {
   output: string;
 }
 
+export interface StreamPermissionAskedEventData {
+  requestId: string;
+  sessionId: string;
+  permission: string;
+  patterns: string[];
+  always: string[];
+  reply: string;
+}
+
 export interface StreamTextEventData {
   text: string;
 }
@@ -83,6 +92,7 @@ export type StreamEvent =
   | { type: 'tool_use'; data: StreamToolUseEventData }
   | { type: 'tool_result'; data: StreamToolResultEventData }
   | { type: 'tool_output'; data: StreamToolOutputEventData }
+  | { type: 'permission_asked'; data: StreamPermissionAskedEventData }
   | { type: 'text'; data: StreamTextEventData }
   | { type: 'thinking'; data: StreamThinkingEventData }
   | { type: 'result'; data: StreamResultEventData }
