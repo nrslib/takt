@@ -44,6 +44,14 @@ describe('resolveOpenCodePermissionReply', () => {
     expect(resolveOpenCodePermissionReply('readonly', 'doom_loop')).toBe('once');
   });
 
+  it('should allow OpenCode doom loop continuation once in edit mode', () => {
+    expect(resolveOpenCodePermissionReply('edit', 'doom_loop')).toBe('once');
+  });
+
+  it('should allow OpenCode doom loop continuation once in full mode', () => {
+    expect(resolveOpenCodePermissionReply('full', 'doom_loop')).toBe('once');
+  });
+
   it('should default to once when permission mode is not configured', () => {
     expect(resolveOpenCodePermissionReply(undefined, 'bash')).toBe('once');
   });
