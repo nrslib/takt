@@ -66,8 +66,17 @@ describe('OpenCode permissions', () => {
     expect(buildOpenCodePermissionConfig('full')).toBe('allow');
   });
 
-  it('should build deny config for readonly mode', () => {
-    expect(buildOpenCodePermissionConfig('readonly')).toBe('deny');
+  it('should build read-only config for readonly mode', () => {
+    expect(buildOpenCodePermissionConfig('readonly')).toMatchObject({
+      read: 'allow',
+      glob: 'allow',
+      grep: 'allow',
+      edit: 'deny',
+      write: 'deny',
+      bash: 'deny',
+      task: 'deny',
+      question: 'deny',
+    });
   });
 
   it('should build ruleset for edit mode', () => {
@@ -85,10 +94,28 @@ describe('OpenCode permissions', () => {
     });
   });
 
+  it('should build ruleset for readonly mode with read-only tools allowed', () => {
+    const ruleset = buildOpenCodePermissionRuleset('readonly');
+    expect(ruleset.find((rule) => rule.permission === 'read')).toEqual({
+      permission: 'read',
+      pattern: '**',
+      action: 'allow',
+    });
+    expect(ruleset.find((rule) => rule.permission === 'glob')?.action).toBe('allow');
+    expect(ruleset.find((rule) => rule.permission === 'grep')?.action).toBe('allow');
+    expect(ruleset.find((rule) => rule.permission === 'edit')?.action).toBe('deny');
+    expect(ruleset.find((rule) => rule.permission === 'write')?.action).toBe('deny');
+    expect(ruleset.find((rule) => rule.permission === 'bash')?.action).toBe('deny');
+    expect(ruleset.find((rule) => rule.permission === 'task')?.action).toBe('deny');
+    expect(ruleset.find((rule) => rule.permission === 'question')?.action).toBe('deny');
+  });
+
   it('should force allow web tools when networkAccess=true', () => {
     const ruleset = buildOpenCodePermissionRuleset('readonly', true);
     expect(ruleset.find((rule) => rule.permission === 'webfetch')?.action).toBe('allow');
     expect(ruleset.find((rule) => rule.permission === 'websearch')?.action).toBe('allow');
+    expect(ruleset.find((rule) => rule.permission === 'read')?.action).toBe('allow');
+    expect(ruleset.find((rule) => rule.permission === 'edit')?.action).toBe('deny');
   });
 
   it('should force deny web tools when networkAccess=false', () => {

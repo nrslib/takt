@@ -51,7 +51,14 @@ function buildPermissionMap(mode?: PermissionMode): OpenCodePermissionMap {
     question: 'deny',
   };
 
-  if (mode === 'readonly') return allDeny;
+  if (mode === 'readonly') {
+    return {
+      ...allDeny,
+      read: 'allow',
+      glob: 'allow',
+      grep: 'allow',
+    };
+  }
 
   if (mode === 'full') {
     return {
@@ -121,7 +128,6 @@ export function buildOpenCodePermissionConfig(
   networkAccess?: boolean,
 ): OpenCodePermissionAction | Record<string, OpenCodePermissionAction> {
   if (networkAccess === undefined) {
-    if (mode === 'readonly') return 'deny';
     if (mode === 'full') return 'allow';
   }
   return applyNetworkAccessOverride(buildPermissionMap(mode), networkAccess);
