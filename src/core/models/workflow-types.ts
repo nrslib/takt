@@ -44,6 +44,7 @@ export type {
   ClaudeProviderOptions,
   ClaudeTerminalProviderOptions,
   CopilotProviderOptions,
+  KiroProviderOptions,
   StepProviderOptions,
   WorkflowStepKind,
   WorkflowCallOverrides,

@@ -100,6 +100,32 @@ describe('resolveProviderOptionSource', () => {
     expect(source).toBe('project');
   });
 
+  it('Given kiro agent on step, When resolve, Then source is step', () => {
+    const source = resolveProviderOptionSource(
+      'kiro.agent',
+      { kiro: { agent: 'step-agent' } },
+      undefined,
+      { kiro: { agent: 'config-agent' } },
+      undefined,
+      'project',
+    );
+
+    expect(source).toBe('step');
+  });
+
+  it('Given kiro agent has env origin, When resolve, Then source is env', () => {
+    const source = resolveProviderOptionSource(
+      'kiro.agent',
+      { kiro: { agent: 'step-agent' } },
+      undefined,
+      { kiro: { agent: 'env-agent' } },
+      (path) => (path === 'kiro.agent' ? 'env' : 'local'),
+      'project',
+    );
+
+    expect(source).toBe('env');
+  });
+
   it('Given opencode variant has env origin, When resolve, Then source is env', () => {
     const source = resolveProviderOptionSource(
       'opencode.variant',
@@ -135,5 +161,20 @@ describe('resolveProviderOptionsSources (all paths)', () => {
     expect(PROVIDER_OPTION_PATHS).toContain('codex.reasoningEffort');
     expect(PROVIDER_OPTION_PATHS).toContain('opencode.variant');
     expect(PROVIDER_OPTION_PATHS).toContain('copilot.effort');
+    expect(PROVIDER_OPTION_PATHS).toContain('kiro.agent');
+  });
+
+  it('includes kiro.agent in resolved sources when set', () => {
+    const result = resolveProviderOptionsSources(
+      { kiro: { agent: 'step-agent' } },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    expect(result).toEqual({
+      'kiro.agent': 'step',
+    });
   });
 });

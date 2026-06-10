@@ -41,6 +41,9 @@ type RawProviderOptions = {
   copilot?: {
     effort?: CopilotEffort;
   };
+  kiro?: {
+    agent?: string;
+  };
 };
 
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
@@ -105,6 +108,9 @@ export function normalizeProviderOptions(
   if (options.copilot?.effort !== undefined) {
     result.copilot = { effort: options.copilot.effort };
   }
+  if (options.kiro?.agent !== undefined) {
+    result.kiro = { agent: options.kiro.agent };
+  }
   if (
     options.claude_terminal?.backend !== undefined
     || options.claude_terminal?.timeout_ms !== undefined
@@ -162,6 +168,14 @@ export function mergeProviderOptions(
         ...result.copilot,
         ...(layer.copilot.effort !== undefined
           ? { effort: layer.copilot.effort }
+          : {}),
+      };
+    }
+    if (layer.kiro) {
+      result.kiro = {
+        ...result.kiro,
+        ...(layer.kiro.agent !== undefined
+          ? { agent: layer.kiro.agent }
           : {}),
       };
     }
@@ -306,6 +320,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.copilot?.effort,
     resolveProviderOptionOrigin(originResolver, 'copilot.effort', source),
   );
+  const kiroAgent = selectProviderValue(
+    resolvedConfigOptions.kiro?.agent,
+    personaOptions?.kiro?.agent,
+    stepOptions?.kiro?.agent,
+    resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
+  );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
     personaOptions?.claudeTerminal?.backend,
@@ -351,6 +371,7 @@ export function resolveEffectiveProviderOptions(
         ? claude
         : undefined,
     copilot: copilotEffort !== undefined ? { effort: copilotEffort } : undefined,
+    kiro: kiroAgent !== undefined ? { agent: kiroAgent } : undefined,
     claudeTerminal:
       claudeTerminalBackend !== undefined
       || claudeTerminalTimeoutMs !== undefined
@@ -367,7 +388,7 @@ export function resolveEffectiveProviderOptions(
         : undefined,
   };
 
-  return result.codex || result.opencode || result.claude || result.copilot || result.claudeTerminal
+  return result.codex || result.opencode || result.claude || result.copilot || result.kiro || result.claudeTerminal
     ? result
     : undefined;
 }
@@ -402,6 +423,9 @@ function stripClaudeAllowedTools(
       : {}),
     ...(providerOptions.copilot !== undefined
       ? { copilot: { ...providerOptions.copilot } }
+      : {}),
+    ...(providerOptions.kiro !== undefined
+      ? { kiro: { ...providerOptions.kiro } }
       : {}),
     ...(providerOptions.claudeTerminal !== undefined
       ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
@@ -452,6 +476,7 @@ export const PROVIDER_OPTION_PATHS = [
   'opencode.networkAccess',
   'opencode.variant',
   'copilot.effort',
+  'kiro.agent',
   'claudeTerminal.backend',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',

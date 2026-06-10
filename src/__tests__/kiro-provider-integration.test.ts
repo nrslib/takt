@@ -141,4 +141,60 @@ describe('KiroProvider integration', () => {
     expect(options.shell).toBeUndefined();
     expect(child.stdin.end).toHaveBeenCalledWith();
   });
+
+  it('Given providerOptions.kiro.agent, When provider agent calls real client, Then --agent reaches spawn args', async () => {
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+      ].join('\n'),
+      'utf-8',
+    );
+    mockSpawnSuccess('agent ok');
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'planner' });
+
+    const result = await agent.call('plan the feature', {
+      cwd: testDir,
+      permissionMode: 'readonly',
+      providerOptions: {
+        kiro: { agent: 'planner-agent' },
+      },
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('agent ok');
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const agentFlagIndex = args.indexOf('--agent');
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[agentFlagIndex + 1]).toBe('planner-agent');
+    expect(args.at(-1)).toBe('plan the feature');
+  });
+
+  it('Given no providerOptions, When provider agent calls real client, Then spawn args have no --agent flag', async () => {
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+      ].join('\n'),
+      'utf-8',
+    );
+    mockSpawnSuccess('default agent ok');
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement', {
+      cwd: testDir,
+      permissionMode: 'readonly',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--agent');
+  });
 });

@@ -10,4 +10,5 @@ export interface KiroCallOptions {
   onStream?: StreamCallback;
   kiroApiKey?: string;
   kiroCliPath?: string;
+  agent?: string;
 }

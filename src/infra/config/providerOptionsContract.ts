@@ -15,6 +15,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.claude_terminal.keep_session', type: 'boolean' },
   { path: 'provider_options.claude_terminal.transcript_poll_interval_ms', type: 'number' },
   { path: 'provider_options.copilot.effort', type: 'string' },
+  { path: 'provider_options.kiro.agent', type: 'string' },
 ] as const satisfies readonly EnvSpec[];
 
 const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
@@ -38,6 +39,8 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.claude_terminal.transcript_poll_interval_ms',
   'provider_options.copilot',
   'provider_options.copilot.effort',
+  'provider_options.kiro',
+  'provider_options.kiro.agent',
 ] as const;
 
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
@@ -54,6 +57,7 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'claudeTerminal.keepSession',
   'claudeTerminal.transcriptPollIntervalMs',
   'copilot.effort',
+  'kiro.agent',
 ] as const;
 
 export type ProviderOptionsTracePath = (typeof PROVIDER_OPTIONS_TRACE_PATH_ENTRIES)[number];
@@ -69,6 +73,7 @@ export const PROVIDER_OPTIONS_TRACKED_KEYS = [
   'provider_options.claude.sandbox',
   'provider_options.claude_terminal',
   'provider_options.copilot',
+  'provider_options.kiro',
   ...PROVIDER_OPTIONS_ENV_SPEC_ENTRIES.map((spec) => spec.path).filter((path) => path !== 'provider_options'),
   'provider_options.claude.allowed_tools',
 ] as const;

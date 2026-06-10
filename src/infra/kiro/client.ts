@@ -8,6 +8,7 @@ export type { KiroCallOptions } from './types.js';
 const KIRO_ABORTED_MESSAGE = 'Kiro execution aborted';
 const KIRO_ERROR_DETAIL_MAX_LENGTH = 400;
 const KIRO_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const KIRO_AGENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 function buildPrompt(prompt: string, systemPrompt?: string): string {
   if (!systemPrompt) {
@@ -35,6 +36,12 @@ function validateSessionId(sessionId: string): void {
   }
 }
 
+function validateAgentName(agent: string): void {
+  if (!KIRO_AGENT_NAME_PATTERN.test(agent)) {
+    throw new Error('Invalid Kiro agent name. Only letters, numbers, dot, underscore, and hyphen are allowed.');
+  }
+}
+
 function buildInputArg(prompt: string): string {
   // Kiro documents the prompt as positional INPUT, but does not document a `--` separator.
   return prompt.startsWith('-') ? `\n${prompt}` : prompt;
@@ -46,6 +53,11 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
     '--no-interactive',
     ...buildTrustArgs(options),
   ];
+
+  if (options.agent) {
+    validateAgentName(options.agent);
+    args.push('--agent', options.agent);
+  }
 
   if (options.sessionId) {
     validateSessionId(options.sessionId);

@@ -404,6 +404,105 @@ describe('callKiro', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
+  it('Given agent option, When called, Then passes --agent with the agent name before the positional input', async () => {
+    mockSpawnWithScenario({
+      stdout: 'planned',
+      code: 0,
+    });
+
+    const result = await callKiro('planner', 'plan the feature', {
+      cwd: '/repo',
+      permissionMode: 'readonly',
+      agent: 'planner-agent',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const agentFlagIndex = args.indexOf('--agent');
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[agentFlagIndex + 1]).toBe('planner-agent');
+    expect(agentFlagIndex + 1).toBeLessThan(args.length - 1);
+    expect(args.at(-1)).toBe('plan the feature');
+  });
+
+  it('Given agent option with session and permission, When called, Then combines --agent with existing flags', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      sessionId: 'sess-prev',
+      permissionMode: 'full',
+      agent: 'coder-agent',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toContain('--trust-all-tools');
+    expect(args).toContain('--resume-id');
+    expect(args).toContain('sess-prev');
+    const agentFlagIndex = args.indexOf('--agent');
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[agentFlagIndex + 1]).toBe('coder-agent');
+  });
+
+  it('Given no agent option, When called, Then does not add an --agent flag', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      permissionMode: 'full',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--agent');
+  });
+
+  it('Given agent name with dot, underscore, and hyphen, When called, Then accepts it', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      agent: 'my.team_agent-v2',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const agentFlagIndex = args.indexOf('--agent');
+    expect(args[agentFlagIndex + 1]).toBe('my.team_agent-v2');
+  });
+
+  it('Given agent name contains shell metacharacters, When called, Then rejects it before spawn', async () => {
+    const result = await callKiro('coder', 'inspect', {
+      cwd: '/repo',
+      agent: 'agent & whoami | cat',
+      permissionMode: 'readonly',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Invalid Kiro agent');
+    expect(result.error).toBe(result.content);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('Given agent name with a space, When called, Then rejects it before spawn', async () => {
+    const result = await callKiro('coder', 'inspect', {
+      cwd: '/repo',
+      agent: 'my agent',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('Invalid Kiro agent');
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
   it('Given plain text stdout, When command succeeds, Then returns stdout without JSON parsing', async () => {
     const output = 'Here is the implementation:\n\n```typescript\nconsole.log("hello");\n```';
     mockSpawnWithScenario({

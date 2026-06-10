@@ -24,12 +24,15 @@ describe('providerOptionsContract', () => {
       'provider_options.claude_terminal.keep_session',
       'provider_options.claude_terminal.transcript_poll_interval_ms',
       'provider_options.copilot.effort',
+      'provider_options.kiro.agent',
     ]));
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
   });
 
   it('maps internal provider option paths to traced-config paths', () => {
@@ -43,6 +46,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.opencode.variant');
     expect(toProviderOptionsTracePath('claudeTerminal.transcriptPollIntervalMs'))
       .toBe('provider_options.claude_terminal.transcript_poll_interval_ms');
+    expect(toProviderOptionsTracePath('kiro.agent'))
+      .toBe('provider_options.kiro.agent');
   });
 
   it('enumerates only present provider option leaves', () => {
@@ -62,5 +67,17 @@ describe('providerOptionsContract', () => {
       'claudeTerminal.keepSession',
       'copilot.effort',
     ]);
+  });
+
+  it('enumerates kiro.agent when present', () => {
+    expect(getPresentProviderOptionPaths({
+      kiro: { agent: 'planner-agent' },
+    })).toEqual(['kiro.agent']);
+  });
+
+  it('does not enumerate kiro.agent for an empty kiro entry', () => {
+    expect(getPresentProviderOptionPaths({
+      kiro: {},
+    })).toEqual([]);
   });
 });

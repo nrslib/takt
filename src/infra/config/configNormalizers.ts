@@ -469,6 +469,9 @@ export function denormalizeProviderOptions(
   if (providerOptions.copilot?.effort !== undefined) {
     raw.copilot = { effort: providerOptions.copilot.effort };
   }
+  if (providerOptions.kiro?.agent !== undefined) {
+    raw.kiro = { agent: providerOptions.kiro.agent };
+  }
   if (providerOptions.claudeTerminal) {
     const claudeTerminal: Record<string, unknown> = {};
     if (providerOptions.claudeTerminal.backend !== undefined) {

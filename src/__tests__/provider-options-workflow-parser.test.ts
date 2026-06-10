@@ -261,6 +261,68 @@ describe('normalizeWorkflowConfig provider_options', () => {
     });
   });
 
+  it('kiro agent を workflow-level で設定し step で上書きできる', () => {
+    const raw = {
+      name: 'kiro-agent',
+      workflow_config: {
+        provider_options: {
+          kiro: {
+            agent: 'default-agent',
+          },
+        },
+      },
+      steps: [
+        {
+          name: 'inherit',
+          provider: 'kiro',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider: 'kiro',
+          provider_options: {
+            kiro: {
+              agent: 'coder-agent',
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      kiro: { agent: 'default-agent' },
+    });
+    expect(config.steps[0]?.providerOptions).toEqual({
+      kiro: { agent: 'default-agent' },
+    });
+    expect(config.steps[1]?.providerOptions).toEqual({
+      kiro: { agent: 'coder-agent' },
+    });
+  });
+
+  it('kiro agent に空文字を指定したら reject する', () => {
+    const raw = {
+      name: 'kiro-agent-empty',
+      steps: [
+        {
+          name: 'plan',
+          provider: 'kiro',
+          provider_options: {
+            kiro: {
+              agent: '',
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow();
+  });
+
   it('workflow-level runtime.prepare を正規化し重複を除去する', () => {
     const raw = {
       name: 'runtime-prepare',
@@ -539,6 +601,22 @@ describe('mergeProviderOptions', () => {
         allowedTools: ['Read', 'Edit'],
       },
       codex: { networkAccess: false },
+    });
+  });
+
+  it('kiro.agent を後の層が優先でマージする', () => {
+    const global = {
+      kiro: { agent: 'global-agent' },
+    };
+    const step = {
+      kiro: { agent: 'step-agent' },
+    };
+
+    expect(mergeProviderOptions(global, step)).toEqual({
+      kiro: { agent: 'step-agent' },
+    });
+    expect(mergeProviderOptions(global, undefined)).toEqual({
+      kiro: { agent: 'global-agent' },
     });
   });
 

@@ -179,6 +179,76 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(out.info).toHaveBeenCalledWith('Reasoning effort: high');
   });
 
+  it('Kiro agent を step start の provider option 表示に含める', () => {
+    const { engine, out } = createBridgeHarness({
+      currentProvider: 'kiro',
+      configuredModel: 'kiro-default',
+    });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', {
+      provider: 'kiro',
+      model: 'kiro-default',
+      providerOptions: { kiro: { agent: 'reviewer-agent' } },
+    });
+
+    expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent');
+  });
+
+  it('Kiro agent 未指定なら Agent 行を表示しない', () => {
+    const { engine, out } = createBridgeHarness({
+      currentProvider: 'kiro',
+      configuredModel: 'kiro-default',
+    });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', {
+      provider: 'kiro',
+      model: 'kiro-default',
+      providerOptions: { opencode: { variant: 'high' } },
+    });
+
+    const agentLines = out.info.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].startsWith('Agent:'),
+    );
+    expect(agentLines).toEqual([]);
+  });
+
+  it('verbose 時に Kiro agent の解決ソースを表示する', () => {
+    resetDebugLogger();
+    setVerboseConsole(true);
+    try {
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'kiro',
+        configuredModel: 'kiro-default',
+      });
+      const step = {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'kiro',
+        model: 'kiro-default',
+        providerOptions: { kiro: { agent: 'reviewer-agent' } },
+        providerOptionsSources: { 'kiro.agent': 'step' },
+      });
+
+      expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent (source: step)');
+    } finally {
+      resetDebugLogger();
+    }
+  });
+
   it('verbose 時に OpenCode variant の解決ソースを表示する', () => {
     resetDebugLogger();
     setVerboseConsole(true);

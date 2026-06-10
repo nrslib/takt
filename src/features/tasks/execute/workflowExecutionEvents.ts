@@ -105,6 +105,11 @@ function emitProviderOptionLines(
     if (effort !== undefined) {
       out.info(`Effort: ${effort}${sourceSuffix('copilot.effort', sources, showSource)}`);
     }
+  } else if (stepProvider === 'kiro') {
+    const agent = options.kiro?.agent;
+    if (agent !== undefined) {
+      out.info(`Agent: ${agent}${sourceSuffix('kiro.agent', sources, showSource)}`);
+    }
   }
 }
 

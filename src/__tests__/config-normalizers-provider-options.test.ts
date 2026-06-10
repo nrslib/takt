@@ -100,6 +100,36 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip kiro agent through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      kiro: {
+        agent: 'planner-agent',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      kiro: {
+        agent: 'planner-agent',
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should persist kiro agent alongside other provider options', () => {
+    const result = denormalizeProviderOptions({
+      kiro: { agent: 'coder-agent' },
+      opencode: { variant: 'high' },
+    });
+
+    expect(result).toEqual({
+      kiro: { agent: 'coder-agent' },
+      opencode: { variant: 'high' },
+    });
+  });
+
   it('should round-trip opencode variant through normalize and denormalize', () => {
     const rawProviderOptions = {
       opencode: {

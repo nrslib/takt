@@ -134,6 +134,59 @@ describe('KiroProvider', () => {
     );
   });
 
+  it('Given providerOptions.kiro.agent, When agent is called, Then passes the Kiro agent name to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('planner'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'planner' });
+
+    await agent.call('plan the feature', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        kiro: { agent: 'planner-agent' },
+      },
+    });
+
+    expect(mockCallKiro).toHaveBeenCalledWith(
+      'planner',
+      'plan the feature',
+      expect.objectContaining({
+        agent: 'planner-agent',
+      }),
+    );
+  });
+
+  it('Given no providerOptions, When agent is called, Then passes undefined agent to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.agent).toBeUndefined();
+  });
+
+  it('Given providerOptions without a kiro entry, When agent is called, Then passes undefined agent to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        opencode: { variant: 'high' },
+      },
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.agent).toBeUndefined();
+  });
+
   it('Given unsupported provider options, When agent is called, Then does not pass them to callKiro', async () => {
     mockCallKiro.mockResolvedValue(doneResponse('coder'));
 

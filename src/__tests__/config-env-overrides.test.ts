@@ -160,6 +160,48 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は kiro.agent の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-kiro-agent-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  kiro:',
+        '    agent: config-agent',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_KIRO_AGENT = 'env-agent';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      kiro: { agent: 'env-agent' },
+    });
+  });
+
+  it('global config は provider_options.kiro.agent を読み込む', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      [
+        'provider: kiro',
+        'provider_options:',
+        '  kiro:',
+        '    agent: global-default-agent',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+
+    expect(config.providerOptions).toEqual({
+      kiro: { agent: 'global-default-agent' },
+    });
+  });
+
   it('project config は root JSON env で subtree 全体を置き換える', () => {
     const projectDir = join(testRoot, 'project-root-json');
     const configDir = getProjectConfigDir(projectDir);

@@ -78,6 +78,9 @@ export const StepProviderOptionsSchema = z.object({
   copilot: z.object({
     effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
   }).optional(),
+  kiro: z.object({
+    agent: z.string().min(1).optional(),
+  }).optional(),
 }).optional();
 
 /** Provider key schema for profile maps */

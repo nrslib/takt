@@ -35,6 +35,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
     onStream: options.onStream,
     kiroApiKey: options.kiroApiKey ?? resolveKiroApiKey(),
     kiroCliPath: resolveKiroCliPath(),
+    agent: options.providerOptions?.kiro?.agent,
   };
 }
 
