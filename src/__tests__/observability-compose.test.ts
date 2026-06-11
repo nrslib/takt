@@ -6,6 +6,7 @@ import { parse } from 'yaml';
 type ComposeFile = {
   services?: {
     'otel-lgtm'?: {
+      image?: unknown;
       ports?: unknown[];
     };
   };
@@ -22,5 +23,14 @@ describe('observability compose stack', () => {
       '127.0.0.1:3000:3000',
       '127.0.0.1:4318:4318',
     ]);
+  });
+
+  it('uses a pinned otel-lgtm image tag', () => {
+    const compose = parse(readFileSync(
+      join(process.cwd(), 'docker-compose.observability.yml'),
+      'utf-8',
+    )) as ComposeFile;
+
+    expect(compose.services?.['otel-lgtm']?.image).toBe('grafana/otel-lgtm:0.28.0');
   });
 });
