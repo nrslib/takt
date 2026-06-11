@@ -51,6 +51,18 @@ These assets change often during wording improvements and reorganization, so mak
 
 Verify non-executable asset changes with review, Markdown lint, link checks, or sample command execution when needed.
 
+## Tests for Replaced Old Specifications
+
+When a specification change replaces elements of an old design (UI, API, events, state, labels, etc.) with a new design, tests must positively verify the new behavior. Do not freeze only the absence of the old specification.
+
+| Criteria | Verdict |
+|----------|---------|
+| Adding a test that only verifies elements of the old specification are not present or not called | REJECT |
+| Keeping an absence-only test from the old specification in an implementation unit that no longer owns the responsibility | REJECT |
+| Changing only tests in a file whose production code has no final diff, solely to negate the old specification | REJECT |
+| Positively verifying the new specification in the layer that owns the new responsibility (upper module, service, integration flow, etc.) | OK |
+| Deleting obsolete tests for removed old behavior and replacing them with regression tests for the new specification | OK |
+
 ## Test Structure: Given-When-Then
 
 ```typescript

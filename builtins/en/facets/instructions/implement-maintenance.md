@@ -15,6 +15,7 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - Implement only required and related changes
 - Do not use a touched file as a reason to make style improvements, renames, file moves, hook return shape changes, comment deletions, or test expectation changes
 - If the existing structure can satisfy the request, do not restructure only to match common style
+- When a specification change removes an old design, do not leave code or tests that only verify the absence of the old specification
 - After implementation, inspect the full diff and revert unnecessary changes
 
 **Maintenance Scope output contract (create at the start of implementation):**
@@ -58,6 +59,7 @@ Before running build and tests, audit your work against Policy with the followin
 2. List every `##` section (do not cherry-pick)
 3. Match the REJECT criteria in each listed section against your implementation
 4. Inspect the full diff and check that no out-of-scope rename, move, comment deletion, UI copy change, accessible-name change, or test expectation change remains
+5. If a specification change replaced an old design, check that no code or test remains that only verifies absence of the old design
 
 **Required output (include headings)**
 ## Work Results

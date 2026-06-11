@@ -18,6 +18,8 @@ Procedure:
 4. Validate the maintenance scope
    - Check whether required, related, and unnecessary change classifications are valid
    - Check that comments, type names, file placement, UI copy, accessible names, and test expectations did not change out of scope
+   - If a specification change replaced an old design, check that no code or test remains only to negate the old specification
+   - If a target has no final production-code diff, check that tests were not changed only as old-specification absence checks
    - REJECT if any diff remains that is justified only by general quality improvement or style cleanup
 5. Re-evaluate prior review findings
    - If a finding does not hold in the code, record it as false_positive

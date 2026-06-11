@@ -112,11 +112,13 @@ AI sometimes "addresses" review findings by adding tests or documentation that "
 | Adding tests instead of fixing | "Remove unnecessary comments" → adds tests verifying comment presence | REJECT |
 | Adding docs instead of fixing | "DRY violation" → adds documentation explaining duplication is intentional | REJECT |
 | Changing unrelated files | Security finding → performs unrelated refactoring | REJECT |
+| Absence checks for an old specification instead of implementing a changed specification | "Replace old badge display with filtering from the list" → lower-level component only verifies the old badge is not shown | REJECT |
 
 Verification approach:
 1. Check if the fix diff includes changes to the finding's target file and target lines
 2. If the fix consists only of new file additions, check whether those files "fix" the issue or merely "verify" it
 3. If tests are added as part of the fix, verify they test "correct behavior after the fix" (not "the finding itself")
+4. For mid-PR specification changes, verify the tests cover the new behavior in the layer that owns it, not only the absence of the old specification
 
 ## Context Fitness Assessment
 

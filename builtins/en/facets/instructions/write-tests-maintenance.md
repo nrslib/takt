@@ -20,6 +20,7 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 - One concept per test. Do not mix multiple concerns in a single test
 - Cover happy path, error cases, boundary values, and edge cases
 - Do not weaken existing expectations for implementation convenience
+- When a specification change replaces an old design with a new one, do not write tests that only freeze the absence of the old specification; positively verify the new specification in the layer that owns it
 - When an external contract exists, include tests that use the contract-defined input location
   - Example: pass request bodies using the defined root shape as-is
   - Example: keep query / path parameters in their defined location instead of moving them into the body
