@@ -149,6 +149,28 @@ describe('denormalizeProviderOptions', () => {
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
+
+  it('should round-trip opencode allowed_tools through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      opencode: {
+        network_access: true,
+        variant: 'high',
+        allowed_tools: ['read', 'glob', 'grep', 'bash'],
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      opencode: {
+        networkAccess: true,
+        variant: 'high',
+        allowedTools: ['read', 'glob', 'grep', 'bash'],
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
 });
 
 describe('buildRawTaktProvidersOrThrow', () => {

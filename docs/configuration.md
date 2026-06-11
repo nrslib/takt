@@ -201,6 +201,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 #     network_access: true
 #   opencode:
 #     variant: high
+#     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 #   kiro:
 #     agent: my-default-agent
 #   claude_terminal:
@@ -465,6 +466,14 @@ OpenCode does not have a native sandbox. TAKT controls `webfetch` / `websearch` 
 provider_options:
   opencode:
     network_access: true
+```
+
+OpenCode tool allowlists use lowercase OpenCode tool names:
+
+```yaml
+provider_options:
+  opencode:
+    allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
 
 `network_access` can be set at step / `workflow_config` / `persona_providers` / project / global levels, with step having the highest priority. The environment variable `TAKT_PROVIDER_OPTIONS_CODEX_NETWORK_ACCESS=true` also works as an override.

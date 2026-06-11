@@ -23,43 +23,77 @@ import {
   resolveRefToContent,
 } from './resource-resolver.js';
 import { mergeProviderOptions } from '../providerOptions.js';
-import { normalizeConfigProviderReferenceDetailed, type ConfigProviderReference } from '../providerReference.js';
+import { normalizeProviderBlockOptions } from '../providerBlockOptions.js';
+import type { ConfigProviderReference } from '../providerReference.js';
 import { validateWorkflowArpeggio, validateWorkflowMcpServers } from './workflowNormalizationPolicies.js';
 import { normalizeRule } from './workflowRuleNormalizer.js';
 import { normalizeArpeggio, normalizeOutputContracts, normalizeTeamLeader } from './workflowStepFeaturesNormalizer.js';
 import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
 import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
+import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
 type RawPromotionEntry = NonNullable<RawStep['promotion']>[number];
+type NormalizedProviderReference = ReturnType<typeof normalizeProviderReference>;
+
 export function normalizeProviderReference(
   provider: RawProviderReference,
   model: RawStep['model'],
   providerOptions: RawStep['provider_options'],
+  workflowDir: string,
 ): {
   provider: WorkflowStep['provider'];
   model: WorkflowStep['model'];
   providerOptions: StepProviderOptions | undefined;
   providerSpecified: boolean;
 } {
-  return normalizeConfigProviderReferenceDetailed(
-    provider as ConfigProviderReference<NonNullable<WorkflowStep['provider']>>,
-    model,
-    providerOptions as Record<string, unknown> | undefined,
+  const normalizedProviderOptions = resolveWorkflowProviderOptions(
+    providerOptions as (Record<string, unknown> & { $ref?: string }) | undefined,
+    workflowDir,
   );
+  const providerReference = provider as ConfigProviderReference<NonNullable<WorkflowStep['provider']>>;
+  if (typeof providerReference === 'string' || providerReference === undefined) {
+    return {
+      provider: providerReference,
+      model,
+      providerOptions: normalizedProviderOptions,
+      providerSpecified: providerReference !== undefined,
+    };
+  }
+
+  return {
+    provider: providerReference.type,
+    model: providerReference.model ?? model,
+    providerOptions: mergeProviderOptions(
+      normalizeProviderBlockOptions(providerReference),
+      normalizedProviderOptions,
+    ),
+    providerSpecified: true,
+  };
 }
 
-function normalizePromotionEntry(entry: RawPromotionEntry): NonNullable<AgentWorkflowStep['promotion']>[number] {
+function normalizePromotionEntry(
+  entry: RawPromotionEntry,
+  workflowDir: string,
+): NonNullable<AgentWorkflowStep['promotion']>[number] {
   const normalizedProvider = normalizeProviderReference(
     entry.provider,
     entry.model,
     entry.provider_options,
+    workflowDir,
   );
   const aiExpression = entry.condition !== undefined
     ? parseAiConditionExpression(entry.condition)
     : undefined;
+  if (
+    entry.provider === undefined
+    && entry.model === undefined
+    && normalizedProvider.providerOptions === undefined
+  ) {
+    throw new Error('Configuration error: promotion entry requires at least one of "provider", "model", or "provider_options"');
+  }
   return {
     at: entry.at,
     condition: entry.condition,
@@ -73,8 +107,21 @@ function normalizePromotionEntry(entry: RawPromotionEntry): NonNullable<AgentWor
 
 function normalizePromotionEntries(
   entries: RawStep['promotion'],
+  workflowDir: string,
 ): AgentWorkflowStep['promotion'] {
-  return entries?.map(normalizePromotionEntry);
+  return entries?.map((entry) => normalizePromotionEntry(entry, workflowDir));
+}
+
+function validateWorkflowCallOverrides(
+  normalizedOverrides: NormalizedProviderReference,
+): void {
+  if (
+    normalizedOverrides.provider === undefined
+    && normalizedOverrides.model === undefined
+    && normalizedOverrides.providerOptions === undefined
+  ) {
+    throw new Error("Configuration error: workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'");
+  }
 }
 
 export function normalizeStepFromRaw(
@@ -134,11 +181,14 @@ export function normalizeStepFromRaw(
       'knowledge',
       context,
   );
-  const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options);
-  const promotion = normalizePromotionEntries(step.promotion);
+  const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options, workflowDir);
+  const promotion = normalizePromotionEntries(step.promotion, workflowDir);
   const normalizedOverrides = step.overrides
-    ? normalizeProviderReference(step.overrides.provider, step.overrides.model, step.overrides.provider_options)
+    ? normalizeProviderReference(step.overrides.provider, step.overrides.model, step.overrides.provider_options, workflowDir)
     : undefined;
+  if (normalizedOverrides !== undefined) {
+    validateWorkflowCallOverrides(normalizedOverrides);
+  }
   const instruction = isSystemStep || isWorkflowCallStep
     ? undefined
     : step.instruction

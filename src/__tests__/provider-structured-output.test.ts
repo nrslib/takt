@@ -258,8 +258,8 @@ describe('OpenCodeProvider — structured output', () => {
     expect(provider.supportsStructuredOutput).toBe(true);
   });
 
-  it('outputSchema を callOpenCode に渡し structuredOutput を返す', async () => {
-    mockCallOpenCode.mockResolvedValue(doneResponse('coder', { step: 2 }));
+  it('outputSchema を callOpenCodeCustom に渡し structuredOutput を返す', async () => {
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder', { step: 2 }));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     const result = await agent.call('prompt', {
@@ -268,13 +268,13 @@ describe('OpenCodeProvider — structured output', () => {
       outputSchema: SCHEMA,
     });
 
-    const opts = mockCallOpenCode.mock.calls[0]?.[2];
+    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('outputSchema', SCHEMA);
     expect(result.structuredOutput).toEqual({ step: 2 });
   });
 
-  it('provider_options.opencode.variant を callOpenCode に渡す', async () => {
-    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
+  it('provider_options.opencode.variant を callOpenCodeCustom に渡す', async () => {
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     await agent.call('prompt', {
@@ -288,7 +288,7 @@ describe('OpenCodeProvider — structured output', () => {
       },
     });
 
-    const opts = mockCallOpenCode.mock.calls[0]?.[2];
+    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
     expect(opts).toMatchObject({
       networkAccess: true,
       variant: 'high',
@@ -311,7 +311,7 @@ describe('OpenCodeProvider — structured output', () => {
   });
 
   it('structuredOutput がない場合は undefined', async () => {
-    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     const result = await agent.call('prompt', {
@@ -324,12 +324,12 @@ describe('OpenCodeProvider — structured output', () => {
   });
 
   it('outputSchema 未指定時は undefined が渡される', async () => {
-    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4' });
 
-    const opts = mockCallOpenCode.mock.calls[0]?.[2];
+    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
     expect(opts.outputSchema).toBeUndefined();
   });
 });

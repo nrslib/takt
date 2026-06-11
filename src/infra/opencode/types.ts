@@ -168,7 +168,9 @@ const BUILTIN_TOOL_MAP: Record<string, string> = {
   WebFetch: 'webfetch',
 };
 
-export function mapToOpenCodeTools(allowedTools?: string[]): Record<string, boolean> | undefined {
+export type OpenCodeAllowedTools = readonly string[];
+
+export function mapToOpenCodeTools(allowedTools?: OpenCodeAllowedTools): Record<string, boolean> | undefined {
   if (!allowedTools) {
     return undefined;
   }
@@ -204,7 +206,8 @@ export interface OpenCodeCallOptions {
   sessionId?: string;
   model: string;
   systemPrompt?: string;
-  allowedTools?: string[];
+  /** Resolved OpenCode tool allowlist from provider_options.opencode.allowed_tools. */
+  allowedTools?: OpenCodeAllowedTools;
   permissionMode?: PermissionMode;
   networkAccess?: boolean;
   variant?: string;

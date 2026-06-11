@@ -7,14 +7,14 @@ import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
-  StepProviderOptionsSchema,
+  StepProviderOptionsObjectSchema,
   OutputContractsFieldSchema,
   PermissionModeSchema,
-  WorkflowProviderOptionsSchema,
   ProviderReferenceSchema,
   RateLimitFallbackSchema,
   QualityGatesSchema,
   hasProviderOptionsLeaf,
+  RuntimeConfigSchema,
 } from './schema-base.js';
 import {
   StructuredOutputRawSchema,
@@ -41,6 +41,24 @@ const WorkflowFacetRefOrParamSchema = z.union([WorkflowFacetRefScalarSchema, Wor
 const WorkflowFacetRefListOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema, WorkflowParamReferenceRawSchema]);
 
 const WorkflowCallArgsRawSchema = z.record(z.string().min(1), WorkflowFacetRefValueSchema);
+
+const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
+  $ref: z.string().min(1).optional(),
+}).optional();
+
+function hasProviderOptionsTarget(
+  providerOptions: NonNullable<z.output<typeof WorkflowStepProviderOptionsSchema>>,
+): boolean {
+  const { $ref, ...providerOptionsWithoutRef } = providerOptions;
+  return $ref !== undefined || hasProviderOptionsLeaf(providerOptionsWithoutRef);
+}
+
+const WorkflowProviderOptionsWithRefSchema = z.object({
+  provider: ProviderReferenceSchema.optional(),
+  model: z.string().optional(),
+  provider_options: WorkflowStepProviderOptionsSchema,
+  runtime: RuntimeConfigSchema,
+}).optional();
 
 const WorkflowParamDeclarationRawSchema = z.object({
   type: z.enum(['facet_ref', 'facet_ref[]']),
@@ -86,7 +104,7 @@ const WorkflowPromotionRawSchema = z.object({
   condition: z.string().min(1).optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
-  provider_options: StepProviderOptionsSchema,
+  provider_options: WorkflowStepProviderOptionsSchema,
 }).strict().superRefine((data, ctx) => {
   if (data.at === undefined && data.condition === undefined) {
     ctx.addIssue({
@@ -103,17 +121,17 @@ const WorkflowPromotionRawSchema = z.object({
     });
   }
 
-  const hasProviderOptionsTarget = data.provider_options !== undefined
-    && hasProviderOptionsLeaf(data.provider_options);
+  const hasProviderOptionsTargetValue = data.provider_options !== undefined
+    && hasProviderOptionsTarget(data.provider_options);
 
-  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTarget) {
+  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'promotion entry requires at least one of "provider", "model", or "provider_options"',
     });
   }
 
-  if (data.provider_options !== undefined && !hasProviderOptionsTarget) {
+  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['provider_options'],
@@ -196,7 +214,7 @@ export const ParallelSubStepRawSchema = z.object({
   promotion: z.never().optional(),
   permission_mode: z.never().optional(),
   required_permission_mode: PermissionModeSchema.optional(),
-  provider_options: StepProviderOptionsSchema,
+  provider_options: WorkflowStepProviderOptionsSchema,
   edit: z.boolean().optional(),
   instruction: WorkflowFacetRefOrParamSchema.optional(),
   instruction_template: z.never().optional(),
@@ -222,13 +240,26 @@ const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 const WorkflowCallOverridesRawSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
-  provider_options: StepProviderOptionsSchema,
-}).strict().refine(
-  (data) => data.provider !== undefined || data.model !== undefined || data.provider_options !== undefined,
-  {
-    message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
-  },
-);
+  provider_options: WorkflowStepProviderOptionsSchema,
+}).strict().superRefine((data, ctx) => {
+  const hasProviderOptionsTargetValue = data.provider_options !== undefined
+    && hasProviderOptionsTarget(data.provider_options);
+
+  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
+    });
+  }
+
+  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['provider_options'],
+      message: 'workflow_call overrides provider_options must include at least one provider-specific option',
+    });
+  }
+});
 
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
@@ -282,7 +313,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     promotion: z.array(WorkflowPromotionRawSchema).optional(),
     permission_mode: z.never().optional(),
     required_permission_mode: PermissionModeSchema.optional(),
-    provider_options: StepProviderOptionsSchema,
+    provider_options: WorkflowStepProviderOptionsSchema,
     edit: z.boolean().optional(),
     instruction: WorkflowFacetRefOrParamSchema.optional(),
     instruction_template: z.never().optional(),
@@ -485,7 +516,7 @@ export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
-  workflow_config: WorkflowProviderOptionsSchema,
+  workflow_config: WorkflowProviderOptionsWithRefSchema,
   rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),

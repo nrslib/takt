@@ -55,7 +55,7 @@ export const ClaudeSandboxSchema = z.object({
 }).optional();
 
 /** Provider-specific step options schema */
-export const StepProviderOptionsSchema = z.object({
+export const StepProviderOptionsObjectSchema = z.object({
   codex: z.object({
     network_access: z.boolean().optional(),
     reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
@@ -63,6 +63,7 @@ export const StepProviderOptionsSchema = z.object({
   opencode: z.object({
     network_access: z.boolean().optional(),
     variant: z.string().min(1).optional(),
+    allowed_tools: z.array(z.string()).optional(),
   }).optional(),
   claude: z.object({
     allowed_tools: z.array(z.string()).optional(),
@@ -81,7 +82,9 @@ export const StepProviderOptionsSchema = z.object({
   kiro: z.object({
     agent: z.string().min(1).optional(),
   }).optional(),
-}).optional();
+});
+
+export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
 
 /** Provider key schema for profile maps */
 export const ProviderProfileNameSchema = z.enum([

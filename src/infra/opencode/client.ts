@@ -433,7 +433,8 @@ export class OpenCodeClient {
         resetIdleTimeout();
         diag.onConnected();
 
-        const tools = mapToOpenCodeTools(options.allowedTools);
+        const openCodeAllowedTools = options.allowedTools;
+        const tools = mapToOpenCodeTools(openCodeAllowedTools);
         const promptPayload: Record<string, unknown> = {
           sessionID: sessionId,
           directory: options.cwd,

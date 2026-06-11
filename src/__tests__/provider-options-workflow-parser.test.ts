@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { mergeProviderOptions } from '../infra/config/providerOptions.js';
@@ -259,6 +262,544 @@ describe('normalizeWorkflowConfig provider_options', () => {
         variant: 'high',
       },
     });
+  });
+
+  it('opencode allowed_tools を workflow-level で設定し step で上書きできる', () => {
+    const raw = {
+      name: 'opencode-allowed-tools',
+      workflow_config: {
+        provider_options: {
+          opencode: {
+            allowed_tools: ['read', 'glob', 'grep'],
+          },
+        },
+      },
+      steps: [
+        {
+          name: 'inherit',
+          provider: 'opencode',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider: 'opencode',
+          provider_options: {
+            opencode: {
+              allowed_tools: ['read', 'edit', 'bash'],
+            },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      opencode: {
+        allowedTools: ['read', 'glob', 'grep'],
+      },
+    });
+    expect(config.steps[0]?.providerOptions).toEqual({
+      opencode: {
+        allowedTools: ['read', 'glob', 'grep'],
+      },
+    });
+    expect(config.steps[1]?.providerOptions).toEqual({
+      opencode: {
+        allowedTools: ['read', 'edit', 'bash'],
+      },
+    });
+  });
+
+  it('provider_options の $ref を workflowDir 相対で解決し inline で上書きできる', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'review-readonly.yaml'), [
+        'claude:',
+        '  allowed_tools:',
+        '    - Read',
+        '    - Glob',
+        'opencode:',
+        '  allowed_tools:',
+        '    - read',
+        '    - glob',
+      ].join('\n'));
+      const raw = {
+        name: 'provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'provider-options/review-readonly.yaml',
+          },
+        },
+        steps: [
+          {
+            name: 'inherit',
+            instruction: '{task}',
+          },
+          {
+            name: 'override',
+            provider_options: {
+              $ref: 'provider-options/review-readonly.yaml',
+              opencode: {
+                allowed_tools: ['read', 'edit', 'bash'],
+              },
+            },
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, tempDir);
+
+      expect(config.providerOptions).toEqual({
+        claude: { allowedTools: ['Read', 'Glob'] },
+        opencode: { allowedTools: ['read', 'glob'] },
+      });
+      expect(config.steps[0]?.providerOptions).toEqual({
+        claude: { allowedTools: ['Read', 'Glob'] },
+        opencode: { allowedTools: ['read', 'glob'] },
+      });
+      expect(config.steps[1]?.providerOptions).toEqual({
+        claude: { allowedTools: ['Read', 'Glob'] },
+        opencode: { allowedTools: ['read', 'edit', 'bash'] },
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の $ref が存在しない場合は参照パスを含めて reject する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-missing-'));
+    try {
+      const raw = {
+        name: 'missing-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'provider-options/missing.yaml',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir))
+        .toThrow(/provider-options\/missing\.yaml/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の $ref 先も inline と同じ schema で検証する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-schema-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'invalid.yaml'), [
+        'opencode:',
+        '  allowed_tools: read',
+      ].join('\n'));
+      const raw = {
+        name: 'invalid-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'provider-options/invalid.yaml',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir)).toThrow(/allowed_tools|expected array/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の nested $ref を解決し inline で上書きできる', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-nested-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'base.yaml'), [
+        'claude:',
+        '  allowed_tools:',
+        '    - Read',
+        'opencode:',
+        '  allowed_tools:',
+        '    - read',
+      ].join('\n'));
+      writeFileSync(join(tempDir, 'provider-options', 'review.yaml'), [
+        '$ref: base.yaml',
+        'opencode:',
+        '  allowed_tools:',
+        '    - read',
+        '    - grep',
+      ].join('\n'));
+      const raw = {
+        name: 'nested-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'provider-options/review.yaml',
+            opencode: {
+              allowed_tools: ['read', 'bash'],
+            },
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, tempDir);
+
+      expect(config.providerOptions).toEqual({
+        claude: { allowedTools: ['Read'] },
+        opencode: { allowedTools: ['read', 'bash'] },
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の $ref が循環参照する場合は reject する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-circular-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'a.yaml'), '$ref: b.yaml\n');
+      writeFileSync(join(tempDir, 'provider-options', 'b.yaml'), '$ref: a.yaml\n');
+      const raw = {
+        name: 'circular-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'provider-options/a.yaml',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir)).toThrow(/circular reference/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の $ref 先 YAML が object でない場合は reject する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-non-object-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'scalar.yaml'), 'read\n');
+      const raw = {
+        name: 'non-object-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'provider-options/scalar.yaml',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir)).toThrow(/must point to a YAML object/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の $ref に absolute path を指定したら reject する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-absolute-'));
+    try {
+      const secretPath = join(tempDir, 'secret.yaml');
+      writeFileSync(secretPath, 'opencode:\n  allowed_tools:\n    - read\n');
+      const raw = {
+        name: 'absolute-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: secretPath,
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir)).toThrow(/relative path inside the workflow directory/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の $ref が workflowDir 外へ出る場合は reject する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-root-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-outside-'));
+    try {
+      const secretPath = join(outsideDir, 'secret.yaml');
+      writeFileSync(secretPath, 'opencode:\n  allowed_tools:\n    - read\n');
+      const raw = {
+        name: 'escaping-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: relative(tempDir, secretPath),
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir)).toThrow(/stay inside the workflow directory/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の $ref が workflowDir 内 symlink 経由で外部実体を指す場合は reject する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-symlink-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-symlink-outside-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      const secretPath = join(outsideDir, 'secret.yaml');
+      writeFileSync(secretPath, 'opencode:\n  allowed_tools:\n    - read\n');
+      symlinkSync(secretPath, join(tempDir, 'provider-options', 'link.yaml'));
+      const raw = {
+        name: 'symlink-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'provider-options/link.yaml',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir)).toThrow(/stay inside the workflow directory/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('promotion entry の provider_options $ref を解決し inline で上書きできる', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-promotion-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'review.yaml'), [
+        'opencode:',
+        '  allowed_tools:',
+        '    - read',
+        '    - glob',
+      ].join('\n'));
+      const raw = {
+        name: 'promotion-provider-options-ref',
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+            promotion: [
+              {
+                at: 2,
+                provider_options: {
+                  $ref: 'provider-options/review.yaml',
+                  opencode: {
+                    allowed_tools: ['read', 'bash'],
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, tempDir);
+      const step = config.steps[0];
+      if (step?.kind !== 'agent') {
+        throw new Error('expected an agent step');
+      }
+
+      expect(step.promotion?.[0]?.providerOptions).toEqual({
+        opencode: { allowedTools: ['read', 'bash'] },
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('workflow_call overrides の provider_options $ref を解決し inline で上書きできる', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-workflow-call-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'review.yaml'), [
+        'claude:',
+        '  allowed_tools:',
+        '    - Read',
+        'opencode:',
+        '  allowed_tools:',
+        '    - read',
+      ].join('\n'));
+      const raw = {
+        name: 'workflow-call-provider-options-ref',
+        steps: [
+          {
+            name: 'delegate',
+            kind: 'workflow_call',
+            call: 'child',
+            overrides: {
+              provider_options: {
+                $ref: 'provider-options/review.yaml',
+                opencode: {
+                  allowed_tools: ['read', 'bash'],
+                },
+              },
+            },
+            rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, tempDir);
+      const step = config.steps[0];
+      if (step?.kind !== 'workflow_call') {
+        throw new Error('expected a workflow_call step');
+      }
+
+      expect(step.overrides?.providerOptions).toEqual({
+        claude: { allowedTools: ['Read'] },
+        opencode: { allowedTools: ['read', 'bash'] },
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('workflow_call overrides の空 provider_options を reject する', () => {
+    const raw = {
+      name: 'workflow-call-empty-provider-options',
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          overrides: {
+            provider_options: {},
+          },
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(
+      /workflow_call overrides provider_options must include at least one provider-specific option/,
+    );
+  });
+
+  it('workflow_call overrides の provider_options $ref が空 options に解決されたら reject する', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-empty-ref-workflow-call-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'empty.yaml'), '{}\n');
+      const raw = {
+        name: 'workflow-call-empty-provider-options-ref',
+        steps: [
+          {
+            name: 'delegate',
+            kind: 'workflow_call',
+            call: 'child',
+            overrides: {
+              provider_options: {
+                $ref: 'provider-options/empty.yaml',
+              },
+            },
+            rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, tempDir)).toThrow(
+        /workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'/,
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parallel sub-step の provider_options $ref を解決し inline で上書きできる', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-parallel-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'review.yaml'), [
+        'claude:',
+        '  allowed_tools:',
+        '    - Read',
+        'opencode:',
+        '  allowed_tools:',
+        '    - read',
+        '    - glob',
+      ].join('\n'));
+      const raw = {
+        name: 'parallel-provider-options-ref',
+        steps: [
+          {
+            name: 'reviewers',
+            instruction: '{task}',
+            parallel: [
+              {
+                name: 'coding-review',
+                instruction: '{task}',
+                provider_options: {
+                  $ref: 'provider-options/review.yaml',
+                  opencode: {
+                    allowed_tools: ['read', 'grep'],
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, tempDir);
+      const step = config.steps[0];
+      if (step?.kind !== 'agent') {
+        throw new Error('expected an agent step');
+      }
+
+      expect(step.parallel?.[0]?.providerOptions).toEqual({
+        claude: { allowedTools: ['Read'] },
+        opencode: { allowedTools: ['read', 'grep'] },
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('kiro agent を workflow-level で設定し step で上書きできる', () => {
@@ -617,6 +1158,19 @@ describe('mergeProviderOptions', () => {
     });
     expect(mergeProviderOptions(global, undefined)).toEqual({
       kiro: { agent: 'global-agent' },
+    });
+  });
+
+  it('opencode.allowedTools を後の層が優先でマージする', () => {
+    const global = {
+      opencode: { allowedTools: ['read', 'glob'] },
+    };
+    const step = {
+      opencode: { allowedTools: ['read', 'edit', 'bash'] },
+    };
+
+    expect(mergeProviderOptions(global as never, step as never)).toEqual({
+      opencode: { allowedTools: ['read', 'edit', 'bash'] },
     });
   });
 

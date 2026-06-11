@@ -319,6 +319,7 @@ Promotion is not supported on parallel sub-steps.
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` requires Opus 4.7) |
+| `provider_options.opencode.allowed_tools` | - | OpenCode tool allowlist. Tool names are lowercase, for example `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` |
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
@@ -356,6 +357,30 @@ workflow_config:
     claude:
       sandbox:
         allow_unsandboxed_commands: true
+```
+
+`provider_options` can reference a shared YAML file relative to the workflow file. The referenced file is the base, and inline values override matching leaves.
+
+```yaml
+workflow_config:
+  provider_options:
+    $ref: provider-options/review-readonly.yaml
+
+steps:
+  - name: implement
+    provider_options:
+      $ref: provider-options/edit.yaml
+      opencode:
+        allowed_tools: [read, grep, bash]
+```
+
+Example shared file:
+
+```yaml
+claude:
+  allowed_tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch]
+opencode:
+  allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
 
 ### `workflow_config.runtime`

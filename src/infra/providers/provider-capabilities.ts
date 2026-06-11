@@ -22,6 +22,10 @@ const CLAUDE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
   'mock',
 ]);
 
+const OPENCODE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
+  'opencode',
+]);
+
 const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
   'claude',
   'claude-sdk',
@@ -38,6 +42,7 @@ interface ProviderCapabilities {
   supportsMcpServers: boolean;
   supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
+  supportsOpenCodeAllowedTools: boolean;
   supportsMaxTurns: boolean;
 }
 
@@ -56,6 +61,7 @@ function resolveProviderCapabilities(
     supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
+    supportsOpenCodeAllowedTools: OPENCODE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsMaxTurns: MAX_TURNS_PROVIDERS.has(provider),
   };
 }
@@ -88,6 +94,12 @@ export function providerSupportsClaudeAllowedTools(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsClaudeAllowedTools;
+}
+
+export function providerSupportsOpenCodeAllowedTools(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsOpenCodeAllowedTools;
 }
 
 export function providerSupportsMaxTurns(

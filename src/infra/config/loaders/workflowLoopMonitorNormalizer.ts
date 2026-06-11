@@ -20,6 +20,7 @@ function normalizeLoopMonitorJudge(
     raw.provider as Parameters<typeof normalizeProviderReference>[0],
     raw.model,
     undefined,
+    workflowDir,
   );
   return {
     persona: personaSpec,

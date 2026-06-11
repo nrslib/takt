@@ -434,13 +434,20 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
-  if (providerOptions.opencode?.networkAccess !== undefined || providerOptions.opencode?.variant !== undefined) {
+  if (
+    providerOptions.opencode?.networkAccess !== undefined
+    || providerOptions.opencode?.variant !== undefined
+    || providerOptions.opencode?.allowedTools !== undefined
+  ) {
     raw.opencode = {
       ...(providerOptions.opencode.networkAccess !== undefined
         ? { network_access: providerOptions.opencode.networkAccess }
         : {}),
       ...(providerOptions.opencode.variant !== undefined
         ? { variant: providerOptions.opencode.variant }
+        : {}),
+      ...(providerOptions.opencode.allowedTools !== undefined
+        ? { allowed_tools: providerOptions.opencode.allowedTools }
         : {}),
     };
   }

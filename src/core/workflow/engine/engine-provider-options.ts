@@ -4,6 +4,7 @@ import {
   providerSupportsAllowedTools,
   providerSupportsClaudeAllowedTools,
   providerSupportsMcpServers,
+  providerSupportsOpenCodeAllowedTools,
 } from '../../../infra/providers/provider-capabilities.js';
 
 interface CapabilitySensitiveStepOptions {
@@ -12,6 +13,8 @@ interface CapabilitySensitiveStepOptions {
 }
 
 type CapabilityProbe = (provider: ProviderType | undefined) => boolean | undefined;
+
+const WRITE_TOOL_NAMES = new Set(['Write', 'write']);
 
 // Silent-drop: workflows may carry options for providers they aren't currently
 // running under. Keep the value only when capability is confirmed true.
@@ -33,6 +36,10 @@ export function resolveAllowedToolsForProvider(
     providerOptions?.claude?.allowedTools,
     provider,
     providerSupportsClaudeAllowedTools,
+  ) ?? keepWhenProviderSupports(
+    providerOptions?.opencode?.allowedTools,
+    provider,
+    providerSupportsOpenCodeAllowedTools,
   );
   if (!allowedTools) {
     return undefined;
@@ -40,7 +47,7 @@ export function resolveAllowedToolsForProvider(
   if (!hasOutputContracts || edit === true) {
     return allowedTools;
   }
-  return allowedTools.filter((tool) => tool !== 'Write');
+  return allowedTools.filter((tool) => !WRITE_TOOL_NAMES.has(tool.trim()));
 }
 
 export function resolveMcpServersForProvider(

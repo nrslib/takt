@@ -138,6 +138,19 @@ describe('resolveProviderOptionSource', () => {
 
     expect(source).toBe('env');
   });
+
+  it('Given opencode allowedTools has env origin, When resolve, Then source is env', () => {
+    const source = resolveProviderOptionSource(
+      'opencode.allowedTools',
+      { opencode: { allowedTools: ['read', 'edit'] } } as never,
+      undefined,
+      { opencode: { allowedTools: ['read', 'grep'] } } as never,
+      (path) => (path === 'opencode.allowedTools' ? 'env' : 'local'),
+      'project',
+    );
+
+    expect(source).toBe('env');
+  });
 });
 
 describe('resolveProviderOptionsSources (all paths)', () => {
@@ -160,6 +173,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
     expect(PROVIDER_OPTION_PATHS).toContain('claude.effort');
     expect(PROVIDER_OPTION_PATHS).toContain('codex.reasoningEffort');
     expect(PROVIDER_OPTION_PATHS).toContain('opencode.variant');
+    expect(PROVIDER_OPTION_PATHS).toContain('opencode.allowedTools');
     expect(PROVIDER_OPTION_PATHS).toContain('copilot.effort');
     expect(PROVIDER_OPTION_PATHS).toContain('kiro.agent');
   });

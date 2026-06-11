@@ -14,14 +14,7 @@ steps:
     persona: planner
     knowledge: architecture
     provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+      $ref: provider-options/review-readonly.yaml
     rules:
       - condition: Requirements are clear and implementable
         next: write_tests
@@ -50,16 +43,7 @@ steps:
       - unit-testing
       - e2e-testing
     provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
+      $ref: provider-options/edit.yaml
     required_permission_mode: edit
     instruction: write-tests-first
     rules:
@@ -103,14 +87,7 @@ steps:
     policy: review
     knowledge: architecture
     provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+      $ref: provider-options/review-readonly.yaml
     pass_previous_response: false
     rules:
       - condition: All clear

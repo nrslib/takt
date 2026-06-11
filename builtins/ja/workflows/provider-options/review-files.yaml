@@ -1,0 +1,10 @@
+claude:
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+opencode:
+  allowed_tools:
+    - read
+    - glob
+    - grep

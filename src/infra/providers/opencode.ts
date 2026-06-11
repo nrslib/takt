@@ -2,22 +2,36 @@
  * OpenCode provider implementation
  */
 
-import { callOpenCode, callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
+import { callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+
+const OPENCODE_TOOL_NAMING_ADDENDUM = [
+  'OpenCode tool names are lowercase.',
+  'Use bash for shell commands, glob for file discovery, grep for search, read for file reads, edit/write for changes, and todowrite for todos.',
+  'Do not call run, list, todo, or todo_write.',
+].join(' ');
+
+function buildOpenCodeSystemPrompt(systemPrompt: string | undefined): string {
+  return systemPrompt
+    ? `${systemPrompt}\n\n${OPENCODE_TOOL_NAMING_ADDENDUM}`
+    : OPENCODE_TOOL_NAMING_ADDENDUM;
+}
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
   if (!options.model) {
     throw new Error("OpenCode provider requires model in 'provider/model' format (e.g. 'opencode/big-pickle').");
   }
 
+  const openCodeAllowedTools = options.allowedTools;
+
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
-    allowedTools: options.allowedTools,
+    allowedTools: openCodeAllowedTools,
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.opencode?.networkAccess,
     variant: options.providerOptions?.opencode?.variant,
@@ -35,17 +49,11 @@ export class OpenCodeProvider implements Provider {
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    if (systemPrompt) {
-      return {
-        call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-          return callOpenCodeCustom(name, prompt, systemPrompt, toOpenCodeOptions(options));
-        },
-      };
-    }
+    const openCodeSystemPrompt = buildOpenCodeSystemPrompt(systemPrompt);
 
     return {
       call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        return callOpenCode(name, prompt, toOpenCodeOptions(options));
+        return callOpenCodeCustom(name, prompt, openCodeSystemPrompt, toOpenCodeOptions(options));
       },
     };
   }

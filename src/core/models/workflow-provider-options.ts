@@ -29,6 +29,7 @@ export interface CodexProviderOptions {
 export interface OpenCodeProviderOptions {
   networkAccess?: boolean;
   variant?: string;
+  allowedTools?: string[];
 }
 
 export const RUNTIME_PREPARE_PRESETS = ['gradle', 'node'] as const;

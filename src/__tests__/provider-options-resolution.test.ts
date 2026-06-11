@@ -95,6 +95,32 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('env origin は opencode.allowedTools の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'opencode.allowedTools' ? 'env' : 'local'),
+      {
+        opencode: {
+          allowedTools: ['read', 'grep'],
+          variant: 'env-high',
+        },
+      } as never,
+      {
+        opencode: {
+          allowedTools: ['read', 'edit'],
+          variant: 'step-low',
+        },
+      } as never,
+    );
+
+    expect(result).toEqual({
+      opencode: {
+        allowedTools: ['read', 'grep'],
+        variant: 'step-low',
+      },
+    });
+  });
+
   it('kiro.agent は step > persona > config の優先で解決される', () => {
     expect(resolveEffectiveProviderOptions(
       'project',

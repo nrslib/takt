@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WorkflowStepRawSchema } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
@@ -364,5 +367,33 @@ describe('normalizeWorkflowConfig promotion', () => {
         },
       },
     });
+  });
+
+  it('rejects provider_options $ref resolving to empty options as the only promotion target', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-promotion-empty-provider-options-ref-'));
+    try {
+      mkdirSync(join(tempDir, 'provider-options'));
+      writeFileSync(join(tempDir, 'provider-options', 'empty.yaml'), '{}\n');
+
+      expect(() => normalizeWorkflowConfig({
+        name: 'promotion-empty-provider-options-ref',
+        steps: [
+          {
+            name: 'implement',
+            instruction: '{task}',
+            promotion: [
+              {
+                at: 1,
+                provider_options: {
+                  $ref: 'provider-options/empty.yaml',
+                },
+              },
+            ],
+          },
+        ],
+      }, tempDir)).toThrow(/promotion entry requires at least one of "provider", "model", or "provider_options"/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

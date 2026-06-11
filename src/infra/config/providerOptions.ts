@@ -16,6 +16,7 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
 type RawProviderOptions = {
+  $ref?: string;
   codex?: {
     network_access?: boolean;
     reasoning_effort?: CodexReasoningEffort;
@@ -23,6 +24,7 @@ type RawProviderOptions = {
   opencode?: {
     network_access?: boolean;
     variant?: string;
+    allowed_tools?: string[];
   };
   claude?: {
     allowed_tools?: string[];
@@ -55,6 +57,10 @@ export function normalizeProviderOptions(
   }
 
   const options = raw as RawProviderOptions;
+  if (options.$ref !== undefined) {
+    throw new Error('Configuration error: provider_options.$ref must be resolved before provider options normalization.');
+  }
+
   const result: StepProviderOptions = {};
   if (options.codex?.network_access !== undefined || options.codex?.reasoning_effort !== undefined) {
     result.codex = {
@@ -66,13 +72,20 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  if (options.opencode?.network_access !== undefined || options.opencode?.variant !== undefined) {
+  if (
+    options.opencode?.network_access !== undefined
+    || options.opencode?.variant !== undefined
+    || options.opencode?.allowed_tools !== undefined
+  ) {
     result.opencode = {
       ...(options.opencode.network_access !== undefined
         ? { networkAccess: options.opencode.network_access }
         : {}),
       ...(options.opencode.variant !== undefined
         ? { variant: options.opencode.variant }
+        : {}),
+      ...(options.opencode.allowed_tools !== undefined
+        ? { allowedTools: options.opencode.allowed_tools }
         : {}),
     };
   }
@@ -314,6 +327,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.opencode?.variant,
     resolveProviderOptionOrigin(originResolver, 'opencode.variant', source),
   );
+  const opencodeAllowedTools = selectProviderValue(
+    resolvedConfigOptions.opencode?.allowedTools,
+    personaOptions?.opencode?.allowedTools,
+    stepOptions?.opencode?.allowedTools,
+    resolveProviderOptionOrigin(originResolver, 'opencode.allowedTools', source),
+  );
   const copilotEffort = selectProviderValue(
     resolvedConfigOptions.copilot?.effort,
     personaOptions?.copilot?.effort,
@@ -360,10 +379,11 @@ export function resolveEffectiveProviderOptions(
           }
         : undefined,
     opencode:
-      opencodeNetworkAccess !== undefined || opencodeVariant !== undefined
+      opencodeNetworkAccess !== undefined || opencodeVariant !== undefined || opencodeAllowedTools !== undefined
         ? {
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
+            ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
           }
         : undefined,
     claude:
@@ -475,6 +495,7 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.reasoningEffort',
   'opencode.networkAccess',
   'opencode.variant',
+  'opencode.allowedTools',
   'copilot.effort',
   'kiro.agent',
   'claudeTerminal.backend',
