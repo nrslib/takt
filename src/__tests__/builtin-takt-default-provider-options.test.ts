@@ -149,14 +149,7 @@ describe('builtin takt-default provider_options refs', () => {
       const normalizedReviewerSteps = new Map(
         (normalizedReviewersStep?.parallel ?? []).map((step) => [step.name, step]),
       );
-      const reviewerNames = [
-        'arch-review',
-        'security-review',
-        'qa-review',
-        'testing-review',
-        'requirements-review',
-        'coding-review',
-      ];
+      const reviewerNames = [...reviewerSteps.keys()].filter((name) => name !== 'ai-antipattern-review-2nd');
 
       for (const name of reviewerNames) {
         expect(reviewerSteps.get(name)?.provider_options).toEqual(REVIEW_READONLY_REF);
