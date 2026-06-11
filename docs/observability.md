@@ -4,6 +4,45 @@
 
 TAKT observability is opt-in. When disabled, workflow execution, session logs, provider events, and the existing `logging.usage_events` output keep their current behavior.
 
+## Visualize Locally with OTLP
+
+Start the local observability stack:
+
+```bash
+docker compose -f docker-compose.observability.yml up -d
+```
+
+Enable TAKT observability in `~/.takt/config.yaml` or `.takt/config.yaml`:
+
+```yaml
+observability:
+  enabled: true
+  monitor: true
+  session_log_exporter: true
+  usage_events_phase: true
+```
+
+Point the OpenTelemetry HTTP exporters at the local collector and run TAKT:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+takt run
+```
+
+When `observability.enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set, TAKT sends spans and metrics through OTLP while keeping the local exporters enabled by config. Without `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT keeps using only the local exporters and does not send telemetry over the network. When `observability.enabled: false`, the OpenTelemetry SDK is not initialized even if OTLP environment variables are set.
+
+Open Grafana at `http://127.0.0.1:3000` and inspect the `takt` service. Traces use the existing workflow span tree (`workflow.<name>` with `step.<name>` and phase or judge spans below it), and metrics are exported alongside the local `monitor.json` stream.
+
+The base endpoint is required for OTLP export:
+
+| Environment variable | Purpose |
+|----------------------|---------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Required opt-in endpoint. TAKT derives `/v1/traces` and `/v1/metrics` from it. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional absolute HTTP(S) trace endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Optional absolute HTTP(S) metric endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
+
+Endpoint values used for OTLP export must be absolute `http` or `https` URLs. A trace or metric endpoint without `OTEL_EXPORTER_OTLP_ENDPOINT` does not opt in to OTLP export; TAKT keeps the local-only exporter set. When the base endpoint is set, any configured trace or metric override is validated before the run starts. Export delivery failures after startup, such as a stopped local collector, do not block the workflow run.
+
 ## Enable Phase Usage Events
 
 Add this to `~/.takt/config.yaml` or `.takt/config.yaml`:

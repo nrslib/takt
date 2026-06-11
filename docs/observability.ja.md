@@ -4,6 +4,45 @@
 
 TAKT の observability は opt-in です。無効時は workflow 実行、session log、provider events、既存の `logging.usage_events` 出力の挙動を変えません。
 
+## OTLP でローカル可視化する
+
+ローカルの observability stack を起動します。
+
+```bash
+docker compose -f docker-compose.observability.yml up -d
+```
+
+`~/.takt/config.yaml` または `.takt/config.yaml` で TAKT の observability を有効化します。
+
+```yaml
+observability:
+  enabled: true
+  monitor: true
+  session_log_exporter: true
+  usage_events_phase: true
+```
+
+OpenTelemetry HTTP exporter の送信先をローカル collector に向けて TAKT を実行します。
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+takt run
+```
+
+`observability.enabled: true` かつ `OTEL_EXPORTER_OTLP_ENDPOINT` が設定されている場合、TAKT は config で有効化したローカル exporter を維持したまま、span と metric を OTLP で送信します。`OTEL_EXPORTER_OTLP_ENDPOINT` が未設定の場合はローカル exporter のみを使い、ネットワーク送信は行いません。`observability.enabled: false` の場合は、OTLP 環境変数が設定されていても OpenTelemetry SDK を初期化しません。
+
+Grafana は `http://127.0.0.1:3000` で開き、`takt` service を確認します。trace は既存の workflow span tree（`workflow.<name>` の下に `step.<name>`、さらに phase / judge span）として表示され、metric はローカルの `monitor.json` 出力と並走して送信されます。
+
+OTLP export には base endpoint が必要です。
+
+| 環境変数 | 用途 |
+|----------|------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 必須の opt-in endpoint。TAKT はここから `/v1/traces` と `/v1/metrics` を派生させます。 |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | 任意の trace endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | 任意の metric endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
+
+OTLP export に使用する endpoint は絶対 `http` または `https` URL である必要があります。trace / metric 個別 endpoint だけを設定して base endpoint を設定していない場合、OTLP export には opt-in せず、TAKT はローカル exporter のみを使います。base endpoint が設定されている場合は、個別 endpoint 上書きも run 開始前に検証されます。起動後に collector が停止しているなどの export 送信失敗が起きても、workflow run は阻害しません。
+
 ## Phase Usage Events を有効化する
 
 `~/.takt/config.yaml` または `.takt/config.yaml` に次を追加します。

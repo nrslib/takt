@@ -1,7 +1,27 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const { createLoggerMock, warnLogMock } = vi.hoisted(() => {
+  const warnLogMock = vi.fn();
+  return {
+    warnLogMock,
+    createLoggerMock: vi.fn(() => ({
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: warnLogMock,
+      error: vi.fn(),
+      enter: vi.fn(),
+      exit: vi.fn(),
+    })),
+  };
+});
+
+vi.mock('../shared/utils/debug.js', () => ({
+  createLogger: createLoggerMock,
+}));
 
 type ObservabilityConfigForTest = {
   enabled: boolean;
@@ -23,6 +43,29 @@ type UsageEventsProcessorForTest = {
   onEnd(span: unknown): void;
   registrations?: Map<string, unknown>;
 };
+
+type MetricReaderForTest = {
+  forceFlushMock: ReturnType<typeof vi.fn>;
+  options: Record<string, unknown>;
+};
+
+type BatchSpanProcessorForTest = {
+  forceFlushMock: ReturnType<typeof vi.fn>;
+  shutdownMock: ReturnType<typeof vi.fn>;
+};
+
+type ShutdownableProcessorForTest = {
+  shutdown(): Promise<void>;
+};
+
+const OTLP_ENV_NAMES = [
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+] as const;
+const ORIGINAL_OTLP_ENV = new Map(
+  OTLP_ENV_NAMES.map((name) => [name, process.env[name]] as const),
+);
 
 const disabledObservability: ObservabilityConfigForTest = {
   enabled: false,
@@ -89,24 +132,50 @@ async function loadFoundationWithMockedSdk(): Promise<{
   ) => Promise<{ shutdown(): Promise<void> }>;
   sdkImportCount: () => number;
   metricsImportCount: () => number;
+  traceExporterImportCount: () => number;
+  metricExporterImportCount: () => number;
+  traceBaseImportCount: () => number;
   constructedOptions: NodeSdkOptionsForTest[];
   metricReaderOptions: Array<Record<string, unknown>>;
+  metricReaders: MetricReaderForTest[];
+  traceExporterConstructorArgs: unknown[][];
+  metricExporterConstructorArgs: unknown[][];
+  batchSpanProcessorOptions: Array<Record<string, unknown>>;
+  batchSpanProcessors: BatchSpanProcessorForTest[];
   startMock: ReturnType<typeof vi.fn>;
   shutdownMock: ReturnType<typeof vi.fn>;
 }> {
   vi.resetModules();
   let sdkImportCount = 0;
   let metricsImportCount = 0;
+  let traceExporterImportCount = 0;
+  let metricExporterImportCount = 0;
+  let traceBaseImportCount = 0;
   const constructedOptions: NodeSdkOptionsForTest[] = [];
   const metricReaderOptions: Array<Record<string, unknown>> = [];
+  const metricReaders: MetricReaderForTest[] = [];
+  const traceExporterConstructorArgs: unknown[][] = [];
+  const metricExporterConstructorArgs: unknown[][] = [];
+  const batchSpanProcessorOptions: Array<Record<string, unknown>> = [];
+  const batchSpanProcessors: BatchSpanProcessorForTest[] = [];
   const startMock = vi.fn();
   const shutdownMock = vi.fn().mockResolvedValue(undefined);
+  const shutdownSpanProcessors = async (processors: unknown[] | undefined): Promise<void> => {
+    if (!processors) {
+      return;
+    }
+    await Promise.all(processors.map(async (processor) => {
+      if (hasShutdown(processor)) {
+        await processor.shutdown();
+      }
+    }));
+  };
 
   vi.doMock('@opentelemetry/sdk-node', () => {
     sdkImportCount += 1;
     return {
       NodeSDK: class {
-        constructor(options: NodeSdkOptionsForTest) {
+        constructor(private readonly options: NodeSdkOptionsForTest) {
           constructedOptions.push(options);
         }
 
@@ -116,6 +185,7 @@ async function loadFoundationWithMockedSdk(): Promise<{
 
         async shutdown(): Promise<void> {
           await shutdownMock();
+          await shutdownSpanProcessors(this.options.spanProcessors);
         }
       },
       resources: {
@@ -128,14 +198,18 @@ async function loadFoundationWithMockedSdk(): Promise<{
     metricsImportCount += 1;
     return {
       PeriodicExportingMetricReader: class {
+        readonly forceFlushMock = vi.fn().mockResolvedValue(undefined);
         readonly options: Record<string, unknown>;
 
         constructor(options: Record<string, unknown>) {
           this.options = options;
           metricReaderOptions.push(options);
+          metricReaders.push(this);
         }
 
-        async forceFlush(): Promise<void> {}
+        async forceFlush(): Promise<void> {
+          await this.forceFlushMock();
+        }
       },
       AggregationTemporality: {
         DELTA: 0,
@@ -146,6 +220,55 @@ async function loadFoundationWithMockedSdk(): Promise<{
         EXPONENTIAL_HISTOGRAM: 1,
         GAUGE: 2,
         SUM: 3,
+      },
+    };
+  });
+
+  vi.doMock('@opentelemetry/exporter-trace-otlp-http', () => {
+    traceExporterImportCount += 1;
+    return {
+      OTLPTraceExporter: class {
+        constructor(...args: unknown[]) {
+          traceExporterConstructorArgs.push(args);
+        }
+      },
+    };
+  });
+
+  vi.doMock('@opentelemetry/exporter-metrics-otlp-http', () => {
+    metricExporterImportCount += 1;
+    return {
+      OTLPMetricExporter: class {
+        constructor(...args: unknown[]) {
+          metricExporterConstructorArgs.push(args);
+        }
+      },
+    };
+  });
+
+  vi.doMock('@opentelemetry/sdk-trace-base', () => {
+    traceBaseImportCount += 1;
+    return {
+      BatchSpanProcessor: class {
+        readonly forceFlushMock = vi.fn().mockResolvedValue(undefined);
+        readonly shutdownMock = vi.fn().mockResolvedValue(undefined);
+
+        constructor(exporter: unknown) {
+          batchSpanProcessorOptions.push({ exporter });
+          batchSpanProcessors.push(this);
+        }
+
+        onStart(): void {}
+
+        onEnd(): void {}
+
+        async forceFlush(): Promise<void> {
+          await this.forceFlushMock();
+        }
+
+        async shutdown(): Promise<void> {
+          await this.shutdownMock();
+        }
       },
     };
   });
@@ -177,21 +300,40 @@ async function loadFoundationWithMockedSdk(): Promise<{
     initializeOtelFoundation: module.initializeOtelFoundation,
     sdkImportCount: () => sdkImportCount,
     metricsImportCount: () => metricsImportCount,
+    traceExporterImportCount: () => traceExporterImportCount,
+    metricExporterImportCount: () => metricExporterImportCount,
+    traceBaseImportCount: () => traceBaseImportCount,
     constructedOptions,
     metricReaderOptions,
+    metricReaders,
+    traceExporterConstructorArgs,
+    metricExporterConstructorArgs,
+    batchSpanProcessorOptions,
+    batchSpanProcessors,
     startMock,
     shutdownMock,
   };
 }
 
 describe('otel foundation', () => {
+  beforeEach(() => {
+    createLoggerMock.mockClear();
+    warnLogMock.mockClear();
+    clearOtlpEnv();
+  });
+
   afterEach(() => {
     vi.doUnmock('@opentelemetry/sdk-node');
     vi.doUnmock('@opentelemetry/sdk-metrics');
+    vi.doUnmock('@opentelemetry/exporter-trace-otlp-http');
+    vi.doUnmock('@opentelemetry/exporter-metrics-otlp-http');
+    vi.doUnmock('@opentelemetry/sdk-trace-base');
     vi.resetModules();
+    restoreOtlpEnv();
   });
 
-  it('should not import or start the SDK when observability is disabled', async () => {
+  it('should not import or start the SDK when observability is disabled even if OTLP endpoint is configured', async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:4318';
     const foundation = await loadFoundationWithMockedSdk();
 
     const handle = await foundation.initializeOtelFoundation(disabledObservability);
@@ -199,6 +341,9 @@ describe('otel foundation', () => {
 
     expect(foundation.sdkImportCount()).toBe(0);
     expect(foundation.metricsImportCount()).toBe(0);
+    expect(foundation.traceExporterImportCount()).toBe(0);
+    expect(foundation.metricExporterImportCount()).toBe(0);
+    expect(foundation.traceBaseImportCount()).toBe(0);
     expect(foundation.constructedOptions).toEqual([]);
     expect(foundation.startMock).not.toHaveBeenCalled();
     expect(foundation.shutdownMock).not.toHaveBeenCalled();
@@ -222,8 +367,96 @@ describe('otel foundation', () => {
       'service.version': packageJson.version,
     });
     expect(usageEventsProcessor.registrations?.size).toBe(0);
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
     expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
     expect(foundation.constructedOptions[0]).not.toHaveProperty('traceExporter');
+    expect(foundation.traceExporterImportCount()).toBe(0);
+    expect(foundation.metricExporterImportCount()).toBe(0);
+    expect(foundation.traceBaseImportCount()).toBe(0);
+    expect(foundation.shutdownMock).toHaveBeenCalledOnce();
+  });
+
+  it('should add OTLP span processor and metric reader when OTLP endpoint is configured', async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:4318';
+    const foundation = await loadFoundationWithMockedSdk();
+
+    const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    await handle.shutdown();
+
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(3);
+    expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(2);
+    expect(foundation.traceExporterImportCount()).toBe(1);
+    expect(foundation.metricExporterImportCount()).toBe(1);
+    expect(foundation.traceBaseImportCount()).toBe(1);
+    expect(foundation.traceExporterConstructorArgs).toEqual([[{ url: 'http://127.0.0.1:4318/v1/traces' }]]);
+    expect(foundation.metricExporterConstructorArgs).toEqual([[{ url: 'http://127.0.0.1:4318/v1/metrics' }]]);
+    expect(foundation.batchSpanProcessorOptions).toHaveLength(1);
+    expect(foundation.metricReaderOptions[1]?.exporter).toBeDefined();
+  });
+
+  it('should keep the local-only processor and reader set when OTLP endpoint is blank', async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = '   ';
+    const foundation = await loadFoundationWithMockedSdk();
+
+    const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    await handle.shutdown();
+
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
+    expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
+    expect(foundation.traceExporterImportCount()).toBe(0);
+    expect(foundation.metricExporterImportCount()).toBe(0);
+    expect(foundation.traceBaseImportCount()).toBe(0);
+  });
+
+  it('should keep the local-only processor and reader set when only signal-specific OTLP endpoints are configured', async () => {
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://127.0.0.1:4318/v1/traces';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'http://127.0.0.1:4318/v1/metrics';
+    const foundation = await loadFoundationWithMockedSdk();
+
+    const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    await handle.shutdown();
+
+    expect(foundation.constructedOptions[0]?.spanProcessors).toHaveLength(2);
+    expect(foundation.constructedOptions[0]?.metricReaders).toHaveLength(1);
+    expect(foundation.traceExporterImportCount()).toBe(0);
+    expect(foundation.metricExporterImportCount()).toBe(0);
+    expect(foundation.traceBaseImportCount()).toBe(0);
+  });
+
+  it('should continue SDK shutdown when an OTLP metric reader force flush fails', async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:4318';
+    const foundation = await loadFoundationWithMockedSdk();
+
+    const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    expect(foundation.metricReaders).toHaveLength(2);
+    foundation.metricReaders[1]?.forceFlushMock.mockRejectedValueOnce(new Error('collector unavailable'));
+
+    await expect(handle.shutdown()).resolves.toBeUndefined();
+
+    expect(foundation.metricReaders[0]?.forceFlushMock).toHaveBeenCalledOnce();
+    expect(foundation.metricReaders[1]?.forceFlushMock).toHaveBeenCalledOnce();
+    expect(warnLogMock).toHaveBeenCalledWith(
+      'Non-blocking OpenTelemetry metric reader forceFlush failed; continuing shutdown',
+      { errorType: 'Error' },
+    );
+    expect(foundation.shutdownMock).toHaveBeenCalledOnce();
+  });
+
+  it('should continue SDK shutdown when an OTLP trace processor shutdown fails', async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:4318';
+    const foundation = await loadFoundationWithMockedSdk();
+
+    const handle = await foundation.initializeOtelFoundation(enabledObservability);
+    expect(foundation.batchSpanProcessors).toHaveLength(1);
+    foundation.batchSpanProcessors[0]?.shutdownMock.mockRejectedValueOnce(new Error('collector unavailable'));
+
+    await expect(handle.shutdown()).resolves.toBeUndefined();
+
+    expect(foundation.batchSpanProcessors[0]?.shutdownMock).toHaveBeenCalledOnce();
+    expect(warnLogMock).toHaveBeenCalledWith(
+      'Non-blocking OpenTelemetry span processor shutdown failed; continuing shutdown',
+      { errorType: 'Error' },
+    );
     expect(foundation.shutdownMock).toHaveBeenCalledOnce();
   });
 
@@ -697,4 +930,28 @@ function makePhaseSpan(runId: string): Record<string, unknown> {
       'gen_ai.usage.total_tokens': 5,
     },
   };
+}
+
+function hasShutdown(processor: unknown): processor is ShutdownableProcessorForTest {
+  return typeof processor === 'object'
+    && processor !== null
+    && 'shutdown' in processor
+    && typeof processor.shutdown === 'function';
+}
+
+function clearOtlpEnv(): void {
+  for (const name of OTLP_ENV_NAMES) {
+    delete process.env[name];
+  }
+}
+
+function restoreOtlpEnv(): void {
+  for (const name of OTLP_ENV_NAMES) {
+    const originalValue = ORIGINAL_OTLP_ENV.get(name);
+    if (originalValue === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = originalValue;
+    }
+  }
 }

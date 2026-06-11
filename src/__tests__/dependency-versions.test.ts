@@ -122,11 +122,19 @@ describe('dependency versions', () => {
   it('declares OpenTelemetry foundation dependencies', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();
+    const otelDependencies = [
+      '@opentelemetry/api',
+      '@opentelemetry/exporter-metrics-otlp-http',
+      '@opentelemetry/exporter-trace-otlp-http',
+      '@opentelemetry/sdk-metrics',
+      '@opentelemetry/sdk-node',
+      '@opentelemetry/sdk-trace-base',
+    ] as const;
 
-    expect(packageJson.dependencies).toHaveProperty('@opentelemetry/api');
-    expect(packageJson.dependencies).toHaveProperty('@opentelemetry/sdk-node');
-    expect(packageLock.packages).toHaveProperty('node_modules/@opentelemetry/api');
-    expect(packageLock.packages).toHaveProperty('node_modules/@opentelemetry/sdk-node');
+    for (const dependencyName of otelDependencies) {
+      expect(packageJson.dependencies).toHaveProperty(dependencyName);
+      expect(packageLock.packages).toHaveProperty(`node_modules/${dependencyName}`);
+    }
   });
 
   it('declares Node support compatible with OpenTelemetry dependency engines', () => {
@@ -144,7 +152,14 @@ describe('dependency versions', () => {
     expect(rootNodeRange).toBe('>=18.19.0');
 
     const rootMinimum = getMinimumNodeVersion(rootNodeRange);
-    const otelDependencies = ['@opentelemetry/api', '@opentelemetry/sdk-node'] as const;
+    const otelDependencies = [
+      '@opentelemetry/api',
+      '@opentelemetry/exporter-metrics-otlp-http',
+      '@opentelemetry/exporter-trace-otlp-http',
+      '@opentelemetry/sdk-metrics',
+      '@opentelemetry/sdk-node',
+      '@opentelemetry/sdk-trace-base',
+    ] as const;
     const incompatibleDependencies = otelDependencies.flatMap((dependencyName) => {
       if (!dependencies[dependencyName]) {
         throw new Error(`${dependencyName} is missing from package.json dependencies`);

@@ -46,6 +46,15 @@ language: en        # UI language: en | ja
 #   provider_events: false         # Persist provider stream events
 #   usage_events: false            # Persist usage event logs
 
+# OpenTelemetry observability
+# observability:
+#   enabled: true                  # Initialize the OpenTelemetry SDK
+#   monitor: true                  # Write .takt/runs/<run>/monitor.json
+#   session_log_exporter: true     # Write a shadow session log from spans
+#   usage_events_phase: true       # Write phase-level usage event logs
+# Set OTEL_EXPORTER_OTLP_ENDPOINT to also export spans and metrics through OTLP HTTP.
+# Optional OTLP overrides: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.
+
 # Analytics
 # analytics:
 #   enabled: true                  # Enable local analytics collection

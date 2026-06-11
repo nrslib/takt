@@ -46,6 +46,15 @@ language: ja         # 表示言語: ja | en
 #   provider_events: false         # providerイベントログを記録
 #   usage_events: false            # 使用量イベントログを記録
 
+# OpenTelemetry observability
+# observability:
+#   enabled: true                  # OpenTelemetry SDK を初期化
+#   monitor: true                  # .takt/runs/<run>/monitor.json を出力
+#   session_log_exporter: true     # span 由来の shadow session log を出力
+#   usage_events_phase: true       # phase 粒度の usage event log を出力
+# OTEL_EXPORTER_OTLP_ENDPOINT を設定すると span と metric も OTLP HTTP で送信します。
+# 任意の OTLP 上書き: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.
+
 # アナリティクス
 # analytics:
 #   enabled: true                  # ローカルアナリティクス収集を有効化
