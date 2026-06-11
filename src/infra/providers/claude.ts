@@ -3,6 +3,7 @@ import type { ClaudeCallOptions } from '../claude/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
+import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowedToolEditPolicy.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
@@ -37,6 +38,14 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = true;
+
+  getRuntimeInstructions(): string | null {
+    return null;
+  }
+
+  keepsAllowedToolWithoutEdit(tool: string): boolean {
+    return keepsClaudeAllowedToolWithoutEdit(tool);
+  }
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

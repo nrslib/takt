@@ -50,6 +50,18 @@ export interface StreamPermissionAskedEventData {
   reply: string;
 }
 
+export interface StreamPermissionSummaryEventData {
+  sessionId: string;
+  permissionMode?: string;
+  allowedTools?: readonly string[];
+  networkAccess?: boolean;
+  resolvedPermissions: Array<{
+    permission: string;
+    pattern: string;
+    action: string;
+  }>;
+}
+
 export interface StreamTextEventData {
   text: string;
 }
@@ -93,6 +105,7 @@ export type StreamEvent =
   | { type: 'tool_result'; data: StreamToolResultEventData }
   | { type: 'tool_output'; data: StreamToolOutputEventData }
   | { type: 'permission_asked'; data: StreamPermissionAskedEventData }
+  | { type: 'permission_summary'; data: StreamPermissionSummaryEventData }
   | { type: 'text'; data: StreamTextEventData }
   | { type: 'thinking'; data: StreamThinkingEventData }
   | { type: 'result'; data: StreamResultEventData }

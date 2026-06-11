@@ -17,6 +17,7 @@ import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderImageAttachment } from '../../infra/providers/types.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
+import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
 
 const log = createLogger('ai-caller');
 
@@ -74,7 +75,12 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
-    const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt });
+    const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
+      systemPrompt,
+      ctx.lang,
+      ctx.provider.getRuntimeInstructions(),
+    );
+    const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
     const promptForProvider = expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
     const nativeImageAttachments = ctx.provider.supportsNativeImageInput
       ? options.imageAttachments
@@ -95,7 +101,7 @@ export async function callAIWithRetry(
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
       const retryDisplay = new StreamDisplay('assistant', isQuietMode());
-      const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt });
+      const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
       const retry = await retryAgent.call(promptForProvider, {
         cwd,
         model: ctx.model,

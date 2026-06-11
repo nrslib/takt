@@ -158,6 +158,7 @@ function setupMockProvider(responses: string[]): void {
   });
   const mockSetup = vi.fn(() => ({ call: mockCall }));
   const mockProvider = {
+    getRuntimeInstructions: vi.fn(() => null),
     setup: mockSetup,
     _call: mockCall,
     _setup: mockSetup,

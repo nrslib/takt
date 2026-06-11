@@ -173,11 +173,15 @@ export class AgentRunner {
     const providerType = resolved.provider;
     const provider = getProvider(providerType);
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
-    const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, options);
     const customOptions: RunnerHandoffOptions = {
       ...options,
       allowedTools: options.allowedTools ?? agentConfig.allowedTools,
     };
+    const providerRuntimeInstructions = provider.getRuntimeInstructions();
+    const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
+      ...customOptions,
+      providerRuntimeInstructions,
+    });
     const resolvedProviderOptions = AgentRunner.resolveProviderOptions(
       options.cwd,
       agentConfig.name,
@@ -246,7 +250,10 @@ export class AgentRunner {
         options.personaPath,
         options.projectCwd ?? options.cwd,
       );
-      const systemPrompt = buildWrappedSystemPrompt(agentDefinition, options);
+      const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
+        ...options,
+        providerRuntimeInstructions: provider.getRuntimeInstructions(),
+      });
       options.onPromptResolved?.({
         systemPrompt,
         userInstruction: task,
@@ -262,7 +269,10 @@ export class AgentRunner {
         return this.runCustom(agentConfig, task, options);
       }
 
-      const systemPrompt = buildWrappedSystemPrompt(personaSpec, options);
+      const systemPrompt = buildWrappedSystemPrompt(personaSpec, {
+        ...options,
+        providerRuntimeInstructions: provider.getRuntimeInstructions(),
+      });
 
       options.onPromptResolved?.({
         systemPrompt,
@@ -272,11 +282,18 @@ export class AgentRunner {
       return agent.call(task, callOptions);
     }
 
+    const systemPrompt = buildWrappedSystemPrompt('', {
+      ...options,
+      providerRuntimeInstructions: provider.getRuntimeInstructions(),
+    });
     options.onPromptResolved?.({
-      systemPrompt: '',
+      systemPrompt,
       userInstruction: task,
     });
-    const agent = provider.setup({ name: personaName });
+    const agentSetup = systemPrompt
+      ? { name: personaName, systemPrompt }
+      : { name: personaName };
+    const agent = provider.setup(agentSetup);
     return agent.call(task, callOptions);
   }
 }

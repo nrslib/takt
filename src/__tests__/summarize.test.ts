@@ -29,12 +29,17 @@ const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
 
 const mockProviderCall = vi.fn();
+const mockGetRuntimeInstructions = vi.fn(() => null);
+const mockProviderSetup = vi.fn(() => ({ call: mockProviderCall }));
 const mockProvider = {
-  setup: () => ({ call: mockProviderCall }),
+  getRuntimeInstructions: mockGetRuntimeInstructions,
+  setup: mockProviderSetup,
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetRuntimeInstructions.mockReturnValue(null);
+  mockProviderSetup.mockReturnValue({ call: mockProviderCall });
   mockGetProvider.mockReturnValue(mockProvider);
   mockResolveConfigValues.mockReturnValue({
     provider: 'claude',
@@ -185,6 +190,28 @@ describe('summarizeTaskName', () => {
         model: 'gpt-4',
       })
     );
+  });
+
+  it('should wrap OpenCode summarizer system prompt with provider runtime instructions', async () => {
+    mockResolveConfigValues.mockReturnValue({
+      provider: 'opencode',
+      model: 'opencode/big-pickle',
+      branchNameStrategy: 'ai',
+    });
+    mockGetRuntimeInstructions.mockReturnValue('OpenCode tool names are lowercase.');
+    mockProviderCall.mockResolvedValue({
+      persona: 'summarizer',
+      status: 'done',
+      content: 'opencode-task',
+      timestamp: new Date(),
+    });
+
+    await summarizeTaskName('test', { cwd: '/project' });
+
+    const setupArg = mockProviderSetup.mock.calls[0]?.[0] as { systemPrompt: string };
+    expect(setupArg.systemPrompt).toContain('## Provider Runtime Instructions');
+    expect(setupArg.systemPrompt).toContain('OpenCode tool names are lowercase.');
+    expect(setupArg.systemPrompt).toContain('You are a slug generator.');
   });
 
   it('should remove consecutive hyphens', async () => {

@@ -6,6 +6,7 @@
  */
 
 import { createOpencode } from '@opencode-ai/sdk/v2';
+import type { OutputFormat } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
@@ -14,7 +15,6 @@ import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {
   buildOpenCodePermissionRuleset,
   resolveOpenCodePermissionReply,
-  mapToOpenCodeTools,
   type OpenCodeCallOptions,
 } from './types.js';
 import {
@@ -25,6 +25,7 @@ import {
   emitInit,
   emitText,
   emitPermissionAsked,
+  emitPermissionSummary,
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
@@ -167,29 +168,43 @@ function extractOpenCodeErrorMessage(error: unknown): string | undefined {
   return undefined;
 }
 
-function getCommonPrefixLength(a: string, b: string): number {
-  const max = Math.min(a.length, b.length);
-  let i = 0;
-  while (i < max && a[i] === b[i]) {
-    i += 1;
-  }
-  return i;
-}
-
 function stripPromptEcho(
   chunk: string,
-  echoState: { remainingPrompt: string },
+  echoState: { remainingPrompts: string[] },
 ): string {
   if (!chunk) return '';
-  if (!echoState.remainingPrompt) return chunk;
+  if (echoState.remainingPrompts.length === 0) return chunk;
 
-  const consumeLength = getCommonPrefixLength(chunk, echoState.remainingPrompt);
-  if (consumeLength > 0) {
-    echoState.remainingPrompt = echoState.remainingPrompt.slice(consumeLength);
-    return chunk.slice(consumeLength);
+  const matchingPrompts = echoState.remainingPrompts.filter((remainingPrompt) => (
+    remainingPrompt.startsWith(chunk) || chunk.startsWith(remainingPrompt)
+  ));
+  if (matchingPrompts.length === 0) {
+    echoState.remainingPrompts = [];
+    return chunk;
   }
 
-  return chunk;
+  const consumedPrompt = matchingPrompts
+    .filter((remainingPrompt) => chunk.startsWith(remainingPrompt))
+    .sort((a, b) => b.length - a.length)[0];
+  if (consumedPrompt !== undefined) {
+    const visible = chunk.slice(consumedPrompt.length);
+    echoState.remainingPrompts = [];
+    return visible;
+  }
+
+  echoState.remainingPrompts = matchingPrompts.map((remainingPrompt) => (
+    remainingPrompt.slice(chunk.length)
+  ));
+  return '';
+}
+
+function buildPromptEchoCandidates(prompt: string, systemPrompt: string | undefined): string[] {
+  const prompts = [prompt];
+  if (systemPrompt !== undefined && systemPrompt.length > 0) {
+    prompts.unshift(`${systemPrompt}\n\n${prompt}`);
+  }
+
+  return Array.from(new Set(prompts)).filter((candidate) => candidate.length > 0);
 }
 
 type OpenCodeQuestionOption = {
@@ -320,18 +335,6 @@ export class OpenCodeClient {
     });
   }
 
-  /** Build a prompt suffix that instructs the agent to return JSON matching the schema */
-  private buildStructuredOutputSuffix(schema: Record<string, unknown>): string {
-    return [
-      '',
-      '---',
-      'IMPORTANT: You MUST respond with ONLY a valid JSON object matching this schema. No other text, no markdown code blocks, no explanation.',
-      '```',
-      JSON.stringify(schema, null, 2),
-      '```',
-    ].join('\n');
-  }
-
   private buildRateLimitedResponse(
     agentType: string,
     sessionId: string | undefined,
@@ -351,16 +354,6 @@ export class OpenCodeClient {
     prompt: string,
     options: OpenCodeCallOptions,
   ): Promise<AgentResponse> {
-    const basePrompt = options.systemPrompt
-      ? `${options.systemPrompt}\n\n${prompt}`
-      : prompt;
-
-    // OpenCode SDK does not natively support structured output via outputFormat.
-    // Inject JSON output instructions into the prompt to make the agent return JSON.
-    const fullPrompt = options.outputSchema
-      ? `${basePrompt}${this.buildStructuredOutputSuffix(options.outputSchema)}`
-      : basePrompt;
-
     for (let attempt = 1; attempt <= OPENCODE_RETRY_MAX_ATTEMPTS; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
@@ -413,55 +406,74 @@ export class OpenCodeClient {
         const acquired = await acquireClient(fullModel, options.opencodeApiKey);
         opencodeApiClient = acquired.client;
         release = acquired.release;
-
-        const sessionResult = sessionId
-          ? { data: { id: sessionId } }
-          : await opencodeApiClient.session.create({
+        const permissionRuleset = buildOpenCodePermissionRuleset(
+          options.permissionMode,
+          options.networkAccess,
+          options.allowedTools,
+        );
+        const shouldCreateSession = sessionId === undefined;
+        const appliedPermissionRuleset = shouldCreateSession || options.allowedTools !== undefined;
+        if (sessionId === undefined) {
+          const sessionResult = await opencodeApiClient.session.create({
             directory: options.cwd,
-            permission: buildOpenCodePermissionRuleset(options.permissionMode, options.networkAccess),
+            permission: permissionRuleset,
           });
 
-        sessionId = sessionResult.data?.id;
-        if (!sessionId) {
-          release();
-          throw new Error('Failed to create OpenCode session');
+          sessionId = sessionResult.data?.id;
+          if (!sessionId) {
+            release();
+            throw new Error('Failed to create OpenCode session');
+          }
+        } else if (options.allowedTools !== undefined) {
+          await opencodeApiClient.session.update({
+            sessionID: sessionId,
+            directory: options.cwd,
+            permission: permissionRuleset,
+          });
         }
+
+        const activeSessionId = sessionId;
+        if (activeSessionId === undefined) {
+          throw new Error('OpenCode session ID is required');
+        }
+
         const { stream } = await opencodeApiClient.event.subscribe(
           { directory: options.cwd },
           { signal: streamAbortController.signal },
         );
         resetIdleTimeout();
         diag.onConnected();
+        if (appliedPermissionRuleset) {
+          emitPermissionSummary(options.onStream, {
+            sessionId: activeSessionId,
+            ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
+            ...(options.allowedTools !== undefined ? { allowedTools: options.allowedTools } : {}),
+            ...(options.networkAccess !== undefined ? { networkAccess: options.networkAccess } : {}),
+            resolvedPermissions: permissionRuleset,
+          });
+        }
 
-        const openCodeAllowedTools = options.allowedTools;
-        const tools = mapToOpenCodeTools(openCodeAllowedTools);
         const promptPayload: Record<string, unknown> = {
-          sessionID: sessionId,
+          sessionID: activeSessionId,
           directory: options.cwd,
           model: parsedModel,
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
-          ...(tools ? { tools } : {}),
-          parts: [{ type: 'text' as const, text: fullPrompt }],
+          ...(options.outputSchema !== undefined ? { format: toOpenCodeOutputFormat(options.outputSchema) } : {}),
+          ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
+          parts: [{ type: 'text' as const, text: prompt }],
         };
-        if (options.outputSchema) {
-          promptPayload.outputFormat = {
-            type: 'json_schema',
-            schema: options.outputSchema,
-          };
-        }
-
         const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];
         await opencodeApiClient.session.promptAsync(promptPayloadForSdk, {
           signal: streamAbortController.signal,
         });
 
-        emitInit(options.onStream, options.model, sessionId);
+        emitInit(options.onStream, options.model, activeSessionId);
 
         let content = '';
         let success = true;
         let failureMessage = '';
         const state = createStreamTrackingState();
-        const echoState = { remainingPrompt: fullPrompt };
+        const echoState = { remainingPrompts: buildPromptEchoCandidates(prompt, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
 
@@ -528,7 +540,7 @@ export class OpenCodeClient {
               patterns?: string[];
               always?: string[];
             };
-            if (permProps.sessionID === sessionId) {
+            if (permProps.sessionID === activeSessionId) {
               try {
                 const reply = resolveOpenCodePermissionReply(options.permissionMode, permProps.permission);
                 emitPermissionAsked(options.onStream, {
@@ -559,7 +571,7 @@ export class OpenCodeClient {
 
           if (sseEvent.type === 'question.asked') {
             const questionProps = sseEvent.properties as OpenCodeQuestionAskedProperties;
-            if (questionProps.sessionID === sessionId) {
+            if (questionProps.sessionID === activeSessionId) {
               const rejectQuestion = (): Promise<unknown> =>
                 withTimeout(
                   (signal) => opencodeApiClient!.question.reject({
@@ -621,7 +633,7 @@ export class OpenCodeClient {
               };
             };
             const info = messageProps.info;
-            const isCurrentAssistantMessage = info?.sessionID === sessionId && info.role === 'assistant';
+            const isCurrentAssistantMessage = info?.sessionID === activeSessionId && info?.role === 'assistant';
             if (isCurrentAssistantMessage) {
               const streamError = extractOpenCodeErrorMessage(info?.error);
               if (streamError) {
@@ -643,7 +655,7 @@ export class OpenCodeClient {
               };
             };
             const info = completedProps.info;
-            const isCurrentAssistantMessage = info?.sessionID === sessionId && info.role === 'assistant';
+            const isCurrentAssistantMessage = info?.sessionID === activeSessionId && info?.role === 'assistant';
             if (isCurrentAssistantMessage) {
               const streamError = extractOpenCodeErrorMessage(info?.error);
               if (streamError) {
@@ -665,7 +677,7 @@ export class OpenCodeClient {
               };
             };
             const info = failedProps.info;
-            const isCurrentAssistantMessage = info?.sessionID === sessionId && info.role === 'assistant';
+            const isCurrentAssistantMessage = info?.sessionID === activeSessionId && info?.role === 'assistant';
             if (isCurrentAssistantMessage) {
               success = false;
               failureMessage = extractOpenCodeErrorMessage(info?.error) ?? 'OpenCode message failed';
@@ -680,7 +692,7 @@ export class OpenCodeClient {
               sessionID?: string;
               status?: { type?: string };
             };
-            if (statusProps.sessionID === sessionId && statusProps.status?.type === 'idle') {
+            if (statusProps.sessionID === activeSessionId && statusProps.status?.type === 'idle') {
               break;
             }
             continue;
@@ -688,7 +700,7 @@ export class OpenCodeClient {
 
           if (sseEvent.type === 'session.idle') {
             const idleProps = sseEvent.properties as { sessionID: string };
-            if (idleProps.sessionID === sessionId) {
+            if (idleProps.sessionID === activeSessionId) {
               break;
             }
             continue;
@@ -699,7 +711,7 @@ export class OpenCodeClient {
               sessionID?: string;
               error?: { name: string; data: { message: string } };
             };
-            if (!errorProps.sessionID || errorProps.sessionID === sessionId) {
+            if (!errorProps.sessionID || errorProps.sessionID === activeSessionId) {
               success = false;
               failureMessage = errorProps.error?.data?.message ?? 'OpenCode session error';
               diag.onStreamError('session.error', failureMessage);
@@ -715,8 +727,8 @@ export class OpenCodeClient {
         if (!success) {
           const message = failureMessage || 'OpenCode execution failed';
           if (containsRateLimitError(message)) {
-            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, sessionId, message);
-            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
+            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, activeSessionId, message);
+            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
             return rateLimitedResponse;
           }
           const retriable = this.isRetriableError(message, streamAbortController.signal.aborted, abortCause);
@@ -726,26 +738,26 @@ export class OpenCodeClient {
             continue;
           }
 
-          emitResult(options.onStream, false, message, sessionId);
+          emitResult(options.onStream, false, message, activeSessionId);
           return {
             persona: agentType,
             status: 'error',
             content: message,
             timestamp: new Date(),
-            sessionId,
+            sessionId: activeSessionId,
           };
         }
 
         const trimmed = content.trim();
         const structuredOutput = parseStructuredOutput(trimmed, !!options.outputSchema);
-        emitResult(options.onStream, true, trimmed, sessionId);
+        emitResult(options.onStream, true, trimmed, activeSessionId);
 
         return {
           persona: agentType,
           status: 'done',
           content: trimmed,
           timestamp: new Date(),
-          sessionId,
+          sessionId: activeSessionId,
           structuredOutput,
         };
       } catch (error) {
@@ -816,6 +828,13 @@ export class OpenCodeClient {
       systemPrompt,
     });
   }
+}
+
+function toOpenCodeOutputFormat(outputSchema: Record<string, unknown>): OutputFormat {
+  return {
+    type: 'json_schema',
+    schema: outputSchema,
+  };
 }
 
 const defaultClient = new OpenCodeClient();

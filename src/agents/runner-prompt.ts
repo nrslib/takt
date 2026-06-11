@@ -1,21 +1,40 @@
 import { loadTemplate } from '../shared/prompts/index.js';
+import { buildProviderRuntimeSystemPrompt } from '../infra/providers/runtimeSystemPrompt.js';
 import type { RunAgentOptions } from './types.js';
 
-type WrappedPromptOptions = Pick<RunAgentOptions, 'language' | 'workflowMeta' | 'personaPath'>;
+type WrappedPromptOptions = Pick<RunAgentOptions, 'language' | 'workflowMeta' | 'personaPath'> & {
+  providerRuntimeInstructions: string | null;
+};
 
-function shouldWrapAgentDefinition(options: Pick<RunAgentOptions, 'personaPath' | 'workflowMeta'>): boolean {
+function shouldRenderWorkflowContext(
+  options: Pick<WrappedPromptOptions, 'personaPath' | 'workflowMeta'>,
+): boolean {
   return options.personaPath !== undefined || options.workflowMeta?.processSafety !== undefined;
+}
+
+function buildRuntimeOnlySystemPrompt(
+  agentDefinition: string,
+  options: Pick<WrappedPromptOptions, 'language' | 'providerRuntimeInstructions'>,
+): string {
+  return buildProviderRuntimeSystemPrompt(
+    agentDefinition,
+    options.language ?? 'en',
+    options.providerRuntimeInstructions,
+  );
 }
 
 export function buildWrappedSystemPrompt(
   agentDefinition: string,
   options: WrappedPromptOptions,
 ): string {
-  if (!shouldWrapAgentDefinition(options)) {
-    return agentDefinition;
+  if (!shouldRenderWorkflowContext(options)) {
+    return buildRuntimeOnlySystemPrompt(agentDefinition, options);
   }
 
-  const templateVars: Record<string, string | boolean> = { agentDefinition };
+  const templateVars: Record<string, string | boolean | null> = {
+    agentDefinition,
+    providerRuntimeInstructions: options.providerRuntimeInstructions,
+  };
   if (options.workflowMeta) {
     templateVars.workflowName = options.workflowMeta.workflowName;
     templateVars.workflowDescription = options.workflowMeta.workflowDescription ?? '';

@@ -73,13 +73,19 @@ function readTemplate(filePath: string): string {
 export function loadTemplate(
   name: string,
   lang: Language,
-  vars?: Record<string, string | boolean>,
+  vars?: Record<string, string | boolean | null>,
 ): string {
   const filePath = resolveTemplatePath(name, lang);
   const raw = readTemplate(filePath);
 
   if (vars) {
-    return renderTemplate(raw, vars);
+    const templateVars: Record<string, string | boolean> = {};
+    for (const [key, value] of Object.entries(vars)) {
+      if (value !== null) {
+        templateVars[key] = value;
+      }
+    }
+    return renderTemplate(raw, templateVars);
   }
   return raw;
 }

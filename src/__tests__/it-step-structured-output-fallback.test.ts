@@ -39,6 +39,8 @@ describe('workflow structured_output fallback integration', () => {
     );
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: false,
+      supportsNativeImageInput: false,
+      getRuntimeInstructions: vi.fn(() => null),
       setup: vi.fn(() => ({
         call: (...args: unknown[]) => mockProviderCall(provider, ...args),
       })),

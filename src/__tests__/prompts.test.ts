@@ -286,6 +286,35 @@ describe('template content integrity', () => {
     expect(result).toContain('{{agentDefinition}}');
   });
 
+  it('perform_agent_system_prompt renders provider runtime instructions when provided', () => {
+    const en = loadTemplate('perform_agent_system_prompt', 'en', {
+      agentDefinition: 'agent',
+      providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
+    });
+    expect(en).toContain('## Provider Runtime Instructions');
+    expect(en).toContain('OpenCode tool names are lowercase.');
+
+    const ja = loadTemplate('perform_agent_system_prompt', 'ja', {
+      agentDefinition: 'agent',
+      providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
+    });
+    expect(ja).toContain('## Provider Runtime Instructions');
+    expect(ja).toContain('OpenCode tool names are lowercase.');
+  });
+
+  it('perform_agent_system_prompt omits provider runtime instructions section when value is null', () => {
+    const vars = {
+      agentDefinition: 'agent',
+      providerRuntimeInstructions: null,
+    };
+
+    const en = loadTemplate('perform_agent_system_prompt', 'en', vars);
+    expect(en).not.toContain('## Provider Runtime Instructions');
+
+    const ja = loadTemplate('perform_agent_system_prompt', 'ja', vars);
+    expect(ja).not.toContain('## Provider Runtime Instructions');
+  });
+
   it('perform_agent_system_prompt uses workflow/step terminology in both languages', () => {
     const en = loadTemplate('perform_agent_system_prompt', 'en');
     expect(en).toContain('**Workflow**: A processing flow combining multiple steps');
@@ -332,6 +361,27 @@ describe('template content integrity', () => {
     expect(ja).toContain('killall');
     expect(ja).toContain('プロセス名ベースの kill');
     expect(ja).toContain('自分が所有していると明確に分かるプロセス以外は停止してはいけません');
+  });
+
+  it('provider_runtime_system_prompt renders provider instructions without workflow context', () => {
+    const vars = {
+      agentDefinition: 'agent',
+      providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
+    };
+
+    const en = loadTemplate('provider_runtime_system_prompt', 'en', vars);
+    expect(en).toContain('## Provider Runtime Instructions');
+    expect(en).toContain('OpenCode tool names are lowercase.');
+    expect(en).toContain('agent');
+    expect(en).not.toContain('Workflow:');
+    expect(en).not.toContain('Current Step:');
+
+    const ja = loadTemplate('provider_runtime_system_prompt', 'ja', vars);
+    expect(ja).toContain('## Provider Runtime Instructions');
+    expect(ja).toContain('OpenCode tool names are lowercase.');
+    expect(ja).toContain('agent');
+    expect(ja).not.toContain('ワークフロー:');
+    expect(ja).not.toContain('現在のステップ:');
   });
 
   it('perform_judge_message contains {{agentOutput}} and {{conditionList}} placeholders', () => {

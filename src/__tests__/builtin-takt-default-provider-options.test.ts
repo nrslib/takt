@@ -34,7 +34,7 @@ const REVIEW_WEB_OPENCODE_TOOLS = ['read', 'glob', 'grep', 'websearch', 'webfetc
 const REVIEW_FILES_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'];
 const REVIEW_FILES_OPENCODE_TOOLS = ['read', 'glob', 'grep'];
 const EDIT_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch'];
-const EDIT_OPENCODE_TOOLS = ['read', 'glob', 'grep', 'edit', 'write', 'bash', 'websearch', 'webfetch'];
+const EDIT_OPENCODE_TOOLS = ['read', 'glob', 'grep', 'edit', 'write', 'bash', 'todowrite', 'websearch', 'webfetch'];
 const REVIEW_READONLY_PROVIDER_OPTIONS = {
   claude: { allowedTools: REVIEW_READONLY_CLAUDE_TOOLS },
   opencode: { allowedTools: REVIEW_READONLY_OPENCODE_TOOLS },

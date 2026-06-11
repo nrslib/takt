@@ -56,6 +56,7 @@ describe('runSyncConflictResolver', () => {
     });
     mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined });
     mockGetProvider.mockReturnValue({
+      getRuntimeInstructions: vi.fn(() => null),
       setup: vi.fn(() => ({ call: mockAgentCall })),
     });
     mockAgentCall.mockResolvedValue({
@@ -105,6 +106,41 @@ describe('runSyncConflictResolver', () => {
     await expect(callOptions.onPermissionRequest?.({ input: { command: 'git status' } })).resolves.toEqual({
       behavior: 'allow',
       updatedInput: { command: 'git status' },
+    });
+  });
+
+  it('wraps OpenCode system prompts with provider runtime instructions', async () => {
+    const setup = vi.fn(() => ({ call: mockAgentCall }));
+    mockResolveAssistantProviderModelFromConfig.mockReturnValue({
+      provider: 'opencode',
+      model: 'opencode/big-pickle',
+    });
+    mockGetProvider.mockReturnValue({
+      getRuntimeInstructions: vi.fn(() => 'OpenCode tool names are lowercase.'),
+      setup,
+    });
+    mockLoadTemplate.mockImplementation((name: string, _lang: string, vars?: Record<string, string>) => {
+      if (name === 'sync_conflict_resolver_system_prompt') {
+        return 'system-prompt';
+      }
+      if (name === 'sync_conflict_resolver_message') {
+        return `message:${vars?.originalInstruction ?? ''}`;
+      }
+      if (name === 'provider_runtime_system_prompt') {
+        return `runtime:${vars?.agentDefinition}:${vars?.providerRuntimeInstructions}`;
+      }
+      throw new Error(`Unexpected template: ${name}`);
+    });
+
+    await runSyncConflictResolver({
+      projectCwd: '/repo',
+      cwd: '/repo/worktree',
+      originalInstruction: 'Resolve conflicts',
+    });
+
+    expect(setup).toHaveBeenCalledWith({
+      name: 'conflict-resolver',
+      systemPrompt: 'runtime:system-prompt:OpenCode tool names are lowercase.',
     });
   });
 

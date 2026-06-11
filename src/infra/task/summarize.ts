@@ -7,6 +7,7 @@
 import * as wanakana from 'wanakana';
 import { resolveConfigValues } from '../config/index.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
+import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
 import { createLogger, slugify } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import type { SummarizeOptions } from './types.js';
@@ -74,9 +75,14 @@ export class TaskSummarizer {
     const model = options.model ?? globalConfig.model;
 
     const provider = getProvider(providerType);
+    const systemPrompt = buildProviderRuntimeSystemPrompt(
+      loadTemplate('score_slug_system_prompt', 'en'),
+      'en',
+      provider.getRuntimeInstructions(),
+    );
     const agent = provider.setup({
       name: 'summarizer',
-      systemPrompt: loadTemplate('score_slug_system_prompt', 'en'),
+      systemPrompt,
     });
     const prompt = loadTemplate('score_slug_user_prompt', 'en', { taskDescription: taskName });
     const response = await agent.call(prompt, {

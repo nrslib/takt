@@ -43,6 +43,14 @@ export class KiroProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
 
+  getRuntimeInstructions(): string | null {
+    return null;
+  }
+
+  keepsAllowedToolWithoutEdit(_tool: string): boolean {
+    return true;
+  }
+
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
 
