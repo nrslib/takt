@@ -4,6 +4,7 @@ import {
   resolveEffectiveTeamLeaderPartProviderOptions,
 } from '../infra/config/providerOptions.js';
 import * as providerOptionsModule from '../infra/config/providerOptions.js';
+import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('resolveEffectiveProviderOptions', () => {
   it('env origin keeps config value only for overridden leaf', () => {
@@ -96,21 +97,24 @@ describe('resolveEffectiveProviderOptions', () => {
   });
 
   it('env origin は opencode.allowedTools の leaf にも適用される', () => {
+    const configOptions: StepProviderOptions = {
+      opencode: {
+        allowedTools: ['read', 'grep'],
+        variant: 'env-high',
+      },
+    };
+    const stepOptions: StepProviderOptions = {
+      opencode: {
+        allowedTools: ['read', 'edit'],
+        variant: 'step-low',
+      },
+    };
+
     const result = resolveEffectiveProviderOptions(
       'project',
       (path: string) => (path === 'opencode.allowedTools' ? 'env' : 'local'),
-      {
-        opencode: {
-          allowedTools: ['read', 'grep'],
-          variant: 'env-high',
-        },
-      } as never,
-      {
-        opencode: {
-          allowedTools: ['read', 'edit'],
-          variant: 'step-low',
-        },
-      } as never,
+      configOptions,
+      stepOptions,
     );
 
     expect(result).toEqual({

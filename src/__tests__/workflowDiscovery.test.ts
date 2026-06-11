@@ -27,9 +27,10 @@ describe('workflowDiscovery', () => {
     try {
       mkdirSync(join(tempDir, 'provider-options'));
       writeFileSync(join(tempDir, 'provider-options', 'review-readonly.yaml'), [
-        'claude:',
-        '  allowed_tools:',
-        '    - Read',
+        'name: review-readonly',
+        'steps:',
+        '  - name: review',
+        '    instruction: "{task}"',
       ].join('\n'));
       writeFileSync(join(tempDir, 'sample.yaml'), [
         'name: sample',

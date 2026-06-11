@@ -4,6 +4,7 @@ import {
   resolveProviderOptionSource,
   resolveProviderOptionsSources,
 } from '../infra/config/providerOptions.js';
+import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('resolveProviderOptionSource', () => {
   it('Given step has value, When resolve, Then source is step', () => {
@@ -140,11 +141,14 @@ describe('resolveProviderOptionSource', () => {
   });
 
   it('Given opencode allowedTools has env origin, When resolve, Then source is env', () => {
+    const stepOptions: StepProviderOptions = { opencode: { allowedTools: ['read', 'edit'] } };
+    const configOptions: StepProviderOptions = { opencode: { allowedTools: ['read', 'grep'] } };
+
     const source = resolveProviderOptionSource(
       'opencode.allowedTools',
-      { opencode: { allowedTools: ['read', 'edit'] } } as never,
+      stepOptions,
       undefined,
-      { opencode: { allowedTools: ['read', 'grep'] } } as never,
+      configOptions,
       (path) => (path === 'opencode.allowedTools' ? 'env' : 'local'),
       'project',
     );
