@@ -79,7 +79,7 @@ function createProviderErrorResponse(
 
 function createRateLimitedResponse(
   input: NormalizeClaudeTerminalResponseInput,
-  source: 'stream_marker' | 'error_text',
+  source: 'stream_marker',
 ): AgentResponse {
   emitResult(input.onStream, {
     result: '',

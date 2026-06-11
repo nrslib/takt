@@ -118,24 +118,103 @@ describe('Claude terminal response normalizer', () => {
     });
   });
 
-  it('Given assistant text contains a rate limit error, When normalizing, Then source is error_text', () => {
+  it('Given assistant text starts with an HTTP 429 description, When normalizing, Then response remains done', () => {
+    const assistantText = 'HTTP 429: Too many requests';
+
     const result = normalizeClaudeTerminalResponse({
       agentName: 'coder',
       sessionId: 'claude-session-1',
-      assistantText: 'HTTP 429: Too many requests',
+      assistantText,
     });
 
     expect(result).toMatchObject({
       persona: 'coder',
-      status: 'rate_limited',
-      content: '',
-      errorKind: 'rate_limit',
+      status: 'done',
+      content: assistantText,
       sessionId: 'claude-session-1',
     });
-    expect(result.rateLimitInfo).toMatchObject({
-      provider: 'claude-terminal',
-      source: 'error_text',
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimitInfo).toBeUndefined();
+  });
+
+  it('Given assistant text references a line range ending in 429, When normalizing, Then response remains done', () => {
+    const assistantText = '| 42 | issue unresolved | `hoge_spec.rb:418-429` |';
+
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText,
     });
+
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'done',
+      content: assistantText,
+      sessionId: 'claude-session-1',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimitInfo).toBeUndefined();
+  });
+
+  it('Given assistant text documents rate limit fallback for issue 429, When normalizing, Then response remains done', () => {
+    const assistantText = 'Documented rate limit fallback behavior for issue 429.';
+
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText,
+    });
+
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'done',
+      content: assistantText,
+      sessionId: 'claude-session-1',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimitInfo).toBeUndefined();
+  });
+
+  it.each([
+    'Documented HTTP 429 Too Many Requests response handling.',
+    'HTTP 429 means Too Many Requests in the docs.',
+    'Status code 429 is Too Many Requests.',
+    'The reviewed code handles HTTP status code 429 with retry fallback.',
+    'The report says too many requests should trigger fallback only on provider errors.',
+  ])('Given assistant text explains %s, When normalizing, Then response remains done', (assistantText) => {
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText,
+    });
+
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'done',
+      content: assistantText,
+      sessionId: 'claude-session-1',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimitInfo).toBeUndefined();
+  });
+
+  it('Given assistant text contains only a reset time phrase, When normalizing, Then response remains done', () => {
+    const assistantText = 'The cache resets 5:00 after the scheduled maintenance window.';
+
+    const result = normalizeClaudeTerminalResponse({
+      agentName: 'coder',
+      sessionId: 'claude-session-1',
+      assistantText,
+    });
+
+    expect(result).toMatchObject({
+      persona: 'coder',
+      status: 'done',
+      content: assistantText,
+      sessionId: 'claude-session-1',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimitInfo).toBeUndefined();
   });
 
   it('Given bridged permission request event, When normalizing final response, Then event does not force provider error', () => {

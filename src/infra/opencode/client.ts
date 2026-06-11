@@ -697,11 +697,11 @@ export class OpenCodeClient {
           if (sseEvent.type === 'session.error') {
             const errorProps = sseEvent.properties as {
               sessionID?: string;
-              error?: { name: string; data: { message: string } };
+              error?: unknown;
             };
             if (!errorProps.sessionID || errorProps.sessionID === sessionId) {
               success = false;
-              failureMessage = errorProps.error?.data?.message ?? 'OpenCode session error';
+              failureMessage = extractOpenCodeErrorMessage(errorProps.error) ?? 'OpenCode session error';
               diag.onStreamError('session.error', failureMessage);
               break;
             }

@@ -3,9 +3,12 @@ import { RATE_LIMIT_ERROR_MESSAGE } from '../../core/models/response.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 
 const RATE_LIMIT_ERROR_PATTERNS = [
-  /\bhttp\s+429\b/i,
-  /\b429\b/i,
-  /rate[_\s-]?limit/i,
+  /\bhttp\s+(?:status\s+)?(?:code\s+)?429\b/i,
+  /\bstatus\s+code\s+429\b/i,
+  /\b429\b[^\n\r]{0,40}\btoo many requests\b/i,
+  /\brate[_\s-]?limit(?:ed|[_\s-]+exceeded)\b/i,
+  /\brate[_\s-]?limit[_\s-]?error\b/i,
+  /\b(?:exceeded|hit|reached)\s+(?:a\s+|the\s+)?rate[_\s-]?limit\b/i,
   /too many requests/i,
   /out of extra usage/i,
   /usage_limit_exceeded/i,
@@ -14,7 +17,6 @@ const RATE_LIMIT_ERROR_PATTERNS = [
 const RATE_LIMIT_STREAM_MARKER_PATTERNS = [
   /out of extra usage/i,
   /usage_limit_exceeded/i,
-  /resets?\s+\d{1,2}:\d{2}\s*(?:am|pm)?/i,
 ] as const;
 
 export function containsRateLimitMarker(text: string | undefined): boolean {
@@ -31,12 +33,9 @@ export function containsRateLimitError(text: string | undefined): boolean {
   return RATE_LIMIT_ERROR_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-export function resolveRateLimitTextSource(text: string | undefined): 'stream_marker' | 'error_text' | undefined {
+export function resolveRateLimitTextSource(text: string | undefined): 'stream_marker' | undefined {
   if (containsRateLimitMarker(text)) {
     return 'stream_marker';
-  }
-  if (containsRateLimitError(text)) {
-    return 'error_text';
   }
   return undefined;
 }
