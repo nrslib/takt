@@ -32,6 +32,7 @@ You are part of TAKT (AI Agent Orchestration Tool).
 Work with awareness of coordination with preceding and following steps.
 
 {{#if providerRuntimeInstructions}}
+
 ## Provider Runtime Instructions
 
 {{providerRuntimeInstructions}}

@@ -152,7 +152,7 @@ export function buildOpenCodePermissionRuleset(
   allowedTools?: OpenCodeAllowedTools,
 ): OpenCodePermissionRule[] {
   if (allowedTools !== undefined) {
-    return buildOpenCodeAllowedToolsRuleset(networkAccess, allowedTools);
+    return buildOpenCodeAllowedToolsRuleset(mode, networkAccess, allowedTools);
   }
 
   if (mode === 'full' && networkAccess === undefined) {
@@ -170,6 +170,7 @@ export function buildOpenCodePermissionRuleset(
 export type OpenCodeAllowedTools = readonly string[];
 
 function buildOpenCodeAllowedToolsRuleset(
+  mode: PermissionMode | undefined,
   networkAccess: boolean | undefined,
   allowedTools: OpenCodeAllowedTools,
 ): OpenCodePermissionRule[] {
@@ -177,6 +178,7 @@ function buildOpenCodeAllowedToolsRuleset(
     .map(toOpenCodeAllowedPermission)
     .filter((permission): permission is string => (
       permission !== null
+      && isAllowedByPermissionMode(permission, mode)
       && (networkAccess !== false || !isOpenCodeWebPermission(permission))
     ));
   const uniqueAllowed = Array.from(new Set(allowed));
@@ -189,6 +191,22 @@ function buildOpenCodeAllowedToolsRuleset(
 
 function isOpenCodeWebPermission(permission: string): boolean {
   return permission === 'websearch' || permission === 'webfetch';
+}
+
+function isAllowedByPermissionMode(permission: string, mode: PermissionMode | undefined): boolean {
+  if (mode === undefined || mode === 'full') {
+    return true;
+  }
+
+  const permissionMap = buildPermissionMap(mode);
+  if (!isOpenCodePermissionKey(permission)) {
+    return mode === 'edit';
+  }
+  return permissionMap[permission] === 'allow';
+}
+
+function isOpenCodePermissionKey(permission: string): permission is OpenCodePermissionKey {
+  return (OPEN_CODE_PERMISSION_KEYS as readonly string[]).includes(permission);
 }
 
 function toOpenCodeAllowedPermission(tool: string): string | null {
@@ -243,6 +261,5 @@ export interface OpenCodeCallOptions {
   onStream?: StreamCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
   opencodeApiKey?: string;
-  outputSchema?: Record<string, unknown>;
   interactionTimeoutMs?: number;
 }

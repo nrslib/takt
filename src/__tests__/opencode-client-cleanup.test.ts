@@ -650,7 +650,7 @@ describe('OpenCodeClient stream cleanup', () => {
     );
   });
 
-  it('should pass structured output schema through OpenCode format', async () => {
+  it('should not pass OpenCode native structured output format', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       {
@@ -665,13 +665,6 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     ]);
 
-    const schema = {
-      type: 'object',
-      properties: {
-        step: { type: 'number' },
-      },
-      required: ['step'],
-    };
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-output-format' } });
     const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
@@ -691,19 +684,11 @@ describe('OpenCodeClient stream cleanup', () => {
     const result = await client.call('coder', 'return json', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
-      outputSchema: schema,
     });
 
     expect(result.status).toBe('done');
-    expect(promptAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        format: {
-          type: 'json_schema',
-          schema,
-        },
-      }),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
+    const promptPayload = promptAsync.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(promptPayload).not.toHaveProperty('format');
     expect(promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         parts: [{ type: 'text', text: 'return json' }],
@@ -927,6 +912,111 @@ describe('OpenCodeClient stream cleanup', () => {
       expect.objectContaining({ sessionID: 'session-existing-tools' }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it('should release the shared OpenCode client once when session.create returns no id', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    resetSharedServer();
+
+    let finishSecondPrompt!: () => void;
+    const secondPrompt = new Promise<void>((resolve) => { finishSecondPrompt = resolve; });
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => secondPrompt)
+      .mockResolvedValue(undefined);
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: { id: 'session-after-create-failure-2' } })
+      .mockResolvedValueOnce({ data: { id: 'session-after-create-failure-3' } });
+    const subscribe = vi.fn().mockImplementation(() => {
+      const sessionId = sessionCreate.mock.results.length === 2
+        ? 'session-after-create-failure-2'
+        : 'session-after-create-failure-3';
+      return Promise.resolve({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sessionId } },
+        ]),
+      });
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const failedPromise = client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+    const secondPromise = client.call('coder', 'second', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+    const thirdPromise = client.call('coder', 'third', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    const failed = await failedPromise;
+    await vi.waitFor(() => {
+      expect(sessionCreate).toHaveBeenCalledTimes(2);
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(failed.status).toBe('error');
+    expect(failed.content).toContain('Failed to create OpenCode session');
+    expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+
+    finishSecondPrompt!();
+    const [second, third] = await Promise.all([secondPromise, thirdPromise]);
+    expect(second.status).toBe('done');
+    expect(third.status).toBe('done');
+    expect(sessionCreate).toHaveBeenCalledTimes(3);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it('should stop before prompting when existing session permission update fails', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'unused-session' } });
+    const sessionUpdate = vi.fn().mockRejectedValue(new Error('permission update failed'));
+    const subscribe = vi.fn().mockResolvedValue({
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: 'session-update-failure' } },
+      ]),
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, update: sessionUpdate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: 'session-update-failure',
+      allowedTools: [],
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('permission update failed');
+    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(sessionUpdate).toHaveBeenCalledTimes(1);
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(promptAsync).not.toHaveBeenCalled();
   });
 
   it('should not update permission ruleset when resuming without allowed tools', async () => {

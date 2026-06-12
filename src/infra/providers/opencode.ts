@@ -33,13 +33,12 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     onStream: options.onStream,
     onAskUserQuestion: options.onAskUserQuestion,
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),
-    outputSchema: options.outputSchema,
   };
 }
 
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
-  readonly supportsStructuredOutput = true;
+  readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
 
   getRuntimeInstructions(): string | null {

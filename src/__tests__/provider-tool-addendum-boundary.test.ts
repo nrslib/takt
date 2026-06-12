@@ -21,12 +21,16 @@ vi.mock('../infra/codex/index.js', () => ({
   callCodexCustom: providerMocks.callCodexCustom,
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  resolveAnthropicApiKey: providerMocks.resolveAnthropicApiKey,
-  resolveClaudeCliPath: providerMocks.resolveClaudeCliPath,
-  resolveOpenaiApiKey: providerMocks.resolveOpenaiApiKey,
-  resolveCodexCliPath: providerMocks.resolveCodexCliPath,
-}));
+vi.mock('../infra/config/index.js', async () => {
+  const actual = await vi.importActual<typeof import('../infra/config/index.js')>('../infra/config/index.js');
+  return {
+    ...actual,
+    resolveAnthropicApiKey: providerMocks.resolveAnthropicApiKey,
+    resolveClaudeCliPath: providerMocks.resolveClaudeCliPath,
+    resolveOpenaiApiKey: providerMocks.resolveOpenaiApiKey,
+    resolveCodexCliPath: providerMocks.resolveCodexCliPath,
+  };
+});
 
 import { ClaudeProvider } from '../infra/providers/claude.js';
 import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';

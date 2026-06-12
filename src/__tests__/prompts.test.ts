@@ -287,18 +287,24 @@ describe('template content integrity', () => {
   });
 
   it('perform_agent_system_prompt renders provider runtime instructions when provided', () => {
+    const rawEn = loadTemplate('perform_agent_system_prompt', 'en');
+    expect(rawEn).toContain('{{#if providerRuntimeInstructions}}\n\n## Provider Runtime Instructions');
+
     const en = loadTemplate('perform_agent_system_prompt', 'en', {
       agentDefinition: 'agent',
       providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
     });
-    expect(en).toContain('## Provider Runtime Instructions');
+    expect(en).toContain('\n\n## Provider Runtime Instructions\n\n');
     expect(en).toContain('OpenCode tool names are lowercase.');
+
+    const rawJa = loadTemplate('perform_agent_system_prompt', 'ja');
+    expect(rawJa).toContain('{{#if providerRuntimeInstructions}}\n\n## Provider Runtime Instructions');
 
     const ja = loadTemplate('perform_agent_system_prompt', 'ja', {
       agentDefinition: 'agent',
       providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
     });
-    expect(ja).toContain('## Provider Runtime Instructions');
+    expect(ja).toContain('\n\n## Provider Runtime Instructions\n\n');
     expect(ja).toContain('OpenCode tool names are lowercase.');
   });
 
@@ -369,15 +375,21 @@ describe('template content integrity', () => {
       providerRuntimeInstructions: 'OpenCode tool names are lowercase.',
     };
 
+    const rawEn = loadTemplate('provider_runtime_system_prompt', 'en');
+    expect(rawEn).toContain('{{#if providerRuntimeInstructions}}\n\n## Provider Runtime Instructions');
+
     const en = loadTemplate('provider_runtime_system_prompt', 'en', vars);
-    expect(en).toContain('## Provider Runtime Instructions');
+    expect(en).toContain('\n## Provider Runtime Instructions\n\n');
     expect(en).toContain('OpenCode tool names are lowercase.');
     expect(en).toContain('agent');
     expect(en).not.toContain('Workflow:');
     expect(en).not.toContain('Current Step:');
 
+    const rawJa = loadTemplate('provider_runtime_system_prompt', 'ja');
+    expect(rawJa).toContain('{{#if providerRuntimeInstructions}}\n\n## Provider Runtime Instructions');
+
     const ja = loadTemplate('provider_runtime_system_prompt', 'ja', vars);
-    expect(ja).toContain('## Provider Runtime Instructions');
+    expect(ja).toContain('\n## Provider Runtime Instructions\n\n');
     expect(ja).toContain('OpenCode tool names are lowercase.');
     expect(ja).toContain('agent');
     expect(ja).not.toContain('ワークフロー:');

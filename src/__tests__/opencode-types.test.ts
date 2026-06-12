@@ -139,7 +139,7 @@ describe('OpenCode permissions', () => {
     ]);
   });
 
-  it('should allow explicitly whitelisted tools regardless of readonly permission mode', () => {
+  it('should keep readonly mode from widening to explicitly whitelisted write tools', () => {
     const ruleset = buildOpenCodePermissionRuleset('readonly', undefined, [
       'Read',
       'Bash',
@@ -149,8 +149,6 @@ describe('OpenCode permissions', () => {
     expect(ruleset).toEqual([
       { permission: '*', pattern: '*', action: 'deny' },
       { permission: 'read', pattern: '*', action: 'allow' },
-      { permission: 'bash', pattern: '*', action: 'allow' },
-      { permission: 'edit', pattern: '*', action: 'allow' },
     ]);
   });
 
@@ -172,7 +170,7 @@ describe('OpenCode permissions', () => {
       .toThrow('OpenCode allowedTools does not accept wildcard permission: *');
   });
 
-  it('should allow custom permissions when explicitly whitelisted', () => {
+  it('should keep readonly mode from widening to custom allowed permissions', () => {
     const ruleset = buildOpenCodePermissionRuleset('readonly', undefined, [
       'Read',
       'mcp__github__search',
@@ -181,7 +179,6 @@ describe('OpenCode permissions', () => {
     expect(ruleset).toEqual([
       { permission: '*', pattern: '*', action: 'deny' },
       { permission: 'read', pattern: '*', action: 'allow' },
-      { permission: 'mcp__github__search', pattern: '*', action: 'allow' },
     ]);
   });
 

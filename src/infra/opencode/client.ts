@@ -6,11 +6,10 @@
  */
 
 import { createOpencode } from '@opencode-ai/sdk/v2';
-import type { OutputFormat } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
-import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {
   buildOpenCodePermissionRuleset,
@@ -54,12 +53,14 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
 ];
 
 type OpencodeClient = Awaited<ReturnType<typeof createOpencode>>['client'];
+type OpenCodeSessionSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient['session']['get']>>['data']>;
 
 interface SharedServer {
   client: OpencodeClient;
   close: () => void;
   model: string;
   apiKey?: string;
+  busy: boolean;
   queue: Array<(client: OpencodeClient) => void>;
 }
 
@@ -72,11 +73,12 @@ async function acquireClient(model: string, apiKey?: string): Promise<{ client: 
   }
 
   if (sharedServer?.model === model && sharedServer.apiKey === apiKey) {
-    if (sharedServer.queue.length === 0) {
-      return { client: sharedServer.client, release: () => releaseClient() };
+    if (!sharedServer.busy) {
+      sharedServer.busy = true;
+      return { client: sharedServer.client, release: createReleaseHandle() };
     }
     return new Promise((resolve) => {
-      sharedServer!.queue.push((client) => resolve({ client, release: () => releaseClient() }));
+      sharedServer!.queue.push((client) => resolve({ client, release: createReleaseHandle() }));
     });
   }
 
@@ -105,20 +107,51 @@ async function acquireClient(model: string, apiKey?: string): Promise<{ client: 
       }
     };
 
-    sharedServer = { client, close: closeServer, model, apiKey, queue: [] };
+    sharedServer = { client, close: closeServer, model, apiKey, busy: true, queue: [] };
     log.debug('OpenCode server started', { model, port });
 
-    return { client, release: () => releaseClient() };
+    return { client, release: createReleaseHandle() };
   } finally {
     initPromise = null;
     resolveInit!();
   }
 }
 
+export async function getOpenCodeSessionSnapshot(
+  model: string,
+  sessionID: string,
+  directory: string,
+  apiKey?: string,
+): Promise<OpenCodeSessionSnapshot> {
+  const { client, release } = await acquireClient(model, apiKey);
+  try {
+    const result = await client.session.get({ sessionID, directory });
+    if (!result.data) {
+      throw new Error(`OpenCode session not found: ${sessionID}`);
+    }
+    return result.data;
+  } finally {
+    release();
+  }
+}
+
 function releaseClient(): void {
   if (!sharedServer) return;
   const next = sharedServer.queue.shift();
-  next?.(sharedServer.client);
+  if (next) {
+    next(sharedServer.client);
+    return;
+  }
+  sharedServer.busy = false;
+}
+
+function createReleaseHandle(): () => void {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseClient();
+  };
 }
 
 export function resetSharedServer(): void {
@@ -421,7 +454,6 @@ export class OpenCodeClient {
 
           sessionId = sessionResult.data?.id;
           if (!sessionId) {
-            release();
             throw new Error('Failed to create OpenCode session');
           }
         } else if (options.allowedTools !== undefined) {
@@ -458,7 +490,6 @@ export class OpenCodeClient {
           directory: options.cwd,
           model: parsedModel,
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
-          ...(options.outputSchema !== undefined ? { format: toOpenCodeOutputFormat(options.outputSchema) } : {}),
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
           parts: [{ type: 'text' as const, text: prompt }],
         };
@@ -749,7 +780,6 @@ export class OpenCodeClient {
         }
 
         const trimmed = content.trim();
-        const structuredOutput = parseStructuredOutput(trimmed, !!options.outputSchema);
         emitResult(options.onStream, true, trimmed, activeSessionId);
 
         return {
@@ -758,7 +788,6 @@ export class OpenCodeClient {
           content: trimmed,
           timestamp: new Date(),
           sessionId: activeSessionId,
-          structuredOutput,
         };
       } catch (error) {
         const message = getErrorMessage(error);
@@ -828,13 +857,6 @@ export class OpenCodeClient {
       systemPrompt,
     });
   }
-}
-
-function toOpenCodeOutputFormat(outputSchema: Record<string, unknown>): OutputFormat {
-  return {
-    type: 'json_schema',
-    schema: outputSchema,
-  };
 }
 
 const defaultClient = new OpenCodeClient();

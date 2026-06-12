@@ -4,7 +4,7 @@
 
 import { callMock, callMockCustom, type MockCallOptions } from '../mock/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
-import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowedToolEditPolicy.js';
+import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toMockOptions(options: ProviderCallOptions): MockCallOptions {

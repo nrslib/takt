@@ -6,7 +6,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
-import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowedToolEditPolicy.js';
+import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function createProviderErrorResponse(
