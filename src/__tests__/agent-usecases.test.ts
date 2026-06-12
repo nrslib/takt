@@ -201,6 +201,27 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledTimes(3);
   });
 
+  it('judgeStatus passes childProcessEnv to all Phase 3 internal agent calls', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2 }));
+
+    const result = await judgeStatus('structured', 'tag', [
+      { condition: 'a', next: 'one' },
+      { condition: 'b', next: 'two' },
+    ], {
+      ...judgeOptions,
+      childProcessEnv,
+    });
+
+    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(runAgent).toHaveBeenCalledTimes(3);
+    for (const call of vi.mocked(runAgent).mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ childProcessEnv }));
+    }
+  });
+
   it('judgeStatus は maxTurns 非対応 provider では全内部ステージで maxTurns を渡さない', async () => {
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
     vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));

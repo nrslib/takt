@@ -12,6 +12,7 @@ import type {
   RuleMatchMethod,
 } from '../../models/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { ProviderType, RuleIndexDetector } from '../types.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { buildJudgeConditions } from '../../../agents/judge-utils.js';
@@ -35,6 +36,7 @@ export interface RuleEvaluatorContext {
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
   /** Rule tag index detector */
@@ -69,13 +71,14 @@ export class RuleEvaluator {
 
   private structuredCallerJudgeOptions(): Pick<
     RuleEvaluatorContext,
-    'cwd' | 'provider' | 'resolvedProvider' | 'resolvedModel'
+    'cwd' | 'provider' | 'resolvedProvider' | 'resolvedModel' | 'childProcessEnv'
   > {
     return {
       cwd: this.ctx.cwd,
       provider: this.ctx.provider,
       resolvedProvider: this.ctx.resolvedProvider,
       resolvedModel: this.ctx.resolvedModel,
+      childProcessEnv: this.ctx.childProcessEnv,
     };
   }
 

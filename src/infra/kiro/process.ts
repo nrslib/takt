@@ -1,4 +1,5 @@
 import { crossSpawn } from '../../shared/utils/index.js';
+import { pickNestedObservabilityEnv } from '../../shared/telemetry/index.js';
 import type { KiroCallOptions } from './types.js';
 
 const KIRO_COMMAND = 'kiro-cli';
@@ -48,7 +49,10 @@ export type KiroExecError = Error & {
   signal?: NodeJS.Signals | null;
 };
 
-function buildEnv(kiroApiKey?: string): NodeJS.ProcessEnv {
+function buildEnv(
+  kiroApiKey: string | undefined,
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of KIRO_ENV_ALLOWLIST) {
     const value = process.env[key];
@@ -56,6 +60,7 @@ function buildEnv(kiroApiKey?: string): NodeJS.ProcessEnv {
       env[key] = value;
     }
   }
+  Object.assign(env, pickNestedObservabilityEnv(childProcessEnv));
 
   const resolvedKiroApiKey = kiroApiKey !== undefined ? kiroApiKey : process.env.KIRO_API_KEY;
   if (resolvedKiroApiKey !== undefined) {
@@ -103,7 +108,7 @@ export function execKiro(
   return new Promise<KiroExecResult>((resolve, reject) => {
     const child = crossSpawn(options.kiroCliPath ?? KIRO_COMMAND, args, {
       cwd: options.cwd,
-      env: buildEnv(options.kiroApiKey),
+      env: buildEnv(options.kiroApiKey, options.childProcessEnv),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

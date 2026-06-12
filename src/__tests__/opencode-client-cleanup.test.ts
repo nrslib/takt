@@ -1,3 +1,14 @@
+import {
+  context,
+  propagation,
+  ROOT_CONTEXT,
+  trace,
+  TraceFlags,
+  type Context,
+  type ContextManager,
+  type Span,
+  type TextMapPropagator,
+} from '@opentelemetry/api';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 
@@ -30,6 +41,77 @@ class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   async throw(e?: unknown): Promise<IteratorResult<unknown, void>> {
     throw e;
   }
+}
+
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { finally?: unknown }).finally === 'function';
+}
+
+function createTestContextManager(): ContextManager {
+  let activeContext: Context = ROOT_CONTEXT;
+  return {
+    active: () => activeContext,
+    with<A extends unknown[], F extends (...args: A) => ReturnType<F>>(
+      nextContext: Context,
+      fn: F,
+      thisArg?: ThisParameterType<F>,
+      ...args: A
+    ): ReturnType<F> {
+      const previousContext = activeContext;
+      activeContext = nextContext;
+      const restore = (): void => {
+        activeContext = previousContext;
+      };
+      try {
+        const result = fn.apply(thisArg, args);
+        if (isPromiseLike(result)) {
+          return result.finally(restore) as ReturnType<F>;
+        }
+        restore();
+        return result;
+      } catch (error) {
+        restore();
+        throw error;
+      }
+    },
+    bind: <T>(_nextContext: Context, target: T): T => target,
+    enable() {
+      return this;
+    },
+    disable() {
+      activeContext = ROOT_CONTEXT;
+      return this;
+    },
+  };
+}
+
+function createTestTraceContextPropagator(): TextMapPropagator<Record<string, string>> {
+  return {
+    inject: (nextContext, carrier, setter) => {
+      const span = trace.getSpan(nextContext);
+      if (!span) {
+        return;
+      }
+      const spanContext = span.spanContext();
+      const sampledFlag = (spanContext.traceFlags & TraceFlags.SAMPLED) === TraceFlags.SAMPLED ? '01' : '00';
+      setter.set(carrier, 'traceparent', `00-${spanContext.traceId}-${spanContext.spanId}-${sampledFlag}`);
+    },
+    extract: (nextContext) => nextContext,
+    fields: () => ['traceparent'],
+  };
+}
+
+function createTestSpan(traceId: string, spanId: string): Span {
+  return {
+    spanContext: () => ({
+      traceId,
+      spanId,
+      traceFlags: TraceFlags.SAMPLED,
+      isRemote: false,
+    }),
+  } as unknown as Span;
 }
 
 const { createOpencodeMock } = vi.hoisted(() => ({
@@ -1065,5 +1147,519 @@ describe('OpenCode conversation via provider (E2E)', () => {
     expect(results[0].sessionId).toBe('multi-session');
     expect(results[1].sessionId).toBe('multi-session');
     expect(results[2].sessionId).toBe('multi-session');
+  });
+
+  it('should apply childProcessEnv only while starting the shared server and restore ambient env', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
+    const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
+    const envSnapshots: Array<Record<string, string | undefined>> = [];
+    const { sessionCreate, promptAsync, subscribe } = makeClientMock('env-session', ['done']);
+    createOpencodeMock.mockImplementation(async () => {
+      envSnapshots.push({
+        TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
+        OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+      });
+      return {
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: sessionCreate, promptAsync },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      };
+    });
+
+    try {
+      const client = new OpenCodeClient();
+      await client.call('coder', 'task', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
+        },
+      });
+
+      expect(envSnapshots).toEqual([{
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
+      }]);
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+      expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
+    } finally {
+      if (previousTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
+      }
+      if (previousOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = previousOtlpEndpoint;
+      }
+    }
+  });
+
+  it('should preserve ambient observability env while starting without childProcessEnv', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
+    const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
+    const envSnapshots: Array<Record<string, string | undefined>> = [];
+    const { sessionCreate, promptAsync, subscribe } = makeClientMock('ambient-env-session', ['done']);
+    createOpencodeMock.mockImplementation(async () => {
+      envSnapshots.push({
+        TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
+        OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+      });
+      return {
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: sessionCreate, promptAsync },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      };
+    });
+
+    try {
+      const client = new OpenCodeClient();
+      await client.call('coder', 'task', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+      });
+
+      expect(envSnapshots).toEqual([{
+        TAKT_OBSERVABILITY: '{"enabled":false}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://ambient.example.test',
+      }]);
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+      expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
+    } finally {
+      if (previousTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
+      }
+      if (previousOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = previousOtlpEndpoint;
+      }
+    }
+  });
+
+  it('should keep childProcessEnv until shared server startup promise settles and then restore ambient env', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    const { sessionCreate, promptAsync, subscribe } = makeClientMock('pending-env-session', ['done']);
+    let resolveStartup: (value: {
+      client: {
+        instance: { dispose: ReturnType<typeof vi.fn> };
+        session: { create: typeof sessionCreate; promptAsync: typeof promptAsync };
+        event: { subscribe: typeof subscribe };
+        permission: { reply: ReturnType<typeof vi.fn> };
+      };
+      server: { close: ReturnType<typeof vi.fn> };
+    }) => void;
+
+    createOpencodeMock.mockImplementation(() => new Promise((resolve) => {
+      resolveStartup = resolve;
+    }));
+
+    try {
+      const client = new OpenCodeClient();
+      const callPromise = client.call('coder', 'task', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true}',
+        },
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+
+      resolveStartup!({
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: sessionCreate, promptAsync },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      await expect(callPromise).resolves.toMatchObject({ status: 'done' });
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+    } finally {
+      if (previousTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
+      }
+    }
+  });
+
+  it('should restore env and allow later startup when OpenCode startup rejects', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
+    const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
+    const envSnapshots: Array<Record<string, string | undefined>> = [];
+    const { sessionCreate, promptAsync, subscribe } = makeClientMock('after-reject-session', ['done']);
+    createOpencodeMock
+      .mockImplementationOnce(async () => {
+        envSnapshots.push({
+          TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
+          OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+        });
+        throw new Error('startup failed');
+      })
+      .mockImplementationOnce(async () => {
+        envSnapshots.push({
+          TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
+          OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+        });
+        return {
+          client: {
+            instance: { dispose: vi.fn() },
+            session: { create: sessionCreate, promptAsync },
+            event: { subscribe },
+            permission: { reply: vi.fn() },
+          },
+          server: { close: vi.fn() },
+        };
+      });
+
+    try {
+      const client = new OpenCodeClient();
+      await expect(client.call('coder', 'task 1', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true,"run":1}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-1.example.test',
+        },
+      })).resolves.toMatchObject({
+        status: 'error',
+        content: 'startup failed',
+      });
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+      expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
+
+      await expect(client.call('coder', 'task 2', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true,"run":2}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-2.example.test',
+        },
+      })).resolves.toMatchObject({ status: 'done' });
+
+      expect(envSnapshots).toEqual([
+        {
+          TAKT_OBSERVABILITY: '{"enabled":true,"run":1}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-1.example.test',
+        },
+        {
+          TAKT_OBSERVABILITY: '{"enabled":true,"run":2}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector-2.example.test',
+        },
+      ]);
+      expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+      expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient.example.test');
+    } finally {
+      if (previousTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
+      }
+      if (previousOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = previousOtlpEndpoint;
+      }
+    }
+  });
+
+  it('should recreate the shared server when childProcessEnv snapshot changes', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const serverCloseFns: Array<ReturnType<typeof vi.fn>> = [];
+    createOpencodeMock.mockImplementation(async () => {
+      const index = createOpencodeMock.mock.calls.length;
+      const { sessionCreate, promptAsync, subscribe } = makeClientMock(`env-session-${index}`, [`done-${index}`]);
+      const close = vi.fn();
+      serverCloseFns.push(close);
+      return {
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: sessionCreate, promptAsync },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close },
+      };
+    });
+
+    const client = new OpenCodeClient();
+    await client.call('coder', 'task 1', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true,"run":1}' },
+    });
+    await client.call('coder', 'task 2', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true,"run":2}' },
+    });
+
+    expect(createOpencodeMock).toHaveBeenCalledTimes(2);
+    expect(serverCloseFns[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it('should reuse the shared server when only active trace context changes', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    context.disable();
+    propagation.disable();
+    context.setGlobalContextManager(createTestContextManager());
+    propagation.setGlobalPropagator(createTestTraceContextPropagator());
+    const serverCloseFns: Array<ReturnType<typeof vi.fn>> = [];
+    createOpencodeMock.mockImplementation(async () => {
+      const index = createOpencodeMock.mock.calls.length;
+      const { sessionCreate, promptAsync, subscribe } = makeClientMock(`trace-session-${index}`, [`done-${index}`]);
+      const close = vi.fn();
+      serverCloseFns.push(close);
+      return {
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: sessionCreate, promptAsync },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close },
+      };
+    });
+
+    try {
+      const client = new OpenCodeClient();
+      await context.with(
+        trace.setSpan(ROOT_CONTEXT, createTestSpan('11111111111111111111111111111111', '1111111111111111')),
+        () => client.call('coder', 'task 1', {
+          cwd: '/tmp',
+          model: 'opencode/big-pickle',
+          childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true}' },
+        }),
+      );
+      await context.with(
+        trace.setSpan(ROOT_CONTEXT, createTestSpan('22222222222222222222222222222222', '2222222222222222')),
+        () => client.call('coder', 'task 2', {
+          cwd: '/tmp',
+          model: 'opencode/big-pickle',
+          childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true}' },
+        }),
+      );
+
+      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+      expect(serverCloseFns[0]).not.toHaveBeenCalled();
+    } finally {
+      context.disable();
+      propagation.disable();
+    }
+  });
+
+  it('should share an in-flight server when only active trace context changes concurrently', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    context.disable();
+    propagation.disable();
+    context.setGlobalContextManager(createTestContextManager());
+    propagation.setGlobalPropagator(createTestTraceContextPropagator());
+    const serverCloseFns: Array<ReturnType<typeof vi.fn>> = [];
+    let resolveFirstPrompt: (() => void) | undefined;
+    let firstPromptStarted: (() => void) | undefined;
+    let promptCalls = 0;
+    const firstPromptStartedPromise = new Promise<void>((resolve) => {
+      firstPromptStarted = resolve;
+    });
+    createOpencodeMock.mockImplementation(async () => {
+      const { sessionCreate, promptAsync, subscribe } = makeClientMock('parallel-trace-session', ['done-1', 'done-2']);
+      const prompt = vi.fn(() => {
+        promptCalls += 1;
+        if (promptCalls === 1) {
+          return new Promise<void>((resolve) => {
+            resolveFirstPrompt = resolve;
+            firstPromptStarted!();
+          });
+        }
+        return promptAsync();
+      });
+      const close = vi.fn();
+      serverCloseFns.push(close);
+      return {
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: sessionCreate, promptAsync: prompt },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close },
+      };
+    });
+
+    try {
+      const client = new OpenCodeClient();
+      const firstCall = context.with(
+        trace.setSpan(ROOT_CONTEXT, createTestSpan('11111111111111111111111111111111', '1111111111111111')),
+        () => client.call('coder', 'task 1', {
+          cwd: '/tmp',
+          model: 'opencode/big-pickle',
+          childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true}' },
+        }),
+      );
+      await firstPromptStartedPromise;
+
+      const secondCall = await context.with(
+        trace.setSpan(ROOT_CONTEXT, createTestSpan('22222222222222222222222222222222', '2222222222222222')),
+        () => client.call('coder', 'task 2', {
+          cwd: '/tmp',
+          model: 'opencode/big-pickle',
+          childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true}' },
+        }),
+      );
+
+      expect(secondCall.status).toBe('done');
+      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+      expect(serverCloseFns[0]).not.toHaveBeenCalled();
+
+      resolveFirstPrompt!();
+      await expect(firstCall).resolves.toMatchObject({ status: 'done' });
+      expect(serverCloseFns[0]).not.toHaveBeenCalled();
+    } finally {
+      context.disable();
+      propagation.disable();
+    }
+  });
+
+  it('should not underflow active calls when session creation returns no id', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const firstServerClose = vi.fn();
+    const secondServerClose = vi.fn();
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: {} })
+      .mockResolvedValueOnce({ data: { id: 'recovered-session' } });
+    let resolvePrompt: (() => void) | undefined;
+    const promptStarted = new Promise<void>((resolve) => {
+      const promptAsync = vi.fn(() => new Promise<void>((promptResolve) => {
+        resolvePrompt = promptResolve;
+        resolve();
+      }));
+      const subscribe = vi.fn().mockResolvedValue({
+        stream: new MockEventStream([
+          { type: 'message.part.updated', properties: { part: { id: 'p-1', type: 'text', text: 'recovered' }, delta: 'recovered' } },
+          { type: 'session.idle', properties: { sessionID: 'recovered-session' } },
+        ]),
+      });
+      createOpencodeMock
+        .mockResolvedValueOnce({
+          client: {
+            instance: { dispose: vi.fn() },
+            session: { create: sessionCreate, promptAsync },
+            event: { subscribe },
+            permission: { reply: vi.fn() },
+          },
+          server: { close: firstServerClose },
+        })
+        .mockResolvedValueOnce({
+          client: {
+            instance: { dispose: vi.fn() },
+            session: {
+              create: vi.fn().mockResolvedValue({ data: { id: 'different-model-session' } }),
+              promptAsync: vi.fn().mockResolvedValue(undefined),
+            },
+            event: {
+              subscribe: vi.fn().mockResolvedValue({
+                stream: new MockEventStream([
+                  { type: 'session.idle', properties: { sessionID: 'different-model-session' } },
+                ]),
+              }),
+            },
+            permission: { reply: vi.fn() },
+          },
+          server: { close: secondServerClose },
+        });
+    });
+
+    const client = new OpenCodeClient();
+    await expect(client.call('coder', 'task 1', {
+      cwd: '/tmp',
+      model: 'opencode/model-a',
+    })).resolves.toMatchObject({
+      status: 'error',
+      content: 'Failed to create OpenCode session',
+    });
+
+    const recoveredCall = client.call('coder', 'task 2', {
+      cwd: '/tmp',
+      model: 'opencode/model-a',
+    });
+    await promptStarted;
+
+    await expect(client.call('coder', 'task 3', {
+      cwd: '/tmp',
+      model: 'opencode/model-b',
+    })).resolves.toMatchObject({ status: 'done' });
+
+    expect(createOpencodeMock).toHaveBeenCalledTimes(2);
+    expect(firstServerClose).not.toHaveBeenCalled();
+
+    resolvePrompt!();
+    await expect(recoveredCall).resolves.toMatchObject({ status: 'done' });
+    expect(firstServerClose).toHaveBeenCalledTimes(1);
+    expect(secondServerClose).not.toHaveBeenCalled();
+  });
+
+  it('should log shared server close failures without throwing', async () => {
+    const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
+    const { setVerboseConsole, resetDebugLogger } = await import('../shared/utils/debug.js');
+    const writeSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const { sessionCreate, promptAsync, subscribe } = makeClientMock('close-failure-session', ['done']);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: {
+        close: vi.fn(() => {
+          throw new Error('close failed');
+        }),
+      },
+    });
+
+    try {
+      setVerboseConsole(true);
+      const client = new OpenCodeClient();
+      await expect(client.call('coder', 'task', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+      })).resolves.toMatchObject({ status: 'done' });
+
+      expect(() => resetSharedServer()).not.toThrow();
+      expect(writeSpy.mock.calls.map(([message]) => String(message)).join('')).toContain('OpenCode server close failed');
+    } finally {
+      writeSpy.mockRestore();
+      resetDebugLogger();
+      resetSharedServer();
+    }
   });
 });

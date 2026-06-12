@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -55,13 +55,17 @@ function monitorHasRunIdAttribute(monitor: JsonRecord): boolean {
 }
 
 function firstRunRoot(repoPath: string): string {
-  const runsDir = join(repoPath, '.takt', 'runs');
-  const runDirs = readdirSync(runsDir).sort();
-  const runDir = runDirs[0];
-  if (!runDir) {
+  const runRoots = allRunRoots(repoPath);
+  const runRoot = runRoots[0];
+  if (!runRoot) {
     throw new Error('Run directory not found');
   }
-  return join(runsDir, runDir);
+  return runRoot;
+}
+
+function allRunRoots(repoPath: string): string[] {
+  const runsDir = join(repoPath, '.takt', 'runs');
+  return readdirSync(runsDir).sort().map((runDir) => join(runsDir, runDir));
 }
 
 function findLogFile(runRoot: string, suffix: string): string {
@@ -72,6 +76,22 @@ function findLogFile(runRoot: string, suffix: string): string {
     throw new Error(`Log file not found: *${suffix}; logs: ${entries.join(', ')}`);
   }
   return join(logsDir, file);
+}
+
+function hasLogFile(runRoot: string, suffix: string): boolean {
+  const logsDir = join(runRoot, 'logs');
+  if (!existsSync(logsDir)) {
+    return false;
+  }
+  return readdirSync(logsDir).some((entry) => entry.endsWith(suffix));
+}
+
+function hasObservabilityArtifacts(runRoot: string): boolean {
+  return (
+    hasLogFile(runRoot, '-usage-events.phase.jsonl') &&
+    hasLogFile(runRoot, '-otel-session-shadow.jsonl') &&
+    existsSync(join(runRoot, 'monitor.json'))
+  );
 }
 
 // E2E更新時は docs/testing/e2e.md も更新すること
@@ -155,5 +175,108 @@ describe('E2E: Observability file outputs (mock)', () => {
     const monitor = JSON.parse(readFileSync(monitorPath, 'utf-8')) as JsonRecord;
     expect(monitor).toBeTruthy();
     expect(monitorHasRunIdAttribute(monitor)).toBe(true);
+  }, 240_000);
+
+  it('should propagate observability file outputs to a nested takt process launched by a command gate', () => {
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'mock',
+      workflow_command_gates: {
+        custom_scripts: true,
+      },
+    });
+
+    mkdirSync(join(testRepo.path, '.takt', 'quality-gates'), { recursive: true });
+    const childConfigDir = join(testRepo.path, '.takt', 'nested-config');
+    mkdirSync(childConfigDir, { recursive: true });
+    writeFileSync(
+      join(childConfigDir, 'config.yaml'),
+      [
+        'provider: mock',
+        'model: mock-model',
+      ].join('\n'),
+      'utf-8',
+    );
+    const binPath = resolve(__dirname, '../../bin/takt');
+    const childWorkflowPath = join(testRepo.path, 'nested-observability-child.yaml');
+    writeFileSync(
+      childWorkflowPath,
+      [
+        'name: nested-observability-child',
+        'description: Nested child workflow for observability propagation',
+        'personas:',
+        '  test-coder: |',
+        '    You are the E2E test coder.',
+        'max_steps: 3',
+        'initial_step: execute',
+        'steps:',
+        '  - name: execute',
+        '    edit: false',
+        '    persona: test-coder',
+        '    instruction: |',
+        '      {task}',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(testRepo.path, 'nested-observability-parent.yaml'),
+      [
+        'name: nested-observability-parent',
+        'description: Parent workflow that launches a nested TAKT run',
+        'personas:',
+        '  test-coder: |',
+        '    You are the E2E test coder.',
+        'max_steps: 3',
+        'initial_step: execute',
+        'steps:',
+        '  - name: execute',
+        '    edit: true',
+        '    persona: test-coder',
+        '    instruction: |',
+        '      {task}',
+        '    quality_gates:',
+        '      - type: command',
+        '        name: nested-takt-observability',
+        '        command: "node ./.takt/quality-gates/run-nested-observability.cjs"',
+        '    rules:',
+        '      - condition: Done',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      join(testRepo.path, '.takt', 'quality-gates', 'run-nested-observability.cjs'),
+      [
+        'const { spawnSync } = require("node:child_process");',
+        `const result = spawnSync(process.execPath, [${JSON.stringify(binPath)}, "--task", "nested child task", "--workflow", ${JSON.stringify(childWorkflowPath)}, "--provider", "mock"], {`,
+        '  cwd: process.cwd(),',
+        `  env: { ...process.env, TAKT_CONFIG_DIR: ${JSON.stringify(childConfigDir)} },`,
+        '  encoding: "utf-8",',
+        '});',
+        'if (result.status !== 0) {',
+        '  process.stdout.write(result.stdout || "");',
+        '  process.stderr.write(result.stderr || "");',
+        '  process.exit(result.status || 1);',
+        '}',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = runTakt({
+      args: [
+        '--task', 'Run the parent workflow and finish',
+        '--workflow', join(testRepo.path, 'nested-observability-parent.yaml'),
+        '--provider', 'mock',
+      ],
+      cwd: testRepo.path,
+      env: isolatedEnv.env,
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const artifactRunRoots = allRunRoots(testRepo.path).filter(hasObservabilityArtifacts);
+    expect(artifactRunRoots.length).toBeGreaterThanOrEqual(2);
   }, 240_000);
 });

@@ -55,6 +55,7 @@ export class ClaudeClient {
       sandbox: options.sandbox,
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
       imageAttachments: options.imageAttachments,
+      childProcessEnv: options.childProcessEnv,
     };
   }
 

@@ -4,6 +4,7 @@
 
 import type { AgentResponse } from '../../core/models/index.js';
 import { crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import type { CursorCallOptions } from './types.js';
 
 export type { CursorCallOptions } from './types.js';
@@ -66,15 +67,12 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
   return args;
 }
 
-function buildEnv(cursorApiKey?: string): NodeJS.ProcessEnv {
-  if (!cursorApiKey) {
-    return process.env;
+function buildEnv(options: CursorCallOptions): NodeJS.ProcessEnv {
+  const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv);
+  if (options.cursorApiKey) {
+    env.CURSOR_API_KEY = options.cursorApiKey;
   }
-
-  return {
-    ...process.env,
-    CURSOR_API_KEY: cursorApiKey,
-  };
+  return env;
 }
 
 function createExecError(
@@ -102,7 +100,7 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
   return new Promise<CursorExecResult>((resolve, reject) => {
     const child = crossSpawn(options.cursorCliPath ?? CURSOR_COMMAND, args, {
       cwd: options.cwd,
-      env: buildEnv(options.cursorApiKey),
+      env: buildEnv(options),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

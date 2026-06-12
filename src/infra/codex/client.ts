@@ -4,9 +4,10 @@
  * Uses @openai/codex-sdk for native TypeScript integration.
  */
 
-import { Codex, type Input, type TurnOptions } from '@openai/codex-sdk';
+import { Codex, type CodexOptions, type Input, type TurnOptions } from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import {
@@ -299,11 +300,15 @@ export class CodexClient {
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + 1;
-      const codexClientOptions = {
+      const codexClientOptions: CodexOptions = {
+        env: buildEnvWithNestedObservabilitySnapshot(
+          process.env,
+          options.childProcessEnv,
+        ) as Record<string, string>,
         ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
         ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
       };
-      const codex = new Codex(Object.keys(codexClientOptions).length > 0 ? codexClientOptions : undefined);
+      const codex = new Codex(codexClientOptions);
       const thread = threadId
         ? await codex.resumeThread(threadId, threadOptions)
         : await codex.startThread(threadOptions);

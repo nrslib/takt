@@ -91,6 +91,26 @@ describe('OTLP exporter config resolution', () => {
     })).toThrow(`${OTEL_EXPORTER_OTLP_ENDPOINT} must use http or https`);
   });
 
+  it('accepts absolute HTTP(S) endpoint URLs without command gate filtering rules', () => {
+    expect(resolve(true, {
+      [OTEL_EXPORTER_OTLP_ENDPOINT]: 'https://user:pass@collector.example.test',
+      [OTEL_EXPORTER_OTLP_TRACES_ENDPOINT]: 'https://collector.example.test/v1/traces?tenant=dev',
+      [OTEL_EXPORTER_OTLP_METRICS_ENDPOINT]: 'https://collector.example.test/v1/metrics#fragment',
+    })).toEqual({
+      enabled: true,
+      endpoint: 'https://user:pass@collector.example.test',
+      endpointSource: { kind: 'env', name: OTEL_EXPORTER_OTLP_ENDPOINT },
+      traces: {
+        endpoint: 'https://collector.example.test/v1/traces?tenant=dev',
+        source: { kind: 'env', name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT },
+      },
+      metrics: {
+        endpoint: 'https://collector.example.test/v1/metrics#fragment',
+        source: { kind: 'env', name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT },
+      },
+    });
+  });
+
   it('rejects invalid signal-specific endpoint URLs', () => {
     expect(() => resolve(true, {
       [OTEL_EXPORTER_OTLP_ENDPOINT]: 'http://127.0.0.1:4318',

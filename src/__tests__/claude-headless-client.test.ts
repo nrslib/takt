@@ -71,6 +71,8 @@ describe('callClaudeHeadless', () => {
     capturedMcpConfigContent = undefined;
     capturedMcpConfigMode = undefined;
     capturedMcpConfigPath = undefined;
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   });
 
   function stubSpawn(opts: {
@@ -131,6 +133,29 @@ describe('callClaudeHeadless', () => {
     const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
     expect(res.status).toBe('done');
     expect(res.content).toBe('ok');
+  });
+
+  it('passes only run-local observability snapshot to headless child env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({ type: 'text', text: 'ok' })}\n`,
+        `${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok' })}\n`,
+      ],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('agent', 'hi', {
+      cwd: '/tmp',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    expect(lastSpawnEnv?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(lastSpawnEnv?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
   });
 
   it('returns provider usage from the final stream-json result', async () => {

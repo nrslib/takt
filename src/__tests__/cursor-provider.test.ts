@@ -145,6 +145,25 @@ describe('CursorProvider', () => {
     );
   });
 
+  it('should pass childProcessEnv to callCursor', async () => {
+    mockCallCursor.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const provider = new CursorProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      childProcessEnv,
+    });
+
+    expect(mockCallCursor).toHaveBeenCalledWith(
+      'coder',
+      'implement',
+      expect.objectContaining({ childProcessEnv }),
+    );
+  });
+
   it('should pass undefined cursorCliPath when resolver returns undefined', async () => {
     mockResolveCursorCliPath.mockReturnValue(undefined);
     mockCallCursor.mockResolvedValue(doneResponse('coder'));

@@ -21,6 +21,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     codexPathOverride: resolveCodexCliPath(),
     outputSchema: options.outputSchema,
     imageAttachments: options.imageAttachments,
+    childProcessEnv: options.childProcessEnv,
   };
 }
 

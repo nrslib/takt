@@ -66,6 +66,8 @@ describe('callCursor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.CURSOR_API_KEY;
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   });
 
   it('should invoke cursor-agent with required args and map model/session/permission', async () => {
@@ -142,7 +144,49 @@ describe('callCursor', () => {
 
     const [, args, options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
     expect(args).not.toContain('--force');
-    expect(options.env).toBe(process.env);
+    expect(options.env).not.toBe(process.env);
+    expect(options.env?.CURSOR_API_KEY).toBeUndefined();
+  });
+
+  it('preserves ambient OTEL env when childProcessEnv is undefined', async () => {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-collector.example.test';
+    mockSpawnWithScenario({
+      stdout: JSON.stringify({ content: 'done' }),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      permissionMode: 'edit',
+    });
+
+    expect(result.status).toBe('done');
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://ambient-collector.example.test');
+  });
+
+  it('passes only run-local observability snapshot to cursor child env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    mockSpawnWithScenario({
+      stdout: JSON.stringify({ content: 'done' }),
+      code: 0,
+    });
+
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    expect(result.status).toBe('done');
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(options.env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
   });
 
   it('should return structured error when cursor-agent binary is not found', async () => {

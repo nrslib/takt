@@ -52,6 +52,8 @@ describe('CodexClient — structuredOutput 抽出', () => {
     mockEvents = [];
     lastThreadOptions = undefined;
     lastCodexConstructorOptions = undefined;
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   });
 
   it('outputSchema 指定時に agent_message の JSON テキストを structuredOutput として返す', async () => {
@@ -172,6 +174,32 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
     expect(result.status).toBe('done');
     expect(result.structuredOutput).toBeUndefined();
+  });
+
+  it('run-local observability snapshot だけを Codex CLI env に渡す', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: { id: 'msg-1', type: 'agent_message', text: 'done' },
+      },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    const env = lastCodexConstructorOptions?.env as Record<string, string> | undefined;
+    expect(env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
   });
 
   it('agent_message が JSON でない場合は undefined', async () => {

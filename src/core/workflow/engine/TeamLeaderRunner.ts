@@ -142,6 +142,7 @@ export class TeamLeaderRunner {
         resolvedModel: leaderModel,
         resolvedProvider: leaderProvider,
         workflowMeta: leaderWorkflowMeta,
+        childProcessEnv: this.deps.engineOptions.childProcessEnv,
         onStream: this.deps.engineOptions.onStream,
         onPromptResolved: (promptParts) => {
           if (didEmitPhaseStart) return;
@@ -259,6 +260,7 @@ export class TeamLeaderRunner {
               resolvedModel: leaderModel,
               resolvedProvider: leaderProvider,
               workflowMeta: leaderWorkflowMeta,
+              childProcessEnv: this.deps.engineOptions.childProcessEnv,
               onStream: this.deps.engineOptions.onStream,
             },
           );

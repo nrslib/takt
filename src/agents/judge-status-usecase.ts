@@ -1,7 +1,7 @@
 import type { WorkflowRule, RuleMatchMethod, Language } from '../core/models/types.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
-import { runAgent, type StreamCallback } from './runner.js';
+import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
 import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditions } from './judge-utils.js';
 import { loadJudgmentSchema, loadEvaluationSchema } from '../infra/resources/schema-loader.js';
 import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
@@ -15,6 +15,7 @@ export interface JudgeStatusOptions {
   resolvedModel?: string;
   language?: Language;
   interactive?: boolean;
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   onStream?: StreamCallback;
   onJudgeStage?: (entry: JudgeStageLogEntry) => void;
   onStructuredPromptResolved?: (promptParts: {
@@ -41,6 +42,7 @@ export interface TagJudgeRunOptions {
   resolvedModel?: string;
   language?: Language;
   onStream?: StreamCallback;
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   stepName: string;
 }
 
@@ -60,6 +62,7 @@ export async function runTagJudgeStage(
     permissionMode: 'readonly',
     language: runOptions.language,
     onStream: runOptions.onStream,
+    childProcessEnv: runOptions.childProcessEnv,
   });
 
   onJudgeStage?.({
@@ -91,6 +94,7 @@ export interface EvaluateConditionOptions {
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   onJudgeResponse?: (entry: {
     instruction: string;
     status: 'done' | 'error';
@@ -113,6 +117,7 @@ export async function evaluateCondition(
     ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
     permissionMode: 'readonly',
     outputSchema: loadEvaluationSchema(),
+    childProcessEnv: options.childProcessEnv,
   });
 
   options.onJudgeResponse?.({
@@ -181,6 +186,7 @@ export async function judgeStatus(
     permissionMode: 'readonly' as const,
     language: options.language,
     onStream: options.onStream,
+    childProcessEnv: options.childProcessEnv,
   };
 
   const structuredResponse = await runAgent('conductor', structuredInstruction, {
@@ -222,6 +228,7 @@ export async function judgeStatus(
       resolvedModel: options.resolvedModel,
       language: options.language,
       onStream: options.onStream,
+      childProcessEnv: options.childProcessEnv,
       stepName: options.stepName,
     },
     options.onJudgeStage,
@@ -240,6 +247,7 @@ export async function judgeStatus(
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
+      childProcessEnv: options.childProcessEnv,
       onJudgeResponse: stage3.capture,
     });
 

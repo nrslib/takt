@@ -75,6 +75,8 @@ describe('callCopilot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.COPILOT_GITHUB_TOKEN;
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     mockMkdtemp.mockResolvedValue('/tmp/takt-copilot-XXXXXX');
     mockReadFile.mockResolvedValue(
       '# 🤖 Copilot CLI Session\n\n> **Session ID:** `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`\n',
@@ -165,7 +167,29 @@ describe('callCopilot', () => {
     expect(result.status).toBe('done');
 
     const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
-    expect(options.env).toBe(process.env);
+    expect(options.env).not.toBe(process.env);
+    expect(options.env?.COPILOT_GITHUB_TOKEN).toBeUndefined();
+  });
+
+  it('passes only run-local observability snapshot to copilot child env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callCopilot('coder', 'implement feature', {
+      cwd: '/repo',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(options.env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
   });
 
   it('should use custom CLI path when copilotCliPath is specified', async () => {

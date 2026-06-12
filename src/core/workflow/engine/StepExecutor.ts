@@ -490,6 +490,7 @@ export class StepExecutor {
       provider: stepProviderModel.provider,
       resolvedProvider: stepProviderModel.provider,
       resolvedModel: stepProviderModel.model,
+      childProcessEnv: phaseCtx.childProcessEnv,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,

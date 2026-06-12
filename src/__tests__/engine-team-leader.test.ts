@@ -119,6 +119,39 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('Tests done');
   });
 
+  it('passes childProcessEnv to team leader decomposition and feedback calls', async () => {
+    const config = buildTeamLeaderConfig();
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      childProcessEnv,
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    await engine.run();
+
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toEqual(expect.objectContaining({ childProcessEnv }));
+    expect(vi.mocked(runAgent).mock.calls[2]?.[2]).toEqual(expect.objectContaining({ childProcessEnv }));
+  });
+
   it('全パートが失敗した場合はstep失敗として中断する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });

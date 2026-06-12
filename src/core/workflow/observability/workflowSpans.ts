@@ -291,9 +291,10 @@ async function runInSpan<T>(
   name: string,
   attributes: Attributes,
   execute: (span: Span) => Promise<T>,
+  parentContext = context.active(),
 ): Promise<T> {
-  const span = tracer.startSpan(name, { attributes });
-  return context.with(trace.setSpan(context.active(), span), async () => {
+  const span = tracer.startSpan(name, { attributes }, parentContext);
+  return context.with(trace.setSpan(parentContext, span), async () => {
     try {
       return await execute(span);
     } catch (error) {

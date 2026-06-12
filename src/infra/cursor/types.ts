@@ -17,4 +17,5 @@ export interface CursorCallOptions {
   cursorApiKey?: string;
   /** Custom path to cursor-agent executable */
   cursorCliPath?: string;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

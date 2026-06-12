@@ -41,4 +41,5 @@ export interface CodexCallOptions {
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
   imageAttachments?: ProviderImageAttachment[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

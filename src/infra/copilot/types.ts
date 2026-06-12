@@ -20,4 +20,5 @@ export interface CopilotCallOptions {
   copilotGithubToken?: string;
   /** Custom path to copilot executable */
   copilotCliPath?: string;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

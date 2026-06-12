@@ -35,6 +35,7 @@ export interface ProviderCallOptions {
   kiroApiKey?: string;
   outputSchema?: Record<string, unknown>;
   imageAttachments?: ProviderImageAttachment[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface ProviderAgent {

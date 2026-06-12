@@ -1,4 +1,5 @@
 import { crossSpawn } from '../../shared/utils/index.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { containsRateLimitMarker } from '../rate-limit/detection.js';
 import { tryExtractTextFromStreamJsonLine, tryExtractThinkingFromStreamJsonLine } from './stream-json-lines.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
@@ -10,7 +11,7 @@ export const HEADLESS_RATE_LIMIT_MESSAGE = 'Claude CLI stream reported a rate li
 const CLAUDE_COMMAND = 'claude';
 
 function buildHeadlessEnv(options: ClaudeHeadlessCallOptions): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv);
   if (options.anthropicApiKey) {
     env.ANTHROPIC_API_KEY = options.anthropicApiKey;
   }

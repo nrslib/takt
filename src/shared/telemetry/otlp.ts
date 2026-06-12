@@ -40,7 +40,19 @@ export type OtlpExporterConfigInput = {
 
 export type OtlpEnvironment = Record<string, string | undefined>;
 
+const OTLP_ENDPOINT_ENV_NAMES = [
+  OTEL_EXPORTER_OTLP_ENDPOINT,
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
+] as const;
+
+const OTLP_ENDPOINT_ENV_NAME_SET = new Set<string>(OTLP_ENDPOINT_ENV_NAMES);
 const OTLP_HTTP_PROTOCOLS = new Set(['http:', 'https:']);
+
+export function isOtlpEndpointEnvName(name: string): name is OtlpEndpointEnvName {
+  return OTLP_ENDPOINT_ENV_NAME_SET.has(name);
+}
+
 export function resolveOtlpExporterConfigFromEnv(observabilityEnabled: boolean): OtlpExporterConfig {
   return resolveOtlpExporterConfig({ observabilityEnabled, env: process.env });
 }

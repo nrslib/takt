@@ -33,6 +33,8 @@ export interface PhaseRunnerContext {
   sanitizeObservabilityText?: (text: string) => string;
   /** Current workflow stack for observability span parity (phase/judge records) */
   getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
+  /** Run-local environment values passed to trusted child processes. */
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   /** Parent workflow iteration for sub-step phase events */
   iteration?: number;
   /** Get persona session ID */

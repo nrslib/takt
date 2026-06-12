@@ -3,6 +3,7 @@ import type {
   AgentWorkflowStep,
   WorkflowPromotionEntry,
 } from '../../models/types.js';
+import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 
 export interface PromotionEvaluationContext {
@@ -12,6 +13,7 @@ export interface PromotionEvaluationContext {
   structuredCaller?: StructuredCaller;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
 }
 
 function matchesAt(entry: WorkflowPromotionEntry, stepIteration: number): boolean {
@@ -42,6 +44,7 @@ async function matchesAiCondition(
       provider: context.resolvedProvider,
       resolvedProvider: context.resolvedProvider,
       resolvedModel: context.resolvedModel,
+      childProcessEnv: context.childProcessEnv,
     },
   );
   return matchedIndex === entryIndex;

@@ -49,6 +49,7 @@ interface WorkflowRunLoopDeps {
     qualityGates: WorkflowStep['qualityGates'];
     projectRoot: string;
     step: WorkflowStep;
+    childProcessEnv?: Readonly<Record<string, string>>;
   }) => Promise<QualityGateRunResult>;
   persistPreviousResponseSnapshot: (
     state: WorkflowState,
@@ -76,6 +77,7 @@ async function resolveStepPromotionRuntime(
     cwd: deps.getCwd(),
     previousResponseContent: deps.state.lastOutput?.content ?? '',
     structuredCaller: deps.options.structuredCaller,
+    childProcessEnv: deps.options.childProcessEnv,
     resolveStepProviderModel: deps.resolveStepProviderModel,
   }, step, stepIteration, runtime);
 }
@@ -402,6 +404,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         qualityGates: step.qualityGates,
         projectRoot: deps.getCwd(),
         step,
+        childProcessEnv: deps.options.childProcessEnv,
       });
       if (!qualityGateResult.ok) {
         applyQualityGateFailure(
@@ -599,6 +602,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     qualityGates: step.qualityGates,
     projectRoot: deps.getCwd(),
     step,
+    childProcessEnv: deps.options.childProcessEnv,
   });
   if (!qualityGateResult.ok) {
     applyQualityGateFailure(

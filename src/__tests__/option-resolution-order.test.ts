@@ -286,6 +286,21 @@ describe('option resolution order', () => {
     );
   });
 
+  it('should pass childProcessEnv to provider call options', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      provider: 'claude',
+      childProcessEnv,
+    });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ childProcessEnv }),
+    );
+  });
+
   it('should merge persona providerOptions into standalone runAgent calls', async () => {
     resolveConfigValueMock.mockReturnValue({
       conductor: {

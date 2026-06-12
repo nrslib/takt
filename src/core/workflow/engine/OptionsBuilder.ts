@@ -166,6 +166,7 @@ export class OptionsBuilder {
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
       workflowMeta,
+      childProcessEnv: this.engineOptions.childProcessEnv,
     };
     return baseOptions;
   }
@@ -310,6 +311,7 @@ export class OptionsBuilder {
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
+      childProcessEnv: this.engineOptions.childProcessEnv,
       onStream: this.engineOptions.onStream,
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),

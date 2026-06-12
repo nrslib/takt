@@ -216,4 +216,5 @@ export interface OpenCodeCallOptions {
   opencodeApiKey?: string;
   outputSchema?: Record<string, unknown>;
   interactionTimeoutMs?: number;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

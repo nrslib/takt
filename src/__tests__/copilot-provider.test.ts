@@ -145,6 +145,25 @@ describe('CopilotProvider', () => {
     );
   });
 
+  it('should pass childProcessEnv to callCopilot', async () => {
+    mockCallCopilot.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const provider = new CopilotProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      childProcessEnv,
+    });
+
+    expect(mockCallCopilot).toHaveBeenCalledWith(
+      'coder',
+      'implement',
+      expect.objectContaining({ childProcessEnv }),
+    );
+  });
+
   it('should pass undefined copilotCliPath when resolver returns undefined', async () => {
     mockResolveCopilotCliPath.mockReturnValue(undefined);
     mockCallCopilot.mockResolvedValue(doneResponse('coder'));

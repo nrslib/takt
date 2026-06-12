@@ -38,6 +38,7 @@ export interface ArpeggioRunnerDeps {
   readonly getCwd: () => string;
   readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
+  readonly childProcessEnv?: RunAgentOptions['childProcessEnv'];
   readonly observabilityEnabled: boolean;
   readonly observabilityRunId?: string;
   readonly sanitizeObservabilityText?: (text: string) => string;
@@ -334,6 +335,7 @@ export class ArpeggioRunner {
       provider: stepProviderModel.provider,
       resolvedProvider: stepProviderModel.provider,
       resolvedModel: stepProviderModel.model,
+      childProcessEnv: this.deps.childProcessEnv,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,

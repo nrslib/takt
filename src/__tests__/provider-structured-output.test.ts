@@ -176,6 +176,28 @@ describe('ClaudeProvider — structured output', () => {
     const opts = mockCallClaude.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('imageAttachments', imageAttachments);
   });
+
+  it('childProcessEnv を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp', childProcessEnv });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
+  });
+
+  it('systemPrompt 指定時も childProcessEnv が callClaudeCustom に渡される', async () => {
+    mockCallClaudeCustom.mockResolvedValue(doneResponse('judge'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new ClaudeProvider().setup({ name: 'judge', systemPrompt: 'sys' });
+    await agent.call('prompt', { cwd: '/tmp', childProcessEnv });
+
+    const opts = mockCallClaudeCustom.mock.calls[0]?.[3];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
+  });
 });
 
 // ---------- Codex ----------
@@ -213,6 +235,20 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('reasoningEffort', 'high');
+  });
+
+  it('childProcessEnv を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      childProcessEnv,
+    });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
   });
 
   it('systemPrompt 指定時も outputSchema が callCodexCustom に渡される', async () => {
@@ -331,6 +367,21 @@ describe('OpenCodeProvider — structured output', () => {
 
     const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
     expect(opts.outputSchema).toBeUndefined();
+  });
+
+  it('childProcessEnv を callOpenCodeCustom に渡す', async () => {
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const agent = new OpenCodeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      model: 'openai/gpt-4',
+      childProcessEnv,
+    });
+
+    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
+    expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
   });
 });
 

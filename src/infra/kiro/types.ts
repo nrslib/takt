@@ -11,4 +11,5 @@ export interface KiroCallOptions {
   kiroApiKey?: string;
   kiroCliPath?: string;
   agent?: string;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

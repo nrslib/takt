@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_COMMAND_GATE_TIMEOUT_MS } from '../../models/quality-gate-defaults.js';
 import { isRealPathInside } from '../../../shared/utils/index.js';
+import { pickCommandGateNestedObservabilityEnv } from '../../../shared/telemetry/index.js';
 import { sanitizeSensitiveText } from './commandGateMessage.js';
 import type { CommandQualityGateResult, RunCommandQualityGateOptions } from './types.js';
 
@@ -111,14 +112,21 @@ function writeOutputLog(
   }
 }
 
-function buildCommandGateEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function buildCommandGateEnv(
+  source: NodeJS.ProcessEnv,
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of COMMAND_GATE_ENV_ALLOWLIST) {
-    if (source[key] !== undefined) {
-      env[key] = source[key];
+    const value = source[key];
+    if (value !== undefined) {
+      env[key] = value;
     }
   }
-  return env;
+  return {
+    ...env,
+    ...pickCommandGateNestedObservabilityEnv(childProcessEnv),
+  };
 }
 
 function buildFailure(
@@ -172,6 +180,7 @@ function killProcess(childPid: number, signal: NodeJS.Signals = 'SIGTERM'): stri
 export function runCommandQualityGate({
   gate,
   projectRoot,
+  childProcessEnv,
 }: RunCommandQualityGateOptions): Promise<CommandQualityGateResult> {
   const cwd = resolveGateCwd(projectRoot, gate.cwd);
   const gateName = gate.name ?? gate.command;
@@ -197,7 +206,7 @@ export function runCommandQualityGate({
       shell: true,
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: buildCommandGateEnv(process.env),
+      env: buildCommandGateEnv(process.env, childProcessEnv),
     });
     let stdout = '';
     let stderr = '';

@@ -31,6 +31,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
       excludedCommands: claudeSandbox.excludedCommands,
     } : undefined,
     pathToClaudeCodeExecutable: resolveClaudeCliPath(),
+    childProcessEnv: options.childProcessEnv,
   };
 }
 

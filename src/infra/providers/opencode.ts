@@ -39,6 +39,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     onAskUserQuestion: options.onAskUserQuestion,
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),
     outputSchema: options.outputSchema,
+    childProcessEnv: options.childProcessEnv,
   };
 }
 

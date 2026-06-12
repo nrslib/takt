@@ -10,6 +10,13 @@ import { createWorkflowExecutionBootstrap } from './workflowExecutionBootstrap.j
 import { createWorkflowExecutionContext, createWorkflowCallResolver } from './workflowExecutionContext.js';
 import { bindWorkflowExecutionEvents, type WorkflowExecutionEventBridge } from './workflowExecutionEvents.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import {
+  OTEL_EXPORTER_OTLP_ENDPOINT,
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+  resolveOtlpExporterConfig,
+  pickNestedOtelExporterOptionEnv,
+} from '../../../shared/telemetry/index.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -18,6 +25,48 @@ const log = createLogger('workflow-execution');
 type WorkflowRunContext = {
   ignoreIterationLimit?: boolean;
 };
+
+function serializeObservabilityForNestedRuns(observability: {
+  enabled: boolean;
+  monitor: boolean;
+  sessionLogExporter: boolean;
+  usageEventsPhase: boolean;
+}): string {
+  return JSON.stringify({
+    enabled: observability.enabled,
+    monitor: observability.monitor,
+    session_log_exporter: observability.sessionLogExporter,
+    usage_events_phase: observability.usageEventsPhase,
+  });
+}
+
+function resolveNestedChildProcessEnv(observability: {
+  enabled: boolean;
+  monitor: boolean;
+  sessionLogExporter: boolean;
+  usageEventsPhase: boolean;
+}, env: NodeJS.ProcessEnv): Readonly<Record<string, string>> | undefined {
+  if (!observability.enabled) {
+    return undefined;
+  }
+
+  const childProcessEnv: Record<string, string> = {
+    TAKT_OBSERVABILITY: serializeObservabilityForNestedRuns(observability),
+    ...pickNestedOtelExporterOptionEnv(env),
+  };
+  const otlpConfig = resolveOtlpExporterConfig({
+    observabilityEnabled: observability.enabled,
+    env,
+  });
+
+  if (otlpConfig.enabled) {
+    childProcessEnv[OTEL_EXPORTER_OTLP_ENDPOINT] = otlpConfig.endpoint;
+    childProcessEnv[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT] = otlpConfig.traces.endpoint;
+    childProcessEnv[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT] = otlpConfig.metrics.endpoint;
+  }
+
+  return childProcessEnv;
+}
 
 function resolveCurrentTaskContext(options: WorkflowExecutionOptions, runSlug: string) {
   return {
@@ -132,6 +181,7 @@ async function executeWorkflowInternal(
   });
 
   try {
+    const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, process.env);
     engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
       abortSignal: runAbortController.signal,
       onStream: bootstrap.providerEventLogger.wrapCallback(bootstrap.streamHandler),
@@ -145,6 +195,7 @@ async function executeWorkflowInternal(
       observability: bootstrap.observability,
       observabilityRunId: bootstrap.runSlug,
       sanitizeObservabilityText: bootstrap.sanitizeObservabilityText,
+      childProcessEnv,
       language: options.language,
       provider: bootstrap.currentProvider,
       providerSource: bootstrap.currentProviderSource,

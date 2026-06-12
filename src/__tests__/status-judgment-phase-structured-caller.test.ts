@@ -116,4 +116,52 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
       }),
     );
   });
+
+  it('passes childProcessEnv to phase 3 structured caller judgment', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const structuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _rules, options) => {
+        options.onStructuredPromptResolved?.({
+          systemPrompt: 'judge-system',
+          userInstruction: 'judge-instruction',
+        });
+        return { ruleIndex: 0, method: 'structured_output' as const };
+      }),
+    };
+    const step: WorkflowStep = {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      passPreviousResponse: true,
+      rules: [
+        { condition: 'needs_fix', next: 'fix' },
+        { condition: 'approved', next: 'COMPLETE' },
+      ],
+    };
+
+    await runStatusJudgmentPhase(step, {
+      cwd: '/tmp/project',
+      reportDir: '/tmp/project/.takt/reports',
+      lastResponse: 'response body',
+      iteration: 2,
+      childProcessEnv,
+      getSessionId: vi.fn(),
+      resolveSessionKey: vi.fn(),
+      buildResumeOptions: vi.fn(),
+      buildNewSessionReportOptions: vi.fn(),
+      updatePersonaSession: vi.fn(),
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
+      structuredCaller,
+    } as Parameters<typeof runStatusJudgmentPhase>[1] & {
+      structuredCaller: { judgeStatus: typeof structuredCaller.judgeStatus };
+    });
+
+    expect(structuredCaller.judgeStatus).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      step.rules,
+      expect.objectContaining({ childProcessEnv }),
+    );
+  });
 });

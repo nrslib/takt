@@ -10,6 +10,10 @@ import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, parseStructuredOutput, type StreamDiagnostics } from '../../shared/utils/index.js';
+import {
+  getNestedObservabilityEnvFingerprint,
+  runWithNestedObservabilityProcessEnv,
+} from '../../shared/telemetry/index.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {
   buildOpenCodePermissionRuleset,
@@ -59,69 +63,132 @@ interface SharedServer {
   close: () => void;
   model: string;
   apiKey?: string;
+  envFingerprint: string;
+  activeCalls: number;
   queue: Array<(client: OpencodeClient) => void>;
 }
 
 let sharedServer: SharedServer | null = null;
+const sharedServers = new Set<SharedServer>();
 let initPromise: Promise<void> | null = null;
 
-async function acquireClient(model: string, apiKey?: string): Promise<{ client: OpencodeClient; release: () => void }> {
+async function acquireClient(
+  model: string,
+  apiKey: string | undefined,
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+): Promise<{ client: OpencodeClient; release: () => void }> {
   if (initPromise) {
     await initPromise;
   }
 
-  if (sharedServer?.model === model && sharedServer.apiKey === apiKey) {
-    if (sharedServer.queue.length === 0) {
-      return { client: sharedServer.client, release: () => releaseClient() };
-    }
-    return new Promise((resolve) => {
-      sharedServer!.queue.push((client) => resolve({ client, release: () => releaseClient() }));
-    });
+  const envFingerprint = getNestedObservabilityEnvFingerprint(childProcessEnv);
+  if (sharedServer && isMatchingSharedServer(sharedServer, model, apiKey, envFingerprint)) {
+    return acquireSharedServerClient(sharedServer);
   }
 
-  sharedServer?.close();
+  closeIdleSharedServer(sharedServer);
 
   let resolveInit: () => void;
   initPromise = new Promise((resolve) => { resolveInit = resolve; });
 
   try {
     const port = await getFreePort();
-    const { client, server } = await createOpencode({
-      port,
-      config: {
-        model,
-        small_model: model,
-        ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
-      },
-      timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
-    });
+    const { client, server } = await runWithNestedObservabilityProcessEnv(childProcessEnv, () =>
+      createOpencode({
+        port,
+        config: {
+          model,
+          small_model: model,
+          ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
+        },
+        timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
+      })
+    );
 
     const closeServer = (): void => {
       try {
         server.close();
-      } catch {
-        // Ignore close errors
+      } catch (error) {
+        log.debug('OpenCode server close failed', { error: getErrorMessage(error) });
       }
     };
 
-    sharedServer = { client, close: closeServer, model, apiKey, queue: [] };
+    const serverState: SharedServer = {
+      client,
+      close: closeServer,
+      model,
+      apiKey,
+      envFingerprint,
+      activeCalls: 1,
+      queue: [],
+    };
+    sharedServer = serverState;
+    sharedServers.add(serverState);
     log.debug('OpenCode server started', { model, port });
 
-    return { client, release: () => releaseClient() };
+    return { client, release: () => releaseClient(serverState) };
   } finally {
     initPromise = null;
     resolveInit!();
   }
 }
 
-function releaseClient(): void {
-  if (!sharedServer) return;
-  const next = sharedServer.queue.shift();
-  next?.(sharedServer.client);
+function isMatchingSharedServer(
+  server: SharedServer,
+  model: string,
+  apiKey: string | undefined,
+  envFingerprint: string,
+): boolean {
+  return server.model === model
+    && server.apiKey === apiKey
+    && server.envFingerprint === envFingerprint;
+}
+
+function acquireSharedServerClient(server: SharedServer): { client: OpencodeClient; release: () => void } | Promise<{ client: OpencodeClient; release: () => void }> {
+  if (server.queue.length === 0) {
+    server.activeCalls += 1;
+    return { client: server.client, release: () => releaseClient(server) };
+  }
+  return new Promise((resolve) => {
+    server.queue.push((client) => {
+      server.activeCalls += 1;
+      resolve({ client, release: () => releaseClient(server) });
+    });
+  });
+}
+
+function releaseClient(server: SharedServer): void {
+  server.activeCalls -= 1;
+  const next = server.queue.shift();
+  if (next) {
+    next(server.client);
+    return;
+  }
+  if (server.activeCalls === 0 && sharedServer !== server) {
+    closeSharedServer(server);
+  }
+}
+
+function closeIdleSharedServer(server: SharedServer | null): void {
+  if (!server || server.activeCalls > 0 || server.queue.length > 0) {
+    return;
+  }
+  closeSharedServer(server);
+}
+
+function closeSharedServer(server: SharedServer): void {
+  server.close();
+  sharedServers.delete(server);
+  if (sharedServer === server) {
+    sharedServer = null;
+  }
 }
 
 export function resetSharedServer(): void {
-  sharedServer?.close();
+  for (const server of sharedServers) {
+    server.close();
+  }
+  sharedServers.clear();
   sharedServer = null;
 }
 
@@ -410,7 +477,7 @@ export class OpenCodeClient {
         const parsedModel = parseProviderModel(options.model, 'OpenCode model');
         const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
 
-        const acquired = await acquireClient(fullModel, options.opencodeApiKey);
+        const acquired = await acquireClient(fullModel, options.opencodeApiKey, options.childProcessEnv);
         opencodeApiClient = acquired.client;
         release = acquired.release;
 
@@ -423,7 +490,6 @@ export class OpenCodeClient {
 
         sessionId = sessionResult.data?.id;
         if (!sessionId) {
-          release();
           throw new Error('Failed to create OpenCode session');
         }
         const { stream } = await opencodeApiClient.event.subscribe(

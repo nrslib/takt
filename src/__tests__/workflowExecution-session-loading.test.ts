@@ -5,7 +5,7 @@
  * retry runs (startStep / retryNote) load persisted sessions.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 
@@ -276,8 +276,46 @@ function makeConfigWithStep(overrides: Record<string, unknown>): WorkflowConfig 
 }
 
 describe('executeWorkflow session loading', () => {
+  const restoredEnvKeys = [
+    'TAKT_OBSERVABILITY',
+    'OTEL_EXPORTER_OTLP_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_HEADERS',
+    'OTEL_EXPORTER_OTLP_TRACES_HEADERS',
+    'OTEL_EXPORTER_OTLP_METRICS_HEADERS',
+    'OTEL_EXPORTER_OTLP_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_TRACES_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_METRICS_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_COMPRESSION',
+    'OTEL_EXPORTER_OTLP_TRACES_COMPRESSION',
+    'OTEL_EXPORTER_OTLP_METRICS_COMPRESSION',
+    'OTEL_EXPORTER_OTLP_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_CLIENT_KEY',
+    'OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY',
+    'OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY',
+    'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE',
+  ] as const;
+  const originalEnv = new Map(restoredEnvKeys.map((key) => [key, process.env[key]]));
+
+  function restoreEnv(): void {
+    for (const [key, value] of originalEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreEnv();
     mockCreateUsageEventLogger.mockReturnValue(mockUsageLogger);
     mockInitializeOtelFoundation.mockResolvedValue({
       shutdown: mockObservabilityShutdown,
@@ -292,6 +330,10 @@ describe('executeWorkflow session loading', () => {
       totalTokens: 5,
       usageMissing: false,
     };
+  });
+
+  afterEach(() => {
+    restoreEnv();
   });
 
   it('should pass empty initialSessions on normal run', async () => {
@@ -440,6 +482,168 @@ describe('executeWorkflow session loading', () => {
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toBe(observability);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
+  });
+
+  it('Given enabled observability and an existing child env snapshot, When executing workflow, Then passes run-local child process env without mutating process env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = ' https://collector.example.test ';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'https://collector.example.test/custom/traces';
+    process.env.OTEL_EXPORTER_OTLP_HEADERS = 'authorization=Bearer%20token';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS = 'x-trace=enabled';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS = 'x-metric=enabled';
+    process.env.OTEL_EXPORTER_OTLP_TIMEOUT = '15000';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = '12000';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_TIMEOUT = '13000';
+    process.env.OTEL_EXPORTER_OTLP_COMPRESSION = 'gzip';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_COMPRESSION = 'none';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_COMPRESSION = 'gzip';
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = '/certs/root.pem';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = '/certs/traces-root.pem';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE = '/certs/metrics-root.pem';
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE = '/certs/client.pem';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = '/certs/traces-client.pem';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE = '/certs/metrics-client.pem';
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_KEY = '/certs/client.key';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY = '/certs/traces-client.key';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY = '/certs/metrics-client.key';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE = 'delta';
+    const observability = {
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: true,
+      usageEventsPhase: true,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+      TAKT_OBSERVABILITY: JSON.stringify({
+        enabled: true,
+        monitor: true,
+        session_log_exporter: true,
+        usage_events_phase: true,
+      }),
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://collector.example.test/custom/traces',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://collector.example.test/v1/metrics',
+      OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer%20token',
+      OTEL_EXPORTER_OTLP_TRACES_HEADERS: 'x-trace=enabled',
+      OTEL_EXPORTER_OTLP_METRICS_HEADERS: 'x-metric=enabled',
+      OTEL_EXPORTER_OTLP_TIMEOUT: '15000',
+      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+      OTEL_EXPORTER_OTLP_METRICS_TIMEOUT: '13000',
+      OTEL_EXPORTER_OTLP_COMPRESSION: 'gzip',
+      OTEL_EXPORTER_OTLP_TRACES_COMPRESSION: 'none',
+      OTEL_EXPORTER_OTLP_METRICS_COMPRESSION: 'gzip',
+      OTEL_EXPORTER_OTLP_CERTIFICATE: '/certs/root.pem',
+      OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE: '/certs/traces-root.pem',
+      OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE: '/certs/metrics-root.pem',
+      OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: '/certs/client.pem',
+      OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE: '/certs/traces-client.pem',
+      OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE: '/certs/metrics-client.pem',
+      OTEL_EXPORTER_OTLP_CLIENT_KEY: '/certs/client.key',
+      OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY: '/certs/traces-client.key',
+      OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY: '/certs/metrics-client.key',
+      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'delta',
+    });
+    expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+    expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe(' https://collector.example.test ');
+    expect(process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe('https://collector.example.test/custom/traces');
+    expect(process.env.OTEL_EXPORTER_OTLP_HEADERS).toBe('authorization=Bearer%20token');
+  });
+
+  it('Given enabled observability and only unsafe signal endpoints, When executing workflow, Then omits raw endpoints from child process env', async () => {
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'https://user:pass@collector.example.test/v1/traces?token=top-secret';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'https://collector.example.test/v1/metrics#top-secret';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = '12000';
+    const observability = {
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: true,
+      usageEventsPhase: true,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+      TAKT_OBSERVABILITY: JSON.stringify({
+        enabled: true,
+        monitor: true,
+        session_log_exporter: true,
+        usage_events_phase: true,
+      }),
+      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+    });
+  });
+
+  it('Given disabled observability and no child env snapshot, When executing workflow, Then does not create TAKT_OBSERVABILITY', async () => {
+    delete process.env.TAKT_OBSERVABILITY;
+    const observability = {
+      enabled: false,
+      monitor: true,
+      sessionLogExporter: true,
+      usageEventsPhase: true,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toBeUndefined();
+    expect(process.env.TAKT_OBSERVABILITY).toBeUndefined();
+  });
+
+  it('Given enabled observability and workflow failure, When executing workflow, Then keeps process env unchanged', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false,"monitor":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://collector.example.test:4318';
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: true,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runError = new Error('workflow engine failed');
+
+    await expect(
+      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+      }),
+    ).rejects.toThrow('workflow engine failed');
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+      TAKT_OBSERVABILITY: JSON.stringify({
+        enabled: true,
+        monitor: false,
+        session_log_exporter: true,
+        usage_events_phase: false,
+      }),
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector.example.test:4318',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector.example.test:4318/v1/traces',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'http://collector.example.test:4318/v1/metrics',
+    });
+    expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false,"monitor":false}');
+    expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('http://collector.example.test:4318');
   });
 
   it('should pass shadow session log exporter options when observability exporter is enabled', async () => {

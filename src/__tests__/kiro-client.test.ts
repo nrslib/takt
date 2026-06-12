@@ -39,6 +39,14 @@ const restoredEnvKeys = [
   'SERVICE_SECRET',
   'SSL_CERT_DIR',
   'SSL_CERT_FILE',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'TAKT_OBSERVABILITY',
+  'TAKT_OBSERVABILITY_ENABLED',
+  'TAKT_OBSERVABILITY_MONITOR',
+  'TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER',
+  'TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE',
   'all_proxy',
   'http_proxy',
   'https_proxy',
@@ -57,6 +65,17 @@ const kiroNetworkEnvCases: Array<[typeof restoredEnvKeys[number], string]> = [
   ['http_proxy', 'http://lower-http-proxy.example'],
   ['https_proxy', 'http://lower-https-proxy.example'],
   ['no_proxy', 'localhost,.internal'],
+];
+
+const kiroObservabilityEnvCases: Array<[typeof restoredEnvKeys[number], string]> = [
+  ['TAKT_OBSERVABILITY', '{"enabled":true,"monitor":true,"session_log_exporter":true,"usage_events_phase":true}'],
+  ['TAKT_OBSERVABILITY_ENABLED', 'true'],
+  ['TAKT_OBSERVABILITY_MONITOR', 'true'],
+  ['TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER', 'true'],
+  ['TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE', 'true'],
+  ['OTEL_EXPORTER_OTLP_ENDPOINT', 'http://otel.example:4318'],
+  ['OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', 'http://otel.example:4318/v1/traces'],
+  ['OTEL_EXPORTER_OTLP_METRICS_ENDPOINT', 'http://otel.example:4318/v1/metrics'],
 ];
 
 const originalEnvValues = new Map(
@@ -219,7 +238,7 @@ describe('callKiro', () => {
     expect(args.at(-1)).toBe('You are a strict reviewer.\n\nreview this code');
   });
 
-  it('Given Kiro home and network env, When called, Then passes only the Kiro child env allowlist', async () => {
+  it('Given Kiro home, network env, and run-local child process env, When called, Then passes only the Kiro child env allowlist', async () => {
     process.env.GITHUB_TOKEN = 'github-token';
     process.env.TAKT_OPENAI_API_KEY = 'openai-token';
     process.env.SERVICE_SECRET = 'service-secret';
@@ -227,6 +246,10 @@ describe('callKiro', () => {
     for (const [key, value] of kiroNetworkEnvCases) {
       process.env[key] = value;
     }
+    for (const [key, value] of kiroObservabilityEnvCases) {
+      process.env[key] = value;
+    }
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
@@ -234,6 +257,13 @@ describe('callKiro', () => {
 
     const result = await callKiro('coder', 'implement feature', {
       cwd: '/repo',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true,"monitor":true,"session_log_exporter":true,"usage_events_phase":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-otel.example:4318',
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://snapshot-otel.example:4318/v1/traces',
+        OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://snapshot-otel.example:4318/v1/metrics',
+        SERVICE_SECRET: 'service-secret-from-overlay',
+      },
     });
 
     expect(result.status).toBe('done');
@@ -247,6 +277,33 @@ describe('callKiro', () => {
     expect(options.env?.KIRO_HOME).toBe('/kiro/home');
     for (const [key, value] of kiroNetworkEnvCases) {
       expect(options.env?.[key]).toBe(value);
+    }
+    expect(options.env?.TAKT_OBSERVABILITY).toBe(
+      '{"enabled":true,"monitor":true,"session_log_exporter":true,"usage_events_phase":true}',
+    );
+    expect(options.env?.TAKT_OBSERVABILITY_ENABLED).toBeUndefined();
+    expect(options.env?.TAKT_OBSERVABILITY_MONITOR).toBeUndefined();
+    expect(options.env?.TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER).toBeUndefined();
+    expect(options.env?.TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE).toBeUndefined();
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-otel.example:4318');
+    expect(options.env?.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe('https://snapshot-otel.example:4318/v1/traces');
+    expect(options.env?.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT).toBe('https://snapshot-otel.example:4318/v1/metrics');
+  });
+
+  it('Given ambient observability env and no child process env, When called, Then does not inherit ambient observability env', async () => {
+    for (const [key, value] of kiroObservabilityEnvCases) {
+      process.env[key] = value;
+    }
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    for (const [key] of kiroObservabilityEnvCases) {
+      expect(options.env?.[key]).toBeUndefined();
     }
   });
 

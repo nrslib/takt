@@ -92,6 +92,7 @@ export interface ParallelRunnerDeps {
     qualityGates: WorkflowStep['qualityGates'];
     projectRoot: string;
     step: WorkflowStep;
+    childProcessEnv?: Readonly<Record<string, string>>;
   }) => Promise<QualityGateRunResult>;
   readonly onPhaseStart?: (
     step: WorkflowStep,
@@ -164,6 +165,7 @@ export class ParallelRunner {
       provider: parentPm.provider,
       resolvedProvider: parentPm.provider,
       resolvedModel: parentPm.model,
+      childProcessEnv: this.deps.engineOptions.childProcessEnv,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,
@@ -203,6 +205,7 @@ export class ParallelRunner {
           provider: subPm.provider,
           resolvedProvider: subPm.provider,
           resolvedModel: subPm.model,
+          childProcessEnv: this.deps.engineOptions.childProcessEnv,
         };
 
         // Session key uses buildSessionKey (persona:provider) — same as normal steps.
@@ -321,6 +324,7 @@ export class ParallelRunner {
           qualityGates: subStep.qualityGates,
           projectRoot: this.deps.getCwd(),
           step: subStep,
+          childProcessEnv: this.deps.engineOptions.childProcessEnv,
         });
         if (!qualityGateResult.ok) {
           state.stepOutputs.set(subStep.name, qualityGateResult.response);

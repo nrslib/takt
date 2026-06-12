@@ -96,9 +96,65 @@ describe('TmuxTerminalBackend', () => {
         cwd: '/tmp/worktree',
         encoding: 'utf-8',
         maxBuffer: 1024 * 1024 * 4,
+        env: expect.any(Object),
       },
       expect.any(Function),
     );
+  });
+
+  it('Given childProcessEnv, When start is called, Then tmux new-session receives nested observability env args', async () => {
+    const backend = new TmuxTerminalBackend();
+    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
+    const previousOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient.example.test';
+
+    try {
+      await backend.start({
+        cwd: '/tmp/worktree',
+        backend: 'tmux',
+        command: {
+          executable: 'claude',
+          args: [],
+        },
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
+          OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer secret',
+          OTEL_EXPORTER_OTLP_CLIENT_KEY: '/tmp/client.key',
+        },
+      });
+
+      const newSessionArgs = mockExecFile.mock.calls[0]?.[1];
+      expect(newSessionArgs).toEqual([
+        'new-session',
+        '-d',
+        '-s',
+        expect.stringMatching(/^takt-claude-terminal-/),
+        '-c',
+        '/tmp/worktree',
+        '-e',
+        'TAKT_OBSERVABILITY={"enabled":true}',
+        '-e',
+        'OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.test',
+        'claude',
+      ]);
+      expect(newSessionArgs).not.toContain('TAKT_OBSERVABILITY={"enabled":false}');
+      expect(newSessionArgs).not.toContain('OTEL_EXPORTER_OTLP_ENDPOINT=https://ambient.example.test');
+      expect(newSessionArgs).not.toContain('OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer secret');
+      expect(newSessionArgs).not.toContain('OTEL_EXPORTER_OTLP_CLIENT_KEY=/tmp/client.key');
+    } finally {
+      if (previousTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
+      }
+      if (previousOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = previousOtlpEndpoint;
+      }
+    }
   });
 
   it('Given prompt text, When pasteText is called, Then tmux waits for prompt and submits pasted text', async () => {
@@ -347,6 +403,7 @@ describe('TmuxTerminalBackend', () => {
         cwd: undefined,
         encoding: 'utf-8',
         maxBuffer: 1024 * 1024 * 4,
+        env: expect.any(Object),
       },
       expect.any(Function),
     );

@@ -22,6 +22,7 @@ export interface DecomposeTaskOptions {
   resolvedProvider?: ProviderType;
   onStream?: StreamCallback;
   workflowMeta?: RunAgentOptions['workflowMeta'];
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
@@ -55,6 +56,7 @@ export async function decomposeTask(
     outputSchema: loadDecompositionSchema(maxTotalParts),
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,
+    childProcessEnv: options.childProcessEnv,
     onPromptResolved: options.onPromptResolved,
   });
 
@@ -100,6 +102,7 @@ export async function requestMoreParts(
     outputSchema: loadMorePartsSchema(maxAdditionalParts),
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,
+    childProcessEnv: options.childProcessEnv,
   });
 
   if (response.status !== 'done') {

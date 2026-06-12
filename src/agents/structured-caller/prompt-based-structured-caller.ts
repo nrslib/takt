@@ -56,6 +56,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       permissionMode: 'readonly',
       language: options.language,
       onStream: options.onStream,
+      childProcessEnv: options.childProcessEnv,
       onPromptResolved: options.onStructuredPromptResolved,
     });
 
@@ -91,6 +92,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         resolvedModel: options.resolvedModel,
         language: options.language,
         onStream: options.onStream,
+        childProcessEnv: options.childProcessEnv,
         stepName: options.stepName,
       },
       options.onJudgeStage,
@@ -108,6 +110,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         provider: options.provider,
         resolvedProvider: options.resolvedProvider,
         resolvedModel: options.resolvedModel,
+        childProcessEnv: options.childProcessEnv,
         onJudgeResponse: stage3.capture,
       });
 
@@ -140,6 +143,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       resolvedModel: options.resolvedModel,
       ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
       permissionMode: 'readonly',
+      childProcessEnv: options.childProcessEnv,
     });
 
     options.onJudgeResponse?.({
@@ -177,6 +181,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
+        childProcessEnv: options.childProcessEnv,
         onPromptResolved: options.onPromptResolved,
       });
 
@@ -218,6 +223,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
+        childProcessEnv: options.childProcessEnv,
       });
 
       if (response.status !== 'done') {

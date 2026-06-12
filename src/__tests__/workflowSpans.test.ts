@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StepRunResult } from '../core/workflow/types.js';
 
@@ -52,39 +53,54 @@ type MetricRecord = {
   attributes: Record<string, unknown>;
 };
 
+type FakeContext = {
+  span?: FakeSpan;
+  remoteParentName?: string;
+};
+
 async function loadWorkflowSpansWithMockedApi() {
   vi.resetModules();
 
   const spans: FakeSpan[] = [];
   const metricRecords: MetricRecord[] = [];
-  let activeSpan: FakeSpan | undefined;
+  const contextStorage = new AsyncLocalStorage<FakeContext>();
+  const rootContext: FakeContext = {};
 
   vi.doMock('@opentelemetry/api', () => ({
     SpanStatusCode: {
       ERROR: 2,
     },
-    context: {
-      active: vi.fn(() => ({ span: activeSpan })),
-      with: vi.fn(async (ctx: { span?: FakeSpan }, fn: () => Promise<unknown>) => {
-        const previous = activeSpan;
-        activeSpan = ctx.span;
-        try {
-          return await fn();
-        } finally {
-          activeSpan = previous;
+    ROOT_CONTEXT: rootContext,
+    propagation: {
+      inject: vi.fn((ctx: FakeContext, carrier: Record<string, string>) => {
+        if (ctx.span) {
+          carrier.traceparent = ctx.span.name;
         }
       }),
+      extract: vi.fn((ctx: FakeContext, carrier: Record<string, string>) => ({
+        ...ctx,
+        remoteParentName: carrier.traceparent,
+      })),
+    },
+    context: {
+      active: vi.fn(() => contextStorage.getStore() ?? rootContext),
+      with: vi.fn((ctx: FakeContext, fn: () => Promise<unknown>) => contextStorage.run(ctx, fn)),
     },
     trace: {
+      getSpan: vi.fn((ctx: FakeContext) => ctx.span),
       getTracer: vi.fn(() => ({
-        startSpan: vi.fn((name: string, options: { attributes?: Record<string, unknown> } = {}) => {
+        startSpan: vi.fn((
+          name: string,
+          options: { attributes?: Record<string, unknown> } = {},
+          parentContext: FakeContext = contextStorage.getStore() ?? rootContext,
+        ) => {
           const span = new FakeSpan(name, options.attributes ?? {});
-          span.parentName = activeSpan?.name;
+          span.parentName = parentContext.span?.name ?? parentContext.remoteParentName;
           spans.push(span);
           return span;
         }),
       })),
-      setSpan: vi.fn((_ctx: unknown, span: FakeSpan) => ({ span })),
+      setSpan: vi.fn((ctx: FakeContext, span: FakeSpan) => ({ ...ctx, span })),
     },
     metrics: {
       getMeter: vi.fn(() => ({
@@ -134,6 +150,10 @@ function makeDoneResult(): StepRunResult {
   };
 }
 
+function waitForContextSwitch(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe('workflow OpenTelemetry spans', () => {
   afterEach(() => {
     vi.doUnmock('@opentelemetry/api');
@@ -173,6 +193,7 @@ describe('workflow OpenTelemetry spans', () => {
 
     expect(spans).toHaveLength(1);
     expect(spans[0]?.name).toBe('workflow.test-workflow');
+    expect(spans[0]?.parentName).toBeUndefined();
     expect(spans[0]?.attributes).toMatchObject({
       'takt.run.id': 'run-1',
       'takt.workflow.name': 'test-workflow',
@@ -288,6 +309,147 @@ describe('workflow OpenTelemetry spans', () => {
         'takt.model.name': 'gpt-5',
       }) as unknown,
     }));
+  });
+
+  it('creates nested runtime workflow spans as roots when trace context only exists in env', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const previousTraceparent = process.env.traceparent;
+    const previousTracestate = process.env.tracestate;
+    process.env.traceparent = 'workflow.parent-runtime';
+    delete process.env.tracestate;
+
+    try {
+      await module.runWithWorkflowSpan({
+        enabled: true,
+        runId: 'child-run',
+        workflowName: 'child-workflow',
+        initialStep: 'implement',
+        stepCount: 1,
+        maxSteps: 3,
+        runMode: 'full',
+        resumeDepth: 0,
+      }, async () => {
+        await module.runWithStepSpan({
+          enabled: true,
+          runId: 'child-run',
+          workflowName: 'child-workflow',
+          step: makeStep(),
+          iteration: 1,
+        }, async () => makeDoneResult());
+        return { done: true };
+      }, () => ({ status: 'completed' }));
+    } finally {
+      if (previousTraceparent === undefined) {
+        delete process.env.traceparent;
+      } else {
+        process.env.traceparent = previousTraceparent;
+      }
+      if (previousTracestate === undefined) {
+        delete process.env.tracestate;
+      } else {
+        process.env.tracestate = previousTracestate;
+      }
+    }
+
+    const workflowSpan = spans.find((span) => span.name === 'workflow.child-workflow');
+    const stepSpan = spans.find((span) => span.name === 'step.implement');
+    expect(workflowSpan?.parentName).toBeUndefined();
+    expect(stepSpan?.parentName).toBe('workflow.child-workflow');
+  });
+
+  it('keeps nested parallel workflow contexts isolated and restores standalone roots', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithWorkflowSpan({
+      enabled: true,
+      runId: 'parent-run',
+      workflowName: 'parent',
+      initialStep: 'fanout',
+      stepCount: 2,
+      maxSteps: 3,
+      runMode: 'full',
+      resumeDepth: 0,
+    }, async () => {
+      await Promise.all([
+        module.runWithWorkflowSpan({
+          enabled: true,
+          runId: 'child-a-run',
+          workflowName: 'child-a',
+          initialStep: 'child-a-step',
+          stepCount: 1,
+          maxSteps: 3,
+          runMode: 'full',
+          resumeDepth: 1,
+        }, async () => {
+          await waitForContextSwitch();
+          await module.runWithStepSpan({
+            enabled: true,
+            runId: 'child-a-run',
+            workflowName: 'child-a',
+            step: makeStep({ name: 'child-a-step' }),
+            iteration: 1,
+          }, async () => makeDoneResult());
+          return { done: true };
+        }, () => ({ status: 'completed' })),
+        module.runWithWorkflowSpan({
+          enabled: true,
+          runId: 'child-b-run',
+          workflowName: 'child-b',
+          initialStep: 'child-b-step',
+          stepCount: 1,
+          maxSteps: 3,
+          runMode: 'full',
+          resumeDepth: 1,
+        }, async () => {
+          await module.runWithStepSpan({
+            enabled: true,
+            runId: 'child-b-run',
+            workflowName: 'child-b',
+            step: makeStep({ name: 'child-b-step' }),
+            iteration: 1,
+          }, async () => makeDoneResult());
+          await waitForContextSwitch();
+          return { done: true };
+        }, () => ({ status: 'completed' })),
+      ]);
+      return { done: true };
+    }, () => ({ status: 'completed' }));
+
+    await module.runWithWorkflowSpan({
+      enabled: true,
+      runId: 'standalone-run',
+      workflowName: 'standalone',
+      initialStep: 'standalone-step',
+      stepCount: 1,
+      maxSteps: 3,
+      runMode: 'full',
+      resumeDepth: 0,
+    }, async () => {
+      await module.runWithStepSpan({
+        enabled: true,
+        runId: 'standalone-run',
+        workflowName: 'standalone',
+        step: makeStep({ name: 'standalone-step' }),
+        iteration: 1,
+      }, async () => makeDoneResult());
+      return { done: true };
+    }, () => ({ status: 'completed' }));
+
+    const parent = spans.find((span) => span.name === 'workflow.parent');
+    const childA = spans.find((span) => span.name === 'workflow.child-a');
+    const childB = spans.find((span) => span.name === 'workflow.child-b');
+    const childAStep = spans.find((span) => span.name === 'step.child-a-step');
+    const childBStep = spans.find((span) => span.name === 'step.child-b-step');
+    const standalone = spans.find((span) => span.name === 'workflow.standalone');
+    const standaloneStep = spans.find((span) => span.name === 'step.standalone-step');
+
+    expect(parent?.parentName).toBeUndefined();
+    expect(childA?.parentName).toBe('workflow.parent');
+    expect(childB?.parentName).toBe('workflow.parent');
+    expect(childAStep?.parentName).toBe('workflow.child-a');
+    expect(childBStep?.parentName).toBe('workflow.child-b');
+    expect(standalone?.parentName).toBeUndefined();
+    expect(standaloneStep?.parentName).toBe('workflow.standalone');
   });
 
   it('serializes provider options onto step spans for session-log parity', async () => {

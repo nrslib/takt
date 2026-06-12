@@ -265,6 +265,7 @@ export async function callClaudeTerminal(
         cwd: options.cwd,
         backend: backendName,
         command,
+        childProcessEnv: options.childProcessEnv,
       });
       pendingStart = startPromise;
       return startPromise;

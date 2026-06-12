@@ -258,6 +258,8 @@ export interface WorkflowEngineOptions {
   observabilityRunId?: string;
   /** Redacts text before it is attached to observability spans. */
   sanitizeObservabilityText?: (text: string) => string;
+  /** Run-local environment values passed to trusted child processes. */
+  childProcessEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;

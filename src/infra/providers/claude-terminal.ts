@@ -64,6 +64,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     onAskUserQuestion: options.onAskUserQuestion,
     outputSchema: options.outputSchema,
     pathToClaudeCodeExecutable: resolveClaudeCliPath() ?? undefined,
+    childProcessEnv: options.childProcessEnv,
   };
 }
 

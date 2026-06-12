@@ -159,6 +159,28 @@ describe('ClaudeHeadlessProvider', () => {
     }));
     expect(result.structuredOutput).toEqual({ decision: 'approved' });
   });
+
+  it('should pass childProcessEnv to the headless client', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'test',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    const provider = new ClaudeHeadlessProvider();
+    const agent = provider.setup({ name: 'test' });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      childProcessEnv,
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('test', 'prompt', expect.objectContaining({
+      childProcessEnv,
+    }));
+  });
 });
 
 describe('ProviderRegistry with Claude headless', () => {

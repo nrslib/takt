@@ -131,6 +131,7 @@ export interface ClaudeCallOptions {
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
   imageAttachments?: ProviderImageAttachment[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
@@ -168,4 +169,5 @@ export interface ClaudeSpawnOptions {
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
   imageAttachments?: ProviderImageAttachment[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

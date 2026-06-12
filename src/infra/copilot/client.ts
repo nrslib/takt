@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger, crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
 import type { CopilotCallOptions } from './types.js';
 
@@ -95,15 +96,12 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
   return args;
 }
 
-function buildEnv(copilotGithubToken?: string): NodeJS.ProcessEnv {
-  if (!copilotGithubToken) {
-    return process.env;
+function buildEnv(options: CopilotCallOptions): NodeJS.ProcessEnv {
+  const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv);
+  if (options.copilotGithubToken) {
+    env.COPILOT_GITHUB_TOKEN = options.copilotGithubToken;
   }
-
-  return {
-    ...process.env,
-    COPILOT_GITHUB_TOKEN: copilotGithubToken,
-  };
+  return env;
 }
 
 function createExecError(
@@ -131,7 +129,7 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
   return new Promise<CopilotExecResult>((resolve, reject) => {
     const child = crossSpawn(options.copilotCliPath ?? COPILOT_COMMAND, args, {
       cwd: options.cwd,
-      env: buildEnv(options.copilotGithubToken),
+      env: buildEnv(options),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

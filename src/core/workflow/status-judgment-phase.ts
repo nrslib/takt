@@ -146,6 +146,7 @@ export async function runStatusJudgmentPhase(
         resolvedModel: stepProvider.model,
         language: ctx.language,
         interactive: ctx.interactive,
+        childProcessEnv: ctx.childProcessEnv,
         onStream: ctx.onStream,
         onStructuredPromptResolved: (promptParts) => {
           if (!didEmitPhaseStart) {

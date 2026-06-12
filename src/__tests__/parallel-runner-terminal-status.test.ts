@@ -174,6 +174,33 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(state.lastOutput).toBe(result.response);
   });
 
+  it('passes engine childProcessEnv to parallel sub-step quality gates', async () => {
+    const { runner, deps } = makeRunner();
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    deps.engineOptions.childProcessEnv = childProcessEnv;
+    const step = makeParallelStep();
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      content: '[STEP:1] approved',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[STEP:1] approved',
+    }));
+
+    await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+
+    expect(deps.runQualityGates).toHaveBeenCalledWith(expect.objectContaining({
+      childProcessEnv,
+      step: expect.objectContaining({ name: 'ai-antipattern-review-2nd' }),
+    }));
+    expect(deps.runQualityGates).toHaveBeenCalledWith(expect.objectContaining({
+      childProcessEnv,
+      step: expect.objectContaining({ name: 'security-review' }),
+    }));
+  });
+
   it('returns parent error with rejected promise detail', async () => {
     const { runner } = makeRunner();
     const step = makeParallelStep();
