@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StepRunResult } from '../core/workflow/types.js';
 
@@ -51,6 +52,23 @@ type MetricRecord = {
   value: number;
   attributes: Record<string, unknown>;
 };
+
+class CapturingSpanExporter implements SpanExporter {
+  readonly spans: ReadableSpan[] = [];
+
+  export(spans: ReadableSpan[], resultCallback: Parameters<SpanExporter['export']>[1]): void {
+    this.spans.push(...spans);
+    resultCallback({ code: 0 });
+  }
+
+  shutdown(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  forceFlush(): Promise<void> {
+    return Promise.resolve();
+  }
+}
 
 async function loadWorkflowSpansWithMockedApi() {
   vi.resetModules();
@@ -106,6 +124,35 @@ async function loadWorkflowSpansWithMockedApi() {
   return { module, spans, metricRecords };
 }
 
+async function loadWorkflowSpansWithRealSdk() {
+  vi.resetModules();
+  vi.doUnmock('@opentelemetry/api');
+
+  const [{ context, trace }, { NodeSDK }, { SimpleSpanProcessor }] = await Promise.all([
+    import('@opentelemetry/api'),
+    import('@opentelemetry/sdk-node'),
+    import('@opentelemetry/sdk-trace-base'),
+  ]);
+  trace.disable();
+  context.disable();
+
+  const exporter = new CapturingSpanExporter();
+  const sdk = new NodeSDK({
+    autoDetectResources: false,
+    instrumentations: [],
+    spanProcessors: [new SimpleSpanProcessor(exporter)],
+  });
+  sdk.start();
+
+  const module = await import('../core/workflow/observability/workflowSpans.js');
+  const shutdown = async () => {
+    await sdk.shutdown();
+    trace.disable();
+    context.disable();
+  };
+  return { module, exporter, shutdown };
+}
+
 function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   return {
     name: 'implement',
@@ -132,6 +179,22 @@ function makeDoneResult(): StepRunResult {
       modelSource: 'global',
     },
   };
+}
+
+function findSpan(spans: FakeSpan[], name: string): FakeSpan {
+  const span = spans.find((item) => item.name === name);
+  if (!span) {
+    throw new Error(`Expected span ${name} to exist`);
+  }
+  return span;
+}
+
+function findReadableSpan(spans: ReadableSpan[], name: string): ReadableSpan {
+  const span = spans.find((item) => item.name === name);
+  if (!span) {
+    throw new Error(`Expected span ${name} to exist`);
+  }
+  return span;
 }
 
 describe('workflow OpenTelemetry spans', () => {
@@ -171,9 +234,8 @@ describe('workflow OpenTelemetry spans', () => {
       resumeDepth: 1,
     }, async () => ({ done: true }), () => ({ status: 'completed' }));
 
-    expect(spans).toHaveLength(1);
-    expect(spans[0]?.name).toBe('workflow.test-workflow');
-    expect(spans[0]?.attributes).toMatchObject({
+    const workflowSpan = findSpan(spans, 'workflow.test-workflow');
+    expect(workflowSpan.attributes).toMatchObject({
       'takt.run.id': 'run-1',
       'takt.workflow.name': 'test-workflow',
       'takt.workflow.initial_step': 'implement',
@@ -183,7 +245,7 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.workflow.resume_depth': 1,
       'takt.workflow.status': 'completed',
     });
-    expect(spans[0]?.ended).toBe(true);
+    expect(workflowSpan.ended).toBe(true);
     expect(metricRecords).toEqual([
       expect.objectContaining({
         instrument: 'counter',
@@ -207,6 +269,134 @@ describe('workflow OpenTelemetry spans', () => {
     ]);
   });
 
+  it('emits a short-lived workflow_start span before workflow execution continues', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithWorkflowSpan({
+      enabled: true,
+      runId: 'run-1',
+      workflowName: 'test-workflow',
+      initialStep: 'implement',
+      stepCount: 2,
+      maxSteps: 3,
+      runMode: 'full',
+      resumeDepth: 0,
+    }, async () => {
+      const workflowSpan = findSpan(spans, 'workflow.test-workflow');
+      const startSpan = findSpan(spans, 'workflow_start.test-workflow');
+
+      expect(workflowSpan.ended).toBe(false);
+      expect(startSpan.ended).toBe(true);
+      expect(startSpan.parentName).toBe('workflow.test-workflow');
+      expect(startSpan.attributes).toMatchObject({
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.workflow.initial_step': 'implement',
+        'takt.workflow.step_count': 2,
+        'takt.workflow.max_steps': 3,
+        'takt.workflow.run_mode': 'full',
+        'takt.workflow.resume_depth': 0,
+        'takt.workflow.status': 'running',
+      });
+
+      return { done: true };
+    }, () => ({ status: 'completed' }));
+
+    expect(spans.map((span) => span.name)).toEqual([
+      'workflow.test-workflow',
+      'workflow_start.test-workflow',
+    ]);
+  });
+
+  it('exports workflow_start before the root workflow span ends with the real OpenTelemetry SDK', async () => {
+    const { module, exporter, shutdown } = await loadWorkflowSpansWithRealSdk();
+
+    try {
+      await module.runWithWorkflowSpan({
+        enabled: true,
+        runId: 'run-1',
+        workflowName: 'test-workflow',
+        initialStep: 'implement',
+        stepCount: 2,
+        maxSteps: 3,
+        runMode: 'full',
+        resumeDepth: 0,
+      }, async () => {
+        expect(exporter.spans.map((span) => span.name)).toEqual(['workflow_start.test-workflow']);
+        expect(exporter.spans[0]?.attributes).toMatchObject({
+          'takt.run.id': 'run-1',
+          'takt.workflow.name': 'test-workflow',
+          'takt.workflow.status': 'running',
+        });
+
+        return { done: true };
+      }, () => ({ status: 'completed' }));
+
+      expect(exporter.spans.map((span) => span.name)).toEqual([
+        'workflow_start.test-workflow',
+        'workflow.test-workflow',
+      ]);
+      const startSpan = findReadableSpan(exporter.spans, 'workflow_start.test-workflow');
+      const workflowSpan = findReadableSpan(exporter.spans, 'workflow.test-workflow');
+      expect(startSpan.parentSpanContext?.spanId).toBe(workflowSpan.spanContext().spanId);
+      expect(workflowSpan.attributes).toMatchObject({
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.workflow.status': 'completed',
+      });
+    } finally {
+      await shutdown();
+    }
+  });
+
+  it('emits workflow_start before failing execution so the active trace stays discoverable', async () => {
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
+    const error = new Error('workflow failed before first step');
+
+    await expect(
+      module.runWithWorkflowSpan({
+        enabled: true,
+        runId: 'run-1',
+        workflowName: 'test-workflow',
+        initialStep: 'implement',
+        stepCount: 2,
+        maxSteps: 3,
+        runMode: 'full',
+        resumeDepth: 0,
+      }, async () => {
+        const startSpan = findSpan(spans, 'workflow_start.test-workflow');
+        expect(startSpan.ended).toBe(true);
+        throw error;
+      }, () => ({ status: 'completed' })),
+    ).rejects.toThrow('workflow failed before first step');
+
+    const workflowSpan = findSpan(spans, 'workflow.test-workflow');
+    const startSpan = findSpan(spans, 'workflow_start.test-workflow');
+    expect(spans.map((span) => span.name)).toEqual([
+      'workflow.test-workflow',
+      'workflow_start.test-workflow',
+    ]);
+    expect(startSpan.parentName).toBe('workflow.test-workflow');
+    expect(startSpan.attributes).toMatchObject({
+      'takt.run.id': 'run-1',
+      'takt.workflow.name': 'test-workflow',
+      'takt.workflow.status': 'running',
+    });
+    expect(workflowSpan.status).toEqual({ code: 2, message: 'workflow failed before first step' });
+    expect(workflowSpan.exceptions).toEqual([error]);
+    expect(workflowSpan.ended).toBe(true);
+    expect(metricRecords).toContainEqual(expect.objectContaining({
+      instrument: 'counter',
+      name: 'takt.workflow.runs',
+      value: 1,
+      attributes: expect.objectContaining({
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.workflow.status': 'error',
+      }) as unknown,
+    }));
+  });
+
   it('sanitizes the workflow abort reason before recording it on the span', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
 
@@ -226,8 +416,7 @@ describe('workflow OpenTelemetry spans', () => {
       abortReason: 'Step "implement" failed: secret content',
     }));
 
-    expect(spans).toHaveLength(1);
-    expect(spans[0]?.attributes).toMatchObject({
+    expect(findSpan(spans, 'workflow.test-workflow').attributes).toMatchObject({
       'takt.workflow.status': 'aborted',
       'takt.workflow.abort.kind': 'step_error',
       'takt.workflow.abort.reason': 'Step "implement" failed: [REDACTED] content',
@@ -260,10 +449,12 @@ describe('workflow OpenTelemetry spans', () => {
 
     expect(spans.map((span) => span.name)).toEqual([
       'workflow.test-workflow',
+      'workflow_start.test-workflow',
       'step.implement',
     ]);
-    expect(spans[1]?.parentName).toBe('workflow.test-workflow');
-    expect(spans[1]?.attributes).toMatchObject({
+    const stepSpan = findSpan(spans, 'step.implement');
+    expect(stepSpan.parentName).toBe('workflow.test-workflow');
+    expect(stepSpan.attributes).toMatchObject({
       'takt.workflow.name': 'test-workflow',
       'takt.step.name': 'implement',
       'takt.step.type': 'agent',
@@ -275,7 +466,7 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.model.name': 'gpt-5',
       'takt.model.source': 'global',
     });
-    expect(spans[1]?.ended).toBe(true);
+    expect(stepSpan.ended).toBe(true);
     expect(metricRecords).toContainEqual(expect.objectContaining({
       instrument: 'counter',
       name: 'takt.workflow.step.runs',

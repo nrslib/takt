@@ -117,9 +117,10 @@ export async function runWithWorkflowSpan<T>(
 
   const startedAt = Date.now();
   return runInSpan(
-    buildSpanName('workflow', params.workflowName),
+    buildWorkflowSpanName(params),
     buildWorkflowAttributes(params),
     async (span) => {
+      recordWorkflowStartSpan(params);
       try {
         const result = await execute();
         const outcome = getOutcome(result);
@@ -147,7 +148,7 @@ export async function runWithStepSpan(
 
   const startedAt = Date.now();
   return runInSpan(
-    buildSpanName('step', params.step.name),
+    buildStepSpanName(params),
     buildStepAttributes(params),
     async (span) => {
       try {
@@ -217,6 +218,17 @@ export function recordJudgeStageSpan(params: JudgeStageSpanParams): void {
     if (params.entry.status === 'error') {
       span.setStatus({ code: SpanStatusCode.ERROR, message: `judge stage ${params.entry.status}` });
     }
+  } finally {
+    span.end();
+  }
+}
+
+function recordWorkflowStartSpan(params: WorkflowSpanParams): void {
+  const span = tracer.startSpan(buildWorkflowStartSpanName(params), {
+    attributes: buildWorkflowAttributes(params),
+  });
+  try {
+    span.setAttributes({ 'takt.workflow.status': 'running' });
   } finally {
     span.end();
   }
@@ -530,16 +542,24 @@ function recordSpanError(span: Span, error: unknown): void {
   span.setStatus({ code: SpanStatusCode.ERROR, message });
 }
 
-function buildSpanName(prefix: 'workflow' | 'step', name: string): string {
-  return `${prefix}.${name || 'unknown'}`;
+function buildWorkflowSpanName(params: WorkflowSpanParams): string {
+  return `workflow.${params.workflowName}`;
+}
+
+function buildStepSpanName(params: StepSpanParams): string {
+  return `step.${params.step.name}`;
+}
+
+function buildWorkflowStartSpanName(params: WorkflowSpanParams): string {
+  return `workflow_start.${params.workflowName}`;
 }
 
 function buildPhaseSpanName(params: PhaseSpanParams): string {
-  return `phase.${params.step.name || 'unknown'}.${params.phaseName}`;
+  return `phase.${params.step.name}.${params.phaseName}`;
 }
 
 function buildJudgeStageSpanName(params: JudgeStageSpanParams): string {
-  return `judge_stage.${params.step.name || 'unknown'}.${params.entry.stage}.${params.entry.method}`;
+  return `judge_stage.${params.step.name}.${params.entry.stage}.${params.entry.method}`;
 }
 
 function compactAttributes(attributes: AttributeInput): Attributes {
