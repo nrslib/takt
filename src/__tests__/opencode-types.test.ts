@@ -50,8 +50,26 @@ describe('resolveOpenCodePermissionReply', () => {
     expect(resolveOpenCodePermissionReply('full', 'doom_loop')).toBe('once');
   });
 
+  it('should allow OpenCode doom loop continuation before applying allowed tools ruleset', () => {
+    expect(resolveOpenCodePermissionReply('readonly', 'doom_loop', [
+      { permission: 'read', pattern: '**', action: 'deny' },
+    ])).toBe('once');
+  });
+
   it('should default to once when permission mode is not configured', () => {
     expect(resolveOpenCodePermissionReply(undefined, 'bash')).toBe('once');
+  });
+
+  it('should reject unknown permissions in edit mode', () => {
+    expect(resolveOpenCodePermissionReply('edit', 'mcp__github__search')).toBe('reject');
+  });
+
+  it('should reject unknown permissions in full mode', () => {
+    expect(resolveOpenCodePermissionReply('full', 'mcp__github__search')).toBe('reject');
+  });
+
+  it('should keep known full mode permissions always allowed', () => {
+    expect(resolveOpenCodePermissionReply('full', 'bash')).toBe('always');
   });
 });
 
@@ -135,7 +153,18 @@ describe('OpenCode permissions', () => {
       { permission: 'edit', pattern: '*', action: 'allow' },
       { permission: 'todowrite', pattern: '*', action: 'allow' },
       { permission: 'bash', pattern: '*', action: 'allow' },
-      { permission: 'mcp__github__search', pattern: '*', action: 'allow' },
+    ]);
+  });
+
+  it('should default-deny unknown allowed tools in edit mode', () => {
+    const ruleset = buildOpenCodePermissionRuleset('edit', undefined, [
+      'Read',
+      'mcp__github__search',
+    ]);
+
+    expect(ruleset).toEqual([
+      { permission: '*', pattern: '*', action: 'deny' },
+      { permission: 'read', pattern: '*', action: 'allow' },
     ]);
   });
 
@@ -185,9 +214,10 @@ describe('OpenCode permissions', () => {
   it('should treat an explicit empty allowed tools list as deny all', () => {
     const ruleset = buildOpenCodePermissionRuleset('edit', undefined, []);
 
-    expect(ruleset).toEqual([
-      { permission: '*', pattern: '*', action: 'deny' },
-    ]);
+    expect(ruleset.length).toBeGreaterThan(1);
+    expect(ruleset.every((rule) => rule.action === 'deny')).toBe(true);
+    expect(ruleset).toContainEqual({ permission: 'read', pattern: '**', action: 'deny' });
+    expect(ruleset).toContainEqual({ permission: 'bash', pattern: '**', action: 'deny' });
   });
 
   it('should not widen a whitelist when network access is enabled', () => {

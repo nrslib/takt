@@ -51,9 +51,9 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
   'failed to start server on port',
   'timeout waiting for server',
 ];
-
 type OpencodeClient = Awaited<ReturnType<typeof createOpencode>>['client'];
 type OpenCodeSessionSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient['session']['get']>>['data']>;
+type OpenCodeAbortCause = 'timeout' | 'external' | 'prompt';
 
 interface SharedServer {
   client: OpencodeClient;
@@ -61,60 +61,121 @@ interface SharedServer {
   model: string;
   apiKey?: string;
   busy: boolean;
-  queue: Array<(client: OpencodeClient) => void>;
+  queue: SharedServerQueueEntry[];
 }
 
-let sharedServer: SharedServer | null = null;
-let initPromise: Promise<void> | null = null;
+interface SharedServerQueueEntry {
+  resolve: (acquired: AcquiredOpenCodeClient) => void;
+  reject: (error: Error) => void;
+  onAbort?: () => void;
+  signal?: AbortSignal;
+}
 
-async function acquireClient(model: string, apiKey?: string): Promise<{ client: OpencodeClient; release: () => void }> {
-  if (initPromise) {
-    await initPromise;
+interface SharedServerEntry {
+  server?: SharedServer;
+  initPromise?: Promise<SharedServer>;
+}
+
+interface AcquiredOpenCodeClient {
+  client: OpencodeClient;
+  release: () => void;
+}
+
+const sharedServers = new Map<string, SharedServerEntry>();
+
+async function acquireClient(
+  model: string,
+  apiKey?: string,
+  abortSignal?: AbortSignal,
+): Promise<AcquiredOpenCodeClient> {
+  throwIfAborted(abortSignal);
+  const key = buildSharedServerKey(model, apiKey);
+  const entry = getSharedServerEntry(key);
+
+  if (entry.initPromise) {
+    const server = await entry.initPromise;
+    throwIfAborted(abortSignal);
+    return acquireSharedServer(server, abortSignal);
   }
 
-  if (sharedServer?.model === model && sharedServer.apiKey === apiKey) {
-    if (!sharedServer.busy) {
-      sharedServer.busy = true;
-      return { client: sharedServer.client, release: createReleaseHandle() };
+  if (entry.server) {
+    return acquireSharedServer(entry.server, abortSignal);
+  }
+
+  entry.initPromise = createSharedServer(model, apiKey)
+    .then((server) => {
+      entry.server = server;
+      return server;
+    })
+    .finally(() => {
+      entry.initPromise = undefined;
+    });
+
+  const server = await entry.initPromise;
+  throwIfAborted(abortSignal);
+  return acquireSharedServer(server, abortSignal);
+}
+
+function buildSharedServerKey(model: string, apiKey?: string): string {
+  return JSON.stringify([model, apiKey]);
+}
+
+function getSharedServerEntry(key: string): SharedServerEntry {
+  const existing = sharedServers.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const entry: SharedServerEntry = {};
+  sharedServers.set(key, entry);
+  return entry;
+}
+
+async function createSharedServer(model: string, apiKey?: string): Promise<SharedServer> {
+  const port = await getFreePort();
+  const { client, server } = await createOpencode({
+    port,
+    config: {
+      model,
+      small_model: model,
+      ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
+    },
+    timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
+  });
+
+  const closeServer = (): void => {
+    try {
+      server.close();
+    } catch (error) {
+      log.debug(`Failed to close OpenCode server: ${getErrorMessage(error)}`, { model });
     }
-    return new Promise((resolve) => {
-      sharedServer!.queue.push((client) => resolve({ client, release: createReleaseHandle() }));
-    });
+  };
+
+  log.debug('OpenCode server started', { model, port });
+  return { client, close: closeServer, model, apiKey, busy: false, queue: [] };
+}
+
+function acquireSharedServer(
+  server: SharedServer,
+  abortSignal?: AbortSignal,
+): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> {
+  throwIfAborted(abortSignal);
+  if (!server.busy) {
+    server.busy = true;
+    return { client: server.client, release: createReleaseHandle(server) };
   }
 
-  sharedServer?.close();
-
-  let resolveInit: () => void;
-  initPromise = new Promise((resolve) => { resolveInit = resolve; });
-
-  try {
-    const port = await getFreePort();
-    const { client, server } = await createOpencode({
-      port,
-      config: {
-        model,
-        small_model: model,
-        ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
-      },
-      timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
-    });
-
-    const closeServer = (): void => {
-      try {
-        server.close();
-      } catch {
-        // Ignore close errors
-      }
-    };
-
-    sharedServer = { client, close: closeServer, model, apiKey, busy: true, queue: [] };
-    log.debug('OpenCode server started', { model, port });
-
-    return { client, release: createReleaseHandle() };
-  } finally {
-    initPromise = null;
-    resolveInit!();
-  }
+  return new Promise((resolve, reject) => {
+    const entry: SharedServerQueueEntry = { resolve, reject, signal: abortSignal };
+    if (abortSignal) {
+      entry.onAbort = () => {
+        removeQueuedClient(server, entry);
+        reject(new Error(OPENCODE_STREAM_ABORTED_MESSAGE));
+      };
+      abortSignal.addEventListener('abort', entry.onAbort, { once: true });
+    }
+    server.queue.push(entry);
+  });
 }
 
 export async function getOpenCodeSessionSnapshot(
@@ -135,28 +196,45 @@ export async function getOpenCodeSessionSnapshot(
   }
 }
 
-function releaseClient(): void {
-  if (!sharedServer) return;
-  const next = sharedServer.queue.shift();
+function releaseClient(server: SharedServer): void {
+  const next = server.queue.shift();
   if (next) {
-    next(sharedServer.client);
+    if (next.signal && next.onAbort) {
+      next.signal.removeEventListener('abort', next.onAbort);
+    }
+    next.resolve({ client: server.client, release: createReleaseHandle(server) });
     return;
   }
-  sharedServer.busy = false;
+  server.busy = false;
 }
 
-function createReleaseHandle(): () => void {
+function removeQueuedClient(server: SharedServer, entry: SharedServerQueueEntry): void {
+  server.queue = server.queue.filter((queued) => queued !== entry);
+  if (entry.signal && entry.onAbort) {
+    entry.signal.removeEventListener('abort', entry.onAbort);
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+  }
+}
+
+function createReleaseHandle(server: SharedServer): () => void {
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    releaseClient();
+    releaseClient(server);
   };
 }
 
 export function resetSharedServer(): void {
-  sharedServer?.close();
-  sharedServer = null;
+  for (const entry of sharedServers.values()) {
+    entry.server?.close();
+  }
+  sharedServers.clear();
 }
 
 async function withTimeout<T>(
@@ -294,6 +372,13 @@ function toQuestionAnswers(
   });
 }
 
+function buildPermissionRejectedMessage(permission: string | undefined): string {
+  if (permission && permission.length > 0) {
+    return `OpenCode permission rejected: ${permission}`;
+  }
+  return 'OpenCode permission rejected';
+}
+
 async function getFreePort(): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const server = createServer();
@@ -324,9 +409,14 @@ async function getFreePort(): Promise<number> {
  * permission auto-reply, and response processing.
  */
 export class OpenCodeClient {
-  private isRetriableError(message: string, aborted: boolean, abortCause?: 'timeout' | 'external'): boolean {
+  private isRetriableError(message: string, aborted: boolean, abortCause?: OpenCodeAbortCause): boolean {
     if (abortCause === 'timeout') {
       return true;
+    }
+
+    if (abortCause === 'prompt') {
+      const lower = message.toLowerCase();
+      return OPENCODE_RETRYABLE_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
     }
 
     if (aborted || abortCause) {
@@ -391,11 +481,13 @@ export class OpenCodeClient {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
       const timeoutMessage = `OpenCode stream timed out after ${Math.floor(OPENCODE_STREAM_IDLE_TIMEOUT_MS / 60000)} minutes of inactivity`;
-      let abortCause: 'timeout' | 'external' | undefined;
+      let abortCause: OpenCodeAbortCause | undefined;
       let diagRef: StreamDiagnostics | undefined;
       let release: (() => void) | undefined;
       let opencodeApiClient: OpencodeClient | undefined;
       let sessionId: string | undefined = options.sessionId;
+      let promptCompletion: Promise<unknown> | undefined;
+      let promptError: string | undefined;
       const interactionTimeoutMs = options.interactionTimeoutMs ?? OPENCODE_INTERACTION_TIMEOUT_MS;
 
       const resetIdleTimeout = (): void => {
@@ -416,6 +508,7 @@ export class OpenCodeClient {
 
       if (options.abortSignal) {
         if (options.abortSignal.aborted) {
+          abortCause = 'external';
           streamAbortController.abort();
         } else {
           options.abortSignal.addEventListener('abort', onExternalAbort, { once: true });
@@ -436,16 +529,21 @@ export class OpenCodeClient {
         const parsedModel = parseProviderModel(options.model, 'OpenCode model');
         const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
 
-        const acquired = await acquireClient(fullModel, options.opencodeApiKey);
+        const acquired = await acquireClient(fullModel, options.opencodeApiKey, options.abortSignal);
         opencodeApiClient = acquired.client;
         release = acquired.release;
+        if (streamAbortController.signal.aborted) {
+          release();
+          release = undefined;
+          throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+        }
         const permissionRuleset = buildOpenCodePermissionRuleset(
           options.permissionMode,
           options.networkAccess,
           options.allowedTools,
         );
-        const shouldCreateSession = sessionId === undefined;
-        const appliedPermissionRuleset = shouldCreateSession || options.allowedTools !== undefined;
+        const shouldCreateSession = sessionId === undefined || options.allowedTools !== undefined;
+        const appliedPermissionRuleset = shouldCreateSession;
         if (sessionId === undefined) {
           const sessionResult = await opencodeApiClient.session.create({
             directory: options.cwd,
@@ -457,11 +555,16 @@ export class OpenCodeClient {
             throw new Error('Failed to create OpenCode session');
           }
         } else if (options.allowedTools !== undefined) {
-          await opencodeApiClient.session.update({
-            sessionID: sessionId,
+          const sessionResult = await opencodeApiClient.session.create({
             directory: options.cwd,
+            parentID: sessionId,
             permission: permissionRuleset,
           });
+
+          sessionId = sessionResult.data?.id;
+          if (!sessionId) {
+            throw new Error('Failed to create OpenCode session');
+          }
         }
 
         const activeSessionId = sessionId;
@@ -494,8 +597,14 @@ export class OpenCodeClient {
           parts: [{ type: 'text' as const, text: prompt }],
         };
         const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];
-        await opencodeApiClient.session.promptAsync(promptPayloadForSdk, {
+        promptCompletion = opencodeApiClient.session.promptAsync(promptPayloadForSdk, {
           signal: streamAbortController.signal,
+        }).catch((error) => {
+          promptError = getErrorMessage(error);
+          if (!streamAbortController.signal.aborted) {
+            abortCause = 'prompt';
+            streamAbortController.abort();
+          }
         });
 
         emitInit(options.onStream, options.model, activeSessionId);
@@ -573,7 +682,11 @@ export class OpenCodeClient {
             };
             if (permProps.sessionID === activeSessionId) {
               try {
-                const reply = resolveOpenCodePermissionReply(options.permissionMode, permProps.permission);
+                const reply = resolveOpenCodePermissionReply(
+                  options.permissionMode,
+                  permProps.permission,
+                  options.allowedTools !== undefined ? permissionRuleset : undefined,
+                );
                 emitPermissionAsked(options.onStream, {
                   requestId: permProps.id,
                   sessionId: permProps.sessionID,
@@ -591,6 +704,11 @@ export class OpenCodeClient {
                   interactionTimeoutMs,
                   'OpenCode permission reply timed out',
                 );
+                if (reply === 'reject') {
+                  success = false;
+                  failureMessage = buildPermissionRejectedMessage(permProps.permission);
+                  break;
+                }
               } catch (e) {
                 success = false;
                 failureMessage = getErrorMessage(e);
@@ -753,6 +871,18 @@ export class OpenCodeClient {
         }
 
         content = [...textContentParts.values()].join('\n');
+        if (!success && !streamAbortController.signal.aborted) {
+          streamAbortController.abort();
+        }
+        await promptCompletion;
+        if (promptError !== undefined) {
+          if (success) {
+            success = false;
+            failureMessage = promptError;
+          } else if (!failureMessage) {
+            failureMessage = promptError;
+          }
+        }
         diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
 
         if (!success) {
@@ -794,7 +924,9 @@ export class OpenCodeClient {
         const errorMessage = streamAbortController.signal.aborted
           ? abortCause === 'timeout'
             ? timeoutMessage
-            : OPENCODE_STREAM_ABORTED_MESSAGE
+            : abortCause === 'prompt' && promptError !== undefined
+              ? promptError
+              : OPENCODE_STREAM_ABORTED_MESSAGE
           : message;
 
         if (containsRateLimitError(errorMessage)) {
@@ -806,7 +938,7 @@ export class OpenCodeClient {
         }
 
         diagRef?.onCompleted(
-          abortCause === 'timeout' ? 'timeout' : streamAbortController.signal.aborted ? 'abort' : 'error',
+          abortCause === 'timeout' ? 'timeout' : streamAbortController.signal.aborted && abortCause !== 'prompt' ? 'abort' : 'error',
           errorMessage,
         );
 
@@ -835,10 +967,11 @@ export class OpenCodeClient {
         if (options.abortSignal) {
           options.abortSignal.removeEventListener('abort', onExternalAbort);
         }
-        release?.();
         if (!streamAbortController.signal.aborted) {
           streamAbortController.abort();
         }
+        await promptCompletion;
+        release?.();
       }
     }
 

@@ -1,4 +1,4 @@
-const CLAUDE_EDIT_TOOL_NAMES = new Set([
+export const CLAUDE_EDIT_TOOL_NAMES = new Set([
   'edit',
   'write',
   'apply_patch',

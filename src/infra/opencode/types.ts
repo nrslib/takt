@@ -31,11 +31,41 @@ const OPEN_CODE_DOOM_LOOP_PERMISSION = 'doom_loop';
 export function resolveOpenCodePermissionReply(
   mode: PermissionMode | undefined,
   permission?: string,
+  allowedToolsRuleset?: readonly OpenCodePermissionRule[],
 ): OpenCodePermissionReply {
   if (permission === OPEN_CODE_DOOM_LOOP_PERMISSION) {
     return 'once';
   }
+
+  if (!permission || !isOpenCodePermissionKey(permission)) {
+    return 'reject';
+  }
+
+  if (allowedToolsRuleset !== undefined) {
+    return isPermissionAllowedByRuleset(permission, allowedToolsRuleset)
+      ? mapAllowedRulesetReply(mode)
+      : 'reject';
+  }
+
   return mode ? mapToOpenCodePermissionReply(mode) : 'once';
+}
+
+function mapAllowedRulesetReply(mode: PermissionMode | undefined): OpenCodePermissionReply {
+  return mode === 'full' ? 'always' : 'once';
+}
+
+function isPermissionAllowedByRuleset(
+  permission: string | undefined,
+  ruleset: readonly OpenCodePermissionRule[],
+): boolean {
+  if (!permission) {
+    return false;
+  }
+
+  return ruleset.some((rule) => (
+    rule.action === 'allow'
+    && (rule.permission === permission || rule.permission === '*')
+  ));
 }
 
 const OPEN_CODE_PERMISSION_KEYS = [
@@ -174,6 +204,14 @@ function buildOpenCodeAllowedToolsRuleset(
   networkAccess: boolean | undefined,
   allowedTools: OpenCodeAllowedTools,
 ): OpenCodePermissionRule[] {
+  if (allowedTools.length === 0) {
+    return OPEN_CODE_PERMISSION_KEYS.map((permission) => ({
+      permission,
+      pattern: '**',
+      action: 'deny',
+    }));
+  }
+
   const allowed = allowedTools
     .map(toOpenCodeAllowedPermission)
     .filter((permission): permission is string => (
@@ -194,14 +232,15 @@ function isOpenCodeWebPermission(permission: string): boolean {
 }
 
 function isAllowedByPermissionMode(permission: string, mode: PermissionMode | undefined): boolean {
+  if (!isOpenCodePermissionKey(permission)) {
+    return false;
+  }
+
   if (mode === undefined || mode === 'full') {
     return true;
   }
 
   const permissionMap = buildPermissionMap(mode);
-  if (!isOpenCodePermissionKey(permission)) {
-    return mode === 'edit';
-  }
   return permissionMap[permission] === 'allow';
 }
 
