@@ -2557,6 +2557,78 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   });
 
+  it('should not leak childProcessEnv into concurrent startup without childProcessEnv', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    const envSnapshots: Array<Record<string, string | undefined>> = [];
+    const firstStartup = deferred<Awaited<ReturnType<typeof createOpencodeMock>>>();
+    const { sessionCreate: firstSessionCreate, promptAsync: firstPromptAsync, subscribe: firstSubscribe } =
+      makeOpenCodeClientMock('env-leak-first-session', ['done-1']);
+    const { sessionCreate: secondSessionCreate, promptAsync: secondPromptAsync, subscribe: secondSubscribe } =
+      makeOpenCodeClientMock('env-leak-second-session', ['done-2']);
+
+    createOpencodeMock
+      .mockImplementationOnce(() => {
+        envSnapshots.push({ TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY });
+        return firstStartup.promise;
+      })
+      .mockImplementationOnce(async () => {
+        envSnapshots.push({ TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY });
+        return {
+          client: {
+            instance: { dispose: vi.fn() },
+            session: { create: secondSessionCreate, promptAsync: secondPromptAsync },
+            event: { subscribe: secondSubscribe },
+            permission: { reply: vi.fn() },
+          },
+          server: { close: vi.fn() },
+        };
+      });
+
+    try {
+      const client = new OpenCodeClient();
+      const firstCall = client.call('coder', 'task 1', {
+        cwd: '/tmp',
+        model: 'opencode/model-a',
+        childProcessEnv: { TAKT_OBSERVABILITY: '{"enabled":true}' },
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const secondCall = client.call('coder', 'task 2', {
+        cwd: '/tmp',
+        model: 'opencode/model-b',
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+      expect(envSnapshots).toEqual([{ TAKT_OBSERVABILITY: '{"enabled":true}' }]);
+
+      firstStartup.resolve({
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: firstSessionCreate, promptAsync: firstPromptAsync },
+          event: { subscribe: firstSubscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      await expect(firstCall).resolves.toMatchObject({ status: 'done' });
+      await expect(secondCall).resolves.toMatchObject({ status: 'done' });
+      expect(envSnapshots).toEqual([
+        { TAKT_OBSERVABILITY: '{"enabled":true}' },
+        { TAKT_OBSERVABILITY: '{"enabled":false}' },
+      ]);
+    } finally {
+      if (previousTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = previousTaktObservability;
+      }
+    }
+  });
+
   it('should keep childProcessEnv until shared server startup promise settles and then restore ambient env', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const previousTaktObservability = process.env.TAKT_OBSERVABILITY;

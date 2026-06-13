@@ -177,10 +177,6 @@ export async function runWithNestedObservabilityProcessEnv<T>(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   operation: () => T | Promise<T>,
 ): Promise<Awaited<T>> {
-  if (!childProcessEnv) {
-    return await operation();
-  }
-
   const previousMutation = nestedProcessEnvMutation;
   let releaseMutation!: () => void;
   nestedProcessEnvMutation = new Promise<void>((resolve) => {
@@ -188,6 +184,14 @@ export async function runWithNestedObservabilityProcessEnv<T>(
   });
 
   await previousMutation;
+
+  if (!childProcessEnv) {
+    try {
+      return await operation();
+    } finally {
+      releaseMutation();
+    }
+  }
 
   const nextEnv = pickNestedObservabilityEnv(childProcessEnv);
   const previousEnv = new Map(
