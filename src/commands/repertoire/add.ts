@@ -12,7 +12,14 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { stringify as stringifyYaml } from 'yaml';
-import { getRepertoirePackageDir } from '../../infra/config/paths.js';
+import {
+  getBuiltinProviderOptionsDir,
+  getGlobalProviderOptionsDir,
+  getProjectProviderOptionsDir,
+  getRepertoireDir,
+  getRepertoirePackageDir,
+} from '../../infra/config/paths.js';
+import { resolveWorkflowConfigValues } from '../../infra/config/resolveWorkflowConfigValue.js';
 import { parseGithubSpec } from '../../features/repertoire/github-spec.js';
 import {
   parseTaktRepertoireConfig,
@@ -29,7 +36,13 @@ import { resolveRef } from '../../features/repertoire/github-ref-resolver.js';
 import { atomicReplace, cleanupResiduals } from '../../features/repertoire/atomic-update.js';
 import { generateLockFile, extractCommitSha } from '../../features/repertoire/lock-file.js';
 import { TAKT_REPERTOIRE_MANIFEST_FILENAME, TAKT_REPERTOIRE_LOCK_FILENAME } from '../../features/repertoire/constants.js';
-import { summarizeFacetsByType, detectEditWorkflows, formatEditWorkflowWarnings } from '../../features/repertoire/pack-summary.js';
+import {
+  PACKAGE_PROVIDER_OPTIONS_DIR,
+  summarizeFacetsByType,
+  detectEditWorkflows,
+  formatEditWorkflowWarnings,
+} from '../../features/repertoire/pack-summary.js';
+import { getScopedProviderOptionsCandidateKey } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { info, success } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
@@ -129,19 +142,57 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
     const targets = collectCopyTargets(packageRoot);
     const facetFiles = targets.filter(t => t.relativePath.startsWith('facets/'));
     const workflowFiles = targets.filter(t => t.relativePath.startsWith('workflows/'));
+    const providerOptionsFiles = targets.filter(t => t.relativePath.startsWith('provider-options/'));
 
     const facetSummary = summarizeFacetsByType(facetFiles.map(t => t.relativePath));
 
-    const workflowYamls: Array<{ name: string; content: string }> = [];
+    const workflowYamls: Array<{ name: string; content: string; relativePath: string }> = [];
     for (const workflowFile of workflowFiles) {
       try {
         const content = readFileSync(workflowFile.absolutePath, 'utf-8');
-        workflowYamls.push({ name: workflowFile.relativePath.replace(/^workflows\//, ''), content });
+        workflowYamls.push({
+          name: workflowFile.relativePath.replace(/^workflows\//, ''),
+          content,
+          relativePath: workflowFile.relativePath,
+        });
       } catch (err) {
         log.debug('Failed to parse workflow YAML for edit check', { path: workflowFile.absolutePath, error: getErrorMessage(err) });
       }
     }
-    const editWorkflows = detectEditWorkflows(workflowYamls);
+    const providerOptionsYamls: Array<{ name: string; content: string; relativePath: string }> = [];
+    const workflowRelativeProviderOptionsFiles = workflowFiles.filter(t => t.relativePath.includes('/provider-options/'));
+    for (const providerOptionsFile of [...providerOptionsFiles, ...workflowRelativeProviderOptionsFiles]) {
+      try {
+        const content = readFileSync(providerOptionsFile.absolutePath, 'utf-8');
+        providerOptionsYamls.push({
+          name: providerOptionsFile.relativePath.replace(/^provider-options\//, ''),
+          content,
+          relativePath: providerOptionsFile.relativePath,
+        });
+      } catch (err) {
+        log.debug('Failed to parse provider-options YAML for edit check', { path: providerOptionsFile.absolutePath, error: getErrorMessage(err) });
+      }
+    }
+    const projectCwd = process.cwd();
+    const { language } = resolveWorkflowConfigValues(projectCwd, ['language']);
+    const repertoireDir = getRepertoireDir();
+    const packageWorkflowDir = join(getRepertoirePackageDir(owner, repo), 'workflows');
+    const editWorkflows = detectEditWorkflows(workflowYamls, providerOptionsYamls, {
+      providerOptionsCandidateDirs: [
+        getProjectProviderOptionsDir(projectCwd),
+        getGlobalProviderOptionsDir(),
+        getBuiltinProviderOptionsDir(language),
+      ],
+      providerOptionsScopedCandidateDirs: new Map([
+        [getScopedProviderOptionsCandidateKey(owner, repo), [PACKAGE_PROVIDER_OPTIONS_DIR]],
+      ]),
+      context: {
+        projectDir: projectCwd,
+        lang: language,
+        workflowDir: packageWorkflowDir,
+        repertoireDir,
+      },
+    });
 
     info(`\n📦 ${owner}/${repo} @${ref}`);
     info(`   facets:  ${facetSummary}`);

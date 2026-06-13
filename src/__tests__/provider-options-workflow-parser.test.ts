@@ -3,7 +3,27 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { mergeProviderOptions } from '../infra/config/providerOptions.js';
+
+function writeProviderOptionsPreset(providerOptionsDir: string, name: string, lines: string[]): void {
+  mkdirSync(providerOptionsDir, { recursive: true });
+  writeFileSync(join(providerOptionsDir, `${name}.yaml`), lines.join('\n'));
+}
+
+function withTaktConfigDir<T>(configDir: string, run: () => T): T {
+  const originalConfigDir = process.env.TAKT_CONFIG_DIR;
+  process.env.TAKT_CONFIG_DIR = configDir;
+  try {
+    return run();
+  } finally {
+    if (originalConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalConfigDir;
+    }
+  }
+}
 
 describe('normalizeWorkflowConfig provider_options', () => {
   it('steps と initial_step を canonical workflow fields に正規化する', () => {
@@ -367,6 +387,813 @@ describe('normalizeWorkflowConfig provider_options', () => {
       });
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref は project provider-options を global より優先する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-project-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(
+        join(projectDir, '.takt', 'provider-options'),
+        'review-readonly',
+        [
+          'claude:',
+          '  allowed_tools:',
+          '    - ProjectRead',
+        ],
+      );
+      writeProviderOptionsPreset(
+        join(globalConfigDir, 'provider-options'),
+        'review-readonly',
+        [
+          'claude:',
+          '  allowed_tools:',
+          '    - GlobalRead',
+        ],
+      );
+      const raw = {
+        name: 'named-provider-options-project',
+        workflow_config: {
+          provider_options: {
+            $ref: 'review-readonly',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = withTaktConfigDir(globalConfigDir, () => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(globalConfigDir, 'repertoire'),
+      }));
+
+      expect(config.providerOptions).toEqual({
+        claude: { allowedTools: ['ProjectRead'] },
+      });
+      expect(config.steps[0]?.providerOptions).toEqual({
+        claude: { allowedTools: ['ProjectRead'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref は project provider-options の .yml も解決する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-yml-project-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-yml-global-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      const providerOptionsDir = join(projectDir, '.takt', 'provider-options');
+      mkdirSync(workflowDir, { recursive: true });
+      mkdirSync(providerOptionsDir, { recursive: true });
+      writeFileSync(join(providerOptionsDir, 'review-yml.yml'), [
+        'opencode:',
+        '  allowed_tools:',
+        '    - project-yml-read',
+      ].join('\n'));
+      const raw = {
+        name: 'named-provider-options-yml',
+        workflow_config: {
+          provider_options: {
+            $ref: 'review-yml',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = withTaktConfigDir(globalConfigDir, () => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(globalConfigDir, 'repertoire'),
+      }));
+
+      expect(config.providerOptions).toEqual({
+        opencode: { allowedTools: ['project-yml-read'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref は project に無い場合 global provider-options を解決する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-config-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(
+        join(globalConfigDir, 'provider-options'),
+        'review-readonly',
+        [
+          'opencode:',
+          '  allowed_tools:',
+          '    - global-read',
+        ],
+      );
+      const raw = {
+        name: 'named-provider-options-global',
+        workflow_config: {
+          provider_options: {
+            $ref: 'review-readonly',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = withTaktConfigDir(globalConfigDir, () => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(globalConfigDir, 'repertoire'),
+      }));
+
+      expect(config.providerOptions).toEqual({
+        opencode: { allowedTools: ['global-read'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref は project/global に無い場合 builtin provider-options を解決する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-builtin-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-builtin-global-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      const raw = {
+        name: 'named-provider-options-builtin',
+        workflow_config: {
+          provider_options: {
+            $ref: 'review-files',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = withTaktConfigDir(globalConfigDir, () => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(globalConfigDir, 'repertoire'),
+      }));
+
+      expect(config.providerOptions).toEqual({
+        claude: { allowedTools: ['Read', 'Glob', 'Grep'] },
+        opencode: { allowedTools: ['read', 'glob', 'grep'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref は inline provider_options で leaf 上書きできる', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-inline-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(
+        join(projectDir, '.takt', 'provider-options'),
+        'review-readonly',
+        [
+          'codex:',
+          '  network_access: true',
+          'opencode:',
+          '  allowed_tools:',
+          '    - read',
+          '    - glob',
+        ],
+      );
+      const raw = {
+        name: 'named-provider-options-inline',
+        workflow_config: {
+          provider_options: {
+            $ref: 'review-readonly',
+            opencode: {
+              allowed_tools: ['read', 'bash'],
+            },
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(projectDir, '.takt', 'repertoire'),
+      });
+
+      expect(config.providerOptions).toEqual({
+        codex: { networkAccess: true },
+        opencode: { allowedTools: ['read', 'bash'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('repertoire workflow 内の provider_options 名前 $ref は package-local provider-options を最優先する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-package-project-'));
+    const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-package-repertoire-'));
+    try {
+      const workflowDir = join(repertoireDir, '@nrslib', 'takt-review', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(
+        join(repertoireDir, '@nrslib', 'takt-review', 'provider-options'),
+        'review',
+        [
+          'claude:',
+          '  allowed_tools:',
+          '    - PackageRead',
+        ],
+      );
+      writeProviderOptionsPreset(
+        join(projectDir, '.takt', 'provider-options'),
+        'review',
+        [
+          'claude:',
+          '  allowed_tools:',
+          '    - ProjectRead',
+        ],
+      );
+      const raw = {
+        name: 'package-local-provider-options',
+        workflow_config: {
+          provider_options: {
+            $ref: 'review',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir,
+      });
+
+      expect(config.providerOptions).toEqual({
+        claude: { allowedTools: ['PackageRead'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(repertoireDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の @scope $ref は repertoire package の provider-options を解決する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-project-'));
+    const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-repertoire-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(
+        join(repertoireDir, '@nrslib', 'takt-review', 'provider-options'),
+        'review-readonly',
+        [
+          'opencode:',
+          '  allowed_tools:',
+          '    - scope-read',
+        ],
+      );
+      const raw = {
+        name: 'scope-provider-options',
+        workflow_config: {
+          provider_options: {
+            $ref: '@nrslib/takt-review/review-readonly',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir,
+      });
+
+      expect(config.providerOptions).toEqual({
+        opencode: { allowedTools: ['scope-read'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(repertoireDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref が candidate dir 内 symlink 経由で外部実体を指す場合は reject する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-symlink-project-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-symlink-outside-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      const providerOptionsDir = join(projectDir, '.takt', 'provider-options');
+      mkdirSync(workflowDir, { recursive: true });
+      mkdirSync(providerOptionsDir, { recursive: true });
+      const secretPath = join(outsideDir, 'secret.yaml');
+      writeFileSync(secretPath, 'opencode:\n  allowed_tools:\n    - outside-read\n');
+      symlinkSync(secretPath, join(providerOptionsDir, 'linked.yaml'));
+      const raw = {
+        name: 'named-provider-options-symlink',
+        workflow_config: {
+          provider_options: {
+            $ref: 'linked',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(projectDir, '.takt', 'repertoire'),
+      })).toThrow(/named resource must stay inside its candidate directory: linked/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref が symlink の project provider-options directory を使う場合は reject する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-dir-symlink-project-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-dir-symlink-outside-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeProviderOptionsPreset(outsideDir, 'linked-dir', [
+        'opencode:',
+        '  allowed_tools:',
+        '    - outside-read',
+      ]);
+      symlinkSync(outsideDir, join(projectDir, '.takt', 'provider-options'));
+      const raw = {
+        name: 'named-provider-options-dir-symlink',
+        workflow_config: {
+          provider_options: {
+            $ref: 'linked-dir',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(projectDir, '.takt', 'repertoire'),
+      })).toThrow(/candidate directory must not be a symlink/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の @scope $ref が package provider-options 内 symlink 経由で外部実体を指す場合は reject する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-symlink-project-'));
+    const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-symlink-repertoire-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-symlink-outside-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      const providerOptionsDir = join(repertoireDir, '@nrslib', 'takt-review', 'provider-options');
+      mkdirSync(workflowDir, { recursive: true });
+      mkdirSync(providerOptionsDir, { recursive: true });
+      const secretPath = join(outsideDir, 'secret.yaml');
+      writeFileSync(secretPath, 'opencode:\n  allowed_tools:\n    - outside-read\n');
+      symlinkSync(secretPath, join(providerOptionsDir, 'linked.yaml'));
+      const raw = {
+        name: 'scoped-provider-options-symlink',
+        workflow_config: {
+          provider_options: {
+            $ref: '@nrslib/takt-review/linked',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir,
+      })).toThrow(/named resource must stay inside its candidate directory: linked/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(repertoireDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の @scope $ref が symlink の package provider-options directory を使う場合は reject する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-dir-symlink-project-'));
+    const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-dir-symlink-repertoire-'));
+    const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-dir-symlink-outside-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      const packageDir = join(repertoireDir, '@nrslib', 'takt-review');
+      mkdirSync(workflowDir, { recursive: true });
+      mkdirSync(packageDir, { recursive: true });
+      writeProviderOptionsPreset(outsideDir, 'linked-dir', [
+        'opencode:',
+        '  allowed_tools:',
+        '    - outside-read',
+      ]);
+      symlinkSync(outsideDir, join(packageDir, 'provider-options'));
+      const raw = {
+        name: 'scoped-provider-options-dir-symlink',
+        workflow_config: {
+          provider_options: {
+            $ref: '@nrslib/takt-review/linked-dir',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir,
+      })).toThrow(/candidate directory must not be a symlink/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(repertoireDir, { recursive: true, force: true });
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref が存在しない場合は参照名を含めて reject する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-missing-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      const raw = {
+        name: 'missing-named-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: 'missing-preset',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(projectDir, '.takt', 'repertoire'),
+      })).toThrow(/provider_options\.\$ref not found: missing-preset/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の @scope $ref が存在しない場合は scope ref を含めて reject する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-missing-project-'));
+    const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-missing-repertoire-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      const raw = {
+        name: 'missing-scoped-provider-options-ref',
+        workflow_config: {
+          provider_options: {
+            $ref: '@nrslib/takt-review/missing',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir,
+      })).toThrow(/provider_options\.\$ref not found: @nrslib\/takt-review\/missing/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(repertoireDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の @scope $ref は repertoireDir がない場合 reject する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-no-repertoire-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      const raw = {
+        name: 'scope-provider-options-without-repertoire',
+        workflow_config: {
+          provider_options: {
+            $ref: '@nrslib/takt-review/review-readonly',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+      })).toThrow(/requires repertoireDir/);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の nested 名前 $ref は参照元層以降だけを探索する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-nested-layer-project-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-nested-layer-global-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(join(projectDir, '.takt', 'provider-options'), 'base', [
+        'claude:',
+        '  allowed_tools:',
+        '    - ProjectRead',
+      ]);
+      writeProviderOptionsPreset(join(globalConfigDir, 'provider-options'), 'review', [
+        '$ref: base',
+        'opencode:',
+        '  allowed_tools:',
+        '    - global-review',
+      ]);
+      writeProviderOptionsPreset(join(globalConfigDir, 'provider-options'), 'base', [
+        'claude:',
+        '  allowed_tools:',
+        '    - GlobalRead',
+      ]);
+      const raw = {
+        name: 'nested-provider-options-layer-boundary',
+        workflow_config: {
+          provider_options: {
+            $ref: 'review',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            instruction: '{task}',
+          },
+        ],
+      };
+
+      const config = withTaktConfigDir(globalConfigDir, () => normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(projectDir, '.takt', 'repertoire'),
+      }));
+
+      expect(config.providerOptions).toEqual({
+        claude: { allowedTools: ['GlobalRead'] },
+        opencode: { allowedTools: ['global-review'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('provider_options の名前 $ref を workflow/step/promotion/workflow_call/parallel に配線する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-wire-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      const providerOptionsDir = join(projectDir, '.takt', 'provider-options');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(providerOptionsDir, 'workflow-preset', [
+        'codex:',
+        '  network_access: true',
+      ]);
+      writeProviderOptionsPreset(providerOptionsDir, 'step-preset', [
+        'opencode:',
+        '  variant: step-variant',
+      ]);
+      writeProviderOptionsPreset(providerOptionsDir, 'promotion-preset', [
+        'claude:',
+        '  allowed_tools:',
+        '    - PromotionRead',
+      ]);
+      writeProviderOptionsPreset(providerOptionsDir, 'call-preset', [
+        'opencode:',
+        '  allowed_tools:',
+        '    - call-read',
+      ]);
+      writeProviderOptionsPreset(providerOptionsDir, 'parallel-preset', [
+        'claude:',
+        '  sandbox:',
+        '    allow_unsandboxed_commands: true',
+      ]);
+      const raw = {
+        name: 'provider-options-name-wiring',
+        workflow_config: {
+          provider_options: {
+            $ref: 'workflow-preset',
+          },
+        },
+        steps: [
+          {
+            name: 'implement',
+            instruction: '{task}',
+            provider_options: {
+              $ref: 'step-preset',
+            },
+            promotion: [
+              {
+                at: 2,
+                provider_options: {
+                  $ref: 'promotion-preset',
+                },
+              },
+            ],
+          },
+          {
+            name: 'delegate',
+            kind: 'workflow_call',
+            call: 'child',
+            overrides: {
+              provider_options: {
+                $ref: 'call-preset',
+              },
+            },
+            rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+          },
+          {
+            name: 'reviewers',
+            instruction: '{task}',
+            parallel: [
+              {
+                name: 'parallel-review',
+                instruction: '{task}',
+                provider_options: {
+                  $ref: 'parallel-preset',
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, workflowDir, {
+        lang: 'en',
+        projectDir,
+        workflowDir,
+        repertoireDir: join(projectDir, '.takt', 'repertoire'),
+      });
+      const implementStep = config.steps[0];
+      const delegateStep = config.steps[1];
+      const reviewersStep = config.steps[2];
+      if (implementStep?.kind !== 'agent') {
+        throw new Error('expected implement to be an agent step');
+      }
+      if (delegateStep?.kind !== 'workflow_call') {
+        throw new Error('expected delegate to be a workflow_call step');
+      }
+      if (reviewersStep?.kind !== 'agent') {
+        throw new Error('expected reviewers to be an agent step');
+      }
+
+      expect(config.providerOptions).toEqual({
+        codex: { networkAccess: true },
+      });
+      expect(implementStep.providerOptions).toEqual({
+        codex: { networkAccess: true },
+        opencode: { variant: 'step-variant' },
+      });
+      expect(implementStep.promotion?.[0]?.providerOptions).toEqual({
+        claude: { allowedTools: ['PromotionRead'] },
+      });
+      expect(delegateStep.overrides?.providerOptions).toEqual({
+        opencode: { allowedTools: ['call-read'] },
+      });
+      expect(reviewersStep.parallel?.[0]?.providerOptions).toEqual({
+        codex: { networkAccess: true },
+        claude: { sandbox: { allowUnsandboxedCommands: true } },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loadWorkflowFromFile は project provider-options の名前 $ref を workflow loader context で解決する', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-loader-project-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-loader-global-'));
+    try {
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      const workflowPath = join(workflowDir, 'named-provider-options.yaml');
+      mkdirSync(workflowDir, { recursive: true });
+      writeProviderOptionsPreset(
+        join(projectDir, '.takt', 'provider-options'),
+        'review-readonly',
+        [
+          'claude:',
+          '  allowed_tools:',
+          '    - LoaderRead',
+        ],
+      );
+      writeFileSync(workflowPath, [
+        'name: named-provider-options-loader',
+        'workflow_config:',
+        '  provider_options:',
+        '    $ref: review-readonly',
+        'steps:',
+        '  - name: plan',
+        '    instruction: "{task}"',
+      ].join('\n'));
+
+      const config = withTaktConfigDir(globalConfigDir, () => loadWorkflowFromFile(workflowPath, projectDir));
+
+      expect(config.providerOptions).toEqual({
+        claude: { allowedTools: ['LoaderRead'] },
+      });
+      expect(config.steps[0]?.providerOptions).toEqual({
+        claude: { allowedTools: ['LoaderRead'] },
+      });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
     }
   });
 

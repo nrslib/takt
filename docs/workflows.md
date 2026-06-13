@@ -359,20 +359,22 @@ workflow_config:
         allow_unsandboxed_commands: true
 ```
 
-`provider_options` can reference a shared YAML file relative to the workflow file. The referenced file is the base, and inline values override matching leaves.
+`provider_options` can reference a shared YAML preset by name. Names are resolved first-match from `.takt/provider-options`, `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For repertoire packages, package-local `provider-options` is checked first, and `@owner/repo/name` resolves a preset from that package. The referenced file is the base, and inline values override matching leaves.
 
 ```yaml
 workflow_config:
   provider_options:
-    $ref: provider-options/review-readonly.yaml
+    $ref: review-readonly
 
 steps:
   - name: implement
     provider_options:
-      $ref: provider-options/edit.yaml
+      $ref: edit
       opencode:
         allowed_tools: [read, grep, bash]
 ```
+
+Relative file paths from the workflow file are still supported for workflow-local shared files.
 
 Example shared file:
 

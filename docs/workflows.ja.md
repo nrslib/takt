@@ -358,20 +358,22 @@ workflow_config:
         allow_unsandboxed_commands: true
 ```
 
-`provider_options` は workflow ファイルからの相対パスで共通 YAML を参照できます。参照先が base になり、inline の値が同じ leaf を上書きします。
+`provider_options` は名前で共通 YAML プリセットを参照できます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package 内の workflow では package-local の `provider-options` が最優先され、`@owner/repo/name` でその package のプリセットも参照できます。参照先が base になり、inline の値が同じ leaf を上書きします。
 
 ```yaml
 workflow_config:
   provider_options:
-    $ref: provider-options/review-readonly.yaml
+    $ref: review-readonly
 
 steps:
   - name: implement
     provider_options:
-      $ref: provider-options/edit.yaml
+      $ref: edit
       opencode:
         allowed_tools: [read, grep, bash]
 ```
+
+workflow ファイルからの相対パスも、workflow-local な共通ファイル用に引き続き使用できます。
 
 共通ファイルの例:
 
