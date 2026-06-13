@@ -391,14 +391,29 @@ describe('callCursor', () => {
   });
 
   it('should return parse error when stdout is not valid JSON', async () => {
+    const onStream = vi.fn();
     mockSpawnWithScenario({
       stdout: 'not-json',
       code: 0,
     });
 
-    const result = await callCursor('coder', 'implement feature', { cwd: '/repo' });
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      sessionId: 'sess-parse-error',
+      onStream,
+    });
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('Failed to parse cursor-agent JSON output');
+    expect(result.sessionId).toBe('sess-parse-error');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: expect.stringContaining('Failed to parse cursor-agent JSON output'),
+        sessionId: 'sess-parse-error',
+      },
+    });
   });
 });

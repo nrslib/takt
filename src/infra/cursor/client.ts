@@ -503,13 +503,8 @@ export class CursorClient {
         const { stdout } = await execCursor(args, options);
         const parsed = parseCursorOutput(stdout);
         if ('error' in parsed) {
-          return {
-            persona: agentType,
-            status: 'error',
-            content: parsed.error,
-            timestamp: new Date(),
-            sessionId: options.sessionId,
-          };
+          emitCursorErrorResult(options, parsed.error);
+          return buildCursorErrorResponse(agentType, parsed.error, options);
         }
 
         const sessionId = parsed.sessionId ?? options.sessionId;

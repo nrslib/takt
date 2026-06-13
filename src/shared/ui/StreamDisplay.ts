@@ -238,7 +238,7 @@ export class StreamDisplay {
     } else {
       console.log(chalk.red('✗ Failed'));
       if (error) {
-        console.log(chalk.red(`  ${error}`));
+        console.log(chalk.red(`  ${stripAnsi(error)}`));
       }
     }
   }
