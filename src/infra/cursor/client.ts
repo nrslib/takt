@@ -5,6 +5,7 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import { crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
+import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { CursorCallOptions } from './types.js';
 
 export type { CursorCallOptions } from './types.js';
@@ -14,6 +15,9 @@ const CURSOR_ABORTED_MESSAGE = 'Cursor execution aborted';
 const CURSOR_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 const CURSOR_FORCE_KILL_DELAY_MS_DEFAULT = 1_000;
 const CURSOR_ERROR_DETAIL_MAX_LENGTH = 400;
+const CURSOR_CLI_CONFIG_RENAME_MAX_RETRIES = 8;
+const CURSOR_CLI_CONFIG_RENAME_RETRY_BASE_DELAY_MS = 1_000;
+const CURSOR_CLI_CONFIG_RENAME_RETRY_MAX_DELAY_MS = 30_000;
 
 function resolveForceKillDelayMs(): number {
   const raw = process.env.TAKT_CURSOR_FORCE_KILL_DELAY_MS;
@@ -346,6 +350,50 @@ function isAuthenticationError(error: CursorExecError): boolean {
   return patterns.some((pattern) => message.includes(pattern));
 }
 
+function isCursorCliConfigRenameEnoent(error: CursorExecError): boolean {
+  if (error.code !== 1) {
+    return false;
+  }
+
+  const detail = [
+    error.message,
+    error.stderr,
+    error.stdout,
+  ].filter((value): value is string => typeof value === 'string').join('\n');
+
+  return /\bENOENT\b/i.test(detail)
+    && /\brename\b/i.test(detail)
+    && /cli-config\.json\.tmp/i.test(detail)
+    && /(?:->|to)\s*['"]?[^'"\r\n]*cli-config\.json(?:['"]|\s|$)/i.test(detail);
+}
+
+async function waitForCursorCliConfigRenameRetryDelay(attempt: number, signal?: AbortSignal): Promise<void> {
+  const delayMs = Math.min(
+    CURSOR_CLI_CONFIG_RENAME_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
+    CURSOR_CLI_CONFIG_RENAME_RETRY_MAX_DELAY_MS,
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+
+    const onAbort = (): void => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', onAbort);
+      reject(signal?.reason ?? new Error(CURSOR_ABORTED_MESSAGE));
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 function classifyExecutionError(error: CursorExecError, options: CursorCallOptions): string {
   if (options.abortSignal?.aborted || error.name === 'AbortError') {
     return CURSOR_ABORTED_MESSAGE;
@@ -397,67 +445,117 @@ function parseCursorOutput(stdout: string): { content: string; sessionId?: strin
   return { content, sessionId };
 }
 
+function toCursorExecError(rawError: unknown): CursorExecError {
+  if (rawError instanceof Error) {
+    return rawError as CursorExecError;
+  }
+
+  return createExecError(getErrorMessage(rawError));
+}
+
+function emitCursorErrorResult(
+  options: CursorCallOptions,
+  message: string,
+  failureCategory?: AgentFailureCategory,
+): void {
+  if (!options.onStream) {
+    return;
+  }
+
+  options.onStream({
+    type: 'result',
+    data: {
+      result: '',
+      success: false,
+      error: message,
+      sessionId: options.sessionId ?? '',
+      ...(failureCategory ? { failureCategory } : {}),
+    },
+  });
+}
+
+function buildCursorErrorResponse(
+  agentType: string,
+  message: string,
+  options: CursorCallOptions,
+  failureCategory?: AgentFailureCategory,
+): AgentResponse {
+  return {
+    persona: agentType,
+    status: 'error',
+    content: message,
+    timestamp: new Date(),
+    sessionId: options.sessionId,
+    ...(failureCategory ? { error: message, failureCategory } : {}),
+  };
+}
+
 /**
  * Client for Cursor Agent CLI interactions.
  */
 export class CursorClient {
   async call(agentType: string, prompt: string, options: CursorCallOptions): Promise<AgentResponse> {
     const args = buildArgs(prompt, options);
+    let cliConfigRenameRetryCount = 0;
 
-    try {
-      const { stdout } = await execCursor(args, options);
-      const parsed = parseCursorOutput(stdout);
-      if ('error' in parsed) {
+    while (true) {
+      try {
+        const { stdout } = await execCursor(args, options);
+        const parsed = parseCursorOutput(stdout);
+        if ('error' in parsed) {
+          return {
+            persona: agentType,
+            status: 'error',
+            content: parsed.error,
+            timestamp: new Date(),
+            sessionId: options.sessionId,
+          };
+        }
+
+        const sessionId = parsed.sessionId ?? options.sessionId;
+        if (options.onStream) {
+          options.onStream({ type: 'text', data: { text: parsed.content } });
+          options.onStream({
+            type: 'result',
+            data: {
+              result: parsed.content,
+              success: true,
+              sessionId: sessionId ?? '',
+            },
+          });
+        }
+
         return {
           persona: agentType,
-          status: 'error',
-          content: parsed.error,
+          status: 'done',
+          content: parsed.content,
           timestamp: new Date(),
-          sessionId: options.sessionId,
+          sessionId,
         };
-      }
+      } catch (rawError) {
+        const error = toCursorExecError(rawError);
+        if (
+          isCursorCliConfigRenameEnoent(error)
+          && cliConfigRenameRetryCount < CURSOR_CLI_CONFIG_RENAME_MAX_RETRIES
+        ) {
+          cliConfigRenameRetryCount += 1;
+          try {
+            await waitForCursorCliConfigRenameRetryDelay(cliConfigRenameRetryCount, options.abortSignal);
+          } catch (delayError) {
+            const message = classifyExecutionError(toCursorExecError(delayError), options);
+            emitCursorErrorResult(options, message);
+            return buildCursorErrorResponse(agentType, message, options);
+          }
+          continue;
+        }
 
-      const sessionId = parsed.sessionId ?? options.sessionId;
-      if (options.onStream) {
-        options.onStream({ type: 'text', data: { text: parsed.content } });
-        options.onStream({
-          type: 'result',
-          data: {
-            result: parsed.content,
-            success: true,
-            sessionId: sessionId ?? '',
-          },
-        });
+        const message = classifyExecutionError(error, options);
+        const failureCategory = isCursorCliConfigRenameEnoent(error)
+          ? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+          : undefined;
+        emitCursorErrorResult(options, message, failureCategory);
+        return buildCursorErrorResponse(agentType, message, options, failureCategory);
       }
-
-      return {
-        persona: agentType,
-        status: 'done',
-        content: parsed.content,
-        timestamp: new Date(),
-        sessionId,
-      };
-    } catch (rawError) {
-      const error = rawError as CursorExecError;
-      const message = classifyExecutionError(error, options);
-      if (options.onStream) {
-        options.onStream({
-          type: 'result',
-          data: {
-            result: '',
-            success: false,
-            error: message,
-            sessionId: options.sessionId ?? '',
-          },
-        });
-      }
-      return {
-        persona: agentType,
-        status: 'error',
-        content: message,
-        timestamp: new Date(),
-        sessionId: options.sessionId,
-      };
     }
   }
 
