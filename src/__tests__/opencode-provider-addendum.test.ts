@@ -30,7 +30,18 @@ describe('OpenCodeProvider tool naming addendum', () => {
     });
   });
 
-  it('should append OpenCode tool naming addendum to custom system prompt', async () => {
+  it('should expose OpenCode tool naming text as provider runtime instructions', () => {
+    const provider = new OpenCodeProvider() as {
+      getRuntimeInstructions(): string | null;
+    };
+
+    const runtimeInstructions = provider.getRuntimeInstructions();
+
+    expect(runtimeInstructions).toContain('OpenCode tool names are lowercase.');
+    expect(runtimeInstructions).toContain('Do not call run, list, todo, or todo_write.');
+  });
+
+  it('should pass custom system prompt without appending OpenCode runtime instructions', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({
       name: 'coder',
@@ -46,14 +57,14 @@ describe('OpenCodeProvider tool naming addendum', () => {
     expect(openCodeMocks.callOpenCodeCustom).toHaveBeenCalledWith(
       'coder',
       'implement task',
-      expect.stringContaining('Use the project conventions.\n\nOpenCode tool names are lowercase.'),
+      'Use the project conventions.',
       expect.objectContaining({ model: 'opencode/big-pickle' }),
     );
     expect(openCodeMocks.callOpenCodeCustom.mock.calls[0]?.[2])
-      .toContain('Do not call run, list, todo, or todo_write.');
+      .not.toContain('OpenCode tool names are lowercase.');
   });
 
-  it('should use custom OpenCode call with addendum when setup has no system prompt', async () => {
+  it('should use the regular OpenCode call when setup has no system prompt', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({ name: 'coder' });
 
@@ -63,11 +74,10 @@ describe('OpenCodeProvider tool naming addendum', () => {
       opencodeApiKey: 'test-key',
     });
 
-    expect(openCodeMocks.callOpenCode).not.toHaveBeenCalled();
-    expect(openCodeMocks.callOpenCodeCustom).toHaveBeenCalledWith(
+    expect(openCodeMocks.callOpenCodeCustom).not.toHaveBeenCalled();
+    expect(openCodeMocks.callOpenCode).toHaveBeenCalledWith(
       'coder',
       'implement task',
-      expect.stringContaining('OpenCode tool names are lowercase.'),
       expect.objectContaining({ model: 'opencode/big-pickle' }),
     );
   });

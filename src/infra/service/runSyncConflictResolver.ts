@@ -4,6 +4,7 @@ import { resolveAssistantConfigLayers } from '../../features/interactive/assista
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLanguage, resolveConfigValues } from '../config/index.js';
 import { getProvider, type ProviderCallOptions, type ProviderType } from '../providers/index.js';
+import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
 
 interface RunSyncConflictResolverOptions {
   projectCwd: string;
@@ -34,7 +35,12 @@ export async function runSyncConflictResolver(
   }
 
   const provider = getProvider(resolvedProviderModel.provider as ProviderType);
-  const agent = provider.setup({ name: 'conflict-resolver', systemPrompt });
+  const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
+    systemPrompt,
+    lang,
+    provider.getRuntimeInstructions(),
+  );
+  const agent = provider.setup({ name: 'conflict-resolver', systemPrompt: resolvedSystemPrompt });
   const onPermissionRequest = config.syncConflictResolver?.autoApproveTools
     ? autoApproveToolRequest
     : undefined;

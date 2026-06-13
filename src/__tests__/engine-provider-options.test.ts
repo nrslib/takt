@@ -272,12 +272,23 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(options?.allowedTools).toEqual(['read', 'grep', 'bash']);
   });
 
-  it('should remove opencode write from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
+  it('should remove opencode edit permission aliases from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
     const step = makeStep('review', {
       provider: 'opencode',
       model: 'opencode/zai-coding-plan/glm-5.1',
       providerOptions: {
-        opencode: { allowedTools: ['read', ' write ', 'bash'] },
+        opencode: {
+          allowedTools: [
+            'read',
+            'Edit',
+            'edit',
+            'Write',
+            ' write ',
+            'apply_patch',
+            'patch',
+            'bash',
+          ],
+        },
       } as never,
       outputContracts: [{ name: 'review.md', format: 'markdown' }],
       edit: false,

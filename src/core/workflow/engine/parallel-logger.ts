@@ -158,6 +158,7 @@ export class ParallelLogger {
         case 'init':
         case 'result':
         case 'permission_asked':
+        case 'permission_summary':
         case 'assistant_error':
         case 'rate_limit':
         case 'error':

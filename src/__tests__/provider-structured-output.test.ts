@@ -1,9 +1,8 @@
 /**
  * Provider layer structured output tests.
  *
- * Verifies that each provider (Claude, Codex, OpenCode) correctly passes
- * `outputSchema` through to its underlying client function and returns
- * `structuredOutput` in the AgentResponse.
+ * Verifies native structured output providers pass `outputSchema` through
+ * and providers without native support do not.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -289,13 +288,13 @@ describe('OpenCodeProvider — structured output', () => {
     vi.clearAllMocks();
   });
 
-  it('supportsStructuredOutput is true', () => {
+  it('supportsStructuredOutput is false', () => {
     const provider = new OpenCodeProvider() as { supportsStructuredOutput?: boolean };
-    expect(provider.supportsStructuredOutput).toBe(true);
+    expect(provider.supportsStructuredOutput).toBe(false);
   });
 
-  it('outputSchema を callOpenCodeCustom に渡し structuredOutput を返す', async () => {
-    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder', { step: 2 }));
+  it('outputSchema を callOpenCode に渡さない', async () => {
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     const result = await agent.call('prompt', {
@@ -304,13 +303,13 @@ describe('OpenCodeProvider — structured output', () => {
       outputSchema: SCHEMA,
     });
 
-    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
-    expect(opts).toHaveProperty('outputSchema', SCHEMA);
-    expect(result.structuredOutput).toEqual({ step: 2 });
+    const opts = mockCallOpenCode.mock.calls[0]?.[2];
+    expect(opts).not.toHaveProperty('outputSchema');
+    expect(result.structuredOutput).toBeUndefined();
   });
 
-  it('provider_options.opencode.variant を callOpenCodeCustom に渡す', async () => {
-    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
+  it('provider_options.opencode.variant を callOpenCode に渡す', async () => {
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     await agent.call('prompt', {
@@ -324,15 +323,15 @@ describe('OpenCodeProvider — structured output', () => {
       },
     });
 
-    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
+    const opts = mockCallOpenCode.mock.calls[0]?.[2];
     expect(opts).toMatchObject({
       networkAccess: true,
       variant: 'high',
     });
   });
 
-  it('systemPrompt 指定時も outputSchema が callOpenCodeCustom に渡される', async () => {
-    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
+  it('systemPrompt 指定時も outputSchema を callOpenCodeCustom に渡さない', async () => {
+    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('judge'));
 
     const agent = new OpenCodeProvider().setup({ name: 'judge', systemPrompt: 'sys' });
     const result = await agent.call('prompt', {
@@ -342,12 +341,12 @@ describe('OpenCodeProvider — structured output', () => {
     });
 
     const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
-    expect(opts).toHaveProperty('outputSchema', SCHEMA);
-    expect(result.structuredOutput).toEqual({ step: 1 });
+    expect(opts).not.toHaveProperty('outputSchema');
+    expect(result.structuredOutput).toBeUndefined();
   });
 
   it('structuredOutput がない場合は undefined', async () => {
-    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     const result = await agent.call('prompt', {
@@ -360,12 +359,12 @@ describe('OpenCodeProvider — structured output', () => {
   });
 
   it('outputSchema 未指定時は undefined が渡される', async () => {
-    mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
     await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4' });
 
-    const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
+    const opts = mockCallOpenCode.mock.calls[0]?.[2];
     expect(opts.outputSchema).toBeUndefined();
   });
 

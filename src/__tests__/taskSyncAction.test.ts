@@ -37,6 +37,7 @@ const mockAgentCall = vi.fn();
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({
+    getRuntimeInstructions: vi.fn(() => null),
     setup: vi.fn(() => ({ call: mockAgentCall })),
   })),
 }));

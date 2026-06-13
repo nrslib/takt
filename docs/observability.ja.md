@@ -33,6 +33,16 @@ takt run
 
 Grafana は `http://127.0.0.1:3000` で開き、`takt` service を確認します。trace は既存の workflow span tree（`workflow.<name>` の下に `step.<name>`、さらに phase / judge span）として表示され、metric はローカルの `monitor.json` 出力と並走して送信されます。
 
+workflow がまだ実行中の場合、OpenTelemetry exporter は長時間生存する root `workflow.<name>` span が終了する前に、完了済みの child span を送信することがあります。Tempo でその active trace を見つけやすくするため、TAKT は root workflow span の下に短命の `workflow_start.<workflowName>` span も送信します。この補助 span は `takt.workflow.status = running` を含む workflow / run 属性を持ちますが、root、step、phase、judge span を置き換えたり改名したりしません。trace discovery 専用であり、shadow session log の canonical record には変換されません。
+
+active workflow を探す Tempo TraceQL filter 例:
+
+```traceql
+{ resource.service.name = "takt" && span."takt.workflow.name" = "takt-default" }
+{ resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
+{ resource.service.name = "takt" && name =~ "workflow_start\\..*" }
+```
+
 OTLP export には base endpoint が必要です。
 
 | 環境変数 | 用途 |

@@ -75,6 +75,7 @@ vi.mock('../shared/prompts/index.js', () => ({
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({
+    getRuntimeInstructions: vi.fn(() => null),
     setup: vi.fn(() => ({ call: mockAgentCall })),
   })),
 }));

@@ -21,15 +21,37 @@ vi.mock('../infra/codex/index.js', () => ({
   callCodexCustom: providerMocks.callCodexCustom,
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  resolveAnthropicApiKey: providerMocks.resolveAnthropicApiKey,
-  resolveClaudeCliPath: providerMocks.resolveClaudeCliPath,
-  resolveOpenaiApiKey: providerMocks.resolveOpenaiApiKey,
-  resolveCodexCliPath: providerMocks.resolveCodexCliPath,
-}));
+vi.mock('../infra/config/index.js', async () => {
+  const actual = await vi.importActual<typeof import('../infra/config/index.js')>('../infra/config/index.js');
+  return {
+    ...actual,
+    resolveAnthropicApiKey: providerMocks.resolveAnthropicApiKey,
+    resolveClaudeCliPath: providerMocks.resolveClaudeCliPath,
+    resolveOpenaiApiKey: providerMocks.resolveOpenaiApiKey,
+    resolveCodexCliPath: providerMocks.resolveCodexCliPath,
+  };
+});
 
 import { ClaudeProvider } from '../infra/providers/claude.js';
+import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';
+import { ClaudeTerminalProvider } from '../infra/providers/claude-terminal.js';
 import { CodexProvider } from '../infra/providers/codex.js';
+import { CopilotProvider } from '../infra/providers/copilot.js';
+import { CursorProvider } from '../infra/providers/cursor.js';
+import { KiroProvider } from '../infra/providers/kiro.js';
+import { MockProvider } from '../infra/providers/mock.js';
+import type { Provider } from '../infra/providers/types.js';
+
+const nonOpenCodeProviders: Array<[string, () => Provider]> = [
+  ['claude-sdk', () => new ClaudeProvider()],
+  ['claude', () => new ClaudeHeadlessProvider()],
+  ['claude-terminal', () => new ClaudeTerminalProvider()],
+  ['codex', () => new CodexProvider()],
+  ['cursor', () => new CursorProvider()],
+  ['copilot', () => new CopilotProvider()],
+  ['kiro', () => new KiroProvider()],
+  ['mock', () => new MockProvider()],
+];
 
 describe('provider tool naming addendum boundary', () => {
   beforeEach(() => {
@@ -55,8 +77,14 @@ describe('provider tool naming addendum boundary', () => {
     });
   });
 
+  it.each(nonOpenCodeProviders)('should return null runtime instructions for %s provider', (_providerName, createProvider) => {
+    expect(createProvider().getRuntimeInstructions()).toBeNull();
+  });
+
   it('should not add OpenCode tool naming text to Claude system prompt', async () => {
     const provider = new ClaudeProvider();
+    expect(provider.getRuntimeInstructions()).toBeNull();
+
     const agent = provider.setup({
       name: 'coder',
       systemPrompt: 'Use the project conventions.',
@@ -80,6 +108,8 @@ describe('provider tool naming addendum boundary', () => {
 
   it('should not add OpenCode tool naming text to Codex system prompt', async () => {
     const provider = new CodexProvider();
+    expect(provider.getRuntimeInstructions()).toBeNull();
+
     const agent = provider.setup({
       name: 'coder',
       systemPrompt: 'Use the project conventions.',

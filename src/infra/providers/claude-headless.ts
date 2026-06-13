@@ -3,6 +3,7 @@ import type { ClaudeHeadlessCallOptions } from '../claude-headless/types.js';
 import { resolveAnthropicApiKey, resolveClaudeCliPath } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
+import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOptions {
@@ -30,6 +31,14 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
 export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
+
+  getRuntimeInstructions(): string | null {
+    return null;
+  }
+
+  keepsAllowedToolWithoutEdit(tool: string): boolean {
+    return keepsClaudeAllowedToolWithoutEdit(tool);
+  }
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

@@ -311,6 +311,34 @@ describe('ParallelLogger', () => {
       expect(parentEvents[0]).toBe(permissionEvent);
     });
 
+    it('should delegate permission_summary event to parent callback', () => {
+      const parentEvents: StreamEvent[] = [];
+      const logger = new ParallelLogger({
+        subStepNames: ['sub-a'],
+        parentOnStream: (event) => parentEvents.push(event),
+        writeFn,
+      });
+      const handler = logger.createStreamHandler('sub-a', 0);
+
+      const permissionEvent: StreamEvent = {
+        type: 'permission_summary',
+        data: {
+          sessionId: 'sess-1',
+          permissionMode: 'readonly',
+          allowedTools: ['Read', 'Bash'],
+          networkAccess: false,
+          resolvedPermissions: [
+            { permission: '*', pattern: '*', action: 'deny' },
+            { permission: 'read', pattern: '*', action: 'allow' },
+          ],
+        },
+      };
+      handler(permissionEvent);
+
+      expect(parentEvents).toHaveLength(1);
+      expect(parentEvents[0]).toBe(permissionEvent);
+    });
+
     it('should not crash when no parent callback for delegated events', () => {
       const logger = new ParallelLogger({
         subStepNames: ['sub-a'],

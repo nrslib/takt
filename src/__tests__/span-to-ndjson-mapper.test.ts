@@ -139,6 +139,35 @@ describe('span-to-ndjson mapper', () => {
     })).toBeUndefined();
   });
 
+  it('skips workflow_start discoverability spans for shadow session log parity', () => {
+    const span: SpanSnapshot = {
+      name: 'workflow_start.default',
+      startTime: [1_778_777_200, 0],
+      endTime: [1_778_777_200, 1_000_000],
+      attributes: {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'default',
+        'takt.workflow.status': 'running',
+      },
+    };
+
+    expect(mapSpanStartToNdjson(span)).toBeUndefined();
+    expect(mapSpanEndToNdjson(span)).toBeUndefined();
+  });
+
+  it('does not treat workflow_start spans with terminal-looking attributes as workflow records', () => {
+    const span: SpanSnapshot = {
+      name: 'workflow_start.default',
+      endTime: [1_778_777_300, 0],
+      attributes: {
+        'takt.workflow.status': 'completed',
+        'takt.workflow.iterations': 3,
+      },
+    };
+
+    expect(mapSpanEndToNdjson(span)).toBeUndefined();
+  });
+
   it('skips nested workflow terminal spans for shadow session log parity', () => {
     expect(mapSpanEndToNdjson({
       name: 'workflow.child',

@@ -2,7 +2,8 @@
  * OpenCode provider implementation
  */
 
-import { callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
+import { callOpenCode, callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
+import { mapsToOpenCodeEditPermission } from '../opencode/allowedTools.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
@@ -12,12 +13,6 @@ const OPENCODE_TOOL_NAMING_ADDENDUM = [
   'Use bash for shell commands, glob for file discovery, grep for search, read for file reads, edit/write for changes, and todowrite for todos.',
   'Do not call run, list, todo, or todo_write.',
 ].join(' ');
-
-function buildOpenCodeSystemPrompt(systemPrompt: string | undefined): string {
-  return systemPrompt
-    ? `${systemPrompt}\n\n${OPENCODE_TOOL_NAMING_ADDENDUM}`
-    : OPENCODE_TOOL_NAMING_ADDENDUM;
-}
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
   if (!options.model) {
@@ -38,23 +33,36 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     onStream: options.onStream,
     onAskUserQuestion: options.onAskUserQuestion,
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),
-    outputSchema: options.outputSchema,
     childProcessEnv: options.childProcessEnv,
   };
 }
 
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
-  readonly supportsStructuredOutput = true;
+  readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+
+  getRuntimeInstructions(): string | null {
+    return OPENCODE_TOOL_NAMING_ADDENDUM;
+  }
+
+  keepsAllowedToolWithoutEdit(tool: string): boolean {
+    return !mapsToOpenCodeEditPermission(tool);
+  }
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;
-    const openCodeSystemPrompt = buildOpenCodeSystemPrompt(systemPrompt);
+    if (systemPrompt) {
+      return {
+        call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+          return callOpenCodeCustom(name, prompt, systemPrompt, toOpenCodeOptions(options));
+        },
+      };
+    }
 
     return {
       call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        return callOpenCodeCustom(name, prompt, openCodeSystemPrompt, toOpenCodeOptions(options));
+        return callOpenCode(name, prompt, toOpenCodeOptions(options));
       },
     };
   }

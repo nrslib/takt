@@ -16,5 +16,6 @@ opencode:
     - edit
     - write
     - bash
+    - todowrite
     - websearch
     - webfetch

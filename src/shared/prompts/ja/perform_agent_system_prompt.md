@@ -1,7 +1,7 @@
 <!--
   template: perform_agent_system_prompt
   role: system prompt for user-defined agents
-  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition, hasProcessSafety, protectedParentRunPid
+  vars: agentDefinition, workflowName, workflowDescription, currentStep, stepsList, currentPosition, hasProcessSafety, protectedParentRunPid, providerRuntimeInstructions
   caller: AgentRunner
 -->
 # TAKT
@@ -30,6 +30,14 @@
 {{/if}}
 
 前後のステップとの連携を意識して作業してください。
+
+{{#if providerRuntimeInstructions}}
+
+## Provider Runtime Instructions
+
+{{providerRuntimeInstructions}}
+
+{{/if}}
 
 ---
 

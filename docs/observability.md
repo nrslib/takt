@@ -33,6 +33,16 @@ When `observability.enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set, TAK
 
 Open Grafana at `http://127.0.0.1:3000` and inspect the `takt` service. Traces use the existing workflow span tree (`workflow.<name>` with `step.<name>` and phase or judge spans below it), and metrics are exported alongside the local `monitor.json` stream.
 
+While a workflow is still running, OpenTelemetry exporters can deliver completed child spans before the long-lived root `workflow.<name>` span has ended. To make those active traces discoverable in Tempo, TAKT also emits a short-lived `workflow_start.<workflowName>` span under the root workflow span. This helper span carries the workflow and run attributes, including `takt.workflow.status = running`, but it does not replace or rename the root, step, phase, or judge spans. It is used only for trace discovery and is not converted into a canonical shadow session log record.
+
+Useful Tempo TraceQL filters for active workflows include:
+
+```traceql
+{ resource.service.name = "takt" && span."takt.workflow.name" = "takt-default" }
+{ resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
+{ resource.service.name = "takt" && name =~ "workflow_start\\..*" }
+```
+
 The base endpoint is required for OTLP export:
 
 | Environment variable | Purpose |

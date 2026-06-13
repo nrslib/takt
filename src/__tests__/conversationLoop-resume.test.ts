@@ -117,7 +117,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { info as logInfo } from '../shared/ui/index.js';
-import { runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
+import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 
 const mockGetProvider = vi.mocked(getProvider);
@@ -190,6 +190,29 @@ describe('initializeSession', () => {
 
     expect(ctx.sessionId).toBeUndefined();
     expect(ctx.personaName).toBe('interactive');
+  });
+});
+
+describe('callAIWithRetry', () => {
+  it('wraps direct OpenCode system prompts with provider runtime instructions', async () => {
+    const { provider, capture } = createScenarioProvider(
+      [{ content: 'ok' }],
+      { runtimeInstructions: 'OpenCode tool names are lowercase.' },
+    );
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'opencode',
+      model: 'opencode/big-pickle',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx);
+
+    expect(capture.systemPrompts[0]).toContain('base system prompt');
+    expect(capture.systemPrompts[0]).toContain('## Provider Runtime Instructions');
+    expect(capture.systemPrompts[0]).toContain('OpenCode tool names are lowercase.');
   });
 });
 

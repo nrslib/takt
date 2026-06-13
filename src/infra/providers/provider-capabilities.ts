@@ -107,3 +107,14 @@ export function providerSupportsMaxTurns(
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsMaxTurns;
 }
+
+export function providerKeepsAllowedToolWithoutEdit(
+  provider: ProviderType | undefined,
+  tool: string,
+): boolean {
+  if (provider === undefined) {
+    return true;
+  }
+
+  return getProvider(provider).keepsAllowedToolWithoutEdit(tool);
+}

@@ -135,6 +135,7 @@ export interface CallScenario {
 
 interface ScenarioProviderOptions {
   supportsNativeImageInput?: boolean;
+  runtimeInstructions?: string | null;
 }
 
 /**
@@ -185,6 +186,7 @@ export function createScenarioProvider(
   const provider = {
     supportsStructuredOutput: true,
     supportsNativeImageInput: options.supportsNativeImageInput === true,
+    getRuntimeInstructions: vi.fn(() => options.runtimeInstructions ?? null),
     setup: vi.fn(({ systemPrompt }: { systemPrompt: string }) => {
       capture.systemPrompts.push(systemPrompt);
       return { call: mockCall };
