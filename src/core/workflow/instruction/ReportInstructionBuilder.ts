@@ -28,6 +28,8 @@ export interface ReportInstructionContext {
   targetFile?: string;
   /** Last response from Phase 1 (used when report phase retries in a new session) */
   lastResponse?: string;
+  /** Finding Contract context available in tool-less report phase. */
+  findingContract?: InstructionContext['findingContract'];
 }
 
 /**
@@ -69,6 +71,7 @@ export class ReportInstructionBuilder {
       userInputs: [],
       reportDir: this.context.reportDir,
       language,
+      findingContract: this.context.findingContract,
     };
 
     const targetContract = this.context.targetFile
@@ -92,6 +95,8 @@ export class ReportInstructionBuilder {
       outputContract = replaceTemplatePlaceholders(targetContract.format.trimEnd(), this.step, instrContext);
       hasOutputContract = true;
     }
+    reportOutput = this.appendFindingContractReportInstruction(reportOutput);
+    hasReportOutput = hasReportOutput || this.context.findingContract !== undefined;
 
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
@@ -105,5 +110,27 @@ export class ReportInstructionBuilder {
       hasOutputContract,
       outputContract,
     });
+  }
+
+  private appendFindingContractReportInstruction(reportOutput: string): string {
+    if (!this.context.findingContract) {
+      return reportOutput;
+    }
+
+    const findingContractInstruction = [
+      '## Finding Contract',
+      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
+      '- Use existing finding IDs from the inline ledger summary when referring to tracked findings.',
+      '- Do not assign final finding IDs.',
+      '',
+      'Current finding ledger summary:',
+      '```json',
+      this.context.findingContract.ledgerSummary,
+      '```',
+    ].join('\n');
+
+    return reportOutput.length > 0
+      ? [reportOutput, '', findingContractInstruction].join('\n')
+      : findingContractInstruction;
   }
 }

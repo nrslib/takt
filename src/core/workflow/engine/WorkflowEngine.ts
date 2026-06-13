@@ -39,6 +39,8 @@ import {
   type StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
+import { buildFindingsRuleContext } from '../findings/context.js';
+import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -76,6 +78,7 @@ export class WorkflowEngine extends EventEmitter {
   private abortRequested = false;
   private readonly sharedRuntime: WorkflowSharedRuntimeState;
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
+  private readonly findingLedgerStore?: FindingLedgerStore;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -122,6 +125,17 @@ export class WorkflowEngine extends EventEmitter {
     validateWorkflowConfig(this.config, options);
 
     this.state = createInitialState(config, this.options);
+    if (this.config.findingContract) {
+      this.findingLedgerStore = createFindingLedgerStore({
+        projectCwd: this.projectCwd,
+        reportDir: this.runPaths.reportsAbs,
+        workflowName: this.config.name,
+        ledgerPath: this.config.findingContract.ledgerPath,
+        rawFindingsPath: this.config.findingContract.rawFindingsPath,
+      });
+      this.refreshFindingsState();
+      this.findingLedgerStore.createRunCopy();
+    }
     this.detectRuleIndex = this.options.detectRuleIndex ?? (() => {
       throw new Error('detectRuleIndex is required for rule evaluation');
     });
@@ -145,6 +159,8 @@ export class WorkflowEngine extends EventEmitter {
         this.sharedRuntime.maxSteps = maxSteps;
       },
       setActiveResumePoint: this.setActiveResumePoint.bind(this),
+      refreshFindingsState: this.refreshFindingsState.bind(this),
+      findingLedgerStore: this.findingLedgerStore,
       updatePersonaSession: this.updatePersonaSession.bind(this),
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
       resetCycleDetector: () => this.cycleDetector.reset(),
@@ -243,6 +259,13 @@ export class WorkflowEngine extends EventEmitter {
 
   getState(): WorkflowState {
     return { ...this.state };
+  }
+
+  private refreshFindingsState(): void {
+    if (!this.findingLedgerStore) {
+      return;
+    }
+    this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger());
   }
 
   private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {

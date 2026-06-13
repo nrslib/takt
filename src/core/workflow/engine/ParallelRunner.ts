@@ -7,6 +7,7 @@
 
 import type {
   WorkflowStep,
+  AgentWorkflowStep,
   WorkflowState,
   AgentResponse,
   WorkflowMaxSteps,
@@ -30,11 +31,18 @@ import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import type { FindingContractConfig } from '../../models/types.js';
+import type { FindingLedgerStore } from '../findings/store.js';
+import {
+  RawFindingsStructuredOutput,
+  runFindingManagerForParallelStep,
+} from '../findings/manager-runner.js';
+import { renderFindingLedgerInstructionSummary } from '../findings/context.js';
 
 const log = createLogger('parallel-runner');
 
 type ParallelSubStepResult = {
-  subStep: WorkflowStep;
+  subStep: AgentWorkflowStep;
   response: AgentResponse;
   instruction: string;
   providerInfo?: StepRunResult['providerInfo'];
@@ -88,6 +96,11 @@ export interface ParallelRunnerDeps {
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
+  readonly refreshFindingsState: () => void;
+  readonly emitEvent: (event: string, ...args: unknown[]) => void;
+  readonly findingContract?: FindingContractConfig;
+  readonly findingLedgerStore?: FindingLedgerStore;
+  readonly getRunId: () => string;
   readonly runQualityGates: (options: {
     qualityGates: WorkflowStep['qualityGates'];
     projectRoot: string;
@@ -178,6 +191,7 @@ export class ParallelRunner {
     if (semaphore) {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
+    const findingLedgerCopyPath = this.prepareFindingContractLedgerCopy();
 
     // Run all sub-steps concurrently (failures are captured, not thrown)
     // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
@@ -187,26 +201,37 @@ export class ParallelRunner {
           await semaphore.acquire();
         }
         try {
-        const subIteration = incrementStepIteration(state, subStep.name);
-        const subInstruction = this.deps.stepExecutor.buildInstruction(
-          subStep,
-          subIteration,
-          state,
-          task,
-          maxSteps,
-          runtime?.fallback,
-        );
-        const parentIteration = state.iteration;
-        const subPm = runtime
-          ? this.deps.optionsBuilder.resolveStepProviderModel(subStep, runtime)
-          : this.deps.optionsBuilder.resolveStepProviderModel(subStep);
-        const subRuleCtx = {
-          ...parentRuleCtx,
-          provider: subPm.provider,
-          resolvedProvider: subPm.provider,
-          resolvedModel: subPm.model,
-          childProcessEnv: this.deps.engineOptions.childProcessEnv,
-        };
+          const executableSubStep = this.withFindingContractStructuredOutput(subStep, findingLedgerCopyPath);
+          const subIteration = incrementStepIteration(state, subStep.name);
+          const subInstruction = this.deps.stepExecutor.buildInstruction(
+            executableSubStep,
+            subIteration,
+            state,
+            task,
+            maxSteps,
+            runtime?.fallback,
+            findingLedgerCopyPath
+              ? {
+                  ledgerCopyPath: findingLedgerCopyPath,
+                  ledgerSummary: this.renderFindingLedgerSummary(),
+                  rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
+                }
+              : undefined,
+          );
+          const phase1Instruction = findingLedgerCopyPath
+            ? this.deps.stepExecutor.buildPhase1Instruction(subInstruction, executableSubStep, runtime)
+            : subInstruction;
+          const parentIteration = state.iteration;
+          const subPm = runtime
+            ? this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, runtime)
+            : this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep);
+          const subRuleCtx = {
+            ...parentRuleCtx,
+            provider: subPm.provider,
+            resolvedProvider: subPm.provider,
+            resolvedModel: subPm.model,
+            childProcessEnv: this.deps.engineOptions.childProcessEnv,
+          };
 
         // Session key uses buildSessionKey (persona:provider) — same as normal steps.
         // This ensures sessions are shared across steps with the same persona+provider,
@@ -214,7 +239,7 @@ export class ParallelRunner {
         const subSessionKey = buildSessionKey(subStep, runtime?.providerInfo?.provider);
 
         // Phase 1: main execution (Write excluded if sub-step has report)
-        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subStep, runtime);
+        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, runtime);
         let didEmitPhaseStart = false;
         let resolvedPromptParts: PhasePromptParts | undefined;
         const phaseExecutionId = buildPhaseExecutionId({
@@ -230,29 +255,32 @@ export class ParallelRunner {
           : { ...baseOptions };
         agentOptions.onPromptResolved = (promptParts: PhasePromptParts) => {
           resolvedPromptParts = promptParts;
-          this.deps.onPhaseStart?.(subStep, 1, 'execute', subInstruction, promptParts, phaseExecutionId, parentIteration);
+          this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, parentIteration);
           didEmitPhaseStart = true;
         };
-        const subResponse = await runWithPhaseSpan({
+        let subResponse = await runWithPhaseSpan({
           enabled: this.deps.observabilityEnabled,
           runId: this.deps.observabilityRunId,
           workflowName: this.deps.getWorkflowName(),
-          step: subStep,
+          step: executableSubStep,
           iteration: parentIteration,
           phase: 1,
           phaseName: 'execute',
-          instruction: subInstruction,
+          instruction: phase1Instruction,
           phaseExecutionId,
           workflowStack: this.deps.getCurrentWorkflowStack?.(),
           sanitizeText: this.deps.sanitizeObservabilityText,
           providerInfo: subPm,
           getPromptParts: () => resolvedPromptParts,
-        }, () => executeAgent(subStep.persona, subInstruction, agentOptions), (result) => ({
+        }, () => executeAgent(executableSubStep.persona, phase1Instruction, agentOptions), (result) => ({
           status: result.status,
           content: result.content,
           error: result.error,
           providerUsage: result.providerUsage,
         }));
+        if (findingLedgerCopyPath) {
+          subResponse = this.deps.stepExecutor.normalizeStructuredOutput(executableSubStep, subResponse, runtime);
+        }
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }
@@ -260,7 +288,7 @@ export class ParallelRunner {
         this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
-          return { subStep, response: subResponse, instruction: subInstruction, providerInfo: subPm };
+          return { subStep, response: subResponse, instruction: phase1Instruction, providerInfo: subPm };
         }
 
         // Phase 2/3 context resolves the same runtime-aware session key as Phase 1.
@@ -285,7 +313,7 @@ export class ParallelRunner {
               content: reportResult.response.content,
             };
             state.stepOutputs.set(subStep.name, blockedResponse);
-            return { subStep, response: blockedResponse, instruction: subInstruction, providerInfo: subPm };
+            return { subStep, response: blockedResponse, instruction: phase1Instruction, providerInfo: subPm };
           }
           if (reportResult && 'rateLimited' in reportResult) {
             const rateLimitedResponse: AgentResponse = {
@@ -293,7 +321,7 @@ export class ParallelRunner {
               persona: subStep.name,
             };
             state.stepOutputs.set(subStep.name, rateLimitedResponse);
-            return { subStep, response: rateLimitedResponse, instruction: subInstruction, providerInfo: subPm };
+            return { subStep, response: rateLimitedResponse, instruction: phase1Instruction, providerInfo: subPm };
           }
         }
 
@@ -331,7 +359,7 @@ export class ParallelRunner {
           return {
             subStep,
             response: qualityGateResult.response,
-            instruction: subInstruction,
+            instruction: phase1Instruction,
             providerInfo: subPm,
             qualityGateFailure: true,
           };
@@ -340,7 +368,7 @@ export class ParallelRunner {
         state.stepOutputs.set(subStep.name, finalResponse);
         this.deps.stepExecutor.emitStepReports(subStep);
 
-        return { subStep, response: finalResponse, instruction: subInstruction, providerInfo: subPm };
+        return { subStep, response: finalResponse, instruction: phase1Instruction, providerInfo: subPm };
         } finally {
           if (semaphore) {
             semaphore.release();
@@ -433,6 +461,8 @@ export class ParallelRunner {
       };
     }
 
+    await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath);
+
     // Print completion summary
     if (parallelLogger) {
       parallelLogger.printSummary(
@@ -476,6 +506,68 @@ export class ParallelRunner {
     );
     this.deps.stepExecutor.emitStepReports(step);
     return { response: aggregatedResponse, instruction: aggregatedInstruction, providerInfo: parentPm };
+  }
+
+  private async runFindingContractManager(
+    step: WorkflowStep,
+    stepIteration: number,
+    subResults: ParallelSubStepResult[],
+    ledgerCopyPath: string | undefined,
+  ): Promise<void> {
+    if (!this.deps.findingContract) {
+      return;
+    }
+    if (!this.deps.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+    const result = await runFindingManagerForParallelStep({
+      contract: this.deps.findingContract,
+      ledgerStore: this.deps.findingLedgerStore,
+      optionsBuilder: this.deps.optionsBuilder,
+      stepExecutor: this.deps.stepExecutor,
+      parentStep: step,
+      stepIteration,
+      subResults,
+      workflowName: this.deps.getWorkflowName(),
+      runId: this.deps.getRunId(),
+      timestamp: new Date().toISOString(),
+      ledgerCopyPath,
+    });
+    this.deps.refreshFindingsState();
+    this.deps.emitEvent('findings:ledger', result.ledger);
+  }
+
+  private prepareFindingContractLedgerCopy(): string | undefined {
+    if (!this.deps.findingContract) {
+      return undefined;
+    }
+    if (!this.deps.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+    return this.deps.findingLedgerStore.createRunCopy();
+  }
+
+  private renderFindingLedgerSummary(): string {
+    if (!this.deps.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+    return renderFindingLedgerInstructionSummary(this.deps.findingLedgerStore.loadLedger());
+  }
+
+  private withFindingContractStructuredOutput(
+    subStep: AgentWorkflowStep,
+    ledgerCopyPath: string | undefined,
+  ): AgentWorkflowStep {
+    if (!ledgerCopyPath) {
+      return subStep;
+    }
+    if (subStep.structuredOutput) {
+      throw new Error(`Step "${subStep.name}" cannot combine finding_contract raw findings with structured_output`);
+    }
+    return {
+      ...subStep,
+      structuredOutput: RawFindingsStructuredOutput,
+    };
   }
 
   private buildParallelLoggerOptions(

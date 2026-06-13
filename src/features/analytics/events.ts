@@ -6,7 +6,7 @@
  */
 
 /** Status of a review finding across iterations */
-export type FindingStatus = 'new' | 'persists' | 'resolved';
+export type FindingStatus = 'new' | 'persists' | 'resolved' | 'reopened';
 
 /** Severity level of a review finding */
 export type FindingSeverity = 'error' | 'warning';

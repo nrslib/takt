@@ -17,6 +17,7 @@ export {
 
 export {
   parseFindingsFromReport,
+  buildReviewFindingEventsFromLedger,
   extractDecisionFromReport,
   inferSeverity,
   emitFixActionEvents,

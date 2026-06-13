@@ -128,14 +128,14 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = replaceTemplatePlaceholders(
+    const instructions = this.appendFindingContractInstruction(replaceTemplatePlaceholders(
       tmpl,
       this.step,
       {
         ...this.context,
         previousResponseText: previousResponsePrepared || undefined,
       },
-    );
+    ));
 
     // Workflow name and description
     const workflowName = this.context.workflowName ?? '';
@@ -224,6 +224,40 @@ export class InstructionBuilder {
       return `- Step ${index + 1}: ${ws.name}${desc}${marker}`;
     });
     return [structureHeader, ...stepLines].join('\n');
+  }
+
+  private appendFindingContractInstruction(instructions: string): string {
+    if (!this.context.findingContract) {
+      return instructions;
+    }
+
+    const lines = [
+      instructions,
+      '',
+      '## Finding Contract',
+      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
+      '- Use existing finding IDs from the ledger when referring to tracked findings.',
+      '- Do not assign final finding IDs.',
+      '',
+      'Current finding ledger summary:',
+      '```json',
+      this.context.findingContract.ledgerSummary,
+      '```',
+    ];
+
+    if (this.context.findingContract.rawFindingsJsonSchema) {
+      lines.push(
+        '',
+        '- Report every issue you observe as structured raw findings.',
+        '- Use rawFindingId values that are unique within this response.',
+        '- Return structured output matching this raw findings schema:',
+        '```json',
+        JSON.stringify(this.context.findingContract.rawFindingsJsonSchema, null, 2),
+        '```',
+      );
+    }
+
+    return lines.join('\n');
   }
 }
 

@@ -129,6 +129,14 @@ Every issue raised must include the following.
 
 To prevent circular rejections, track findings by ID.
 
+When the instruction includes a Finding Contract ledger summary / raw findings schema,
+reviewers must not allocate new final `finding_id` values. Report observed problems as
+raw findings. Refer to existing IDs only when they are present in the ledger. Final
+`new` / `persists` / `resolved` / `reopened` matching belongs to the findings-manager
+and engine, not to each reviewer output contract.
+
+When a workflow does not use Finding Contract instructions, follow the legacy rules below.
+
 - Every issue raised in a REJECT must include a `finding_id`
 - If the same issue is raised again, reuse the same `finding_id`
 - For repeated issues, set status to `persists` and include concrete evidence (file/line) that it remains unresolved
@@ -264,6 +272,7 @@ When a change involves side effects or state changes such as external calls, con
 - `Previous Response` may be used as supplementary information, but finding state determinations must prioritize the report history
 - Do not drop open findings from the previous report when producing the new report
 - Apply the `finding_id` management rules when classifying each finding as `new` / `persists` / `resolved` / `reopened`
+- When a Finding Contract ledger summary is available, use the ledger as the authoritative source and treat individual reports as supporting evidence reachable from the ledger
 
 ### Final Decision Steps
 

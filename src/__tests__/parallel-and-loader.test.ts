@@ -418,6 +418,14 @@ describe('all()/any() aggregate condition expression parsing', () => {
     });
   });
 
+  it('should match aggregate condition with deterministic guard', () => {
+    expect(parseAggregateConditionExpression('all("approved") && findings.open.count == 0')).toEqual({
+      type: 'all',
+      argsText: '"approved"',
+      guardCondition: 'findings.open.count == 0',
+    });
+  });
+
   it('should not match regular condition text', () => {
     expect(parseAggregateConditionExpression('approved')).toBeUndefined();
   });

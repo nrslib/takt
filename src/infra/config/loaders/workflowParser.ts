@@ -4,12 +4,22 @@
 
 import type { WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
-import type { WorkflowConfig, WorkflowStep, WorkflowSubworkflowConfig } from '../../../core/models/index.js';
+import type {
+  FindingContractConfig,
+  LoopMonitorConfig,
+  WorkflowConfig,
+  WorkflowStep,
+  WorkflowSubworkflowConfig,
+} from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
+import { isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 import { normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
+  extractPersonaDisplayName,
+  resolvePersona,
+  resolveRefToContent,
   resolveSectionMapWithSource,
   unwrapResolvedSectionMap,
 } from './resource-resolver.js';
@@ -49,6 +59,92 @@ function normalizeSubworkflowConfig(
       )
       : undefined,
   };
+}
+
+function normalizeFindingContractConfig(
+  raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['finding_contract'],
+  workflowDir: string,
+  sections: WorkflowSections,
+  context?: FacetResolutionContext,
+): FindingContractConfig | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  const { personaSpec, personaPath } = resolvePersona(raw.manager.persona, sections, workflowDir, context);
+  const instruction = resolveRefToContent(
+    raw.manager.instruction,
+    sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+    workflowDir,
+    'instructions',
+    context,
+  );
+  const outputContract = resolveRefToContent(
+    raw.manager.output_contract,
+    sections.resolvedReportFormatsWithSource ?? sections.resolvedReportFormats,
+    workflowDir,
+    'output-contracts',
+    context,
+  );
+  if (!personaSpec) {
+    throw new Error('Configuration error: finding_contract.manager.persona is required');
+  }
+  if (!instruction) {
+    throw new Error(`Configuration error: failed to resolve finding_contract.manager.instruction "${raw.manager.instruction}"`);
+  }
+  if (!outputContract) {
+    throw new Error(`Configuration error: failed to resolve finding_contract.manager.output_contract "${raw.manager.output_contract}"`);
+  }
+
+  return {
+    ledgerPath: raw.ledger_path,
+    rawFindingsPath: raw.raw_findings_path,
+    manager: {
+      persona: personaSpec,
+      personaDisplayName: personaPath ? extractPersonaDisplayName(personaPath) : personaSpec,
+      ...(personaPath ? { personaPath } : {}),
+      instruction,
+      outputContract,
+    },
+  };
+}
+
+function validateFindingsRulesRequireContract(
+  steps: readonly WorkflowStep[],
+  loopMonitors: readonly LoopMonitorConfig[] | undefined,
+  findingContract: FindingContractConfig | undefined,
+): void {
+  if (findingContract) {
+    return;
+  }
+
+  for (const step of steps) {
+    for (const rule of step.rules ?? []) {
+      if (rule.isAiCondition || !isFindingsCondition(rule.condition)) {
+        continue;
+      }
+      throw new Error(`Configuration error: step "${step.name}" uses findings.* rule but finding_contract is not configured`);
+    }
+    for (const subStep of step.parallel ?? []) {
+      for (const rule of subStep.rules ?? []) {
+        if (rule.isAiCondition || !isFindingsCondition(rule.condition)) {
+          continue;
+        }
+        throw new Error(
+          `Configuration error: parallel sub-step "${subStep.name}" in step "${step.name}" uses findings.* rule but finding_contract is not configured`,
+        );
+      }
+    }
+  }
+
+  for (const monitor of loopMonitors ?? []) {
+    for (const rule of monitor.judge.rules) {
+      if (!isFindingsCondition(rule.condition)) {
+        continue;
+      }
+      throw new Error('Configuration error: loop_monitor judge uses findings.* rule but finding_contract is not configured');
+    }
+  }
 }
 
 export function normalizeWorkflowConfig(
@@ -147,10 +243,14 @@ export function normalizeWorkflowConfig(
     );
   }
 
+  const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
+  validateFindingsRulesRequireContract(steps, loopMonitors, findingContract);
+
   return {
     name: parsed.name,
     description: parsed.description,
     subworkflow: normalizeSubworkflowConfig(parsed.subworkflow),
+    findingContract,
     schemas: parsed.schemas,
     provider: normalizedWorkflowProvider.provider,
     model: normalizedWorkflowProvider.model,

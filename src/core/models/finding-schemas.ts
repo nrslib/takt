@@ -1,0 +1,251 @@
+import { z } from 'zod/v4';
+import type {
+  FindingLedger,
+  FindingManagerOutput,
+  RawFinding,
+} from './finding-types.js';
+
+const nonEmptyString = z.string().min(1);
+const findingSeverities = ['critical', 'high', 'medium', 'low'] as const;
+const findingStatuses = ['open', 'resolved'] as const;
+const findingLifecycles = ['new', 'persists', 'resolved', 'reopened'] as const;
+const findingConflictStatuses = ['active', 'resolved'] as const;
+
+export const FindingContractManagerConfigRawSchema = z.object({
+  persona: nonEmptyString,
+  instruction: nonEmptyString,
+  output_contract: nonEmptyString,
+}).strict();
+
+export const FindingContractConfigRawSchema = z.object({
+  ledger_path: nonEmptyString,
+  raw_findings_path: nonEmptyString,
+  manager: FindingContractManagerConfigRawSchema,
+}).strict();
+
+export const FindingSeveritySchema = z.enum(findingSeverities);
+export const FindingStatusSchema = z.enum(findingStatuses);
+export const FindingLifecycleSchema = z.enum(findingLifecycles);
+
+export const FindingObservationSchema = z.object({
+  runId: nonEmptyString,
+  stepName: nonEmptyString,
+  timestamp: nonEmptyString,
+}).strict();
+
+export const FindingLedgerEntrySchema = z.object({
+  id: nonEmptyString,
+  status: FindingStatusSchema,
+  lifecycle: FindingLifecycleSchema,
+  severity: FindingSeveritySchema,
+  title: nonEmptyString,
+  location: nonEmptyString.optional(),
+  description: nonEmptyString.optional(),
+  suggestion: nonEmptyString.optional(),
+  reviewers: z.array(nonEmptyString),
+  rawFindingIds: z.array(nonEmptyString),
+  firstSeen: FindingObservationSchema,
+  lastSeen: FindingObservationSchema,
+  resolvedAt: nonEmptyString.optional(),
+  resolvedEvidence: nonEmptyString.optional(),
+  reopenedEvidence: nonEmptyString.optional(),
+}).strict();
+
+export const RawFindingSchema = z.object({
+  rawFindingId: nonEmptyString,
+  stepName: nonEmptyString,
+  reviewer: nonEmptyString,
+  severity: FindingSeveritySchema,
+  title: nonEmptyString,
+  location: nonEmptyString.optional(),
+  description: nonEmptyString,
+  suggestion: nonEmptyString.optional(),
+}).strict();
+
+export const ReviewerRawFindingSchema = z.object({
+  rawFindingId: nonEmptyString,
+  severity: FindingSeveritySchema,
+  title: nonEmptyString,
+  location: nonEmptyString.optional(),
+  description: nonEmptyString,
+  suggestion: nonEmptyString.optional(),
+}).strict();
+
+export const FindingLedgerConflictSchema = z.object({
+  id: nonEmptyString,
+  status: z.enum(findingConflictStatuses),
+  findingIds: z.array(nonEmptyString),
+  rawFindingIds: z.array(nonEmptyString),
+  description: nonEmptyString,
+  firstSeen: FindingObservationSchema,
+  lastSeen: FindingObservationSchema,
+  resolvedAt: nonEmptyString.optional(),
+  resolvedEvidence: nonEmptyString.optional(),
+}).strict();
+
+export const FindingLedgerSchema = z.object({
+  version: z.literal(1),
+  workflowName: nonEmptyString,
+  nextId: z.number().int().positive(),
+  updatedAt: nonEmptyString,
+  findings: z.array(FindingLedgerEntrySchema),
+  rawFindings: z.array(RawFindingSchema),
+  conflicts: z.array(FindingLedgerConflictSchema),
+}).strict();
+
+export const FindingManagerOutputSchema = z.object({
+  matches: z.array(z.object({
+    findingId: nonEmptyString,
+    rawFindingIds: z.array(nonEmptyString),
+    evidence: nonEmptyString.optional(),
+  }).strict()),
+  newFindings: z.array(z.object({
+    rawFindingIds: z.array(nonEmptyString),
+    title: nonEmptyString,
+    severity: FindingSeveritySchema,
+  }).strict()),
+  resolvedFindings: z.array(z.object({
+    findingId: nonEmptyString,
+    rawFindingIds: z.array(nonEmptyString),
+    evidence: nonEmptyString,
+  }).strict()),
+  reopenedFindings: z.array(z.object({
+    findingId: nonEmptyString,
+    rawFindingIds: z.array(nonEmptyString),
+    evidence: nonEmptyString,
+  }).strict()),
+  conflicts: z.array(z.object({
+    findingIds: z.array(nonEmptyString).optional().default([]),
+    rawFindingIds: z.array(nonEmptyString),
+    description: nonEmptyString,
+  }).strict()),
+  resolvedConflicts: z.array(z.object({
+    conflictId: nonEmptyString,
+    evidence: nonEmptyString,
+  }).strict()),
+}).strict();
+
+export const FindingManagerOutputJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts'],
+  properties: {
+    matches: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'rawFindingIds'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    newFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rawFindingIds', 'title', 'severity'],
+        properties: {
+          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          title: { type: 'string', minLength: 1 },
+          severity: { enum: findingSeverities },
+        },
+      },
+    },
+    resolvedFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'rawFindingIds', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    reopenedFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'rawFindingIds', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    conflicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rawFindingIds', 'description'],
+        properties: {
+          findingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          description: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    resolvedConflicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['conflictId', 'evidence'],
+        properties: {
+          conflictId: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  },
+} as const;
+
+export const RawFindingsOutputJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['rawFindings'],
+  properties: {
+    rawFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rawFindingId', 'severity', 'title', 'description'],
+        properties: {
+          rawFindingId: { type: 'string', minLength: 1 },
+          severity: { enum: findingSeverities },
+          title: { type: 'string', minLength: 1 },
+          location: { type: 'string', minLength: 1 },
+          description: { type: 'string', minLength: 1 },
+          suggestion: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  },
+} as const;
+
+export function parseFindingLedger(value: unknown): FindingLedger {
+  return FindingLedgerSchema.parse(value);
+}
+
+export function parseRawFindings(value: unknown): RawFinding[] {
+  return z.array(RawFindingSchema).parse(value);
+}
+
+export function parseReviewerRawFindings(value: unknown): Array<z.infer<typeof ReviewerRawFindingSchema>> {
+  return z.array(ReviewerRawFindingSchema).parse(value);
+}
+
+export function parseFindingManagerOutput(value: unknown): FindingManagerOutput {
+  return FindingManagerOutputSchema.parse(value);
+}

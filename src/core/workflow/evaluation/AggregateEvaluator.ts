@@ -6,6 +6,7 @@
 
 import type { WorkflowStep, WorkflowState } from '../../models/types.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { evaluateWhenExpression } from './when-evaluator.js';
 
 const log = createLogger('aggregate-evaluator');
 
@@ -46,6 +47,8 @@ export class AggregateEvaluator {
 
       const subSteps = this.step.parallel;
       const targetCondition = rule.aggregateConditionText;
+      const guardMatches = rule.aggregateGuardCondition === undefined
+        || evaluateWhenExpression(rule.aggregateGuardCondition, this.state);
 
       if (rule.aggregateType === 'all') {
         // Multiple conditions: order-based matching (1st sub-step matches 1st condition, etc.)
@@ -66,7 +69,7 @@ export class AggregateEvaluator {
             if (!expectedCondition) return false;
             return matchedRule?.condition === expectedCondition;
           });
-          if (allMatch) {
+          if (allMatch && guardMatches) {
             log.debug('Aggregate all() matched (multi-condition)', { step: this.step.name, conditions: targetCondition, ruleIndex: i });
             return i;
           }
@@ -78,7 +81,7 @@ export class AggregateEvaluator {
             const matchedRule = sub.rules[output.matchedRuleIndex];
             return matchedRule?.condition === targetCondition;
           });
-          if (allMatch) {
+          if (allMatch && guardMatches) {
             log.debug('Aggregate all() matched', { step: this.step.name, condition: targetCondition, ruleIndex: i });
             return i;
           }
@@ -93,7 +96,7 @@ export class AggregateEvaluator {
             const matchedRule = sub.rules[output.matchedRuleIndex];
             return targetCondition.includes(matchedRule?.condition ?? '');
           });
-          if (anyMatch) {
+          if (anyMatch && guardMatches) {
             log.debug('Aggregate any() matched (multi-condition)', { step: this.step.name, conditions: targetCondition, ruleIndex: i });
             return i;
           }
@@ -105,7 +108,7 @@ export class AggregateEvaluator {
             const matchedRule = sub.rules[output.matchedRuleIndex];
             return matchedRule?.condition === targetCondition;
           });
-          if (anyMatch) {
+          if (anyMatch && guardMatches) {
             log.debug('Aggregate any() matched', { step: this.step.name, condition: targetCondition, ruleIndex: i });
             return i;
           }
