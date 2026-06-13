@@ -47,13 +47,11 @@ interface RawSummaryStep {
   edit?: boolean;
   provider_options?: unknown;
   required_permission_mode?: string;
-  promotion?: {
-    provider_options?: unknown;
-  }[];
+  promotion?: unknown;
   overrides?: {
     provider_options?: unknown;
   };
-  parallel?: RawSummaryStep[];
+  parallel?: unknown;
 }
 
 interface PermissionStep {
@@ -73,6 +71,18 @@ function parseYamlRecord(content: string, label: string): YamlRecord | undefined
     log.debug(`YAML parse failed for ${label}: ${getErrorMessage(e)}`);
     return undefined;
   }
+}
+
+function normalizeSummarySteps(value: unknown): RawSummaryStep[] {
+  return Array.isArray(value)
+    ? value.filter(isRecord) as RawSummaryStep[]
+    : [];
+}
+
+function normalizePromotionEntries(value: unknown): { provider_options?: unknown }[] {
+  return Array.isArray(value)
+    ? value.filter(isRecord) as { provider_options?: unknown }[]
+    : [];
 }
 
 function normalizePackagePath(path: string): string {
@@ -201,7 +211,7 @@ function collectPermissionSteps(
     );
     return [
       { step, providerOptions },
-      ...collectPermissionSteps(step.parallel ?? [], providerOptions, resolveStepProviderOptions),
+      ...collectPermissionSteps(normalizeSummarySteps(step.parallel), providerOptions, resolveStepProviderOptions),
     ];
   });
 }
@@ -253,11 +263,11 @@ export function detectEditWorkflows(
       workflow_config?: {
         provider_options?: unknown;
       };
-      steps?: RawSummaryStep[];
+      steps?: unknown;
     } | undefined;
     if (!raw) continue;
 
-    const steps = raw?.steps ?? [];
+    const steps = normalizeSummarySteps(raw.steps);
     const workflowPath = toPackageAbsolutePath(relativePath ?? `workflows/${name}`);
     const workflowProviderOptions = resolveProviderOptionsRecord(
       raw?.workflow_config?.provider_options,
@@ -286,7 +296,7 @@ export function detectEditWorkflows(
     const resolveRawAllowedTools = (providerOptions: unknown): string[] =>
       getAllowedTools(resolveStepProviderOptions(providerOptions));
     const resolvePromotionAllowedTools = (step: RawSummaryStep): string[] =>
-      (step.promotion ?? []).flatMap((entry) => resolveRawAllowedTools(entry.provider_options));
+      normalizePromotionEntries(step.promotion).flatMap((entry) => resolveRawAllowedTools(entry.provider_options));
     const resolveOverrideAllowedTools = (step: RawSummaryStep): string[] =>
       resolveRawAllowedTools(step.overrides?.provider_options);
 

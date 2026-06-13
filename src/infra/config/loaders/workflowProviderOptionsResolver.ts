@@ -21,6 +21,7 @@ type RawWorkflowProviderOptions = Record<string, unknown> & {
 interface ResolvedProviderOptionsRefPath {
   path: string;
   realPath: string;
+  kind: 'path' | 'name' | 'scope';
   candidateDirs?: readonly string[];
 }
 
@@ -112,7 +113,7 @@ function resolvePathLikeProviderOptionsRef(
     throw new Error(`Configuration error: provider_options.$ref must stay inside the workflow directory: ${ref}`);
   }
 
-  return { path: refPath, realPath: realRefPath };
+  return { path: refPath, realPath: realRefPath, kind: 'path' };
 }
 
 function getProviderOptionsCandidateDirs(scope: ProviderOptionsResolutionScope, ref: string): readonly string[] {
@@ -133,6 +134,7 @@ function resolveProviderOptionsByNameRef(
     ? {
         path: resolved.path,
         realPath: fileAccess.realpath(resolved.path),
+        kind: 'name',
         candidateDirs: candidateDirs.slice(resolved.sourceLayerIndex),
       }
     : undefined;
@@ -149,6 +151,7 @@ function resolveProviderOptionsScopeRefPath(
     ? {
         path: resolved.path,
         realPath: fileAccess.realpath(resolved.path),
+        kind: 'scope',
         candidateDirs: [resolved.candidateDir],
       }
     : undefined;
@@ -250,7 +253,7 @@ function resolveWorkflowProviderOptionsFromDir(
   const referencedOptions = resolveWorkflowProviderOptionsFromDir(
     parsedReferencedRaw,
     dirname(refPath.path),
-    isProviderOptionsRefPath(ref) ? rootDir : dirname(refPath.path),
+    refPath.kind === 'path' ? rootDir : dirname(refPath.path),
     {
       context: scope.context,
       candidateDirs: refPath.candidateDirs ?? scope.candidateDirs,

@@ -144,6 +144,37 @@ steps:
     expect(detectEditWorkflows(workflows)).toEqual([]);
   });
 
+  it('should not crash when steps, promotion, or parallel use object form', () => {
+    const workflows = [
+      { name: 'object-steps.yaml', content: 'steps: {}\n' },
+      {
+        name: 'object-promotion.yaml',
+        content: `
+steps:
+  - name: promote
+    required_permission_mode: bypassPermissions
+    promotion: {}
+`.trim(),
+      },
+      {
+        name: 'object-parallel.yaml',
+        content: `
+steps:
+  - name: reviewers
+    edit: true
+    parallel: {}
+`.trim(),
+      },
+    ];
+
+    const result = detectEditWorkflows(workflows);
+
+    expect(result.map((workflow) => workflow.name)).toEqual([
+      'object-promotion.yaml',
+      'object-parallel.yaml',
+    ]);
+  });
+
   it('should return multiple results when multiple workflows have edit: true', () => {
     const workflows = [
       {

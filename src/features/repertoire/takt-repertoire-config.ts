@@ -10,7 +10,7 @@
  * - Realpath validation to prevent symlink-based traversal outside root
  */
 
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { isPathInside } from '../../shared/utils/index.js';
@@ -119,7 +119,22 @@ export function checkPackageHasContent(packageRoot: string): void {
 }
 
 function hasAllowedContentDir(packageRoot: string): boolean {
-  return ALLOWED_DIRS.some((dir) => existsSync(join(packageRoot, dir)));
+  return ALLOWED_DIRS.some((dir) => isExistingDirectory(join(packageRoot, dir)));
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+function isExistingDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function formatAllowedContentDirs(): string {

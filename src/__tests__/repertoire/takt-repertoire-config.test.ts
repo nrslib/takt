@@ -280,6 +280,20 @@ describe('checkPackageHasContent', () => {
     expect(() => checkPackageHasContent(tempDir)).not.toThrow();
   });
 
+  it('should reject supported content paths that are regular files', () => {
+    for (const dir of ['facets', 'workflows', 'provider-options']) {
+      const packageRoot = join(tempDir, `file-${dir}`);
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(join(packageRoot, dir), 'not a directory');
+
+      expect(() => checkPackageHasContent(packageRoot)).toThrow(/empty package rejected/);
+      expect(() => checkPackageHasContentWithContext(packageRoot, {
+        manifestPath: join(packageRoot, 'takt-repertoire.yaml'),
+        configuredPath: '.',
+      })).toThrow(/Package content not found/);
+    }
+  });
+
   it('should not throw when both facets/ and workflows/ exist', () => {
     // Given: package with both directories
     mkdirSync(join(tempDir, 'facets'), { recursive: true });
