@@ -502,32 +502,36 @@ export class OpenCodeClient {
       let opencodeApiClient: OpencodeClient | undefined;
       let sessionId: string | undefined = options.sessionId;
       let promptCompletion: Promise<unknown> | undefined;
+      let promptCompletionWait: Promise<void> | undefined;
       let promptError: string | undefined;
       const interactionTimeoutMs = options.interactionTimeoutMs ?? OPENCODE_INTERACTION_TIMEOUT_MS;
       const promptCompletionTimeoutMessage = 'OpenCode prompt completion timed out';
 
-      const awaitPromptCompletion = async (): Promise<void> => {
+      const awaitPromptCompletion = (): Promise<void> => {
         if (!promptCompletion) {
-          return;
+          return Promise.resolve();
         }
 
-        let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            promptCompletion,
-            new Promise<never>((_, reject) => {
-              timeoutId = setTimeout(() => {
-                reject(new Error(promptCompletionTimeoutMessage));
-              }, interactionTimeoutMs);
-            }),
-          ]);
-        } catch (error) {
-          promptError ??= getErrorMessage(error);
-        } finally {
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
+        promptCompletionWait ??= (async () => {
+          let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              promptCompletion,
+              new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => {
+                  reject(new Error(promptCompletionTimeoutMessage));
+                }, interactionTimeoutMs);
+              }),
+            ]);
+          } catch (error) {
+            promptError ??= getErrorMessage(error);
+          } finally {
+            if (timeoutId !== undefined) {
+              clearTimeout(timeoutId);
+            }
           }
-        }
+        })();
+        return promptCompletionWait;
       };
 
       const resetIdleTimeout = (): void => {
