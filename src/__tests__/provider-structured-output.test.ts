@@ -372,7 +372,7 @@ describe('OpenCodeProvider — structured output', () => {
     mockCallOpenCodeCustom.mockResolvedValue(doneResponse('coder'));
     const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
 
-    const agent = new OpenCodeProvider().setup({ name: 'coder' });
+    const agent = new OpenCodeProvider().setup({ name: 'coder', systemPrompt: 'system' });
     await agent.call('prompt', {
       cwd: '/tmp',
       model: 'openai/gpt-4',

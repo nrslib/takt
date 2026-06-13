@@ -161,6 +161,6 @@ describe('WorkflowEngine agent overrides', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0][2];
-    expect(options.childProcessEnv).toBe(childProcessEnv);
+    expect(options.childProcessEnv).toEqual(childProcessEnv);
   });
 });

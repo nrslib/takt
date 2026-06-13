@@ -3,7 +3,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSpawn } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
@@ -63,11 +63,27 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
 }
 
 describe('callCursor', () => {
+  const originalEnv = {
+    CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+    TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
+    OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.CURSOR_API_KEY;
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   });
 
   it('should invoke cursor-agent with required args and map model/session/permission', async () => {

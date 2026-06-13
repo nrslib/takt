@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   isOtlpEndpointEnvName,
   OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -166,9 +167,10 @@ export function getNestedObservabilityEnvFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
   const env = pickNestedObservabilityEnv(childProcessEnv);
-  return JSON.stringify(NESTED_OBSERVABILITY_ENV_KEYS
+  const normalized = JSON.stringify(NESTED_OBSERVABILITY_ENV_KEYS
     .map((key) => [key, env[key]])
     .filter(([, value]) => value !== undefined));
+  return createHash('sha256').update(normalized).digest('hex');
 }
 
 let nestedProcessEnvMutation: Promise<void> = Promise.resolve();

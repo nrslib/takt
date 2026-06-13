@@ -504,6 +504,31 @@ export class OpenCodeClient {
       let promptCompletion: Promise<unknown> | undefined;
       let promptError: string | undefined;
       const interactionTimeoutMs = options.interactionTimeoutMs ?? OPENCODE_INTERACTION_TIMEOUT_MS;
+      const promptCompletionTimeoutMessage = 'OpenCode prompt completion timed out';
+
+      const awaitPromptCompletion = async (): Promise<void> => {
+        if (!promptCompletion) {
+          return;
+        }
+
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            promptCompletion,
+            new Promise<never>((_, reject) => {
+              timeoutId = setTimeout(() => {
+                reject(new Error(promptCompletionTimeoutMessage));
+              }, interactionTimeoutMs);
+            }),
+          ]);
+        } catch (error) {
+          promptError ??= getErrorMessage(error);
+        } finally {
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+          }
+        }
+      };
 
       const resetIdleTimeout = (): void => {
         if (idleTimeoutId !== undefined) {
@@ -894,7 +919,7 @@ export class OpenCodeClient {
         if (!success && !streamAbortController.signal.aborted) {
           streamAbortController.abort();
         }
-        await promptCompletion;
+        await awaitPromptCompletion();
         if (promptError !== undefined) {
           if (success) {
             success = false;
@@ -990,7 +1015,7 @@ export class OpenCodeClient {
         if (!streamAbortController.signal.aborted) {
           streamAbortController.abort();
         }
-        await promptCompletion;
+        await awaitPromptCompletion();
         release?.();
       }
     }

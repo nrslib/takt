@@ -324,6 +324,54 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.content).toBe('done');
   });
 
+  it('should release same config queue when promptAsync never settles after idle', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-prompt-timeout' } })
+      .mockResolvedValueOnce({ data: { id: 'session-after-prompt-timeout' } });
+    const promptAsync = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>(() => {}))
+      .mockResolvedValueOnce(undefined);
+    const subscribe = vi.fn().mockImplementation(() => {
+      const sessionID = sessionCreate.mock.calls.length === 1
+        ? 'session-prompt-timeout'
+        : 'session-after-prompt-timeout';
+      return Promise.resolve({
+        stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }]),
+      });
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const firstResult = await client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      interactionTimeoutMs: 1,
+    });
+
+    expect(firstResult.status).toBe('error');
+    expect(firstResult.content).toContain('OpenCode prompt completion timed out');
+
+    const secondResult = await client.call('coder', 'second', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      interactionTimeoutMs: 1,
+    });
+
+    expect(secondResult.status).toBe('done');
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
   it('should close SSE stream when session.error is received', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
