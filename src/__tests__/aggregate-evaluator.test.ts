@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { AggregateEvaluator } from '../core/workflow/evaluation/AggregateEvaluator.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { WorkflowStep, WorkflowState, AgentResponse } from '../core/models/types.js';
 
 function makeState(
@@ -80,6 +81,32 @@ describe('AggregateEvaluator', () => {
         'review-a': { matchedRuleIndex: 0 },
         'review-b': { matchedRuleIndex: 0 },
       });
+
+      const evaluator = new AggregateEvaluator(step, state);
+      expect(evaluator.evaluate()).toBe(0);
+    });
+
+    it('should match an unquoted condition expression containing an escaped quote', () => {
+      const targetCondition = String.raw`condition == "test\"inner"`;
+      const sub1 = makeSubStep('review-a', [targetCondition]);
+      const sub2 = makeSubStep('review-b', [targetCondition]);
+      const step = makeParentStep([sub1, sub2], [
+        normalizeRule({
+          condition: String.raw`all(condition == "test\"inner") && findings.open.count == 0`,
+          next: 'COMPLETE',
+        }),
+      ]);
+      const state = makeState(
+        {
+          'review-a': { matchedRuleIndex: 0 },
+          'review-b': { matchedRuleIndex: 0 },
+        },
+        {
+          open: { count: 0, bySeverity: {}, items: [] },
+          resolved: { count: 0 },
+          conflicts: { count: 0, items: [] },
+        },
+      );
 
       const evaluator = new AggregateEvaluator(step, state);
       expect(evaluator.evaluate()).toBe(0);

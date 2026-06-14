@@ -11,6 +11,7 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Fact-check | Verify against actual code before raising issues. Do not speculate |
 | Practical fixes | Propose implementable solutions, not theoretical ideals |
 | State consistency | For side effects and state changes, verify that success, failure, and interruption paths have no missing, duplicated, or inconsistent effects |
+| Contract coverage | Verify new contracts across normal entries, derived conditions, validation, evaluation, output, and re-injection paths |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
 
@@ -48,7 +49,8 @@ REJECT without exception if any of the following apply.
 - Internal implementation exported from public API (infrastructure functions or internal classes exposed publicly)
 - Replaced code/exports surviving after refactoring
 - Missing cross-validation of related fields (invariants of semantically coupled config values left unverified)
-- Missing caller, producer, or test data updates after a contract change
+- Missing caller, producer, consumer, validator, test data, or derived-entry updates after a contract change
+- Existing branches with the same contract remain on the old implementation after adding or changing a shared helper, normalizer, builder, or adapter
 - Missing, duplicated, or incorrectly ordered effects in side-effect or state-change paths
 - Sensitive data exposed in logs, error responses, or test output
 
@@ -129,11 +131,21 @@ Every issue raised must include the following.
 
 To prevent circular rejections, track findings by ID.
 
-When the instruction includes a Finding Contract ledger summary / raw findings schema,
-reviewers must not allocate new final `finding_id` values. Report observed problems as
-raw findings. Refer to existing IDs only when they are present in the ledger. Final
-`new` / `persists` / `resolved` / `reopened` matching belongs to the findings-manager
-and engine, not to each reviewer output contract.
+Finding Contract applies to the whole review workflow, not to individual findings.
+Treat a workflow as using Finding Contract when any of these signals are present:
+`finding_contract: true`, `findings-ledger.json`, a dedicated "Finding Contract"
+section in the instruction template, or an `Observed Findings` table in the output
+contract.
+
+When Finding Contract is in use, reviewers must not allocate new final `finding_id`
+values and must not classify lifecycle as `new`, `persists`, `resolved`, or
+`reopened`. Report observed problems as raw findings in the `Observed Findings`
+table. Refer to existing IDs only when they are present in the ledger. ID assignment
+and lifecycle matching belong to the findings-manager and engine.
+
+When a parseable ledger is available, it is the authoritative source for tracked
+findings. Individual reports and raw finding details are supporting evidence. When no
+ledger is available, use the legacy tracking rules below.
 
 When a workflow does not use Finding Contract instructions, follow the legacy rules below.
 
@@ -142,7 +154,7 @@ When a workflow does not use Finding Contract instructions, follow the legacy ru
 - For repeated issues, set status to `persists` and include concrete evidence (file/line) that it remains unresolved
 - New issues must use status `new`
 - Resolved issues must be listed with status `resolved`
-- Issues without `finding_id` are invalid (cannot be used as rejection grounds)
+- Issues without `finding_id` are invalid (cannot be used as rejection grounds). This legacy rule does not apply to Finding Contract workflows.
 - REJECT is allowed only when there is at least one `new` or `persists` issue
 - Before treating a prior finding as resolved, verify that the fix did not introduce a different structural or contract problem
 
@@ -254,6 +266,18 @@ The review target is the entire cumulative diff from the task's starting point (
 - If the implementation step has emitted `coder-decisions.md`, read it and understand the recorded design decisions
 - Do not dismiss intentional decisions as false positives just because they were recorded. Evaluate validity against `order.md` / `plan.md` / actual code
 - If the design decision itself is flawed, raise it
+
+### Full Entry Review for Contract Additions and Changes
+
+When the diff adds or changes a contract such as a config value, state, condition expression, file format, event, builder, adapter, or state-transition function, enumerate and reconcile every entry, exit, and re-injection path that can carry that contract.
+
+- Verify that definition, production, normalization, validation, evaluation, persistence, output, and event emission all apply the same contract
+- Check derived paths as well as the normal entry: derived conditions, aggregate conditions, parent/child workflows, loop decisions, early exits, and exception paths
+- When persisted data or externally supplied data is re-injected into JSON, Markdown, logs, events, or later instructions, include escaping, boundary handling, and failure behavior in the contract
+- Search for existing returns, throws, catches, early returns, branches, and call sites with the same responsibility
+- If an existing branch does not satisfy the new contract, treat it as related code even if the code itself predates the change
+- If tests cover only the new path and do not verify existing equivalent branches or derived entries, treat it as a coverage gap
+- "Not explicitly stated in the task requirements" is not a valid reason to mark a contract inconsistency introduced by the diff as non-blocking
 
 ### Reviewing Side Effects and State Transitions
 

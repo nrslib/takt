@@ -29,6 +29,12 @@ type MockChildProcess = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
 };
 
+const CURSOR_CONFIG_RENAME_ENOENT =
+  "Error: ENOENT: no such file or directory, rename '/home/user/.cursor/cli-config.json.tmp' -> '/home/user/.cursor/cli-config.json'";
+const CURSOR_CONFIG_NON_RENAME_ENOENT =
+  "Error: ENOENT: no such file or directory, open '/home/user/.cursor/cli-config.json.tmp'";
+const CURSOR_CONFIG_RENAME_ENOENT_ATTEMPTS = 9;
+
 function createMockChildProcess(): MockChildProcess {
   const child = new EventEmitter() as MockChildProcess;
   child.stdout = new EventEmitter();
@@ -37,8 +43,16 @@ function createMockChildProcess(): MockChildProcess {
   return child;
 }
 
-function mockSpawnWithScenario(scenario: SpawnScenario): void {
+function mockSpawnWithScenarios(scenarios: SpawnScenario[]): void {
+  let scenarioIndex = 0;
+
   mockSpawn.mockImplementation((_cmd: string, _args: string[], _options: object) => {
+    const scenario = scenarios[scenarioIndex];
+    scenarioIndex += 1;
+    if (!scenario) {
+      throw new Error(`Missing cursor spawn scenario for attempt ${scenarioIndex}`);
+    }
+
     const child = createMockChildProcess();
 
     queueMicrotask(() => {
@@ -62,6 +76,10 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
   });
 }
 
+function mockSpawnWithScenario(scenario: SpawnScenario): void {
+  mockSpawnWithScenarios([scenario]);
+}
+
 describe('callCursor', () => {
   const originalEnv = {
     CURSOR_API_KEY: process.env.CURSOR_API_KEY,
@@ -77,6 +95,9 @@ describe('callCursor', () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+
     for (const [key, value] of Object.entries(originalEnv)) {
       if (value === undefined) {
         delete process.env[key];
@@ -214,6 +235,8 @@ describe('callCursor', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('cursor-agent binary not found');
+    expect(result.failureCategory).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('should classify authentication errors', async () => {
@@ -227,6 +250,8 @@ describe('callCursor', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('cursor-agent login');
     expect(result.content).toContain('TAKT_CURSOR_API_KEY');
+    expect(result.failureCategory).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('should classify non-zero exits', async () => {
@@ -240,17 +265,155 @@ describe('callCursor', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('code 2');
     expect(result.content).toContain('unexpected failure');
+    expect(result.failureCategory).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should retry cli-config rename ENOENT and return successful retry result', async () => {
+    vi.useFakeTimers();
+    mockSpawnWithScenarios([
+      {
+        code: 1,
+        stderr: `${'x'.repeat(450)}${CURSOR_CONFIG_RENAME_ENOENT}`,
+      },
+      {
+        stdout: JSON.stringify({ content: 'retry succeeded', sessionId: 'sess-after-retry' }),
+        code: 0,
+      },
+    ]);
+
+    const resultPromise = callCursor('coding-review', 'review changes', {
+      cwd: '/repo',
+      sessionId: 'sess-before-retry',
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('retry succeeded');
+    expect(result.sessionId).toBe('sess-after-retry');
+  });
+
+  it('should stop cli-config rename ENOENT retry when aborted during retry delay', async () => {
+    vi.useFakeTimers();
+    const abortController = new AbortController();
+    const onStream = vi.fn();
+    mockSpawnWithScenarios([
+      {
+        code: 1,
+        stderr: CURSOR_CONFIG_RENAME_ENOENT,
+      },
+      {
+        stdout: JSON.stringify({ content: 'should not run' }),
+        code: 0,
+      },
+    ]);
+
+    const resultPromise = callCursor('coding-review', 'review changes', {
+      cwd: '/repo',
+      sessionId: 'sess-aborted-retry',
+      abortSignal: abortController.signal,
+      onStream,
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    abortController.abort();
+    const result = await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('error');
+    expect(result.content).toBe('Cursor execution aborted');
+    expect(result.failureCategory).toBeUndefined();
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: 'Cursor execution aborted',
+        sessionId: 'sess-aborted-retry',
+      },
+    });
+  });
+
+  it('should not retry cli-config ENOENT when it is not a rename failure', async () => {
+    vi.useFakeTimers();
+    mockSpawnWithScenario({
+      code: 1,
+      stderr: CURSOR_CONFIG_NON_RENAME_ENOENT,
+    });
+
+    const result = await callCursor('coding-review', 'review changes', { cwd: '/repo' });
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBeUndefined();
+    expect(result.content).toContain('code 1');
+    expect(result.content).toContain('cli-config.json.tmp');
+  });
+
+  it('should return provider_error when cli-config rename ENOENT retry attempts are exhausted', async () => {
+    vi.useFakeTimers();
+    const onStream = vi.fn();
+    mockSpawnWithScenarios(Array.from({ length: CURSOR_CONFIG_RENAME_ENOENT_ATTEMPTS }, () => ({
+      code: 1,
+      stderr: CURSOR_CONFIG_RENAME_ENOENT,
+    })));
+
+    const resultPromise = callCursor('coding-review', 'review changes', {
+      cwd: '/repo',
+      sessionId: 'sess-retry-exhausted',
+      onStream,
+    });
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(CURSOR_CONFIG_RENAME_ENOENT_ATTEMPTS);
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.content).toContain('code 1');
+    expect(result.content).toContain('cli-config.json.tmp');
+    expect(result.content).toContain('cli-config.json');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('cli-config.json.tmp'),
+        failureCategory: 'provider_error',
+      }),
+    });
   });
 
   it('should return parse error when stdout is not valid JSON', async () => {
+    const onStream = vi.fn();
     mockSpawnWithScenario({
       stdout: 'not-json',
       code: 0,
     });
 
-    const result = await callCursor('coder', 'implement feature', { cwd: '/repo' });
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      sessionId: 'sess-parse-error',
+      onStream,
+    });
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('Failed to parse cursor-agent JSON output');
+    expect(result.sessionId).toBe('sess-parse-error');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error: expect.stringContaining('Failed to parse cursor-agent JSON output'),
+        sessionId: 'sess-parse-error',
+      },
+    });
   });
 });

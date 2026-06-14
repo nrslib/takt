@@ -228,6 +228,7 @@ describe('buildReviewFindingEventsFromLedger', () => {
       rawFindings: [
         {
           rawFindingId: 'raw-security-review-1',
+          familyTag: 'secret-handling',
           stepName: 'security-review',
           reviewer: 'security-reviewer',
           severity: 'high',

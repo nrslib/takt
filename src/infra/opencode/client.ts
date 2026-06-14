@@ -24,6 +24,7 @@ import {
   type OpenCodeStreamEvent,
   type OpenCodePart,
   type OpenCodeTextPart,
+  type OpenCodeToolPart,
   createStreamTrackingState,
   emitInit,
   emitText,
@@ -32,6 +33,7 @@ import {
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
+import { UnavailableToolLoopDetector } from './unavailableToolLoop.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 
 export type { OpenCodeCallOptions } from './types.js';
@@ -662,6 +664,7 @@ export class OpenCodeClient {
         let success = true;
         let failureMessage = '';
         const state = createStreamTrackingState();
+        const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
         const echoState = { remainingPrompts: buildPromptEchoCandidates(prompt, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
@@ -696,11 +699,34 @@ export class OpenCodeClient {
             const delta = props.delta;
 
             if (part.type === 'text') {
+              unavailableToolLoopDetector.reset();
               const textPart = part as OpenCodeTextPart;
               const prev = textOffsets.get(textPart.id) ?? 0;
               const rawDelta = delta
                 ?? (textPart.text.length > prev ? textPart.text.slice(prev) : '');
               consumeTextDelta(textPart.id, rawDelta);
+              continue;
+            }
+
+            if (part.type === 'tool') {
+              const toolPart = part as OpenCodeToolPart;
+              const loopError = toolPart.state.status === 'error'
+                ? unavailableToolLoopDetector.observe(
+                  toolPart.callID || toolPart.id,
+                  toolPart.tool,
+                  toolPart.state.error,
+                )
+                : undefined;
+              if (toolPart.state.status !== 'error') {
+                unavailableToolLoopDetector.reset();
+              }
+              handlePartUpdated(part, delta, options.onStream, state);
+              if (loopError !== undefined) {
+                success = false;
+                failureMessage = loopError;
+                diag.onStreamError('message.part.updated', loopError);
+                break;
+              }
               continue;
             }
 
@@ -716,6 +742,7 @@ export class OpenCodeClient {
               delta: string;
             };
             if (deltaProps.field === 'text' && deltaProps.delta) {
+              unavailableToolLoopDetector.reset();
               consumeTextDelta(deltaProps.partID, deltaProps.delta);
             }
             continue;

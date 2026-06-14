@@ -1,6 +1,12 @@
 import { EventEmitter } from 'node:events';
+import { writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { FindingLedger, WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
+import { initAnalyticsWriter } from '../features/analytics/index.js';
+import { resetAnalyticsWriter } from '../features/analytics/writer.js';
+import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 
@@ -171,6 +177,48 @@ describe('bindWorkflowExecutionEvents', () => {
     engine.emit('findings:ledger', ledger);
 
     expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(ledger);
+  });
+
+  it('finding ledger analytics の書き込み失敗後も workflow complete を処理する', () => {
+    const analyticsPath = join(tmpdir(), `takt-test-ledger-analytics-failure-${Date.now()}`);
+    writeFileSync(analyticsPath, 'not a directory', 'utf-8');
+    initAnalyticsWriter(true, analyticsPath);
+    try {
+      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model');
+      const { engine, runMetaManager, analyticsEmitter } = createBridgeHarness();
+      analyticsEmitter.onFindingLedgerUpdated.mockImplementation((ledger: FindingLedger) => {
+        actualAnalyticsEmitter.onFindingLedgerUpdated(ledger);
+      });
+      const ledger: FindingLedger = {
+        version: 1,
+        workflowName: 'peer-review',
+        nextId: 2,
+        updatedAt: '2026-06-13T02:30:00.000Z',
+        findings: [
+          {
+            id: 'F-0001',
+            status: 'open',
+            lifecycle: 'new',
+            severity: 'high',
+            title: 'Analytics write should not abort workflow',
+            reviewers: ['architecture-reviewer'],
+            rawFindingIds: ['run:reviewers:1:architecture-review:raw-1'],
+            firstSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
+            lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
+          },
+        ],
+        rawFindings: [],
+        conflicts: [],
+      };
+
+      expect(() => engine.emit('findings:ledger', ledger)).not.toThrow();
+      expect(() => engine.emit('workflow:complete', { iteration: 3 })).not.toThrow();
+
+      expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 3);
+    } finally {
+      resetAnalyticsWriter();
+      rmSync(analyticsPath, { force: true });
+    }
   });
 
   it('event bridge 初期化時に既存 open finding id を analytics emitter に渡す', () => {

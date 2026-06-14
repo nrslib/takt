@@ -20,6 +20,8 @@ import {
   prepareKnowledgeContent as prepareKnowledgeContentGeneric,
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
+export { renderFencedJsonBlock } from './fenced-json.js';
+import { renderFencedJsonBlock } from './fenced-json.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
@@ -42,15 +44,6 @@ function preparePreviousResponseContent(content: string, sourcePath?: string): s
   }
   lines.push('', renderConflictNotice());
   return lines.join('\n');
-}
-
-export function renderFencedJsonBlock(content: string): string {
-  const maxBacktickRun = Math.max(
-    0,
-    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
-  );
-  const fence = '`'.repeat(Math.max(3, maxBacktickRun + 1));
-  return [fence + 'json', content, fence].join('\n');
 }
 
 /**
@@ -257,8 +250,9 @@ export class InstructionBuilder {
         '',
         '- Report every issue you observe as structured raw findings.',
         '- Use rawFindingId values that are unique within this response.',
+        '- Copy each Observed Findings family_tag value into the structured familyTag field.',
         '- Return structured output matching this raw findings schema:',
-        renderFencedJsonBlock(JSON.stringify(this.context.findingContract.rawFindingsJsonSchema, null, 2)),
+        renderFencedJsonBlock(this.context.findingContract.rawFindingsJsonSchema),
       );
     }
 

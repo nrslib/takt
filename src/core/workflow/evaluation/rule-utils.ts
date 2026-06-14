@@ -3,6 +3,7 @@
  */
 
 import type { WorkflowStep, OutputContractEntry } from '../../models/types.js';
+import { isEscapedQuote } from '../../models/workflow-condition-expression.js';
 
 const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect|findings)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
 
@@ -23,7 +24,9 @@ export function hasUnquotedFindingsReference(condition: string): boolean {
 
   for (let index = 0; index < condition.length; index++) {
     if (condition[index] === '"') {
-      inString = !inString;
+      if (!isEscapedQuote(condition, index)) {
+        inString = !inString;
+      }
       continue;
     }
     if (inString || !condition.startsWith('findings.', index)) {

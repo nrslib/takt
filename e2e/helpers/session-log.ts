@@ -11,7 +11,9 @@ export function readSessionRecords(repoPath: string): Array<Record<string, unkno
 
   for (const runDir of runDirs) {
     const logsDir = join(runsDir, runDir, 'logs');
-    const logFiles = readdirSync(logsDir).filter((file) => file.endsWith('.jsonl'));
+    const logFiles = readdirSync(logsDir).filter((file) => (
+      file.endsWith('.jsonl') && !file.endsWith('-otel-session-shadow.jsonl')
+    ));
     for (const file of logFiles) {
       const content = readFileSync(join(logsDir, file), 'utf-8').trim();
       if (!content) continue;

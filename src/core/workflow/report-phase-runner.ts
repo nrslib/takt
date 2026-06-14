@@ -5,6 +5,7 @@ import { resolveAgentErrorMessage } from '../models/response.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { executeAgent } from '../../agents/agent-usecases.js';
 import { createLogger } from '../../shared/utils/index.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { getReportFiles } from './evaluation/rule-utils.js';
@@ -18,6 +19,13 @@ const REPORT_PHASE_MAX_TURNS = 3;
 /** Result when Phase 2 encounters a blocked status */
 export type ReportPhaseBlockedResult = { blocked: true; response: AgentResponse };
 export type ReportPhaseRateLimitedResult = { rateLimited: true; response: AgentResponse };
+
+class ReportPhaseToolCallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReportPhaseToolCallError';
+  }
+}
 
 function formatHistoryTimestamp(date: Date): string {
   const year = date.getUTCFullYear();
@@ -204,6 +212,26 @@ function buildNewSessionRetryOptions(step: WorkflowStep, ctx: PhaseRunnerContext
   });
 }
 
+function buildReportPhaseToolUseError(tool: string): ReportPhaseToolCallError {
+  return new ReportPhaseToolCallError(`Report phase does not allow tool calls, but provider emitted tool "${tool}".`);
+}
+
+function buildReportPhaseToolResultError(): ReportPhaseToolCallError {
+  return new ReportPhaseToolCallError('Report phase does not allow tool results.');
+}
+
+function detectReportPhaseToolCall(event: StreamEvent): ReportPhaseToolCallError | undefined {
+  if (event.type === 'tool_use') {
+    return buildReportPhaseToolUseError(event.data.tool);
+  }
+
+  if (event.type === 'tool_result') {
+    return buildReportPhaseToolResultError();
+  }
+
+  return undefined;
+}
+
 type ReportAttemptResult =
   | { kind: 'success'; content: string; response: AgentResponse }
   | { kind: 'blocked'; response: AgentResponse }
@@ -219,12 +247,26 @@ async function runSingleReportAttempt(
 ): Promise<ReportAttemptResult> {
   let didEmitPhaseStart = false;
   let resolvedPromptParts: PhasePromptParts | undefined;
+  let reportToolCallError: ReportPhaseToolCallError | undefined;
   const callOptions: RunAgentOptions = {
     ...options,
     onPromptResolved: (promptParts) => {
       resolvedPromptParts = promptParts;
       ctx.onPhaseStart?.(step, 2, 'report', instruction, promptParts, phaseExecutionId, ctx.iteration);
       didEmitPhaseStart = true;
+    },
+    onStream: (event) => {
+      const detected = detectReportPhaseToolCall(event);
+      if (detected !== undefined) {
+        reportToolCallError ??= detected;
+        throw reportToolCallError;
+      }
+      if (reportToolCallError !== undefined) {
+        throw reportToolCallError;
+      }
+
+      const streamCallback = options.onStream ?? ctx.onStream;
+      streamCallback?.(event);
     },
   };
 
@@ -244,21 +286,42 @@ async function runSingleReportAttempt(
       sanitizeText: ctx.sanitizeObservabilityText,
       providerInfo: ctx.resolveStepProviderModel?.(step),
       getPromptParts: () => resolvedPromptParts,
-    }, () => executeAgent(step.persona, instruction, callOptions), (result) => ({
-      status: result.status,
-      content: result.content,
-      error: result.error,
-      providerUsage: result.providerUsage,
-    }));
+    }, () => executeAgent(step.persona, instruction, callOptions), (result) => {
+      if (reportToolCallError !== undefined) {
+        return {
+          status: 'error',
+          content: '',
+          error: reportToolCallError.message,
+          providerUsage: result.providerUsage,
+        };
+      }
+
+      return {
+        status: result.status,
+        content: result.content,
+        error: result.error,
+        providerUsage: result.providerUsage,
+      };
+    });
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:2`);
     }
   } catch (error) {
+    if (error instanceof ReportPhaseToolCallError) {
+      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', error.message, phaseExecutionId, ctx.iteration);
+      return { kind: 'retryable_failure', errorMessage: error.message };
+    }
+
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (didEmitPhaseStart) {
       ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, phaseExecutionId, ctx.iteration);
     }
     throw error;
+  }
+
+  if (reportToolCallError !== undefined) {
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', reportToolCallError.message, phaseExecutionId, ctx.iteration);
+    return { kind: 'retryable_failure', errorMessage: reportToolCallError.message };
   }
 
   if (response.status === 'blocked') {

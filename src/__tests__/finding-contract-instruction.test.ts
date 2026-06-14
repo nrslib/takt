@@ -60,6 +60,43 @@ describe('Finding Contract instruction context', () => {
     expect(lines).not.toContain('```json');
   });
 
+  it('phase 1 instruction should normalize structured raw findings schema before fencing', () => {
+    const step = makeStep({
+      name: 'review',
+      instruction: 'Review.',
+      outputContracts: [{ name: 'review.md', format: 'Write the report.' }],
+    });
+
+    const instruction = new InstructionBuilder(step, {
+      task: 'Review the changes.',
+      iteration: 1,
+      maxSteps: 3,
+      stepIteration: 1,
+      cwd: '/tmp/project',
+      projectCwd: '/tmp/project',
+      userInputs: [],
+      reportDir: '/tmp/project/.takt/runs/run/reports',
+      findingContract: {
+        ledgerCopyPath: '/tmp/project/.takt/runs/run/reports/findings-ledger.json',
+        ledgerSummary: '{"open":[],"resolved":[]}',
+        rawFindingsJsonSchema: {
+          type: 'object',
+          properties: {
+            rawFindings: {
+              type: 'array',
+              description: 'do not close ``` the JSON fence',
+            },
+          },
+        },
+      },
+    }).build();
+
+    expect(instruction).toContain('Copy each Observed Findings family_tag value into the structured familyTag field.');
+    expect(instruction).toContain('````json\n{\n  "type": "object"');
+    expect(instruction).toContain('"description": "do not close ``` the JSON fence"');
+    expect(instruction).not.toMatch(/^```json\n{\n  "type": "object"/m);
+  });
+
   it('report phase instruction should use a fence longer than backticks inside ledger summary', () => {
     const step = makeStep({
       name: 'review',

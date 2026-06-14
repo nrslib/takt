@@ -14,6 +14,9 @@
 | Context fit | ✅ | - |
 | Scope | ✅ | - |
 
+Expected `family_tag` values: `hallucination`, `unvalidated-assumption`, `off-by-one`, `api-mismatch`, `missing-edge-case`, `logic-error`, `scope-creep`.
+When structured raw findings are requested, copy this table's `family_tag` value into the structured `familyTag` field.
+
 ## Observed Findings
 | # | family_tag | Category | Severity | Location | Issue | Fix Suggestion |
 |---|------------|----------|----------|----------|-------|----------------|

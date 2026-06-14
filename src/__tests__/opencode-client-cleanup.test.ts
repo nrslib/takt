@@ -966,6 +966,322 @@ describe('OpenCodeClient stream cleanup', () => {
     );
   });
 
+  it('should return provider error when the same unavailable OpenCode tool error repeats', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const unavailableToolError = "Model tried to call unavailable tool 'invalid'. Available tools: glob, grep, read.";
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-1',
+            type: 'tool',
+            callID: 'call-run-1',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: unavailableToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-2',
+            type: 'tool',
+            callID: 'call-run-2',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: unavailableToolError },
+          },
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-tool-loop' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-tool-loop' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'write report', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('run');
+    expect(result.content).toContain(unavailableToolError);
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it('should return provider error when the same invalid OpenCode tool error repeats', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const invalidToolError = "Model tried to call invalid tool 'run'. Available tools: glob, grep, read.";
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-1',
+            type: 'tool',
+            callID: 'call-run-1',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: invalidToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-2',
+            type: 'tool',
+            callID: 'call-run-2',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: invalidToolError },
+          },
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-invalid-tool-loop' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-invalid-tool-loop' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'write report', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('run');
+    expect(result.content).toContain(invalidToolError);
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it('should return provider error when unavailable OpenCode tool errors alternate tools', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const runToolError = "Model tried to call unavailable tool 'run'. Available tools: glob, grep, read.";
+    const listToolError = "Model tried to call invalid tool 'list'. Available tools: glob, grep, read.";
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-1',
+            type: 'tool',
+            callID: 'call-run-1',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: runToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-2',
+            type: 'tool',
+            callID: 'call-list-1',
+            tool: 'list',
+            state: { status: 'error', input: {}, error: listToolError },
+          },
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-alternating-tool-loop' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-alternating-tool-loop' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'write report', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('list');
+    expect(result.content).toContain(listToolError);
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it('should ignore duplicate unavailable tool updates for the same OpenCode call', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const runToolError = "Model tried to call unavailable tool 'run'. Available tools: glob, grep, read.";
+    const listToolError = "Model tried to call invalid tool 'list'. Available tools: glob, grep, read.";
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-run',
+            type: 'tool',
+            callID: 'call-run-1',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: runToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-run',
+            type: 'tool',
+            callID: 'call-run-1',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: runToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-list',
+            type: 'tool',
+            callID: 'call-list-1',
+            tool: 'list',
+            state: { status: 'error', input: {}, error: listToolError },
+          },
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-duplicate-tool-update' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-duplicate-tool-update' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'write report', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('list');
+    expect(result.content).toContain(listToolError);
+    expect(result.content).not.toContain(runToolError);
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it('should continue when an unavailable OpenCode tool error occurs only once', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const unavailableToolError = "Model tried to call unavailable tool 'invalid'. Available tools: glob, grep, read.";
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-1',
+            type: 'tool',
+            callID: 'call-run-1',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: unavailableToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'text-part-1', type: 'text', text: 'report ready' },
+          delta: 'report ready',
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-single-tool-error' },
+      },
+    ]);
+
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-single-tool-error' } });
+    const subscribe = vi.fn().mockResolvedValue({ stream });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'write report', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('report ready');
+    expect(result.content).not.toContain(unavailableToolError);
+  });
+
+  it('should keep unavailable tool message matching as an internal helper', async () => {
+    const unavailableToolLoopModule = await import('../infra/opencode/unavailableToolLoop.js');
+
+    expect(unavailableToolLoopModule).toHaveProperty('UnavailableToolLoopDetector');
+    expect(unavailableToolLoopModule).not.toHaveProperty('isUnavailableToolErrorMessage');
+  });
+
   it('should pass system prompt separately from user prompt to promptAsync', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([

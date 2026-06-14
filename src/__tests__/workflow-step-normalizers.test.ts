@@ -16,6 +16,17 @@ describe('workflow step normalizer helpers', () => {
     expect(normalized.aggregateConditionText).toEqual(['done', 'approved']);
   });
 
+  it('normalizes aggregate rules whose argument quotes are backslash-escaped', () => {
+    const normalized = normalizeRule({
+      condition: String.raw`all(\"approved\")`,
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.aggregateType).toBe('all');
+    expect(normalized.aggregateConditionText).toBe('approved');
+  });
+
   it('normalizes aggregate rules with deterministic guards', () => {
     const normalized = normalizeRule({
       condition: 'any("needs_fix") && findings.conflicts.count == 0',
@@ -25,6 +36,42 @@ describe('workflow step normalizer helpers', () => {
     expect(normalized.isAggregateCondition).toBe(true);
     expect(normalized.aggregateType).toBe('any');
     expect(normalized.aggregateConditionText).toBe('needs_fix');
+    expect(normalized.aggregateGuardCondition).toBe('findings.conflicts.count == 0');
+  });
+
+  it('normalizes aggregate arguments with escaped quotes through the rule helper', () => {
+    const targetCondition = String.raw`condition == "test\"inner"`;
+    const normalized = normalizeRule({
+      condition: String.raw`all("condition == \"test\\\"inner\"") && findings.open.count == 0`,
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.aggregateConditionText).toBe(targetCondition);
+    expect(normalized.aggregateGuardCondition).toBe('findings.open.count == 0');
+  });
+
+  it('normalizes unquoted aggregate condition expressions as matched rule text', () => {
+    const targetCondition = String.raw`condition == "test\"inner"`;
+    const normalized = normalizeRule({
+      condition: String.raw`all(condition == "test\"inner") && findings.open.count == 0`,
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.aggregateType).toBe('all');
+    expect(normalized.aggregateConditionText).toBe(targetCondition);
+    expect(normalized.aggregateGuardCondition).toBe('findings.open.count == 0');
+  });
+
+  it('normalizes aggregate arguments when an even backslash run closes the quote', () => {
+    const normalized = normalizeRule({
+      condition: String.raw`any("path ends with \\") && findings.conflicts.count == 0`,
+      next: 'fix',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.aggregateConditionText).toBe('path ends with \\');
     expect(normalized.aggregateGuardCondition).toBe('findings.conflicts.count == 0');
   });
 

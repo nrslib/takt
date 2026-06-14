@@ -6,13 +6,15 @@ ledger がない場合は、Report Directory内のレビューレポートを確
 - 指摘の対象コードを直接修正すること。テストやドキュメントの追加で指摘を回避しない
 
 **レポート参照方針:**
-- Finding Contract の ledger がある場合は、統合 ledger を唯一の正本として参照してください。
-- ledger の `findings[].rawFindingIds` から辿れる raw finding 詳細と個別レビューは補助証跡として参照してください。
+- parse 可能な Finding Contract の ledger summary / `findings-ledger.json` がある場合は、何を修正するかを決める唯一の正本として統合 ledger を参照してください。
+- 修正対象は lifecycle が `new`、`persists`、`reopened` の open ledger findings のみです。
+- status / lifecycle が `resolved` または closed の ledger findings は修正対象外です。
+- ledger の `findings[].rawFindingIds` は raw finding 詳細と個別レビューへ到達するための補助証跡であり、代替の正本ではありません。
 - ledger がない場合は、Report Directory内の最新レビューレポートを一次情報として参照してください。
 - 過去イテレーションのレポートは `{ファイル名}.{タイムスタンプ}` 形式で同ディレクトリに保存されています（例: `architect-review.md.20260304T123456Z`）。各レポートについて `{レポート名}.*` パターンで Glob を実行し、タイムスタンプ降順で最大2件まで読み、persists / reopened の傾向を把握してから修正に入ること。
 
 **完了条件（以下をすべて満たすこと）:**
-- 今回受け取った全指摘（new / reopened）を修正したこと
+- 今回受け取った open findings（`new` / `persists` / `reopened`）をすべて修正したこと
 - 同一 `family_tag` の潜在箇所を同時に修正したこと（部分修正で再発させない）
 - `family_tag` ごとに最低1件の再発防止テストを追加したこと（config契約/境界チェック系は必須）
 - 複数レビュアーから同一 `family_tag` の指摘が届いている場合は1件に統合して対応したこと
@@ -33,6 +35,6 @@ ledger がない場合は、Report Directory内のレビューレポートを確
 |------|------|
 | new（今回修正） | {N} |
 | reopened（再発修正） | {N} |
-| persists（前回から継続、今回未着手） | {N} |
+| persists（前回から継続、今回修正） | {N} |
 ## 証拠
 - {確認したファイル/検索/差分/ログの要点を列挙}

@@ -90,9 +90,6 @@ function prepareWritableFilePath(baseDir: string, filePath: string): void {
 
 function prepareWritableCopyPath(baseDir: string, filePath: string): void {
   prepareWritableFilePath(baseDir, filePath);
-  if (pathExists(filePath)) {
-    chmodSync(filePath, PRIVATE_FILE_MODE);
-  }
 }
 
 function prepareWritableDirectory(baseDir: string, dirPath: string): void {

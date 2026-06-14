@@ -169,6 +169,49 @@ function getRawFindings(rawFindings: readonly RawFinding[], rawFindingIds: reado
   });
 }
 
+function assertSameFamilyTag(rawFindings: readonly RawFinding[], action: string): void {
+  const [primary, ...rest] = rawFindings;
+  if (primary === undefined) {
+    throw new Error('At least one raw finding is required to validate familyTag');
+  }
+
+  for (const rawFinding of rest) {
+    if (rawFinding.familyTag !== primary.familyTag) {
+      throw new Error(
+        `Cannot ${action} raw findings with different familyTag values: "${primary.familyTag}" and "${rawFinding.familyTag}"`,
+      );
+    }
+  }
+}
+
+function getPreviousRawFindingsForFinding(input: {
+  finding: FindingRecord;
+  previousRawFindingsById: ReadonlyMap<string, RawFinding>;
+}): RawFinding[] {
+  return input.finding.rawFindingIds.map((rawFindingId) => {
+    const rawFinding = input.previousRawFindingsById.get(rawFindingId);
+    if (rawFinding === undefined) {
+      throw new Error(
+        `Finding "${input.finding.id}" references previous raw finding "${rawFindingId}" that is not in the ledger`,
+      );
+    }
+    return rawFinding;
+  });
+}
+
+function assertFindingFamilyTagCompatible(input: {
+  finding: FindingRecord;
+  previousRawFindingsById: ReadonlyMap<string, RawFinding>;
+  currentRawFindings: readonly RawFinding[];
+  action: string;
+}): void {
+  const previousRawFindings = getPreviousRawFindingsForFinding({
+    finding: input.finding,
+    previousRawFindingsById: input.previousRawFindingsById,
+  });
+  assertSameFamilyTag([...previousRawFindings, ...input.currentRawFindings], input.action);
+}
+
 function rawEvidenceFields(rawFindings: readonly RawFinding[]): Pick<FindingRecord, 'location' | 'description' | 'suggestion' | 'reviewers'> {
   const primary = rawFindings[0];
   if (primary === undefined) {
@@ -337,6 +380,12 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     const finding = updatedById.get(match.findingId)!;
     assertFindingStatus(finding, 'open', 'match');
     const matchedRawFindings = getRawFindings(input.rawFindings, match.rawFindingIds);
+    assertFindingFamilyTagCompatible({
+      finding,
+      previousRawFindingsById,
+      currentRawFindings: matchedRawFindings,
+      action: 'match',
+    });
     const evidence = rawEvidenceFields(matchedRawFindings);
     updatedById.set(match.findingId, {
       ...finding,
@@ -376,6 +425,12 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     const finding = updatedById.get(reopened.findingId)!;
     assertFindingStatus(finding, 'resolved', 'reopen');
     const reopenedRawFindings = getRawFindings(input.rawFindings, reopened.rawFindingIds);
+    assertFindingFamilyTagCompatible({
+      finding,
+      previousRawFindingsById,
+      currentRawFindings: reopenedRawFindings,
+      action: 'reopen',
+    });
     const evidence = rawEvidenceFields(reopenedRawFindings);
     const reopenedFinding = withoutResolutionFields(finding);
     updatedById.set(reopened.findingId, {
@@ -396,6 +451,8 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     assertKnownRawFindings(rawFindingIds, newFinding.rawFindingIds);
     markRawFindingIdsUsed(usedRawFindingIds, newFinding.rawFindingIds);
     const rawFinding = getRawFinding(input.rawFindings, newFinding.rawFindingIds);
+    const newRawFindings = getRawFindings(input.rawFindings, newFinding.rawFindingIds);
+    assertSameFamilyTag(newRawFindings, 'create a new finding from');
     const id = formatFindingId(nextId);
     nextId += 1;
     return buildNewFinding({
@@ -403,7 +460,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       severity: newFinding.severity,
       title: newFinding.title,
       rawFindingIds: [...newFinding.rawFindingIds],
-      rawFindings: getRawFindings(input.rawFindings, newFinding.rawFindingIds),
+      rawFindings: newRawFindings,
       firstSeenStepName: rawFinding.stepName,
       context: input.context,
     });

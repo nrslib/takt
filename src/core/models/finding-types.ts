@@ -62,6 +62,7 @@ export interface RawFinding {
   rawFindingId: string;
   stepName: string;
   reviewer: string;
+  familyTag: string;
   severity: FindingSeverity;
   title: string;
   location?: string;

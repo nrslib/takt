@@ -80,6 +80,7 @@ describe('Finding Contract integration flow', () => {
       rawFindings: [
         {
           rawFindingId: 'raw-security-1',
+          familyTag: 'security',
           stepName: 'security-review',
           reviewer: 'security-reviewer',
           severity: 'high',

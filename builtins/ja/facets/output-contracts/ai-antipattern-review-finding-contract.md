@@ -14,6 +14,9 @@
 | コンテキスト適合 | ✅ | - |
 | スコープ | ✅ | - |
 
+期待される `family_tag` 値: `hallucination`, `unvalidated-assumption`, `off-by-one`, `api-mismatch`, `missing-edge-case`, `logic-error`, `scope-creep`.
+structured raw findings を要求された場合は、この表の `family_tag` 値を structured output の `familyTag` フィールドへコピーする。
+
 ## 観測した指摘
 | # | family_tag | カテゴリ | 重大度 | 場所 | 問題 | 修正案 |
 |---|------------|---------|--------|------|------|--------|

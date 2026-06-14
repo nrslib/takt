@@ -434,6 +434,14 @@ describe('all()/any() aggregate condition expression parsing', () => {
     });
   });
 
+  it('should treat a quote after an even backslash run as the aggregate argument boundary', () => {
+    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && findings.open.count == 0`)).toEqual({
+      type: 'any',
+      argsText: String.raw`"path ends with \\"`,
+      guardCondition: 'findings.open.count == 0',
+    });
+  });
+
   it('should not match regular condition text', () => {
     expect(parseAggregateConditionExpression('approved')).toBeUndefined();
   });

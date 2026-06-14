@@ -4,12 +4,14 @@ import type {
   FindingManagerOutput,
   RawFinding,
 } from './finding-types.js';
+import {
+  FINDING_CONFLICT_STATUSES,
+  FINDING_LIFECYCLES,
+  FINDING_SEVERITIES,
+  FINDING_STATUSES,
+} from './finding-types.js';
 
 const nonEmptyString = z.string().min(1);
-const findingSeverities = ['critical', 'high', 'medium', 'low'] as const;
-const findingStatuses = ['open', 'resolved'] as const;
-const findingLifecycles = ['new', 'persists', 'resolved', 'reopened'] as const;
-const findingConflictStatuses = ['active', 'resolved'] as const;
 
 export const FindingContractManagerConfigRawSchema = z.object({
   persona: nonEmptyString,
@@ -23,9 +25,9 @@ export const FindingContractConfigRawSchema = z.object({
   manager: FindingContractManagerConfigRawSchema,
 }).strict();
 
-export const FindingSeveritySchema = z.enum(findingSeverities);
-export const FindingStatusSchema = z.enum(findingStatuses);
-export const FindingLifecycleSchema = z.enum(findingLifecycles);
+export const FindingSeveritySchema = z.enum(FINDING_SEVERITIES);
+export const FindingStatusSchema = z.enum(FINDING_STATUSES);
+export const FindingLifecycleSchema = z.enum(FINDING_LIFECYCLES);
 
 export const FindingObservationSchema = z.object({
   runId: nonEmptyString,
@@ -55,6 +57,7 @@ export const RawFindingSchema = z.object({
   rawFindingId: nonEmptyString,
   stepName: nonEmptyString,
   reviewer: nonEmptyString,
+  familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
   location: nonEmptyString.optional(),
@@ -64,6 +67,7 @@ export const RawFindingSchema = z.object({
 
 export const ReviewerRawFindingSchema = z.object({
   rawFindingId: nonEmptyString,
+  familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
   location: nonEmptyString.optional(),
@@ -73,7 +77,7 @@ export const ReviewerRawFindingSchema = z.object({
 
 export const FindingLedgerConflictSchema = z.object({
   id: nonEmptyString,
-  status: z.enum(findingConflictStatuses),
+  status: z.enum(FINDING_CONFLICT_STATUSES),
   findingIds: z.array(nonEmptyString),
   rawFindingIds: z.array(nonEmptyString),
   description: nonEmptyString,
@@ -152,7 +156,7 @@ export const FindingManagerOutputJsonSchema = {
         properties: {
           rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
           title: { type: 'string', minLength: 1 },
-          severity: { enum: findingSeverities },
+          severity: { enum: FINDING_SEVERITIES },
         },
       },
     },
@@ -220,10 +224,15 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'severity', 'title', 'description'],
+        required: ['rawFindingId', 'familyTag', 'severity', 'title', 'description'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
-          severity: { enum: findingSeverities },
+          familyTag: {
+            type: 'string',
+            minLength: 1,
+            description: 'Structured form of the Observed Findings family_tag value.',
+          },
+          severity: { enum: FINDING_SEVERITIES },
           title: { type: 'string', minLength: 1 },
           location: { type: 'string', minLength: 1 },
           description: { type: 'string', minLength: 1 },
