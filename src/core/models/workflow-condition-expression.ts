@@ -29,7 +29,9 @@ function findClosingParen(value: string, startIndex: number): number {
   for (let index = startIndex; index < value.length; index++) {
     const current = value[index];
     if (current === '"') {
-      inString = !inString;
+      if (!isEscapedQuote(value, index)) {
+        inString = !inString;
+      }
       continue;
     }
     if (inString) {
@@ -48,6 +50,14 @@ function findClosingParen(value: string, startIndex: number): number {
   }
 
   return -1;
+}
+
+function isEscapedQuote(value: string, quoteIndex: number): boolean {
+  let slashCount = 0;
+  for (let index = quoteIndex - 1; index >= 0 && value[index] === '\\'; index--) {
+    slashCount++;
+  }
+  return slashCount % 2 === 1;
 }
 
 export function parseAggregateConditionExpression(value: string): AggregateConditionExpression | undefined {

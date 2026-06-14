@@ -64,6 +64,46 @@ describe('validateWorkflowConfig', () => {
     );
   });
 
+  it('fails fast when aggregate guard findings rules are used without findingContract', () => {
+    const workflow = createWorkflow({
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved' }],
+            },
+          ],
+          rules: [
+            {
+              condition: 'all("approved")',
+              next: 'COMPLETE',
+              isAggregateCondition: true,
+              aggregateType: 'all',
+              aggregateConditionText: 'approved',
+              aggregateGuardCondition: 'findings.open.count == 0',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in step "plan": findings.* conditions require finding_contract',
+    );
+  });
+
   it('accepts findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {

@@ -44,6 +44,15 @@ function preparePreviousResponseContent(content: string, sourcePath?: string): s
   return lines.join('\n');
 }
 
+export function renderFencedJsonBlock(content: string): string {
+  const maxBacktickRun = Math.max(
+    0,
+    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
+  );
+  const fence = '`'.repeat(Math.max(3, maxBacktickRun + 1));
+  return [fence + 'json', content, fence].join('\n');
+}
+
 /**
  * Check if an output contract entry is the item form (OutputContractItem).
  */
@@ -240,9 +249,7 @@ export class InstructionBuilder {
       '- Do not assign final finding IDs.',
       '',
       'Current finding ledger summary:',
-      '```json',
-      this.context.findingContract.ledgerSummary,
-      '```',
+      renderFencedJsonBlock(this.context.findingContract.ledgerSummary),
     ];
 
     if (this.context.findingContract.rawFindingsJsonSchema) {
@@ -251,9 +258,7 @@ export class InstructionBuilder {
         '- Report every issue you observe as structured raw findings.',
         '- Use rawFindingId values that are unique within this response.',
         '- Return structured output matching this raw findings schema:',
-        '```json',
-        JSON.stringify(this.context.findingContract.rawFindingsJsonSchema, null, 2),
-        '```',
+        renderFencedJsonBlock(JSON.stringify(this.context.findingContract.rawFindingsJsonSchema, null, 2)),
       );
     }
 

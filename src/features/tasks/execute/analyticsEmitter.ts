@@ -7,6 +7,10 @@
 
 import { readFileSync } from 'node:fs';
 import {
+  createLogger,
+  getErrorMessage,
+} from '../../../shared/utils/index.js';
+import {
   writeAnalyticsEvent,
   parseFindingsFromReport,
   buildReviewFindingEventsFromLedger,
@@ -17,6 +21,8 @@ import {
 } from '../../analytics/index.js';
 import type { StepResultEvent, ReviewFindingEvent } from '../../analytics/index.js';
 import type { WorkflowStep, AgentResponse, FindingLedger } from '../../../core/models/index.js';
+
+const log = createLogger('analytics-emitter');
 
 export class AnalyticsEmitter {
   private readonly runSlug: string;
@@ -112,18 +118,25 @@ export class AnalyticsEmitter {
   }
 
   onFindingLedgerUpdated(ledger: FindingLedger): void {
-    this.findingContractFindingIds.clear();
-    for (const finding of ledger.findings) {
-      this.findingContractFindingIds.add(finding.id);
-    }
-    const events = buildReviewFindingEventsFromLedger(
-      ledger,
-      this.currentIteration,
-      this.runSlug,
-      new Date(ledger.updatedAt),
-    );
-    for (const event of events) {
-      writeAnalyticsEvent(event);
+    try {
+      this.findingContractFindingIds.clear();
+      for (const finding of ledger.findings) {
+        this.findingContractFindingIds.add(finding.id);
+      }
+      const events = buildReviewFindingEventsFromLedger(
+        ledger,
+        this.currentIteration,
+        this.runSlug,
+        new Date(ledger.updatedAt),
+      );
+      for (const event of events) {
+        writeAnalyticsEvent(event);
+      }
+    } catch (error) {
+      log.warn('Failed to emit finding ledger analytics events', {
+        error: getErrorMessage(error),
+        workflowName: ledger.workflowName,
+      });
     }
   }
 }

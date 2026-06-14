@@ -231,6 +231,31 @@ describe('RuleEvaluator findings conditions', () => {
     );
   });
 
+  it('should fail fast when findings state is absent for a findings aggregate guard', async () => {
+    const reviewStep = makeStep({
+      name: 'review',
+      rules: [{ condition: 'approved' }],
+    });
+    const step = makeStep({
+      name: 'peer-review',
+      parallel: [reviewStep],
+      rules: [
+        {
+          condition: 'all("approved")',
+          next: 'COMPLETE',
+          isAggregateCondition: true,
+          aggregateType: 'all',
+          aggregateConditionText: 'approved',
+          aggregateGuardCondition: 'findings.open.count == 0',
+        },
+      ],
+    });
+
+    await expect(new RuleEvaluator(step, makeContext(makeState(undefined, { review: 0 }))).evaluate('', '')).rejects.toThrow(
+      'Missing workflow findings state',
+    );
+  });
+
   it('should not treat findings text inside ai conditions as a findings rule', async () => {
     const evaluateCondition = vi.fn().mockResolvedValue(0);
     const step = makeStep({

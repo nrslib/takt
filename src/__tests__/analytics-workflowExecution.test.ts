@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
@@ -206,6 +206,36 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       runId: 'run-ledger',
       timestamp: '2026-06-13T02:30:00.000Z',
     });
+  });
+
+  it('does not throw when finding ledger analytics writing fails', () => {
+    const fileInsteadOfDirectory = join(testDir, 'events-file');
+    writeFileSync(fileInsteadOfDirectory, 'not a directory', 'utf-8');
+    initAnalyticsWriter(true, fileInsteadOfDirectory);
+    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model');
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'peer-review',
+      nextId: 2,
+      updatedAt: '2026-06-13T02:30:00.000Z',
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Analytics write should not abort workflow',
+          reviewers: ['architecture-reviewer'],
+          rawFindingIds: ['run:reviewers:1:architecture-review:raw-1'],
+          firstSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
+          lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
+        },
+      ],
+      rawFindings: [],
+      conflicts: [],
+    };
+
+    expect(() => emitter.onFindingLedgerUpdated(ledger)).not.toThrow();
   });
 
   it('writes fix_action for seeded finding ids before a ledger update event', () => {

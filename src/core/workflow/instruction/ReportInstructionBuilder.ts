@@ -9,7 +9,12 @@ import type { WorkflowStep, Language } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildGitRules } from './instruction-context.js';
 import { replaceTemplatePlaceholders } from './escape.js';
-import { isOutputContractItem, renderReportContext, renderReportOutputInstruction } from './InstructionBuilder.js';
+import {
+  isOutputContractItem,
+  renderFencedJsonBlock,
+  renderReportContext,
+  renderReportOutputInstruction,
+} from './InstructionBuilder.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**
@@ -124,9 +129,7 @@ export class ReportInstructionBuilder {
       '- Do not assign final finding IDs.',
       '',
       'Current finding ledger summary:',
-      '```json',
-      this.context.findingContract.ledgerSummary,
-      '```',
+      renderFencedJsonBlock(this.context.findingContract.ledgerSummary),
     ].join('\n');
 
     return reportOutput.length > 0

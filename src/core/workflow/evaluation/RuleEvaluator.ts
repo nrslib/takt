@@ -168,7 +168,8 @@ export class RuleEvaluator {
       if (rule.isAiCondition) {
         return false;
       }
-      return isFindingsCondition(rule.condition);
+      return isFindingsCondition(rule.condition)
+        || (rule.aggregateGuardCondition !== undefined && isFindingsCondition(rule.aggregateGuardCondition));
     }) === true;
   }
 

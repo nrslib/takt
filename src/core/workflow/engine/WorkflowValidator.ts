@@ -7,8 +7,13 @@ import { isWorkflowCallStep } from '../step-kind.js';
 import { isFindingsCondition } from '../evaluation/rule-utils.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
-  return !('isAiCondition' in rule && rule.isAiCondition === true)
-    && isFindingsCondition(rule.condition);
+  if ('isAiCondition' in rule && rule.isAiCondition === true) {
+    return false;
+  }
+  return isFindingsCondition(rule.condition)
+    || ('aggregateGuardCondition' in rule
+      && rule.aggregateGuardCondition !== undefined
+      && isFindingsCondition(rule.aggregateGuardCondition));
 }
 
 function validateFindingsRuleContract(
