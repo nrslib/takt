@@ -1,15 +1,52 @@
-import type { WorkflowConfig } from '../../models/types.js';
+import type { LoopMonitorRule, WorkflowConfig, WorkflowRule } from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
 import { isWorkflowCallStep } from '../step-kind.js';
+import { isFindingsCondition } from '../evaluation/rule-utils.js';
+
+function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
+  if ('isAiCondition' in rule && rule.isAiCondition === true) {
+    return false;
+  }
+  return isFindingsCondition(rule.condition)
+    || ('aggregateGuardCondition' in rule
+      && rule.aggregateGuardCondition !== undefined
+      && isFindingsCondition(rule.aggregateGuardCondition));
+}
+
+function validateFindingsRuleContract(
+  findingContractConfigured: boolean,
+  rule: WorkflowRule | LoopMonitorRule,
+  source: string,
+): void {
+  if (!findingContractConfigured && isFindingsRule(rule)) {
+    throw new Error(`${source}: findings.* conditions require finding_contract`);
+  }
+}
+
+function validateFindingContractParallelStructuredOutput(config: WorkflowConfig): void {
+  if (!config.findingContract) {
+    return;
+  }
+  for (const step of config.steps) {
+    for (const subStep of step.parallel ?? []) {
+      if (subStep.structuredOutput) {
+        throw new Error(
+          `Invalid parallel sub-step "${subStep.name}" in step "${step.name}": cannot combine finding_contract raw findings with structured_output`,
+        );
+      }
+    }
+  }
+}
 
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
   }
+  validateFindingContractParallelStructuredOutput(config);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);
@@ -31,6 +68,20 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       if (rule.next && !stepNames.has(rule.next)) {
         throw new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`);
       }
+      validateFindingsRuleContract(
+        config.findingContract !== undefined,
+        rule,
+        `Invalid rule in step "${step.name}"`,
+      );
+    }
+    for (const subStep of step.parallel ?? []) {
+      for (const rule of subStep.rules ?? []) {
+        validateFindingsRuleContract(
+          config.findingContract !== undefined,
+          rule,
+          `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+        );
+      }
     }
   }
 
@@ -44,6 +95,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       if (!stepNames.has(rule.next)) {
         throw new Error(`Invalid loop_monitor judge rule: target step "${rule.next}" does not exist`);
       }
+      validateFindingsRuleContract(
+        config.findingContract !== undefined,
+        rule,
+        'Invalid loop_monitor judge rule',
+      );
     }
 
     const triggeringStep = config.steps.find((step) => step.name === monitor.cycle[monitor.cycle.length - 1]);

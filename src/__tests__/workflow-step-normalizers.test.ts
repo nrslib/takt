@@ -16,6 +16,18 @@ describe('workflow step normalizer helpers', () => {
     expect(normalized.aggregateConditionText).toEqual(['done', 'approved']);
   });
 
+  it('normalizes aggregate rules with deterministic guards', () => {
+    const normalized = normalizeRule({
+      condition: 'any("needs_fix") && findings.conflicts.count == 0',
+      next: 'fix',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.aggregateType).toBe('any');
+    expect(normalized.aggregateConditionText).toBe('needs_fix');
+    expect(normalized.aggregateGuardCondition).toBe('findings.conflicts.count == 0');
+  });
+
   it('normalizes loop monitor judges in the extracted helper', () => {
     const normalized = normalizeLoopMonitors(
       [

@@ -26,6 +26,7 @@ import {
   isAggregateConditionExpression,
   isAiConditionExpression,
 } from './workflow-condition-expression.js';
+import { FindingContractConfigRawSchema } from './finding-schemas.js';
 import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
@@ -516,6 +517,7 @@ export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
+  finding_contract: FindingContractConfigRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsWithRefSchema,
   rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),

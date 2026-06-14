@@ -23,6 +23,10 @@ import { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
+import type { FindingLedgerStore } from '../findings/store.js';
+import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
+import { renderFindingLedgerInstructionSummary } from '../findings/context.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('workflow-engine');
 
@@ -45,6 +49,8 @@ interface WorkflowEngineSetupParams {
   runPaths: RunPaths;
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
+  refreshFindingsState: () => void;
+  findingLedgerStore?: FindingLedgerStore;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
   resetCycleDetector: () => void;
@@ -127,6 +133,27 @@ export function applyRuntimeEnvironment(
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
   const phaseRelay = createWorkflowPhaseRelay((event, ...args) => params.emitEvent(event, ...args));
   const getCurrentWorkflowStack = () => params.sharedRuntime.activeResumePoint?.stack;
+  const buildFindingContractInstructionContext = (
+    _step: WorkflowStep,
+    includeRawFindingsSchema: boolean,
+  ): FindingContractInstructionContext | undefined => {
+    if (!params.config.findingContract) {
+      return undefined;
+    }
+    if (!params.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+
+    return {
+      ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
+      ledgerSummary: renderFindingLedgerInstructionSummary(params.findingLedgerStore.loadLedger()),
+      ...(includeRawFindingsSchema
+        ? {
+            rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
+          }
+        : {}),
+    };
+  };
 
   const optionsBuilder = new OptionsBuilder(
     params.options,
@@ -139,6 +166,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.config.name,
     () => params.config.description,
     getCurrentWorkflowStack,
+    buildFindingContractInstructionContext,
   );
 
   const stepExecutor = new StepExecutor({
@@ -178,6 +206,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
+    refreshFindingsState: params.refreshFindingsState,
+    emitEvent: params.emitEvent,
+    findingContract: params.config.findingContract,
+    findingLedgerStore: params.findingLedgerStore,
+    getRunId: () => params.runPaths.slug,
     runQualityGates,
     ...phaseRelay,
   });

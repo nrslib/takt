@@ -44,6 +44,249 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow('missing-step');
   });
 
+  it('fails fast when findings rules are used without findingContract', () => {
+    const workflow = createWorkflow({
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in step "plan": findings.* conditions require finding_contract',
+    );
+  });
+
+  it('fails fast when aggregate guard findings rules are used without findingContract', () => {
+    const workflow = createWorkflow({
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved' }],
+            },
+          ],
+          rules: [
+            {
+              condition: 'all("approved")',
+              next: 'COMPLETE',
+              isAggregateCondition: true,
+              aggregateType: 'all',
+              aggregateConditionText: 'approved',
+              aggregateGuardCondition: 'findings.open.count == 0',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in step "plan": findings.* conditions require finding_contract',
+    );
+  });
+
+  it('accepts findings rules when findingContract is configured', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('accepts loop monitor judge findings rules when findingContract is configured', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      loopMonitors: [
+        {
+          cycle: ['plan', 'plan'],
+          threshold: 2,
+          judge: {
+            rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+          },
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('fails fast when parallel sub-step findings rules are used without findingContract', () => {
+    const workflow = createWorkflow({
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'findings.open.count == 0' }],
+            },
+          ],
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in parallel sub-step "review" of step "plan": findings.* conditions require finding_contract',
+    );
+  });
+
+  it('accepts parallel sub-step findings rules when findingContract is configured', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'findings.open.count == 0' }],
+            },
+          ],
+          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('fails fast when loop monitor judge findings rules are used without findingContract', () => {
+    const workflow = createWorkflow({
+      loopMonitors: [
+        {
+          cycle: ['plan', 'plan'],
+          threshold: 2,
+          judge: {
+            rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+          },
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid loop_monitor judge rule: findings.* conditions require finding_contract',
+    );
+  });
+
+  it('fails fast when findingContract parallel sub-steps already declare structuredOutput', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              structuredOutput: {
+                schemaRef: 'existing.schema',
+                schema: { type: 'object' },
+              },
+              rules: [{ condition: 'true', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid parallel sub-step "review" in step "plan": cannot combine finding_contract raw findings with structured_output',
+    );
+  });
+
   it('fails fast when workflow_call is configured without workflowCallResolver', () => {
     const workflow = createWorkflow({
       initialStep: 'delegate',

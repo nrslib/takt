@@ -115,7 +115,12 @@ function parseLiteral(raw: string, state: WorkflowState, item?: unknown): unknow
   if (value.startsWith('"') && value.endsWith('"')) {
     return value.slice(1, -1);
   }
-  if (value.startsWith('context.') || value.startsWith('structured.') || value.startsWith('effect.')) {
+  if (
+    value.startsWith('context.')
+    || value.startsWith('structured.')
+    || value.startsWith('effect.')
+    || value.startsWith('findings.')
+  ) {
     return resolveReference(value, state);
   }
   if (item !== undefined && value.startsWith('item.')) {

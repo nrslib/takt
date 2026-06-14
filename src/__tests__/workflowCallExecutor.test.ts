@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
-import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
+import type { AgentResponse, FindingLedger, WorkflowConfig, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
 import type { WorkflowCallChildEngine, WorkflowRunResult } from '../core/workflow/types.js';
 
 function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
@@ -116,6 +116,18 @@ describe('WorkflowCallExecutor', () => {
     expect(childEngine.on).toHaveBeenCalledWith('step:start', expect.any(Function));
     listeners.get('step:start')?.('payload');
     expect(emit).toHaveBeenCalledWith('step:start', 'payload');
+    expect(childEngine.on).toHaveBeenCalledWith('findings:ledger', expect.any(Function));
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: '2026-06-13T02:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    };
+    listeners.get('findings:ledger')?.(ledger);
+    expect(emit).toHaveBeenCalledWith('findings:ledger', ledger);
     expect(state.iteration).toBe(4);
     expect(state.personaSessions.get('coder')).toBe('session-2');
     expect(setActiveResumePoint).toHaveBeenCalledWith(step, 4);

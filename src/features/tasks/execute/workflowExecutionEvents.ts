@@ -117,6 +117,7 @@ export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
   const canReadResumePoint = (): boolean => typeof deps.engine.getResumePoint === 'function';
+  const canReadEngineState = (): boolean => typeof deps.engine.getState === 'function';
   const getResumePoint = (): WorkflowExecutionOptions['resumePoint'] => {
     if (!canReadResumePoint()) {
       return undefined;
@@ -136,6 +137,12 @@ export function bindWorkflowExecutionEvents(
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateResumePoint(state.lastResumePoint);
   };
+  const initialFindingsState = canReadEngineState() ? deps.engine.getState().findings : undefined;
+  deps.analyticsEmitter.seedFindingContractFindingIds(
+    initialFindingsState !== undefined
+      ? initialFindingsState.open.items.map((finding) => finding.id)
+      : [],
+  );
 
   deps.engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
     deps.runMetaManager.updatePhase(step.name, iteration, phase);
@@ -275,6 +282,10 @@ export function bindWorkflowExecutionEvents(
   deps.engine.on('step:report', (_step, filePath, fileName) => {
     reportStepFile(filePath, fileName, deps.out);
     deps.analyticsEmitter.onStepReport(_step, filePath);
+  });
+
+  deps.engine.on('findings:ledger', (ledger) => {
+    deps.analyticsEmitter.onFindingLedgerUpdated(ledger);
   });
 
   deps.engine.on('workflow:complete', (workflowState) => {

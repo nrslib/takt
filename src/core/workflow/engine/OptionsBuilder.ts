@@ -32,6 +32,7 @@ import type {
 import { buildSessionKey } from '../session-key.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 export class OptionsBuilder {
   constructor(
@@ -45,6 +46,10 @@ export class OptionsBuilder {
     private readonly getWorkflowName: () => string,
     private readonly getWorkflowDescription: () => string | undefined,
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
+    private readonly getFindingContractInstructionContext?: (
+      step: WorkflowStep,
+      includeRawFindingsSchema: boolean,
+    ) => FindingContractInstructionContext | undefined,
   ) {}
 
   private resolveEngineProviderModel(): StepProviderInfo {
@@ -184,6 +189,13 @@ export class OptionsBuilder {
     return buildPhase1WorkflowMeta(workflowMeta, processSafety);
   }
 
+  buildFindingContractInstructionContext(
+    step: WorkflowStep,
+    includeRawFindingsSchema: boolean,
+  ): FindingContractInstructionContext | undefined {
+    return this.getFindingContractInstructionContext?.(step, includeRawFindingsSchema);
+  }
+
   private resolveSupportedMaxTurns(
     step: WorkflowStep,
     maxTurns: number | undefined,
@@ -315,6 +327,8 @@ export class OptionsBuilder {
       onStream: this.engineOptions.onStream,
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
+      buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
+        this.buildFindingContractInstructionContext(step, includeRawFindingsSchema),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => buildSessionKey(step, runtime?.providerInfo?.provider),
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),

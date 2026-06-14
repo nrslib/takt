@@ -14,6 +14,7 @@ import type {
   WorkflowEffect,
   WorkflowSystemInput,
 } from './workflow-system-input-types.js';
+import type { FindingContractConfig, FindingsRuleContext } from './finding-types.js';
 
 export type {
   WorkflowPrListWhere,
@@ -25,6 +26,7 @@ export type {
   WorkflowTemplateReference,
   WorkflowEffectScalarReference,
 } from './workflow-system-input-types.js';
+export type { FindingContractConfig, FindingLedger, FindingsRuleContext } from './finding-types.js';
 export {
   normalizeWorkflowPrListWhere,
   workflowPrListWhereEquals,
@@ -69,6 +71,7 @@ export interface WorkflowRule {
   isAggregateCondition?: boolean;
   aggregateType?: 'all' | 'any';
   aggregateConditionText?: string | string[];
+  aggregateGuardCondition?: string;
 }
 
 export type WorkflowMaxSteps = number | 'infinite';
@@ -287,6 +290,7 @@ export interface WorkflowConfig {
   name: string;
   description?: string;
   subworkflow?: WorkflowSubworkflowConfig;
+  findingContract?: FindingContractConfig;
   schemas?: Record<string, string>;
   provider?: ProviderType;
   model?: string;
@@ -331,6 +335,7 @@ export interface WorkflowState {
   workflowName: string;
   currentStep: string;
   iteration: number;
+  findings?: FindingsRuleContext;
   stepOutputs: Map<string, AgentResponse>;
   structuredOutputs: Map<string, Record<string, unknown>>;
   systemContexts: Map<string, Record<string, unknown>>;

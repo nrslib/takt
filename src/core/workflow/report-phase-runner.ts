@@ -117,6 +117,7 @@ export async function runReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
+      findingContract: ctx.buildFindingContractInstructionContext?.(step, false),
     }).build();
     const firstAttemptOptions = currentSessionId
       ? ctx.buildResumeOptions(step, currentSessionId, {
@@ -165,6 +166,7 @@ export async function runReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
+      findingContract: ctx.buildFindingContractInstructionContext?.(step, false),
     }).build();
     const retryOptions = buildNewSessionRetryOptions(step, ctx);
     const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);

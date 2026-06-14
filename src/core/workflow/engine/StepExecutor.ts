@@ -43,6 +43,7 @@ import type {
   StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('step-executor');
 
@@ -115,6 +116,19 @@ export class StepExecutor {
   ): string {
     const safeStepName = slugify(stepName) || 'step';
     return `${safeStepName}.${stepIteration}.${timestamp}.md`;
+  }
+
+  private buildFindingContractInstructionContext(
+    step: WorkflowStep,
+    explicitContext: FindingContractInstructionContext | undefined,
+  ): FindingContractInstructionContext | undefined {
+    if (explicitContext !== undefined) {
+      return explicitContext;
+    }
+    return this.deps.optionsBuilder.buildFindingContractInstructionContext?.(
+      step,
+      false,
+    );
   }
 
   private writeSnapshot(
@@ -210,7 +224,7 @@ export class StepExecutor {
     ].join('\n');
   }
 
-  private normalizeStructuredOutput(
+  normalizeStructuredOutput(
     step: WorkflowStep,
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
@@ -347,6 +361,7 @@ export class StepExecutor {
     task: string,
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
+    findingContract?: FindingContractInstructionContext,
   ): string {
     this.ensurePreviousResponseSnapshot(state, step.name, stepIteration);
     const policySnapshot = this.writeFacetSnapshot(
@@ -397,6 +412,7 @@ export class StepExecutor {
       previousResponseSourcePath: state.previousResponseSourcePath,
       fallbackContext: fallbackContext ?? state.pendingFallback,
       workflowState: state,
+      findingContract: this.buildFindingContractInstructionContext(step, findingContract),
     }).build();
     if (fallbackContext === undefined) {
       state.pendingFallback = undefined;

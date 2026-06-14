@@ -9,6 +9,7 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { hasTagBasedRules } from './evaluation/rule-utils.js';
+import type { FindingContractInstructionContext } from './instruction/instruction-context.js';
 export { runReportPhase, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
@@ -52,6 +53,10 @@ export interface PhaseRunnerContext {
   /** Structured caller for phase 3 status judgment */
   structuredCaller: StructuredCaller;
   resolveStepProviderModel?: (step: WorkflowStep) => StepProviderInfo;
+  buildFindingContractInstructionContext?: (
+    step: WorkflowStep,
+    includeRawFindingsSchema: boolean,
+  ) => FindingContractInstructionContext | undefined;
   /** Callback for phase lifecycle logging */
   onPhaseStart?: (
     step: WorkflowStep,

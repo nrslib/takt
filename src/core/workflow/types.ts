@@ -20,6 +20,7 @@ import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
+import type { FindingLedger } from '../models/finding-types.js';
 
 import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
 export type {
@@ -161,6 +162,7 @@ export interface WorkflowEvents {
   'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo) => void;
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
+  'findings:ledger': (ledger: FindingLedger) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;

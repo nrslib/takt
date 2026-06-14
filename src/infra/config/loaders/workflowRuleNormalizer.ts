@@ -60,6 +60,9 @@ export function normalizeRule(rule: {
       isAggregateCondition: true,
       aggregateType: aggregateExpression.type,
       aggregateConditionText: conditions.length === 1 ? conditions[0]! : conditions,
+      ...(aggregateExpression.guardCondition !== undefined
+        ? { aggregateGuardCondition: aggregateExpression.guardCondition }
+        : {}),
     };
   }
 

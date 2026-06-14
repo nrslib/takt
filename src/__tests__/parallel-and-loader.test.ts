@@ -418,6 +418,22 @@ describe('all()/any() aggregate condition expression parsing', () => {
     });
   });
 
+  it('should match aggregate condition with deterministic guard', () => {
+    expect(parseAggregateConditionExpression('all("approved") && findings.open.count == 0')).toEqual({
+      type: 'all',
+      argsText: '"approved"',
+      guardCondition: 'findings.open.count == 0',
+    });
+  });
+
+  it('should keep escaped quotes inside aggregate arguments when locating the closing parenthesis', () => {
+    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && findings.open.count == 0')).toEqual({
+      type: 'any',
+      argsText: '"approved with \\"quoted ) text\\""',
+      guardCondition: 'findings.open.count == 0',
+    });
+  });
+
   it('should not match regular condition text', () => {
     expect(parseAggregateConditionExpression('approved')).toBeUndefined();
   });
