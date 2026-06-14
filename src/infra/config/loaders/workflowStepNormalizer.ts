@@ -43,6 +43,7 @@ export function normalizeProviderReference(
   model: RawStep['model'],
   providerOptions: RawStep['provider_options'],
   workflowDir: string,
+  context?: FacetResolutionContext,
 ): {
   provider: WorkflowStep['provider'];
   model: WorkflowStep['model'];
@@ -52,6 +53,7 @@ export function normalizeProviderReference(
   const normalizedProviderOptions = resolveWorkflowProviderOptions(
     providerOptions as (Record<string, unknown> & { $ref?: string }) | undefined,
     workflowDir,
+    context,
   );
   const providerReference = provider as ConfigProviderReference<NonNullable<WorkflowStep['provider']>>;
   if (typeof providerReference === 'string' || providerReference === undefined) {
@@ -77,12 +79,14 @@ export function normalizeProviderReference(
 function normalizePromotionEntry(
   entry: RawPromotionEntry,
   workflowDir: string,
+  context?: FacetResolutionContext,
 ): NonNullable<AgentWorkflowStep['promotion']>[number] {
   const normalizedProvider = normalizeProviderReference(
     entry.provider,
     entry.model,
     entry.provider_options,
     workflowDir,
+    context,
   );
   const aiExpression = entry.condition !== undefined
     ? parseAiConditionExpression(entry.condition)
@@ -108,8 +112,9 @@ function normalizePromotionEntry(
 function normalizePromotionEntries(
   entries: RawStep['promotion'],
   workflowDir: string,
+  context?: FacetResolutionContext,
 ): AgentWorkflowStep['promotion'] {
-  return entries?.map((entry) => normalizePromotionEntry(entry, workflowDir));
+  return entries?.map((entry) => normalizePromotionEntry(entry, workflowDir, context));
 }
 
 function validateWorkflowCallOverrides(
@@ -181,10 +186,10 @@ export function normalizeStepFromRaw(
       'knowledge',
       context,
   );
-  const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options, workflowDir);
-  const promotion = normalizePromotionEntries(step.promotion, workflowDir);
+  const normalizedProvider = normalizeProviderReference(step.provider, step.model, step.provider_options, workflowDir, context);
+  const promotion = normalizePromotionEntries(step.promotion, workflowDir, context);
   const normalizedOverrides = step.overrides
-    ? normalizeProviderReference(step.overrides.provider, step.overrides.model, step.overrides.provider_options, workflowDir)
+    ? normalizeProviderReference(step.overrides.provider, step.overrides.model, step.overrides.provider_options, workflowDir, context)
     : undefined;
   if (normalizedOverrides !== undefined) {
     validateWorkflowCallOverrides(normalizedOverrides);

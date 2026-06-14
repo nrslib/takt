@@ -43,7 +43,7 @@ steps:
         knowledge:
           $param: arch_knowledge
         provider_options:
-          $ref: provider-options/review-readonly.yaml
+          $ref: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -58,7 +58,7 @@ steps:
         policy: review
         knowledge: security
         provider_options:
-          $ref: provider-options/review-readonly.yaml
+          $ref: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -74,7 +74,7 @@ steps:
           - review
           - qa
         provider_options:
-          $ref: provider-options/review-readonly.yaml
+          $ref: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -93,7 +93,7 @@ steps:
           - unit-testing
           - e2e-testing
         provider_options:
-          $ref: provider-options/review-readonly.yaml
+          $ref: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -107,7 +107,7 @@ steps:
         persona: pure-reviewer
         policy: review
         provider_options:
-          $ref: provider-options/review-readonly.yaml
+          $ref: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -122,7 +122,7 @@ steps:
         policy: review
         pass_previous_response: false
         provider_options:
-          $ref: provider-options/review-readonly.yaml
+          $ref: review-readonly
         instruction: review-coding
         rules:
           - condition: approved
@@ -138,7 +138,7 @@ steps:
           - review
           - ai-antipattern
         provider_options:
-          $ref: provider-options/review-web.yaml
+          $ref: review-web
         instruction: ai-antipattern-review
         rules:
           - condition: approved
@@ -162,7 +162,7 @@ steps:
       - takt
       - architecture
     provider_options:
-      $ref: provider-options/edit.yaml
+      $ref: edit
     required_permission_mode: edit
     pass_previous_response: false
     rules:

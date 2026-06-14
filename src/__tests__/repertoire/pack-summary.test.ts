@@ -8,7 +8,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { summarizeFacetsByType, detectEditWorkflows, formatEditWorkflowWarnings } from '../../features/repertoire/pack-summary.js';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  PACKAGE_PROVIDER_OPTIONS_DIR,
+  summarizeFacetsByType,
+  detectEditWorkflows,
+  formatEditWorkflowWarnings,
+} from '../../features/repertoire/pack-summary.js';
+import { getScopedProviderOptionsCandidateKey } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
 
 // ---------------------------------------------------------------------------
 // summarizeFacetsByType
@@ -135,6 +144,37 @@ steps:
     expect(detectEditWorkflows(workflows)).toEqual([]);
   });
 
+  it('should not crash when steps, promotion, or parallel use object form', () => {
+    const workflows = [
+      { name: 'object-steps.yaml', content: 'steps: {}\n' },
+      {
+        name: 'object-promotion.yaml',
+        content: `
+steps:
+  - name: promote
+    required_permission_mode: bypassPermissions
+    promotion: {}
+`.trim(),
+      },
+      {
+        name: 'object-parallel.yaml',
+        content: `
+steps:
+  - name: reviewers
+    edit: true
+    parallel: {}
+`.trim(),
+      },
+    ];
+
+    const result = detectEditWorkflows(workflows);
+
+    expect(result.map((workflow) => workflow.name)).toEqual([
+      'object-promotion.yaml',
+      'object-parallel.yaml',
+    ]);
+  });
+
   it('should return multiple results when multiple workflows have edit: true', () => {
     const workflows = [
       {
@@ -250,6 +290,320 @@ steps:
     expect(result[0]!.allowedTools).toHaveLength(2);
   });
 
+  it('should respect empty step allowed_tools as an override of workflow_config tools', () => {
+    const content = `
+workflow_config:
+  provider_options:
+    claude:
+      allowed_tools: [Read]
+steps:
+  - name: review
+    edit: true
+    provider_options:
+      claude:
+        allowed_tools: []
+`.trim();
+    const result = detectEditWorkflows([{ name: 'workflow-level-override.yaml', content }]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.allowedTools).toEqual([]);
+  });
+
+  it('should detect provider_options named $ref tools from package provider-options presets', () => {
+    const content = `
+workflow_config:
+  provider_options:
+    $ref: edit
+steps:
+  - name: plan
+    edit: false
+`.trim();
+    const result = detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [{
+        name: 'edit.yaml',
+        relativePath: 'provider-options/edit.yaml',
+        content: 'claude:\n  allowed_tools: [Bash, Write]\n',
+      }],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Write']));
+  });
+
+  it('should detect provider_options path $ref tools from workflow-relative presets', () => {
+    const content = `
+steps:
+  - name: plan
+    provider_options:
+      $ref: provider-options/edit.yaml
+`.trim();
+    const result = detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [{
+        name: 'edit.yaml',
+        relativePath: 'workflows/provider-options/edit.yaml',
+        content: 'claude:\n  allowed_tools: [Bash, Edit]\n',
+      }],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Edit']));
+  });
+
+  it('should throw when provider_options named $ref is missing from package provider-options presets', () => {
+    const content = `
+steps:
+  - name: plan
+    provider_options:
+      $ref: missing
+`.trim();
+
+    expect(() => detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [],
+    )).toThrow(/provider_options\.\$ref not found: missing/);
+  });
+
+  it('should throw when provider_options $ref contains a circular reference', () => {
+    const content = `
+steps:
+  - name: plan
+    provider_options:
+      $ref: first
+`.trim();
+
+    expect(() => detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [
+        { name: 'first.yaml', relativePath: 'provider-options/first.yaml', content: '$ref: second\n' },
+        { name: 'second.yaml', relativePath: 'provider-options/second.yaml', content: '$ref: first\n' },
+      ],
+    )).toThrow(/provider_options\.\$ref contains a circular reference/);
+  });
+
+  it('should not resolve nested provider-options files by basename as bare named $ref', () => {
+    const content = `
+steps:
+  - name: plan
+    provider_options:
+      $ref: edit
+`.trim();
+
+    expect(() => detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [{
+        name: 'edit.yaml',
+        relativePath: 'provider-options/nested/edit.yaml',
+        content: 'claude:\n  allowed_tools: [Bash]\n',
+      }],
+    )).toThrow(/provider_options\.\$ref not found: edit/);
+  });
+
+  it('should detect provider_options named $ref tools from promotion entries and workflow_call overrides', () => {
+    const content = `
+steps:
+  - name: implement
+    promotion:
+      - at: 2
+        provider_options:
+          $ref: promotion-edit
+  - name: delegate
+    kind: workflow_call
+    call: child
+    overrides:
+      provider_options:
+        $ref: call-edit
+`.trim();
+
+    const result = detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [
+        {
+          name: 'promotion-edit.yaml',
+          relativePath: 'provider-options/promotion-edit.yaml',
+          content: 'claude:\n  allowed_tools: [Bash]\n',
+        },
+        {
+          name: 'call-edit.yaml',
+          relativePath: 'provider-options/call-edit.yaml',
+          content: 'claude:\n  allowed_tools: [Write]\n',
+        },
+      ],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.hasEdit).toBe(false);
+    expect(result[0]!.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Write']));
+    expect(result[0]!.allowedTools).toHaveLength(2);
+  });
+
+  it('should detect provider_options named $ref tools from parallel sub-steps', () => {
+    const content = `
+steps:
+  - name: reviewers
+    parallel:
+      - name: coding-review
+        provider_options:
+          $ref: edit
+`.trim();
+
+    const result = detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [{
+        name: 'edit.yaml',
+        relativePath: 'provider-options/edit.yaml',
+        content: 'claude:\n  allowed_tools: [Bash]\n',
+      }],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.hasEdit).toBe(false);
+    expect(result[0]!.allowedTools).toEqual(['Bash']);
+  });
+
+  it('should detect provider_options named $ref tools from fallback provider-options candidate directories', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-pack-summary-provider-options-fallback-'));
+    try {
+      const builtinProviderOptionsDir = join(tempDir, 'builtins', 'ja', 'provider-options');
+      mkdirSync(builtinProviderOptionsDir, { recursive: true });
+      writeFileSync(join(builtinProviderOptionsDir, 'review-readonly.yaml'), 'claude:\n  allowed_tools: [Read]\n');
+
+      const content = `
+steps:
+  - name: review
+    provider_options:
+      $ref: review-readonly
+`.trim();
+
+      const result = detectEditWorkflows(
+        [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+        [],
+        { providerOptionsCandidateDirs: [builtinProviderOptionsDir] },
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.allowedTools).toEqual(['Read']);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should prefer package provider-options over fallback candidate directories', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-pack-summary-provider-options-priority-'));
+    try {
+      const builtinProviderOptionsDir = join(tempDir, 'builtins', 'ja', 'provider-options');
+      mkdirSync(builtinProviderOptionsDir, { recursive: true });
+      writeFileSync(join(builtinProviderOptionsDir, 'review.yaml'), 'claude:\n  allowed_tools: [Read]\n');
+
+      const content = `
+steps:
+  - name: review
+    provider_options:
+      $ref: review
+`.trim();
+
+      const result = detectEditWorkflows(
+        [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+        [{
+          name: 'review.yaml',
+          relativePath: 'provider-options/review.yaml',
+          content: 'claude:\n  allowed_tools: [Bash]\n',
+        }],
+        { providerOptionsCandidateDirs: [builtinProviderOptionsDir] },
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.allowedTools).toEqual(['Bash']);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should resolve scoped provider_options refs when a context is provided', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-pack-summary-provider-options-scope-'));
+    try {
+      const scopedProviderOptionsDir = join(tempDir, '@nrslib', 'takt-review', 'provider-options');
+      mkdirSync(scopedProviderOptionsDir, { recursive: true });
+      writeFileSync(join(scopedProviderOptionsDir, 'edit.yaml'), 'claude:\n  allowed_tools: [Bash]\n');
+
+      const content = `
+steps:
+  - name: review
+    provider_options:
+      $ref: "@nrslib/takt-review/edit"
+`.trim();
+
+      const result = detectEditWorkflows(
+        [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+        [],
+        {
+          context: {
+            lang: 'ja',
+            repertoireDir: tempDir,
+          },
+        },
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.allowedTools).toEqual(['Bash']);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should resolve self scoped provider_options refs from package provider-options presets', () => {
+    const content = `
+steps:
+  - name: review
+    provider_options:
+      $ref: "@nrslib/takt-review/edit"
+`.trim();
+
+    const result = detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [{
+        name: 'edit.yaml',
+        relativePath: 'provider-options/edit.yaml',
+        content: 'claude:\n  allowed_tools: [Bash]\n',
+      }],
+      {
+        providerOptionsScopedCandidateDirs: new Map([
+          [getScopedProviderOptionsCandidateKey('nrslib', 'takt-review'), [PACKAGE_PROVIDER_OPTIONS_DIR]],
+        ]),
+        context: {
+          lang: 'ja',
+          repertoireDir: '/not-installed-yet',
+        },
+      },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.allowedTools).toEqual(['Bash']);
+  });
+
+  it('should detect opencode provider_options named $ref tools from package provider-options presets', () => {
+    const content = `
+steps:
+  - name: run
+    provider_options:
+      $ref: opencode-edit
+`.trim();
+
+    const result = detectEditWorkflows(
+      [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
+      [{
+        name: 'opencode-edit.yaml',
+        relativePath: 'provider-options/opencode-edit.yaml',
+        content: 'opencode:\n  allowed_tools: [read, bash]\n',
+      }],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.allowedTools).toEqual(expect.arrayContaining(['read', 'bash']));
+    expect(result[0]!.allowedTools).toHaveLength(2);
+  });
+
   it('should exclude a workflow with edit: false and empty provider_options.claude.allowed_tools', () => {
     const content = `
 steps:
@@ -299,7 +653,7 @@ describe('formatEditWorkflowWarnings', () => {
       allowedTools: ['Bash', 'Edit'],
       requiredPermissionModes: [],
     });
-    expect(warnings).toEqual(['\n   ⚠ workflow.yaml: edit: true, provider_options.claude.allowed_tools: [Bash, Edit]']);
+    expect(warnings).toEqual(['\n   ⚠ workflow.yaml: edit: true, provider_options.allowed_tools: [Bash, Edit]']);
   });
 
   it('should format provider_options.claude.allowed_tools-only warning when edit:false', () => {
@@ -309,7 +663,7 @@ describe('formatEditWorkflowWarnings', () => {
       allowedTools: ['Bash'],
       requiredPermissionModes: [],
     });
-    expect(warnings).toEqual(['\n   ⚠ runner.yaml: provider_options.claude.allowed_tools: [Bash]']);
+    expect(warnings).toEqual(['\n   ⚠ runner.yaml: provider_options.allowed_tools: [Bash]']);
   });
 
   it('should return empty array when edit:false and no provider_options.claude.allowed_tools and no required_permission_mode', () => {
@@ -340,7 +694,7 @@ describe('formatEditWorkflowWarnings', () => {
       requiredPermissionModes: ['bypassPermissions'],
     });
     expect(warnings).toEqual([
-      '\n   ⚠ combo.yaml: provider_options.claude.allowed_tools: [Bash]',
+      '\n   ⚠ combo.yaml: provider_options.allowed_tools: [Bash]',
       '\n   ⚠ combo.yaml: required_permission_mode: bypassPermissions',
     ]);
   });

@@ -5,8 +5,10 @@
  *
  * Scanner searches for @scope package references in:
  *   - {root}/workflows/**\/*.yaml
+ *   - {root}/provider-options/**\/*.yaml
  *   - {root}/preferences/workflow-categories.yaml
  *   - {root}/.takt/workflows/**\/*.yaml (project-level)
+ *   - {root}/.takt/provider-options/**\/*.yaml (project-level)
  *
  * Detection criteria:
  *   - Matches "@{owner}/{repo}" substring in file contents
@@ -76,6 +78,28 @@ describe('repertoire reference integrity: detection', () => {
     const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
 
     expect(refs.some((r) => r.filePath === projFile)).toBe(true);
+  });
+
+  it('should detect @scope reference in global provider-options YAML', () => {
+    const providerOptionsDir = join(tempDir, 'provider-options');
+    mkdirSync(providerOptionsDir, { recursive: true });
+    const providerOptionsFile = join(providerOptionsDir, 'review.yaml');
+    writeFileSync(providerOptionsFile, 'claude:\n  allowed_tools: ["@nrslib/takt-ensemble-fixture/tool"]');
+
+    const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
+
+    expect(refs.some((r) => r.filePath === providerOptionsFile)).toBe(true);
+  });
+
+  it('should detect @scope reference in project-level provider-options YAML', () => {
+    const providerOptionsDir = join(tempDir, '.takt', 'provider-options');
+    mkdirSync(providerOptionsDir, { recursive: true });
+    const providerOptionsFile = join(providerOptionsDir, 'review.yaml');
+    writeFileSync(providerOptionsFile, '$ref: "@nrslib/takt-ensemble-fixture/review-readonly"');
+
+    const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
+
+    expect(refs.some((r) => r.filePath === providerOptionsFile)).toBe(true);
   });
 });
 

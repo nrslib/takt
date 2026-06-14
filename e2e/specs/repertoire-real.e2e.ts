@@ -417,7 +417,7 @@ describe('E2E: takt repertoire (real GitHub fixtures)', () => {
 
   it.todo('should reject takt-repertoire.yaml with path traversal via ".." segments');
 
-  it.todo('should reject package with neither facets/ nor workflows/ directory');
+  it.todo('should reject package with no supported content directory');
 
   it.todo('should reject takt-repertoire.yaml with min_version "1.0" (missing patch segment)');
 

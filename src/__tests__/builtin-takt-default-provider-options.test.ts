@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
@@ -51,10 +52,10 @@ const EDIT_PROVIDER_OPTIONS = {
   claude: { allowedTools: EDIT_CLAUDE_TOOLS },
   opencode: { allowedTools: EDIT_OPENCODE_TOOLS },
 };
-const REVIEW_READONLY_REF = { $ref: 'provider-options/review-readonly.yaml' };
-const REVIEW_WEB_REF = { $ref: 'provider-options/review-web.yaml' };
-const REVIEW_FILES_REF = { $ref: 'provider-options/review-files.yaml' };
-const EDIT_REF = { $ref: 'provider-options/edit.yaml' };
+const REVIEW_READONLY_REF = { $ref: 'review-readonly' };
+const REVIEW_WEB_REF = { $ref: 'review-web' };
+const REVIEW_FILES_REF = { $ref: 'review-files' };
+const EDIT_REF = { $ref: 'edit' };
 
 function workflowDir(locale: 'en' | 'ja'): string {
   return join(process.cwd(), 'builtins', locale, 'workflows');
@@ -66,20 +67,37 @@ function loadBuiltinWorkflow(locale: 'en' | 'ja', name: string): BuiltinWorkflow
 }
 
 function loadProviderOptionsRef(locale: 'en' | 'ja', name: string): ProviderOptionsRefRaw {
-  const filePath = join(workflowDir(locale), 'provider-options', name);
+  const filePath = join(process.cwd(), 'builtins', locale, 'provider-options', name);
   return parseYaml(readFileSync(filePath, 'utf-8')) as ProviderOptionsRefRaw;
 }
 
-function normalizeBuiltinWorkflow(workflow: BuiltinWorkflowRaw, locale: 'en' | 'ja') {
-  return normalizeWorkflowConfig({
-    ...workflow,
-    knowledge: {
-      ...workflow.knowledge,
-      takt: 'placeholder',
-      architecture: 'placeholder',
-      'task-decomposition': 'placeholder',
-    },
-  }, workflowDir(locale));
+function normalizeBuiltinWorkflow(workflow: BuiltinWorkflowRaw, locale: 'en' | 'ja', projectDir?: string) {
+  const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-builtin-provider-options-global-'));
+  const originalConfigDir = process.env.TAKT_CONFIG_DIR;
+  try {
+    process.env.TAKT_CONFIG_DIR = globalConfigDir;
+    const context = {
+      lang: locale,
+      ...(projectDir ? { projectDir } : {}),
+      workflowDir: workflowDir(locale),
+    };
+    return normalizeWorkflowConfig({
+      ...workflow,
+      knowledge: {
+        ...workflow.knowledge,
+        takt: 'placeholder',
+        architecture: 'placeholder',
+        'task-decomposition': 'placeholder',
+      },
+    }, workflowDir(locale), context);
+  } finally {
+    if (originalConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalConfigDir;
+    }
+    rmSync(globalConfigDir, { recursive: true, force: true });
+  }
 }
 
 describe('builtin takt-default provider_options refs', () => {
@@ -136,6 +154,28 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalizedSteps.get('ai-antipattern-no-fix')?.providerOptions).toMatchObject(
         REVIEW_FILES_PROVIDER_OPTIONS,
       );
+    });
+
+    it(`${locale} builtin workflow provider_options refs should be shadowed by project presets`, () => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-builtin-provider-options-shadow-'));
+      try {
+        const projectProviderOptionsDir = join(projectDir, '.takt', 'provider-options');
+        mkdirSync(projectProviderOptionsDir, { recursive: true });
+        writeFileSync(
+          join(projectProviderOptionsDir, 'review-files.yaml'),
+          'claude:\n  allowed_tools:\n    - Write\nopencode:\n  allowed_tools:\n    - write\n',
+          'utf-8',
+        );
+
+        const workflow = loadBuiltinWorkflow(locale, 'draft.yaml');
+        const normalized = normalizeBuiltinWorkflow(workflow, locale, projectDir);
+        const normalizedSteps = new Map(normalized.steps.map((step) => [step.name, step]));
+
+        expect(normalizedSteps.get('ai-antipattern-no-fix')?.providerOptions?.claude?.allowedTools).toEqual(['Write']);
+        expect(normalizedSteps.get('ai-antipattern-no-fix')?.providerOptions?.opencode?.allowedTools).toEqual(['write']);
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
     });
 
     it(`${locale} peer-review subworkflow should resolve provider_options refs for OpenCode tools`, () => {

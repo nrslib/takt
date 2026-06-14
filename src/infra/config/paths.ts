@@ -44,6 +44,10 @@ export function getGlobalSchemasDir(): string {
   return join(getGlobalConfigDir(), 'schemas');
 }
 
+export function getGlobalProviderOptionsDir(): string {
+  return join(getGlobalConfigDir(), 'provider-options');
+}
+
 /** Get takt global logs directory */
 export function getGlobalLogsDir(): string {
   return join(getGlobalConfigDir(), 'logs');
@@ -57,6 +61,10 @@ export function getGlobalConfigPath(): string {
 /** Get builtin workflows directory (builtins/{lang}/workflows) */
 export function getBuiltinWorkflowsDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'workflows');
+}
+
+export function getBuiltinProviderOptionsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'provider-options');
 }
 
 export function isBuiltinWorkflowPath(filePath: string): boolean {
@@ -82,6 +90,10 @@ export function getProjectWorkflowsDir(projectDir: string): string {
 /** Get project schemas directory (.takt/schemas in project) */
 export function getProjectSchemasDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'schemas');
+}
+
+export function getProjectProviderOptionsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'provider-options');
 }
 
 /** Get project config file path */
@@ -146,6 +158,11 @@ export function getRepertoirePackageDir(owner: string, repo: string): string {
 export function getRepertoireFacetDir(owner: string, repo: string, facetType: FacetType, repertoireDir?: string): string {
   const base = repertoireDir ?? getRepertoireDir();
   return join(base, `@${owner}`, repo, 'facets', facetType);
+}
+
+export function getRepertoireProviderOptionsDir(owner: string, repo: string, repertoireDir?: string): string {
+  const base = repertoireDir ?? getRepertoireDir();
+  return join(base, `@${owner}`, repo, 'provider-options');
 }
 
 /** Validate path is safe (no directory traversal) */
