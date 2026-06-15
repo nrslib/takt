@@ -170,7 +170,7 @@ describe('repertoireAddCommand temporary directory handling', () => {
   it('should pass provider-options package YAMLs to edit workflow detection', async () => {
     const workflowPath = `${secureTempDir}/extract/workflows/workflow.yaml`;
     const providerOptionsPath = `${secureTempDir}/extract/provider-options/edit.yaml`;
-    const workflowYaml = 'steps:\n  - name: run\n    provider_options:\n      $ref: edit\n';
+    const workflowYaml = 'steps:\n  - name: run\n    provider_options:\n      extends: edit\n';
     const providerOptionsYaml = 'claude:\n  allowed_tools: [Bash]\n';
 
     mockCollectCopyTargets.mockReturnValue([

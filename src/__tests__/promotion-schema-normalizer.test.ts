@@ -369,7 +369,7 @@ describe('normalizeWorkflowConfig promotion', () => {
     });
   });
 
-  it('rejects provider_options $ref resolving to empty options as the only promotion target', () => {
+  it('rejects provider_options extends resolving to empty options as the only promotion target', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-promotion-empty-provider-options-ref-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -385,7 +385,7 @@ describe('normalizeWorkflowConfig promotion', () => {
               {
                 at: 1,
                 provider_options: {
-                  $ref: 'provider-options/empty.yaml',
+                  extends: 'provider-options/empty.yaml',
                 },
               },
             ],

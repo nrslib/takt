@@ -332,7 +332,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     });
   });
 
-  it('provider_options の $ref を workflowDir 相対で解決し inline で上書きできる', () => {
+  it('provider_options の extends を workflowDir 相対で解決し inline で上書きできる', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -350,7 +350,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'provider-options/review-readonly.yaml',
+            extends: 'provider-options/review-readonly.yaml',
           },
         },
         steps: [
@@ -361,7 +361,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
           {
             name: 'override',
             provider_options: {
-              $ref: 'provider-options/review-readonly.yaml',
+              extends: 'provider-options/review-readonly.yaml',
               opencode: {
                 allowed_tools: ['read', 'edit', 'bash'],
               },
@@ -390,7 +390,27 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref は project provider-options を global より優先する', () => {
+  it('provider_options の削除済み参照キーは reject する', () => {
+    const removedReferenceKey = `$${'ref'}`;
+    const raw = {
+      name: 'removed-provider-options-reference-key',
+      workflow_config: {
+        provider_options: {
+          [removedReferenceKey]: 'provider-options/review-readonly.yaml',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => normalizeWorkflowConfig(raw, process.cwd())).toThrow(/Unrecognized key/);
+  });
+
+  it('provider_options の名前 extends は project provider-options を global より優先する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-project-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-'));
     try {
@@ -418,7 +438,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-project',
         workflow_config: {
           provider_options: {
-            $ref: 'review-readonly',
+            extends: 'review-readonly',
           },
         },
         steps: [
@@ -448,7 +468,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref は project provider-options の .yml も解決する', () => {
+  it('provider_options の名前 extends は project provider-options の .yml も解決する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-yml-project-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-yml-global-'));
     try {
@@ -465,7 +485,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-yml',
         workflow_config: {
           provider_options: {
-            $ref: 'review-yml',
+            extends: 'review-yml',
           },
         },
         steps: [
@@ -492,7 +512,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref は project に無い場合 global provider-options を解決する', () => {
+  it('provider_options の名前 extends は project に無い場合 global provider-options を解決する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-global-config-'));
     try {
@@ -511,7 +531,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-global',
         workflow_config: {
           provider_options: {
-            $ref: 'review-readonly',
+            extends: 'review-readonly',
           },
         },
         steps: [
@@ -538,7 +558,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref は project/global に無い場合 builtin provider-options を解決する', () => {
+  it('provider_options の名前 extends は project/global に無い場合 builtin provider-options を解決する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-builtin-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-builtin-global-'));
     try {
@@ -548,7 +568,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-builtin',
         workflow_config: {
           provider_options: {
-            $ref: 'review-files',
+            extends: 'review-files',
           },
         },
         steps: [
@@ -576,7 +596,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref は inline provider_options で leaf 上書きできる', () => {
+  it('provider_options の名前 extends は inline provider_options で leaf 上書きできる', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-inline-'));
     try {
       const workflowDir = join(projectDir, '.takt', 'workflows');
@@ -597,7 +617,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-inline',
         workflow_config: {
           provider_options: {
-            $ref: 'review-readonly',
+            extends: 'review-readonly',
             opencode: {
               allowed_tools: ['read', 'bash'],
             },
@@ -627,7 +647,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('repertoire workflow 内の provider_options 名前 $ref は package-local provider-options を最優先する', () => {
+  it('repertoire workflow 内の provider_options 名前 extends は package-local provider-options を最優先する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-package-project-'));
     const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-package-repertoire-'));
     try {
@@ -655,7 +675,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'package-local-provider-options',
         workflow_config: {
           provider_options: {
-            $ref: 'review',
+            extends: 'review',
           },
         },
         steps: [
@@ -682,7 +702,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の @scope $ref は repertoire package の provider-options を解決する', () => {
+  it('provider_options の @scope extends は repertoire package の provider-options を解決する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-project-'));
     const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-repertoire-'));
     try {
@@ -701,7 +721,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'scope-provider-options',
         workflow_config: {
           provider_options: {
-            $ref: '@nrslib/takt-review/review-readonly',
+            extends: '@nrslib/takt-review/review-readonly',
           },
         },
         steps: [
@@ -728,7 +748,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の @scope $ref 内の相対 $ref は scoped preset のディレクトリ基準で解決する', () => {
+  it('provider_options の @scope extends 内の相対 extends は scoped preset のディレクトリ基準で解決する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-relative-project-'));
     const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-relative-repertoire-'));
     try {
@@ -741,7 +761,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         '    - ScopeBaseRead',
       ]);
       writeProviderOptionsPreset(providerOptionsDir, 'review', [
-        '$ref: base.yaml',
+        'extends: base.yaml',
         'opencode:',
         '  allowed_tools:',
         '    - scope-review',
@@ -750,7 +770,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'scoped-provider-options-relative-ref',
         workflow_config: {
           provider_options: {
-            $ref: '@nrslib/takt-review/review',
+            extends: '@nrslib/takt-review/review',
           },
         },
         steps: [
@@ -778,7 +798,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref が candidate dir 内 symlink 経由で外部実体を指す場合は reject する', () => {
+  it('provider_options の名前 extends が candidate dir 内 symlink 経由で外部実体を指す場合は reject する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-symlink-project-'));
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-symlink-outside-'));
     try {
@@ -793,7 +813,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-symlink',
         workflow_config: {
           provider_options: {
-            $ref: 'linked',
+            extends: 'linked',
           },
         },
         steps: [
@@ -816,7 +836,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref が symlink の project provider-options directory を使う場合は reject する', () => {
+  it('provider_options の名前 extends が symlink の project provider-options directory を使う場合は reject する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-dir-symlink-project-'));
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-dir-symlink-outside-'));
     try {
@@ -833,7 +853,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-dir-symlink',
         workflow_config: {
           provider_options: {
-            $ref: 'linked-dir',
+            extends: 'linked-dir',
           },
         },
         steps: [
@@ -856,7 +876,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の @scope $ref が package provider-options 内 symlink 経由で外部実体を指す場合は reject する', () => {
+  it('provider_options の @scope extends が package provider-options 内 symlink 経由で外部実体を指す場合は reject する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-symlink-project-'));
     const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-symlink-repertoire-'));
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-symlink-outside-'));
@@ -872,7 +892,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'scoped-provider-options-symlink',
         workflow_config: {
           provider_options: {
-            $ref: '@nrslib/takt-review/linked',
+            extends: '@nrslib/takt-review/linked',
           },
         },
         steps: [
@@ -896,7 +916,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の @scope $ref が symlink の package provider-options directory を使う場合は reject する', () => {
+  it('provider_options の @scope extends が symlink の package provider-options directory を使う場合は reject する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-dir-symlink-project-'));
     const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-dir-symlink-repertoire-'));
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-dir-symlink-outside-'));
@@ -915,7 +935,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'scoped-provider-options-dir-symlink',
         workflow_config: {
           provider_options: {
-            $ref: '@nrslib/takt-review/linked-dir',
+            extends: '@nrslib/takt-review/linked-dir',
           },
         },
         steps: [
@@ -939,7 +959,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref が存在しない場合は参照名を含めて reject する', () => {
+  it('provider_options の名前 extends が存在しない場合は参照名を含めて reject する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-missing-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-missing-global-'));
     try {
@@ -949,7 +969,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'missing-named-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'missing-preset',
+            extends: 'missing-preset',
           },
         },
         steps: [
@@ -965,14 +985,14 @@ describe('normalizeWorkflowConfig provider_options', () => {
         projectDir,
         workflowDir,
         repertoireDir: join(projectDir, '.takt', 'repertoire'),
-      }))).toThrow(/provider_options\.\$ref not found: missing-preset/);
+      }))).toThrow(/provider_options\.extends not found: missing-preset/);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
     }
   });
 
-  it('provider_options の @scope $ref が存在しない場合は scope ref を含めて reject する', () => {
+  it('provider_options の @scope extends が存在しない場合は scope ref を含めて reject する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-missing-project-'));
     const repertoireDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-missing-repertoire-'));
     try {
@@ -982,7 +1002,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'missing-scoped-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: '@nrslib/takt-review/missing',
+            extends: '@nrslib/takt-review/missing',
           },
         },
         steps: [
@@ -998,14 +1018,14 @@ describe('normalizeWorkflowConfig provider_options', () => {
         projectDir,
         workflowDir,
         repertoireDir,
-      })).toThrow(/provider_options\.\$ref not found: @nrslib\/takt-review\/missing/);
+      })).toThrow(/provider_options\.extends not found: @nrslib\/takt-review\/missing/);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(repertoireDir, { recursive: true, force: true });
     }
   });
 
-  it('provider_options の @scope $ref は repertoireDir がない場合 reject する', () => {
+  it('provider_options の @scope extends は repertoireDir がない場合 reject する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-scope-no-repertoire-'));
     try {
       const workflowDir = join(projectDir, '.takt', 'workflows');
@@ -1014,7 +1034,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'scope-provider-options-without-repertoire',
         workflow_config: {
           provider_options: {
-            $ref: '@nrslib/takt-review/review-readonly',
+            extends: '@nrslib/takt-review/review-readonly',
           },
         },
         steps: [
@@ -1035,7 +1055,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の nested 名前 $ref は参照元層以降だけを探索する', () => {
+  it('provider_options の nested 名前 extends は参照元層以降だけを探索する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-nested-layer-project-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-nested-layer-global-'));
     try {
@@ -1047,7 +1067,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         '    - ProjectRead',
       ]);
       writeProviderOptionsPreset(join(globalConfigDir, 'provider-options'), 'review', [
-        '$ref: base',
+        'extends: base',
         'opencode:',
         '  allowed_tools:',
         '    - global-review',
@@ -1061,7 +1081,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'nested-provider-options-layer-boundary',
         workflow_config: {
           provider_options: {
-            $ref: 'review',
+            extends: 'review',
           },
         },
         steps: [
@@ -1089,7 +1109,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の名前 $ref を workflow/step/promotion/workflow_call/parallel に配線する', () => {
+  it('provider_options の名前 extends を workflow/step/promotion/workflow_call/parallel に配線する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-name-wire-'));
     try {
       const workflowDir = join(projectDir, '.takt', 'workflows');
@@ -1122,7 +1142,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'provider-options-name-wiring',
         workflow_config: {
           provider_options: {
-            $ref: 'workflow-preset',
+            extends: 'workflow-preset',
           },
         },
         steps: [
@@ -1130,13 +1150,13 @@ describe('normalizeWorkflowConfig provider_options', () => {
             name: 'implement',
             instruction: '{task}',
             provider_options: {
-              $ref: 'step-preset',
+              extends: 'step-preset',
             },
             promotion: [
               {
                 at: 2,
                 provider_options: {
-                  $ref: 'promotion-preset',
+                  extends: 'promotion-preset',
                 },
               },
             ],
@@ -1147,7 +1167,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
             call: 'child',
             overrides: {
               provider_options: {
-                $ref: 'call-preset',
+                extends: 'call-preset',
               },
             },
             rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
@@ -1160,7 +1180,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
                 name: 'parallel-review',
                 instruction: '{task}',
                 provider_options: {
-                  $ref: 'parallel-preset',
+                  extends: 'parallel-preset',
                 },
               },
             ],
@@ -1209,7 +1229,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('loadWorkflowFromFile は project provider-options の名前 $ref を workflow loader context で解決する', () => {
+  it('loadWorkflowFromFile は project provider-options の名前 extends を workflow loader context で解決する', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-loader-project-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-loader-global-'));
     try {
@@ -1229,7 +1249,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         'name: named-provider-options-loader',
         'workflow_config:',
         '  provider_options:',
-        '    $ref: review-readonly',
+        '    extends: review-readonly',
         'steps:',
         '  - name: plan',
         '    instruction: "{task}"',
@@ -1249,14 +1269,14 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の $ref が存在しない場合は参照パスを含めて reject する', () => {
+  it('provider_options の extends が存在しない場合は参照パスを含めて reject する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-missing-'));
     try {
       const raw = {
         name: 'missing-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'provider-options/missing.yaml',
+            extends: 'provider-options/missing.yaml',
           },
         },
         steps: [
@@ -1274,7 +1294,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の $ref 先も inline と同じ schema で検証する', () => {
+  it('provider_options の extends 先も inline と同じ schema で検証する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-schema-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -1286,7 +1306,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'invalid-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'provider-options/invalid.yaml',
+            extends: 'provider-options/invalid.yaml',
           },
         },
         steps: [
@@ -1303,7 +1323,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の nested $ref を解決し inline で上書きできる', () => {
+  it('provider_options の nested extends を解決し inline で上書きできる', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-nested-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -1316,7 +1336,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         '    - read',
       ].join('\n'));
       writeFileSync(join(tempDir, 'provider-options', 'review.yaml'), [
-        '$ref: base.yaml',
+        'extends: base.yaml',
         'opencode:',
         '  allowed_tools:',
         '    - read',
@@ -1326,7 +1346,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'nested-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'provider-options/review.yaml',
+            extends: 'provider-options/review.yaml',
             opencode: {
               allowed_tools: ['read', 'bash'],
             },
@@ -1351,17 +1371,17 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の $ref が循環参照する場合は reject する', () => {
+  it('provider_options の extends が循環参照する場合は reject する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-circular-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
-      writeFileSync(join(tempDir, 'provider-options', 'a.yaml'), '$ref: b.yaml\n');
-      writeFileSync(join(tempDir, 'provider-options', 'b.yaml'), '$ref: a.yaml\n');
+      writeFileSync(join(tempDir, 'provider-options', 'a.yaml'), 'extends: b.yaml\n');
+      writeFileSync(join(tempDir, 'provider-options', 'b.yaml'), 'extends: a.yaml\n');
       const raw = {
         name: 'circular-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'provider-options/a.yaml',
+            extends: 'provider-options/a.yaml',
           },
         },
         steps: [
@@ -1378,7 +1398,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の $ref 先 YAML が object でない場合は reject する', () => {
+  it('provider_options の extends 先 YAML が object でない場合は reject する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-non-object-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -1387,7 +1407,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'non-object-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'provider-options/scalar.yaml',
+            extends: 'provider-options/scalar.yaml',
           },
         },
         steps: [
@@ -1404,7 +1424,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の $ref に absolute path を指定したら reject する', () => {
+  it('provider_options の extends に absolute path を指定したら reject する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-absolute-'));
     try {
       const secretPath = join(tempDir, 'secret.yaml');
@@ -1413,7 +1433,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'absolute-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: secretPath,
+            extends: secretPath,
           },
         },
         steps: [
@@ -1430,7 +1450,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の $ref が workflowDir 外へ出る場合は reject する', () => {
+  it('provider_options の extends が workflowDir 外へ出る場合は reject する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-root-'));
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-outside-'));
     try {
@@ -1440,7 +1460,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'escaping-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: relative(tempDir, secretPath),
+            extends: relative(tempDir, secretPath),
           },
         },
         steps: [
@@ -1458,7 +1478,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('provider_options の $ref が workflowDir 内 symlink 経由で外部実体を指す場合は reject する', () => {
+  it('provider_options の extends が workflowDir 内 symlink 経由で外部実体を指す場合は reject する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-symlink-'));
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-symlink-outside-'));
     try {
@@ -1470,7 +1490,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'symlink-provider-options-ref',
         workflow_config: {
           provider_options: {
-            $ref: 'provider-options/link.yaml',
+            extends: 'provider-options/link.yaml',
           },
         },
         steps: [
@@ -1488,7 +1508,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('promotion entry の provider_options $ref を解決し inline で上書きできる', () => {
+  it('promotion entry の provider_options extends を解決し inline で上書きできる', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-promotion-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -1508,7 +1528,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
               {
                 at: 2,
                 provider_options: {
-                  $ref: 'provider-options/review.yaml',
+                  extends: 'provider-options/review.yaml',
                   opencode: {
                     allowed_tools: ['read', 'bash'],
                   },
@@ -1533,7 +1553,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('workflow_call overrides の provider_options $ref を解決し inline で上書きできる', () => {
+  it('workflow_call overrides の provider_options extends を解決し inline で上書きできる', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-workflow-call-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -1554,7 +1574,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
             call: 'child',
             overrides: {
               provider_options: {
-                $ref: 'provider-options/review.yaml',
+                extends: 'provider-options/review.yaml',
                 opencode: {
                   allowed_tools: ['read', 'bash'],
                 },
@@ -1601,7 +1621,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     );
   });
 
-  it('workflow_call overrides の provider_options $ref が空 options に解決されたら reject する', () => {
+  it('workflow_call overrides の provider_options extends が空 options に解決されたら reject する', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-empty-ref-workflow-call-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -1615,7 +1635,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
             call: 'child',
             overrides: {
               provider_options: {
-                $ref: 'provider-options/empty.yaml',
+                extends: 'provider-options/empty.yaml',
               },
             },
             rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
@@ -1631,7 +1651,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     }
   });
 
-  it('parallel sub-step の provider_options $ref を解決し inline で上書きできる', () => {
+  it('parallel sub-step の provider_options extends を解決し inline で上書きできる', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-provider-options-ref-parallel-'));
     try {
       mkdirSync(join(tempDir, 'provider-options'));
@@ -1655,7 +1675,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
                 name: 'coding-review',
                 instruction: '{task}',
                 provider_options: {
-                  $ref: 'provider-options/review.yaml',
+                  extends: 'provider-options/review.yaml',
                   opencode: {
                     allowed_tools: ['read', 'grep'],
                   },

@@ -55,13 +55,13 @@ vi.mock('../../shared/utils/index.js', async (importOriginal) => ({
 
 import { repertoireAddCommand } from '../../commands/repertoire/add.js';
 
-let workflowProviderOptionsRef = 'edit';
+let workflowProviderOptionsExtends = 'edit';
 
 describe('repertoireAddCommand install summary integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPaths.root = '';
-    workflowProviderOptionsRef = 'edit';
+    workflowProviderOptionsExtends = 'edit';
     mockConfirm.mockResolvedValue(false);
     mockResolveRef.mockReturnValue('main');
   });
@@ -99,7 +99,7 @@ describe('repertoireAddCommand install summary integration', () => {
 
   it('should report provider_options tools from self scoped package refs before installation', async () => {
     mockPaths.root = mkdirTempRoot();
-    workflowProviderOptionsRef = '@owner/repo/edit';
+    workflowProviderOptionsExtends = '@owner/repo/edit';
     writeInstalledProviderOptions('claude:\n  allowed_tools: [Read]\n');
     mockExecFileSync.mockImplementation((cmd: string, args: string[], options?: { encoding?: string }) => {
       if (cmd === 'gh' && args[0] === '--version') {
@@ -153,7 +153,7 @@ function extractPackage(args: string[]): void {
       'steps:',
       '  - name: run',
       '    provider_options:',
-      `      $ref: "${workflowProviderOptionsRef}"`,
+      `      extends: "${workflowProviderOptionsExtends}"`,
       '',
     ].join('\n'),
   );

@@ -51,7 +51,7 @@ export function normalizeProviderReference(
   providerSpecified: boolean;
 } {
   const normalizedProviderOptions = resolveWorkflowProviderOptions(
-    providerOptions as (Record<string, unknown> & { $ref?: string }) | undefined,
+    providerOptions as (Record<string, unknown> & { extends?: string }) | undefined,
     workflowDir,
     context,
   );

@@ -19,7 +19,7 @@ interface BuiltinWorkflowRaw {
   steps?: WorkflowStepRaw[];
 }
 
-interface ProviderOptionsRefRaw {
+interface ProviderOptionsPresetRaw {
   claude?: {
     allowed_tools?: string[];
   };
@@ -52,10 +52,10 @@ const EDIT_PROVIDER_OPTIONS = {
   claude: { allowedTools: EDIT_CLAUDE_TOOLS },
   opencode: { allowedTools: EDIT_OPENCODE_TOOLS },
 };
-const REVIEW_READONLY_REF = { $ref: 'review-readonly' };
-const REVIEW_WEB_REF = { $ref: 'review-web' };
-const REVIEW_FILES_REF = { $ref: 'review-files' };
-const EDIT_REF = { $ref: 'edit' };
+const REVIEW_READONLY_EXTENDS = { extends: 'review-readonly' };
+const REVIEW_WEB_EXTENDS = { extends: 'review-web' };
+const REVIEW_FILES_EXTENDS = { extends: 'review-files' };
+const EDIT_EXTENDS = { extends: 'edit' };
 
 function workflowDir(locale: 'en' | 'ja'): string {
   return join(process.cwd(), 'builtins', locale, 'workflows');
@@ -66,9 +66,9 @@ function loadBuiltinWorkflow(locale: 'en' | 'ja', name: string): BuiltinWorkflow
   return parseYaml(readFileSync(filePath, 'utf-8')) as BuiltinWorkflowRaw;
 }
 
-function loadProviderOptionsRef(locale: 'en' | 'ja', name: string): ProviderOptionsRefRaw {
+function loadProviderOptionsPreset(locale: 'en' | 'ja', name: string): ProviderOptionsPresetRaw {
   const filePath = join(process.cwd(), 'builtins', locale, 'provider-options', name);
-  return parseYaml(readFileSync(filePath, 'utf-8')) as ProviderOptionsRefRaw;
+  return parseYaml(readFileSync(filePath, 'utf-8')) as ProviderOptionsPresetRaw;
 }
 
 function normalizeBuiltinWorkflow(workflow: BuiltinWorkflowRaw, locale: 'en' | 'ja', projectDir?: string) {
@@ -112,25 +112,25 @@ describe('builtin takt-default provider_options refs', () => {
         codex: { network_access: true },
         opencode: { network_access: true },
       });
-      expect(loadProviderOptionsRef(locale, 'review-readonly.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'review-readonly.yaml')).toEqual({
         claude: { allowed_tools: REVIEW_READONLY_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_READONLY_OPENCODE_TOOLS },
       });
-      expect(loadProviderOptionsRef(locale, 'review-web.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'review-web.yaml')).toEqual({
         claude: { allowed_tools: REVIEW_WEB_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_WEB_OPENCODE_TOOLS },
       });
-      expect(loadProviderOptionsRef(locale, 'review-files.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'review-files.yaml')).toEqual({
         claude: { allowed_tools: REVIEW_FILES_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_FILES_OPENCODE_TOOLS },
       });
-      expect(loadProviderOptionsRef(locale, 'edit.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'edit.yaml')).toEqual({
         claude: { allowed_tools: EDIT_CLAUDE_TOOLS },
         opencode: { allowed_tools: EDIT_OPENCODE_TOOLS },
       });
-      expect(steps.get('plan')?.provider_options).toEqual(REVIEW_READONLY_REF);
-      expect(steps.get('write_tests')?.provider_options).toEqual(EDIT_REF);
-      expect(steps.get('supervise')?.provider_options).toEqual(REVIEW_READONLY_REF);
+      expect(steps.get('plan')?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
+      expect(steps.get('write_tests')?.provider_options).toEqual(EDIT_EXTENDS);
+      expect(steps.get('supervise')?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
       expect(normalizedSteps.get('plan')?.providerOptions).toMatchObject(REVIEW_READONLY_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('write_tests')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('supervise')?.providerOptions).toMatchObject(REVIEW_READONLY_PROVIDER_OPTIONS);
@@ -142,10 +142,10 @@ describe('builtin takt-default provider_options refs', () => {
       const normalized = normalizeBuiltinWorkflow(workflow, locale);
       const normalizedSteps = new Map(normalized.steps.map((step) => [step.name, step]));
 
-      expect(steps.get('implement')?.provider_options).toEqual(EDIT_REF);
-      expect(steps.get('ai-antipattern-review-1st')?.provider_options).toEqual(REVIEW_WEB_REF);
-      expect(steps.get('ai-antipattern-fix')?.provider_options).toEqual(EDIT_REF);
-      expect(steps.get('ai-antipattern-no-fix')?.provider_options).toEqual(REVIEW_FILES_REF);
+      expect(steps.get('implement')?.provider_options).toEqual(EDIT_EXTENDS);
+      expect(steps.get('ai-antipattern-review-1st')?.provider_options).toEqual(REVIEW_WEB_EXTENDS);
+      expect(steps.get('ai-antipattern-fix')?.provider_options).toEqual(EDIT_EXTENDS);
+      expect(steps.get('ai-antipattern-no-fix')?.provider_options).toEqual(REVIEW_FILES_EXTENDS);
       expect(normalizedSteps.get('implement')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('ai-antipattern-review-1st')?.providerOptions).toMatchObject(
         REVIEW_WEB_PROVIDER_OPTIONS,
@@ -192,16 +192,16 @@ describe('builtin takt-default provider_options refs', () => {
       const reviewerNames = [...reviewerSteps.keys()].filter((name) => name !== 'ai-antipattern-review-2nd');
 
       for (const name of reviewerNames) {
-        expect(reviewerSteps.get(name)?.provider_options).toEqual(REVIEW_READONLY_REF);
+        expect(reviewerSteps.get(name)?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
         expect(normalizedReviewerSteps.get(name)?.providerOptions).toMatchObject(
           REVIEW_READONLY_PROVIDER_OPTIONS,
         );
       }
-      expect(reviewerSteps.get('ai-antipattern-review-2nd')?.provider_options).toEqual(REVIEW_WEB_REF);
+      expect(reviewerSteps.get('ai-antipattern-review-2nd')?.provider_options).toEqual(REVIEW_WEB_EXTENDS);
       expect(normalizedReviewerSteps.get('ai-antipattern-review-2nd')?.providerOptions).toMatchObject(
         REVIEW_WEB_PROVIDER_OPTIONS,
       );
-      expect(steps.get('fix')?.provider_options).toEqual(EDIT_REF);
+      expect(steps.get('fix')?.provider_options).toEqual(EDIT_EXTENDS);
       expect(normalizedSteps.get('fix')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
     });
   }

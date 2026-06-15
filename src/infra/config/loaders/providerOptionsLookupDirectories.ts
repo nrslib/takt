@@ -70,7 +70,7 @@ export function resolveProviderOptionsScopeRef(
   scopedCandidateDirs?: ScopedProviderOptionsCandidateDirs,
 ): ResolvedProviderOptionsResource | undefined {
   if (!context.repertoireDir) {
-    throw new Error(`Configuration error: provider_options.$ref requires repertoireDir to resolve scope reference: ${ref}`);
+    throw new Error(`Configuration error: provider_options.extends requires repertoireDir to resolve scope reference: ${ref}`);
   }
 
   const scopeRef = parseScopeRef(ref);

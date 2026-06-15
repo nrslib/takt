@@ -309,11 +309,11 @@ steps:
     expect(result[0]!.allowedTools).toEqual([]);
   });
 
-  it('should detect provider_options named $ref tools from package provider-options presets', () => {
+  it('should detect provider_options named extends tools from package provider-options presets', () => {
     const content = `
 workflow_config:
   provider_options:
-    $ref: edit
+    extends: edit
 steps:
   - name: plan
     edit: false
@@ -331,12 +331,12 @@ steps:
     expect(result[0]!.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Write']));
   });
 
-  it('should detect provider_options path $ref tools from workflow-relative presets', () => {
+  it('should detect provider_options path extends tools from workflow-relative presets', () => {
     const content = `
 steps:
   - name: plan
     provider_options:
-      $ref: provider-options/edit.yaml
+      extends: provider-options/edit.yaml
 `.trim();
     const result = detectEditWorkflows(
       [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
@@ -351,43 +351,43 @@ steps:
     expect(result[0]!.allowedTools).toEqual(expect.arrayContaining(['Bash', 'Edit']));
   });
 
-  it('should throw when provider_options named $ref is missing from package provider-options presets', () => {
+  it('should throw when provider_options named extends is missing from package provider-options presets', () => {
     const content = `
 steps:
   - name: plan
     provider_options:
-      $ref: missing
+      extends: missing
 `.trim();
 
     expect(() => detectEditWorkflows(
       [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
       [],
-    )).toThrow(/provider_options\.\$ref not found: missing/);
+    )).toThrow(/provider_options\.extends not found: missing/);
   });
 
-  it('should throw when provider_options $ref contains a circular reference', () => {
+  it('should throw when provider_options extends contains a circular reference', () => {
     const content = `
 steps:
   - name: plan
     provider_options:
-      $ref: first
+      extends: first
 `.trim();
 
     expect(() => detectEditWorkflows(
       [{ name: 'workflow.yaml', content, relativePath: 'workflows/workflow.yaml' }],
       [
-        { name: 'first.yaml', relativePath: 'provider-options/first.yaml', content: '$ref: second\n' },
-        { name: 'second.yaml', relativePath: 'provider-options/second.yaml', content: '$ref: first\n' },
+        { name: 'first.yaml', relativePath: 'provider-options/first.yaml', content: 'extends: second\n' },
+        { name: 'second.yaml', relativePath: 'provider-options/second.yaml', content: 'extends: first\n' },
       ],
-    )).toThrow(/provider_options\.\$ref contains a circular reference/);
+    )).toThrow(/provider_options\.extends contains a circular reference/);
   });
 
-  it('should not resolve nested provider-options files by basename as bare named $ref', () => {
+  it('should not resolve nested provider-options files by basename as bare named extends', () => {
     const content = `
 steps:
   - name: plan
     provider_options:
-      $ref: edit
+      extends: edit
 `.trim();
 
     expect(() => detectEditWorkflows(
@@ -397,23 +397,23 @@ steps:
         relativePath: 'provider-options/nested/edit.yaml',
         content: 'claude:\n  allowed_tools: [Bash]\n',
       }],
-    )).toThrow(/provider_options\.\$ref not found: edit/);
+    )).toThrow(/provider_options\.extends not found: edit/);
   });
 
-  it('should detect provider_options named $ref tools from promotion entries and workflow_call overrides', () => {
+  it('should detect provider_options named extends tools from promotion entries and workflow_call overrides', () => {
     const content = `
 steps:
   - name: implement
     promotion:
       - at: 2
         provider_options:
-          $ref: promotion-edit
+          extends: promotion-edit
   - name: delegate
     kind: workflow_call
     call: child
     overrides:
       provider_options:
-        $ref: call-edit
+        extends: call-edit
 `.trim();
 
     const result = detectEditWorkflows(
@@ -438,14 +438,14 @@ steps:
     expect(result[0]!.allowedTools).toHaveLength(2);
   });
 
-  it('should detect provider_options named $ref tools from parallel sub-steps', () => {
+  it('should detect provider_options named extends tools from parallel sub-steps', () => {
     const content = `
 steps:
   - name: reviewers
     parallel:
       - name: coding-review
         provider_options:
-          $ref: edit
+          extends: edit
 `.trim();
 
     const result = detectEditWorkflows(
@@ -462,7 +462,7 @@ steps:
     expect(result[0]!.allowedTools).toEqual(['Bash']);
   });
 
-  it('should detect provider_options named $ref tools from fallback provider-options candidate directories', () => {
+  it('should detect provider_options named extends tools from fallback provider-options candidate directories', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'takt-pack-summary-provider-options-fallback-'));
     try {
       const builtinProviderOptionsDir = join(tempDir, 'builtins', 'ja', 'provider-options');
@@ -473,7 +473,7 @@ steps:
 steps:
   - name: review
     provider_options:
-      $ref: review-readonly
+      extends: review-readonly
 `.trim();
 
       const result = detectEditWorkflows(
@@ -500,7 +500,7 @@ steps:
 steps:
   - name: review
     provider_options:
-      $ref: review
+      extends: review
 `.trim();
 
       const result = detectEditWorkflows(
@@ -531,7 +531,7 @@ steps:
 steps:
   - name: review
     provider_options:
-      $ref: "@nrslib/takt-review/edit"
+      extends: "@nrslib/takt-review/edit"
 `.trim();
 
       const result = detectEditWorkflows(
@@ -557,7 +557,7 @@ steps:
 steps:
   - name: review
     provider_options:
-      $ref: "@nrslib/takt-review/edit"
+      extends: "@nrslib/takt-review/edit"
 `.trim();
 
     const result = detectEditWorkflows(
@@ -582,12 +582,12 @@ steps:
     expect(result[0]!.allowedTools).toEqual(['Bash']);
   });
 
-  it('should detect opencode provider_options named $ref tools from package provider-options presets', () => {
+  it('should detect opencode provider_options named extends tools from package provider-options presets', () => {
     const content = `
 steps:
   - name: run
     provider_options:
-      $ref: opencode-edit
+      extends: opencode-edit
 `.trim();
 
     const result = detectEditWorkflows(

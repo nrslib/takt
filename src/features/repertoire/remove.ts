@@ -78,7 +78,7 @@ export interface ScanConfig {
  * 3. categoriesFiles entries individually (e.g. ~/.takt/preferences/workflow-categories.yaml)
  *
  * @param scope  - e.g. "@nrslib/takt-fullstack"
- * @param config - explicit scan targets (workflowDirs + categoriesFiles)
+ * @param config - explicit scan targets (workflowDirs + providerOptionsDirs + categoriesFiles)
  */
 export function findScopeReferences(scope: string, config: ScanConfig): ScopeReference[] {
   const results: ScopeReference[] = [];

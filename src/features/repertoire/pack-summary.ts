@@ -6,8 +6,8 @@
 
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { dirname, resolve } from 'node:path';
+import { createLogger, getErrorMessage, isPathInside } from '../../shared/utils/index.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
 import type { FacetResolutionContext } from '../../infra/config/loaders/workflowPackageScope.js';
@@ -100,13 +100,8 @@ const nodeFileAccess: ProviderOptionsFileAccess = {
   isSymlink: (path) => lstatSync(path).isSymbolicLink(),
 };
 
-function isPathInsideDirectory(path: string, directory: string): boolean {
-  const relativePath = relative(directory, path);
-  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
-}
-
 function isPackageVirtualPath(path: string): boolean {
-  return isPathInsideDirectory(resolve(path), resolve(PACKAGE_ROOT));
+  return isPathInside(resolve(PACKAGE_ROOT), resolve(path));
 }
 
 function buildProviderOptionsFileAccess(
@@ -133,7 +128,7 @@ function buildProviderOptionsFileAccess(
       if (!isPackageVirtualPath(resolvedPath)) {
         return fallbackFileAccess.readText(resolvedPath);
       }
-      throw new Error(`Configuration error: provider_options.$ref not found: ${path}`);
+      throw new Error(`Configuration error: provider_options.extends not found: ${path}`);
     },
     realpath: (path) => {
       const resolvedPath = resolve(path);
@@ -159,11 +154,11 @@ function buildProviderOptionsCandidateDirs(options: DetectEditWorkflowsOptions |
   ];
 }
 
-function assertProviderOptionsRecord(rawProviderOptions: unknown): Record<string, unknown> & { $ref?: string } {
+function assertProviderOptionsRecord(rawProviderOptions: unknown): Record<string, unknown> & { extends?: string } {
   if (!isRecord(rawProviderOptions)) {
     throw new Error('Configuration error: provider_options must be a YAML object');
   }
-  return rawProviderOptions as Record<string, unknown> & { $ref?: string };
+  return rawProviderOptions as Record<string, unknown> & { extends?: string };
 }
 
 function resolveProviderOptionsRecord(
@@ -245,7 +240,7 @@ export function summarizeFacetsByType(facetRelativePaths: string[]): string {
  * - `required_permission_mode` is set
  *
  * @param workflowYamls - Pre-read YAML content pairs. Invalid YAML is skipped (debug-logged).
- * @param providerOptionsYamls - Pre-read package provider-options YAML files used by provider_options.$ref.
+ * @param providerOptionsYamls - Pre-read package provider-options YAML files used by provider_options.extends.
  */
 export function detectEditWorkflows(
   workflowYamls: PackageYaml[],

@@ -122,6 +122,17 @@ steps:
     knowledge: @nrslib/takt-fullstack/domain
 ```
 
+Provider-options presets from installed packages can be referenced with `provider_options.extends` using the same scoped syntax. For workflows provided by a repertoire package, package-local `provider-options/` is checked before project, user, and builtin provider-options directories. Inline `provider_options` in the workflow or step use the referenced preset as the base and override matching leaves.
+
+`provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
+
+```yaml
+provider_options:
+  extends: @nrslib/takt-fullstack/edit
+  opencode:
+    allowed_tools: [read, grep]
+```
+
 ### 4-layer facet resolution
 
 When a workflow from a repertoire package resolves facets by name (without @scope), the resolution order is:

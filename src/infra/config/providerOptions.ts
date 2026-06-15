@@ -16,7 +16,7 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
 type RawProviderOptions = {
-  $ref?: string;
+  extends?: string;
   codex?: {
     network_access?: boolean;
     reasoning_effort?: CodexReasoningEffort;
@@ -57,8 +57,8 @@ export function normalizeProviderOptions(
   }
 
   const options = raw as RawProviderOptions;
-  if (options.$ref !== undefined) {
-    throw new Error('Configuration error: provider_options.$ref must be resolved before provider options normalization.');
+  if (options.extends !== undefined) {
+    throw new Error('Configuration error: provider_options.extends must be resolved before provider options normalization.');
   }
 
   const result: StepProviderOptions = {};
