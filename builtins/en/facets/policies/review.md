@@ -14,6 +14,8 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Contract coverage | Verify new contracts across normal entries, derived conditions, validation, evaluation, output, and re-injection paths |
 | Contract consistency | Verify that contracts carried by consolidation or abstraction are applied to existing equivalent branches by the same standard |
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
+| Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
+| Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
 
@@ -54,6 +56,7 @@ REJECT without exception if any of the following apply.
 - Missing caller, producer, consumer, validator, test data, or derived-entry updates after a contract change
 - User-facing contract changes for configuration, CLI, or file formats where documentation or examples omit priority, first-match/merge behavior, inline overrides, scoped/special references, or failure conditions
 - Existing branches with the same contract remain on the old implementation after adding or changing a shared helper, normalizer, builder, or adapter
+- Fields, attributes, outputs, settings, or identifiers requested by the task are treated as optional, unset, out of scope, or missing for some entry point or execution mode without explicit evidence
 - Missing, duplicated, or incorrectly ordered effects in side-effect or state-change paths
 - Sensitive data exposed in logs, error responses, or test output
 
@@ -263,6 +266,7 @@ When the diff adds or changes a contract such as a config value, state, conditio
 - Search for existing returns, throws, catches, early returns, branches, and call sites with the same responsibility
 - If an existing branch does not satisfy the new contract, treat it as related code even if the code itself predates the change
 - If tests cover only the new path and do not verify existing equivalent branches or derived entries, treat it as a coverage gap
+- Treating a required contract as optional, excluded, or a different requirement requires evidence from the task spec, specification, or explicit user instruction
 - "Not explicitly stated in the task requirements" is not a valid reason to mark a contract inconsistency introduced by the diff as non-blocking
 
 ### Reviewing Side Effects and State Transitions
@@ -282,6 +286,7 @@ When a change involves side effects or state changes such as external calls, con
 - `Previous Response` may be used as supplementary information, but finding state determinations must prioritize the report history
 - Do not drop open findings from the previous report when producing the new report
 - Apply the `finding_id` management rules when classifying each finding as `new` / `persists` / `resolved` / `reopened`
+- Mark `resolved` only when the original expected result and original requirement are satisfied, not merely because a patch exists
 
 ### Final Decision Steps
 
@@ -291,12 +296,4 @@ When a change involves side effects or state changes such as external calls, con
 
 ## Detecting Circular Arguments
 
-When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating the same fix instructions.
-
-### When the Same Problem Recurs
-
-1. Check if the same kind of issue is being repeated
-2. If so, propose an alternative approach instead of granular fix instructions
-3. Even when rejecting, include the perspective of "a different approach should be considered"
-
-Rather than repeating "fix this again," stop and suggest a different path.
+When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating granular fix instructions.

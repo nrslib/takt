@@ -15,6 +15,13 @@
 | Documentation | ✅ | - |
 | Maintainability | ✅ | - |
 
+## Contract Entry Check
+Fill this when the diff adds or changes IDs, names, metadata, config, environment variables, or output contracts.
+
+| Entry / Path | Original Requirement | Implementation Evidence | Test Evidence | Judgment | Exception / Unverified Evidence |
+|--------------|----------------------|--------------------------|---------------|----------|---------------------------------|
+| {normal entry / derived condition / validation / evaluation / output / re-injection, etc.} | {Requirement} | `src/file.ts:42` | `src/file.test.ts:10` | ✅/❌/⚠️ | {none / evidence} |
+
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|----------------|
@@ -26,9 +33,9 @@
 | 1 | QA-PERSIST-src-test-L77 | test-coverage | `src/test.ts:77` | `src/test.ts:77` | Still flaky | Stabilize assertion & setup |
 
 ## Resolved Findings (resolved)
-| finding_id | Resolution Evidence |
-|------------|---------------------|
-| QA-RESOLVED-src-test-L10 | `src/test.ts:10` now covers error path |
+| finding_id | Original Expected Result | Resolution Evidence |
+|------------|--------------------------|---------------------|
+| QA-RESOLVED-src-test-L10 | {Original finding acceptance criteria} | `src/test.ts:10` now covers error path |
 
 ## Reopened Findings (reopened)
 | # | finding_id | family_tag | Prior Resolution Evidence | Recurrence Evidence | Issue | Fix Suggestion |
