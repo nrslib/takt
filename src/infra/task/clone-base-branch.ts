@@ -157,18 +157,8 @@ export function resolveBaseBranch(
   projectDir: string,
   explicitBaseBranch?: string,
 ): { branch: string; fetchedCommit?: string } {
-  const configBaseBranch = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const baseBranch = resolveBaseBranchName(projectDir, explicitBaseBranch);
   const autoFetch = resolveConfigValue(projectDir, 'autoFetch');
-
-  const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
-
-  if (explicitBaseBranch !== undefined) {
-    assertExplicitBaseBranch(projectDir, baseBranch);
-  }
-
-  if (explicitBaseBranch !== undefined && !branchExists(projectDir, baseBranch)) {
-    throw new Error(`Base branch does not exist: ${baseBranch}`);
-  }
 
   if (!autoFetch) {
     return { branch: baseBranch };
@@ -191,6 +181,24 @@ export function resolveBaseBranch(
     log.info('Failed to fetch from remote, continuing with local state', { baseBranch, error: String(err) });
     return { branch: baseBranch };
   }
+}
+
+export function resolveBaseBranchName(
+  projectDir: string,
+  explicitBaseBranch?: string,
+): string {
+  const configBaseBranch = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
+
+  if (explicitBaseBranch !== undefined) {
+    assertExplicitBaseBranch(projectDir, baseBranch);
+  }
+
+  if (explicitBaseBranch !== undefined && !branchExists(projectDir, baseBranch)) {
+    throw new Error(`Base branch does not exist: ${baseBranch}`);
+  }
+
+  return baseBranch;
 }
 
 export async function resolveBaseBranchAbortable(

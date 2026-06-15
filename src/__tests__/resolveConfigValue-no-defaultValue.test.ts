@@ -10,6 +10,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 const testId = randomUUID();
 const testDir = join(tmpdir(), `takt-rcv-test-${testId}`);
@@ -41,38 +42,13 @@ const disabledObservability = {
   usageEventsPhase: false,
 };
 
-const observabilityEnvKeys = [
-  'TAKT_OBSERVABILITY',
-  'TAKT_OBSERVABILITY_ENABLED',
-  'TAKT_OBSERVABILITY_MONITOR',
-  'TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER',
-  'TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE',
-] as const;
-
-let observabilityEnvSnapshot: Map<typeof observabilityEnvKeys[number], string | undefined>;
-
-function clearObservabilityEnv(): void {
-  observabilityEnvSnapshot = new Map(observabilityEnvKeys.map((key) => [key, process.env[key]]));
-  for (const key of observabilityEnvKeys) {
-    delete process.env[key];
-  }
-}
-
-function restoreObservabilityEnv(): void {
-  for (const [key, value] of observabilityEnvSnapshot) {
-    if (value === undefined) {
-      delete process.env[key];
-      continue;
-    }
-    process.env[key] = value;
-  }
-}
+let taktEnvSnapshot: TaktEnvSnapshot;
 
 describe('config resolution defaults and project-local priority', () => {
   let projectDir: string;
 
   beforeEach(() => {
-    clearObservabilityEnv();
+    taktEnvSnapshot = clearTaktEnv();
     projectDir = join(testDir, `project-${randomUUID()}`);
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(globalTaktDir, { recursive: true });
@@ -84,7 +60,7 @@ describe('config resolution defaults and project-local priority', () => {
   afterEach(() => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
-    restoreObservabilityEnv();
+    restoreTaktEnv(taktEnvSnapshot);
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }

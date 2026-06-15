@@ -55,6 +55,7 @@ export {
   cleanupOrphanedClone,
   createBaseBranchIfMissing,
   resolveBaseBranch,
+  resolveBaseBranchName,
   resolveCloneBaseDir,
   branchExists,
   localBranchExists,

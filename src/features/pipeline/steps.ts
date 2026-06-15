@@ -6,7 +6,7 @@ import {
 } from '../../infra/git/index.js';
 import type { Issue } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
-import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
+import { stageAndCommit, resolveBaseBranch, resolveBaseBranchName, pushBranch, checkoutBranch, getCurrentBranch } from '../../infra/task/index.js';
 import { executeTask, confirmAndCreateWorktree, type ExecuteTaskOptions, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
 import { statusLine } from '../../shared/ui/StatusLine.js';
@@ -33,8 +33,8 @@ export interface GitExecutionContext {
 export interface SkipGitExecutionContext {
   execCwd: string;
   isWorktree: false;
-  branch: string | undefined;
-  baseBranch: string | undefined;
+  branch?: string;
+  baseBranch?: string;
 }
 
 export type ExecutionContext = GitExecutionContext | SkipGitExecutionContext;
@@ -85,24 +85,48 @@ function resolveExecutionBaseBranch(cwd: string, preferredBaseBranch?: string): 
   return requireBaseBranch(branch, 'execution context');
 }
 
+function resolveReadOnlyBaseBranch(cwd: string): string {
+  return requireBaseBranch(resolveBaseBranchName(cwd), 'skip-git execution');
+}
+
+function tryResolveCurrentBranch(cwd: string): string | undefined {
+  try {
+    const branch = getCurrentBranch(cwd);
+    return branch || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function tryResolveReadOnlyBaseBranch(cwd: string): string | undefined {
+  try {
+    return resolveReadOnlyBaseBranch(cwd);
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveSkipGitExecutionContext(
   cwd: string,
   prBranch: string | undefined,
   prBaseBranch: string | undefined,
 ): SkipGitExecutionContext {
   if (prBranch) {
+    const baseBranch = prBaseBranch ?? tryResolveReadOnlyBaseBranch(cwd);
     return {
       execCwd: cwd,
       isWorktree: false,
       branch: prBranch,
-      baseBranch: prBaseBranch,
+      baseBranch,
     };
   }
+  const branch = tryResolveCurrentBranch(cwd);
+  const baseBranch = branch ? tryResolveReadOnlyBaseBranch(cwd) : undefined;
   return {
     execCwd: cwd,
     isWorktree: false,
-    branch: undefined,
-    baseBranch: undefined,
+    branch,
+    baseBranch,
   };
 }
 

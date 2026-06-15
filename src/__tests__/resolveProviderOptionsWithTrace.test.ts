@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 const testId = randomUUID();
 const testDir = join(tmpdir(), `takt-provider-trace-${testId}`);
@@ -25,39 +26,13 @@ const {
 const { invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 
-let taktEnvSnapshot: Record<string, string | undefined>;
-
-function snapshotTaktEnv(): Record<string, string | undefined> {
-  const snapshot: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith('TAKT_')) {
-      snapshot[key] = value;
-    }
-  }
-  return snapshot;
-}
-
-function restoreTaktEnv(snapshot: Record<string, string | undefined>): void {
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith('TAKT_') && !(key in snapshot)) {
-      delete process.env[key];
-    }
-  }
-
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-      continue;
-    }
-    process.env[key] = value;
-  }
-}
+let taktEnvSnapshot: TaktEnvSnapshot;
 
 describe('resolveProviderOptionsWithTrace', () => {
   let projectDir: string;
 
   beforeEach(() => {
-    taktEnvSnapshot = snapshotTaktEnv();
+    taktEnvSnapshot = clearTaktEnv();
     projectDir = join(testDir, `project-${randomUUID()}`);
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(globalTaktDir, { recursive: true });
