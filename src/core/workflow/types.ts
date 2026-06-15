@@ -309,11 +309,26 @@ export interface WorkflowEngineOptions {
     issueNumber?: number;
     runSlug?: string;
   };
+  /** Task metadata used only for trace discovery attributes. */
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
   phase1ProcessSafetyByStep?: Record<string, { protectedParentRunPid: number }>;
   systemStepServicesFactory?: SystemStepServicesFactory;
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+}
+
+export interface WorkflowTraceTaskMetadata {
+  taskName?: string | undefined;
+  taskSlug?: string | undefined;
+  taskSummary?: string | undefined;
+  taskSource?: 'issue' | 'pr_review' | 'manual' | undefined;
+  issueNumber?: number | undefined;
+  prNumber?: number | undefined;
+  gitBranch?: string | undefined;
+  gitBaseBranch?: string | undefined;
+  worktreePath?: string | undefined;
+  runDir?: string | undefined;
 }
 
 /** Loop detection result */

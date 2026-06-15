@@ -40,6 +40,10 @@ Useful Tempo TraceQL filters for active workflows include:
 ```traceql
 { resource.service.name = "takt" && span."takt.workflow.name" = "takt-default" }
 { resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
+{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }
+{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }
+{ resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-finding-contract" }
+{ resource.service.name = "takt" && span."takt.task.summary" =~ ".*finding contract.*" }
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 

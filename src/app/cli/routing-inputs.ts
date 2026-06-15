@@ -7,7 +7,7 @@ export async function resolveIssueInput(
   issueOption: number | undefined,
   task: string | undefined,
   cwd?: string,
-): Promise<{ initialInput: string } | null> {
+): Promise<{ initialInput: string; issueNumber?: number } | null> {
   if (issueOption) {
     const provider = getGitProvider();
     const cliStatus = provider.checkCliStatus(cwd);
@@ -19,7 +19,7 @@ export async function resolveIssueInput(
       (fetchedIssue) => `Issue fetched: #${fetchedIssue.number} ${fetchedIssue.title}`,
       async () => provider.fetchIssue(issueOption, cwd),
     );
-    return { initialInput: formatIssueAsTask(issue) };
+    return { initialInput: formatIssueAsTask(issue), issueNumber: issueOption };
   }
 
   if (task && isDirectTask(task)) {
@@ -38,7 +38,10 @@ export async function resolveIssueInput(
       (fetchedIssues) => `Issues fetched: ${fetchedIssues.map((issue) => `#${issue.number}`).join(', ')}`,
       async () => issueNumbers.map((n) => provider.fetchIssue(n, cwd)),
     );
-    return { initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n') };
+    return {
+      initialInput: issues.map(formatIssueAsTask).join('\n\n---\n\n'),
+      ...(issueNumbers.length === 1 ? { issueNumber: issueNumbers[0] } : {}),
+    };
   }
 
   return null;

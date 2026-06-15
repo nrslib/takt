@@ -7,7 +7,7 @@ import {
 import type { Issue } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { stageAndCommit, resolveBaseBranch, pushBranch, checkoutBranch } from '../../infra/task/index.js';
-import { executeTask, confirmAndCreateWorktree, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
+import { executeTask, confirmAndCreateWorktree, type ExecuteTaskOptions, type TaskExecutionOptions, type PipelineExecutionOptions } from '../tasks/index.js';
 import { info, error, success } from '../../shared/ui/index.js';
 import { statusLine } from '../../shared/ui/StatusLine.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -27,16 +27,19 @@ export interface GitExecutionContext {
   isWorktree: boolean;
   branch: string;
   baseBranch: string;
+  taskSlug?: string;
 }
 
 export interface SkipGitExecutionContext {
   execCwd: string;
   isWorktree: false;
-  branch: undefined;
-  baseBranch: undefined;
+  branch: string | undefined;
+  baseBranch: string | undefined;
 }
 
 export type ExecutionContext = GitExecutionContext | SkipGitExecutionContext;
+
+type PipelineTraceTaskContext = NonNullable<ExecuteTaskOptions['traceTaskContext']>;
 
 function requireBaseBranch(baseBranch: string | undefined, context: string): string {
   if (!baseBranch) {
@@ -80,6 +83,27 @@ export function buildCommitMessage(
 function resolveExecutionBaseBranch(cwd: string, preferredBaseBranch?: string): string {
   const { branch } = resolveBaseBranch(cwd, preferredBaseBranch);
   return requireBaseBranch(branch, 'execution context');
+}
+
+function resolveSkipGitExecutionContext(
+  cwd: string,
+  prBranch: string | undefined,
+  prBaseBranch: string | undefined,
+): SkipGitExecutionContext {
+  if (prBranch) {
+    return {
+      execCwd: cwd,
+      isWorktree: false,
+      branch: prBranch,
+      baseBranch: prBaseBranch,
+    };
+  }
+  return {
+    execCwd: cwd,
+    isWorktree: false,
+    branch: undefined,
+    baseBranch: undefined,
+  };
 }
 
 function fetchVcsResource<T>(
@@ -158,15 +182,11 @@ export async function resolveExecutionContext(
       branch,
       baseBranch,
       isWorktree: result.isWorktree,
+      taskSlug: result.taskSlug,
     };
   }
   if (options.skipGit) {
-    return {
-      execCwd: cwd,
-      isWorktree: false,
-      branch: undefined,
-      baseBranch: undefined,
-    };
+    return resolveSkipGitExecutionContext(cwd, prBranch, prBaseBranch);
   }
   if (prBranch) {
     const safePrBranch = sanitizeTerminalText(prBranch);
@@ -195,7 +215,8 @@ export async function runWorkflow(
   workflow: string,
   task: string,
   execCwd: string,
-  options: Pick<PipelineExecutionOptions, 'provider' | 'model'>,
+  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'issueNumber' | 'prNumber'>,
+  context: ExecutionContext,
 ): Promise<boolean> {
   const safeWorkflow = sanitizeTerminalText(workflow);
   info(`Running workflow: ${safeWorkflow}`);
@@ -212,6 +233,7 @@ export async function runWorkflow(
       workflowIdentifier: workflow,
       projectCwd,
       agentOverrides,
+      traceTaskContext: buildPipelineTraceTaskContext(options, context),
     });
   } finally {
     statusLine.stop();
@@ -223,6 +245,20 @@ export async function runWorkflow(
   }
   success(`Workflow '${safeWorkflow}' completed`);
   return true;
+}
+
+function buildPipelineTraceTaskContext(
+  options: Pick<PipelineExecutionOptions, 'issueNumber' | 'prNumber'>,
+  context: ExecutionContext,
+): PipelineTraceTaskContext {
+  return {
+    issueNumber: options.issueNumber,
+    prNumber: options.prNumber,
+    branch: context.branch,
+    baseBranch: context.baseBranch,
+    taskSlug: context.isWorktree ? context.taskSlug : undefined,
+    worktreePath: context.isWorktree ? context.execCwd : undefined,
+  };
 }
 
 export function commitAndPush(

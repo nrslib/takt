@@ -7,6 +7,7 @@ import type { PersonaProviderEntry } from '../../../core/models/config-types.js'
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
 import type {
   ProviderOptionsOriginResolver,
@@ -15,6 +16,7 @@ import type {
 } from '../../../core/workflow/provider-options-trace.js';
 import type { DirectResumeMetadata } from './runMeta.js';
 import type { TaskAttachment } from '../attachments.js';
+import type { TraceTaskContext } from './traceTaskMetadata.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -95,6 +97,8 @@ export interface WorkflowExecutionOptions {
   taskColorIndex?: number;
   /** Current task issue number for system-step context resolution */
   currentTaskIssueNumber?: number;
+  /** Task metadata used only for trace discovery attributes. */
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
 }
 
 export interface TaskExecutionOptions {
@@ -156,6 +160,10 @@ export interface ExecuteTaskOptions {
   taskColorIndex?: number;
   /** Current task issue number for system-step context resolution */
   currentTaskIssueNumber?: number;
+  /** Source metadata used by the task feature to build trace discovery attributes. */
+  traceTaskContext?: TraceTaskContext;
+  /** Task metadata used only for trace discovery attributes. */
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
 }
 
 export interface PipelineExecutionOptions {
@@ -203,4 +211,6 @@ export interface SelectAndExecuteOptions {
   skipTaskList?: boolean;
   /** Images pasted during interactive task input. */
   attachments?: TaskAttachment[];
+  /** Source metadata for direct trace discovery when no task record exists. */
+  traceTaskContext?: TraceTaskContext;
 }

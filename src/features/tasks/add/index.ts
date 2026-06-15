@@ -138,6 +138,7 @@ export async function saveTaskFromInteractive(
   workflow?: string,
   options?: {
     issue?: number;
+    prNumber?: number;
     confirmAtEndMessage?: string;
     presetSettings?: WorktreeSettings;
     attachments?: TaskAttachment[];
@@ -153,6 +154,7 @@ export async function saveTaskFromInteractive(
   const created = await saveTaskFile(cwd, task, {
     workflow,
     issue: options?.issue,
+    prNumber: options?.prNumber,
     ...settings,
     ...(options?.attachments ? { attachments: options.attachments } : {}),
   });

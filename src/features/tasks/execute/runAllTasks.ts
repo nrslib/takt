@@ -9,11 +9,12 @@ import {
   notifySuccess,
   sendSlackNotification,
   buildSlackRunSummary,
+  generateRunId,
 } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { runWithWorkerPool } from './parallelExecution.js';
-import { generateRunId, toSlackTaskDetail } from './slackSummaryAdapter.js';
+import { toSlackTaskDetail } from './slackSummaryAdapter.js';
 
 export async function runAllTasks(
   cwd: string,

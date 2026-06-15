@@ -6,6 +6,7 @@ export interface TaskInfo {
   name: string;
   slug?: string;
   runSlug?: string;
+  summary?: string;
   content: string;
   taskDir?: string;
   createdAt: string;

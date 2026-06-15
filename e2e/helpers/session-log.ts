@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 /**
  * Read session NDJSON log records from a workflow execution run.
- * Finds the first .jsonl file whose first record is `workflow_start`.
+ * Finds the first canonical .jsonl file whose first record is `workflow_start`.
  */
 export function readSessionRecords(repoPath: string): Array<Record<string, unknown>> {
   const runsDir = join(repoPath, '.takt', 'runs');
@@ -11,7 +11,7 @@ export function readSessionRecords(repoPath: string): Array<Record<string, unkno
 
   for (const runDir of runDirs) {
     const logsDir = join(runsDir, runDir, 'logs');
-    const logFiles = readdirSync(logsDir).filter((file) => file.endsWith('.jsonl'));
+    const logFiles = readdirSync(logsDir).filter(isCanonicalSessionLogFile);
     for (const file of logFiles) {
       const content = readFileSync(join(logsDir, file), 'utf-8').trim();
       if (!content) continue;
@@ -23,4 +23,8 @@ export function readSessionRecords(repoPath: string): Array<Record<string, unkno
   }
 
   throw new Error('Session NDJSON log not found');
+}
+
+function isCanonicalSessionLogFile(file: string): boolean {
+  return file.endsWith('.jsonl') && !file.endsWith('-otel-session-shadow.jsonl') && !file.endsWith('-usage-events.jsonl');
 }

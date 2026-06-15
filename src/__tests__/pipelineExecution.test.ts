@@ -6,6 +6,7 @@ const mockCheckGhCli = vi.fn().mockReturnValue({ available: true });
 const mockCreatePullRequest = vi.fn();
 const mockCreatePullRequestSafely = vi.fn();
 const mockPushBranch = vi.fn();
+const mockGetCurrentBranch = vi.fn();
 const mockBuildPrBody = vi.fn(() => 'Default PR body');
 const mockBuildTaktManagedPrOptions = vi.fn((body: string) => ({
   body: `${body}\n\n<!-- takt:managed -->`,
@@ -39,6 +40,7 @@ vi.mock('../infra/git/index.js', () => ({
 
 vi.mock('../infra/task/git.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  getCurrentBranch: (...args: unknown[]) => mockGetCurrentBranch(...args),
   pushBranch: (...args: unknown[]) => mockPushBranch(...args),
 }));
 
@@ -87,10 +89,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getSlackWebhookUrl: (...args: unknown[]) => mockGetSlackWebhookUrl(...args as []),
   sendSlackNotification: (...args: unknown[]) => mockSendSlackNotification(...(args as [string, string])),
   buildSlackRunSummary: (...args: unknown[]) => mockBuildSlackRunSummary(...(args as [unknown])),
-}));
-
-// Mock generateRunId
-vi.mock('../features/tasks/execute/slackSummaryAdapter.js', () => ({
   generateRunId: () => 'run-20260222-000000',
 }));
 
@@ -120,6 +118,7 @@ describe('executePipeline', () => {
     mockGetSlackWebhookUrl.mockReturnValue(undefined);
     // Default: git operations succeed
     mockExecFileSync.mockReturnValue('abc1234\n');
+    mockGetCurrentBranch.mockReturnValue('current/branch');
     // Default: no pipeline config
     mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
   });
@@ -195,13 +194,20 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockExecuteTask).toHaveBeenCalledWith({
+    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
       task: 'Fix the bug',
       cwd: '/tmp/test',
       workflowIdentifier: 'default',
       projectCwd: '/tmp/test',
       agentOverrides: undefined,
-    });
+    }));
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+      traceTaskContext?: {
+        branch?: string;
+      };
+    };
+    expect(executeArg.traceTaskContext?.branch).toMatch(/^takt\/pipeline-/);
+    expect('traceTaskMetadata' in executeArg).toBe(false);
     expect(mockInfo).toHaveBeenCalledWith('Running workflow: default');
     expect(mockSuccess).toHaveBeenCalledWith("Workflow 'default' completed");
     expect(mockStatus).toHaveBeenCalledWith('Workflow', 'default');
@@ -230,6 +236,18 @@ describe('executePipeline', () => {
     expect(mockSuccess).toHaveBeenCalledWith("Workflow 'default' completed");
     expect(mockStatus).toHaveBeenCalledWith('Workflow', 'default');
     expect(mockStatus).toHaveBeenCalledWith('Result', 'Success', 'green');
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+      traceTaskContext?: {
+        issueNumber?: number;
+        branch?: string;
+        baseBranch?: string;
+      };
+    };
+    expect(executeArg.traceTaskContext).toEqual(expect.objectContaining({
+      issueNumber: 99,
+      baseBranch: expect.any(String),
+    }));
+    expect(executeArg.traceTaskContext?.branch).toMatch(/^takt\/issue-99-/);
   });
 
   it('should sanitize workflow names before terminal output', async () => {
@@ -316,13 +334,13 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockExecuteTask).toHaveBeenCalledWith({
+    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
       task: 'Fix the bug',
       cwd: '/tmp/test',
       workflowIdentifier: 'default',
       projectCwd: '/tmp/test',
       agentOverrides: { provider: 'codex', model: 'codex-model' },
-    });
+    }));
   });
 
   it('should return exit code 5 when PR creation fails', async () => {
@@ -458,13 +476,13 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(mockExecuteTask).toHaveBeenCalledWith({
+    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
       task: 'From --task flag',
       cwd: '/tmp/test',
       workflowIdentifier: 'magi',
       projectCwd: '/tmp/test',
       agentOverrides: undefined,
-    });
+    }));
   });
 
   describe('PipelineConfig template expansion', () => {
@@ -634,13 +652,20 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mockExecuteTask).toHaveBeenCalledWith({
+      expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
         task: 'Fix the bug',
         cwd: '/tmp/test',
         workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
-      });
+      }));
+      const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+        traceTaskContext?: {
+          branch?: string;
+        };
+      };
+      expect(executeArg.traceTaskContext?.branch).toBeUndefined();
+      expect(mockGetCurrentBranch).not.toHaveBeenCalled();
 
       // No git operations should have been called
       const gitCalls = mockExecFileSync.mock.calls.filter(
@@ -648,6 +673,49 @@ describe('executePipeline', () => {
       );
       expect(gitCalls).toHaveLength(0);
       expect(mockPushBranch).not.toHaveBeenCalled();
+    });
+
+    it('should use PR head and base branch for trace metadata without checkout', async () => {
+      mockFetchPrReviewComments.mockReturnValueOnce({
+        number: 456,
+        title: 'Fix auth bug',
+        body: 'PR description',
+        url: 'https://github.com/org/repo/pull/456',
+        headRefName: 'fix/auth-bug',
+        baseRefName: 'main',
+        comments: [{ author: 'commenter1', body: 'Update tests' }],
+        reviews: [{ author: 'reviewer1', body: 'Fix null check' }],
+        files: ['src/auth.ts'],
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        prNumber: 456,
+        workflow: 'default',
+        autoPr: false,
+        skipGit: true,
+        cwd: '/tmp/test',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockGetCurrentBranch).not.toHaveBeenCalled();
+      const checkoutCall = mockExecFileSync.mock.calls.find(
+        (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout',
+      );
+      expect(checkoutCall).toBeUndefined();
+      expect(mockPushBranch).not.toHaveBeenCalled();
+      const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+        traceTaskContext?: {
+          prNumber?: number;
+          branch?: string;
+          baseBranch?: string;
+        };
+      };
+      expect(executeArg.traceTaskContext).toEqual(expect.objectContaining({
+        prNumber: 456,
+        branch: 'fix/auth-bug',
+        baseBranch: 'main',
+      }));
     });
 
     it('should ignore --auto-pr when skipGit is true', async () => {
@@ -707,12 +775,21 @@ describe('executePipeline', () => {
         undefined,
         undefined,
       );
-      expect(mockExecuteTask).toHaveBeenCalledWith({
+      expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
         task: 'Fix the bug',
         cwd: '/tmp/test-worktree',
         workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
+      }));
+      const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+        traceTaskContext?: unknown;
+      };
+      expect(executeArg.traceTaskContext).toEqual({
+        taskSlug: 'fix-the-bug',
+        branch: 'fix/the-bug',
+        baseBranch: 'main',
+        worktreePath: '/tmp/test-worktree',
       });
     });
 
@@ -729,13 +806,13 @@ describe('executePipeline', () => {
 
       expect(exitCode).toBe(0);
       expect(mockConfirmAndCreateWorktree).not.toHaveBeenCalled();
-      expect(mockExecuteTask).toHaveBeenCalledWith({
+      expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
         task: 'Fix the bug',
         cwd: '/tmp/test',
         workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
-      });
+      }));
     });
 
     it('should use original cwd when createWorktree is undefined', async () => {
@@ -750,13 +827,13 @@ describe('executePipeline', () => {
 
       expect(exitCode).toBe(0);
       expect(mockConfirmAndCreateWorktree).not.toHaveBeenCalled();
-      expect(mockExecuteTask).toHaveBeenCalledWith({
+      expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
         task: 'Fix the bug',
         cwd: '/tmp/test',
         workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: undefined,
-      });
+      }));
     });
 
     it('should pass provider/model overrides when worktree is created', async () => {
@@ -780,13 +857,13 @@ describe('executePipeline', () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mockExecuteTask).toHaveBeenCalledWith({
+      expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
         task: 'Fix the bug',
         cwd: '/tmp/test-worktree',
         workflowIdentifier: 'default',
         projectCwd: '/tmp/test',
         agentOverrides: { provider: 'codex', model: 'codex-model' },
-      });
+      }));
     });
 
     it('should return exit code 4 when worktree creation fails', async () => {
@@ -1089,6 +1166,7 @@ describe('executePipeline', () => {
         body: 'PR description',
         url: 'https://github.com/org/repo/pull/456',
         headRefName: 'fix/auth-bug',
+        baseRefName: 'main',
         comments: [{ author: 'commenter1', body: 'Update tests' }],
         reviews: [{ author: 'reviewer1', body: 'Fix null check' }],
         files: ['src/auth.ts'],
@@ -1110,6 +1188,14 @@ describe('executePipeline', () => {
         (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === 'fix/auth-bug',
       );
       expect(checkoutCall).toBeDefined();
+      const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+        traceTaskContext?: unknown;
+      };
+      expect(executeArg.traceTaskContext).toEqual({
+        prNumber: 456,
+        branch: 'fix/auth-bug',
+        baseBranch: 'main',
+      });
     });
 
     it('should return exit code 2 when gh CLI is unavailable for --pr', async () => {

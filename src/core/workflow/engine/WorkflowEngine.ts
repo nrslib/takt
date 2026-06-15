@@ -94,28 +94,34 @@ export class WorkflowEngine extends EventEmitter {
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.config = config;
     this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
+    if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
+      throw new Error(`Invalid reportDirName: ${options.reportDirName}`);
+    }
+
+    const reportDirName = options.reportDirName ?? generateReportDir(task);
+    const runPaths = buildRunPaths(cwd, reportDirName, options.runPathNamespace);
+    const traceTaskMetadata = {
+      ...options.traceTaskMetadata,
+      runDir: runPaths.runRootAbs,
+    };
     this.options = {
       ...options,
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
+      traceTaskMetadata,
     };
     this.projectCwd = this.options.projectCwd;
     this.cwd = cwd;
     this.task = task;
     this.loopDetector = new LoopDetector(config.loopDetection);
     this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
-    if (this.options.reportDirName !== undefined && !isValidReportDirName(this.options.reportDirName)) {
-      throw new Error(`Invalid reportDirName: ${this.options.reportDirName}`);
-    }
-
-    const reportDirName = this.options.reportDirName ?? generateReportDir(task);
     const initialMaxSteps = this.options.maxStepsOverride ?? config.maxSteps;
     this.sharedRuntime = this.options.sharedRuntime ?? createSharedRuntime(this.options.resumePoint, initialMaxSteps);
     this.sharedRuntime.maxSteps ??= initialMaxSteps;
     this.maxSteps = this.sharedRuntime.maxSteps;
     this.resumeStackPrefix = this.options.resumeStackPrefix ?? [];
-    this.runPaths = buildRunPaths(this.cwd, reportDirName, this.options.runPathNamespace);
+    this.runPaths = runPaths;
     this.reportDir = this.runPaths.reportsRel;
     ensureRunDirsExist(this.runPaths);
     applyRuntimeEnvironment(this.cwd, this.config, 'init');
@@ -311,6 +317,7 @@ export class WorkflowEngine extends EventEmitter {
       runMode,
       resumeDepth: this.resumeStackPrefix.length,
       sanitizeText: this.options.sanitizeObservabilityText,
+      traceTaskMetadata: this.options.traceTaskMetadata,
     };
   }
 

@@ -38,6 +38,11 @@ function restoreTaktEnv(snapshot: Record<string, string | undefined>): void {
 describe('traced config boundaries', () => {
   beforeEach(() => {
     taktEnvSnapshot = snapshotTaktEnv();
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('TAKT_')) {
+        delete process.env[key];
+      }
+    }
   });
 
   afterEach(() => {

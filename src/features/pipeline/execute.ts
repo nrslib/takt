@@ -1,8 +1,7 @@
 import { resolveConfigValues } from '../../infra/config/index.js';
 import { info, error, status, blankLine } from '../../shared/ui/index.js';
-import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification, buildSlackRunSummary } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification, buildSlackRunSummary, generateRunId } from '../../shared/utils/index.js';
 import type { SlackTaskDetail } from '../../shared/utils/index.js';
-import { generateRunId } from '../tasks/execute/slackSummaryAdapter.js';
 import type { PipelineExecutionOptions } from '../tasks/index.js';
 import {
   EXIT_ISSUE_FETCH_FAILED,
@@ -57,7 +56,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
   }
 
   log.info('Pipeline workflow execution starting', { workflow, branch: context.branch, skipGit, issueNumber: options.issueNumber });
-  const workflowOk = await runWorkflow(cwd, workflow, taskContent.task, context.execCwd, options);
+  const workflowOk = await runWorkflow(cwd, workflow, taskContent.task, context.execCwd, options, context);
   if (!workflowOk) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
 
   if (!skipGit && context.branch) {

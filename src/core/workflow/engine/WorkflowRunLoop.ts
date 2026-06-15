@@ -340,6 +340,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         sanitizeText: deps.options.sanitizeObservabilityText,
         providerInfo,
         getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+        traceTaskMetadata: deps.options.traceTaskMetadata,
       }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
       const { response, instruction, providerInfo: resultProviderInfo } = result;
       if (stepRuntime?.fallback) {
@@ -546,6 +547,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     sanitizeText: deps.options.sanitizeObservabilityText,
     providerInfo,
     getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+    traceTaskMetadata: deps.options.traceTaskMetadata,
   }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
   const { response, providerInfo: resultProviderInfo } = result;
   if (stepRuntime?.fallback) {

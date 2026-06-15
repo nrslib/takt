@@ -38,8 +38,36 @@ type ObservabilityConfigForTest = {
   usageEventsPhase?: boolean;
 };
 
+const observabilityEnvKeys = [
+  'TAKT_OBSERVABILITY',
+  'TAKT_OBSERVABILITY_ENABLED',
+  'TAKT_OBSERVABILITY_MONITOR',
+  'TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER',
+  'TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE',
+] as const;
+
+let observabilityEnvSnapshot: Map<typeof observabilityEnvKeys[number], string | undefined>;
+
+function clearObservabilityEnv(): void {
+  observabilityEnvSnapshot = new Map(observabilityEnvKeys.map((key) => [key, process.env[key]]));
+  for (const key of observabilityEnvKeys) {
+    delete process.env[key];
+  }
+}
+
+function restoreObservabilityEnv(): void {
+  for (const [key, value] of observabilityEnvSnapshot) {
+    if (value === undefined) {
+      delete process.env[key];
+      continue;
+    }
+    process.env[key] = value;
+  }
+}
+
 describe('loadGlobalConfig', () => {
   beforeEach(() => {
+    clearObservabilityEnv();
     invalidateGlobalConfigCache();
     mkdirSync(testHomeDir, { recursive: true });
   });
@@ -50,6 +78,7 @@ describe('loadGlobalConfig', () => {
     }
     delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
     delete process.env[unexpectedInteractivePreviewEnvVar];
+    restoreObservabilityEnv();
   });
 
   it('should return default values when config.yaml does not exist', () => {

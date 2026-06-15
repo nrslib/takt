@@ -313,9 +313,16 @@ describe('executeWorkflow session loading', () => {
     }
   }
 
+  function clearRestoredEnv(): void {
+    for (const key of restoredEnvKeys) {
+      delete process.env[key];
+    }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     restoreEnv();
+    clearRestoredEnv();
     mockCreateUsageEventLogger.mockReturnValue(mockUsageLogger);
     mockInitializeOtelFoundation.mockResolvedValue({
       shutdown: mockObservabilityShutdown,
