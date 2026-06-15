@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
@@ -23,7 +24,7 @@ interface BuiltinWorkflowRaw {
   steps?: WorkflowStepRaw[];
 }
 
-interface ProviderOptionsRefRaw {
+interface ProviderOptionsPresetRaw {
   claude?: {
     allowed_tools?: string[];
   };
@@ -56,10 +57,10 @@ const EDIT_PROVIDER_OPTIONS = {
   claude: { allowedTools: EDIT_CLAUDE_TOOLS },
   opencode: { allowedTools: EDIT_OPENCODE_TOOLS },
 };
-const REVIEW_READONLY_REF = { $ref: 'provider-options/review-readonly.yaml' };
-const REVIEW_WEB_REF = { $ref: 'provider-options/review-web.yaml' };
-const REVIEW_FILES_REF = { $ref: 'provider-options/review-files.yaml' };
-const EDIT_REF = { $ref: 'provider-options/edit.yaml' };
+const REVIEW_READONLY_EXTENDS = { extends: 'review-readonly' };
+const REVIEW_WEB_EXTENDS = { extends: 'review-web' };
+const REVIEW_FILES_EXTENDS = { extends: 'review-files' };
+const EDIT_EXTENDS = { extends: 'edit' };
 const PEER_REVIEW_OUTPUT_CONTRACTS = [
   'architecture-review',
   'security-review',
@@ -79,9 +80,9 @@ function loadBuiltinWorkflow(locale: 'en' | 'ja', name: string): BuiltinWorkflow
   return parseYaml(readFileSync(filePath, 'utf-8')) as BuiltinWorkflowRaw;
 }
 
-function loadProviderOptionsRef(locale: 'en' | 'ja', name: string): ProviderOptionsRefRaw {
-  const filePath = join(workflowDir(locale), 'provider-options', name);
-  return parseYaml(readFileSync(filePath, 'utf-8')) as ProviderOptionsRefRaw;
+function loadProviderOptionsPreset(locale: 'en' | 'ja', name: string): ProviderOptionsPresetRaw {
+  const filePath = join(process.cwd(), 'builtins', locale, 'provider-options', name);
+  return parseYaml(readFileSync(filePath, 'utf-8')) as ProviderOptionsPresetRaw;
 }
 
 function outputContractPath(locale: 'en' | 'ja', name: string): string {
@@ -100,21 +101,34 @@ function personaPath(locale: 'en' | 'ja', name: string): string {
   return join(process.cwd(), 'builtins', locale, 'facets', 'personas', `${name}.md`);
 }
 
-function normalizeBuiltinWorkflow(workflow: BuiltinWorkflowRaw, locale: 'en' | 'ja') {
-  return normalizeWorkflowConfig({
-    ...workflow,
-    knowledge: {
-      ...workflow.knowledge,
-      takt: 'placeholder',
-      architecture: 'placeholder',
-      'task-decomposition': 'placeholder',
-    },
-  }, workflowDir(locale), {
-    lang: locale,
-    projectDir: process.cwd(),
-    workflowDir: workflowDir(locale),
-    repertoireDir: getRepertoireDir(),
-  });
+function normalizeBuiltinWorkflow(workflow: BuiltinWorkflowRaw, locale: 'en' | 'ja', projectDir?: string) {
+  const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-builtin-provider-options-global-'));
+  const originalConfigDir = process.env.TAKT_CONFIG_DIR;
+  try {
+    process.env.TAKT_CONFIG_DIR = globalConfigDir;
+    const context = {
+      lang: locale,
+      ...(projectDir ? { projectDir } : {}),
+      workflowDir: workflowDir(locale),
+      repertoireDir: getRepertoireDir(),
+    };
+    return normalizeWorkflowConfig({
+      ...workflow,
+      knowledge: {
+        ...workflow.knowledge,
+        takt: 'placeholder',
+        architecture: 'placeholder',
+        'task-decomposition': 'placeholder',
+      },
+    }, workflowDir(locale), context);
+  } finally {
+    if (originalConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalConfigDir;
+    }
+    rmSync(globalConfigDir, { recursive: true, force: true });
+  }
 }
 
 describe('builtin takt-default provider_options refs', () => {
@@ -129,25 +143,25 @@ describe('builtin takt-default provider_options refs', () => {
         codex: { network_access: true },
         opencode: { network_access: true },
       });
-      expect(loadProviderOptionsRef(locale, 'review-readonly.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'review-readonly.yaml')).toEqual({
         claude: { allowed_tools: REVIEW_READONLY_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_READONLY_OPENCODE_TOOLS },
       });
-      expect(loadProviderOptionsRef(locale, 'review-web.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'review-web.yaml')).toEqual({
         claude: { allowed_tools: REVIEW_WEB_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_WEB_OPENCODE_TOOLS },
       });
-      expect(loadProviderOptionsRef(locale, 'review-files.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'review-files.yaml')).toEqual({
         claude: { allowed_tools: REVIEW_FILES_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_FILES_OPENCODE_TOOLS },
       });
-      expect(loadProviderOptionsRef(locale, 'edit.yaml')).toEqual({
+      expect(loadProviderOptionsPreset(locale, 'edit.yaml')).toEqual({
         claude: { allowed_tools: EDIT_CLAUDE_TOOLS },
         opencode: { allowed_tools: EDIT_OPENCODE_TOOLS },
       });
-      expect(steps.get('plan')?.provider_options).toEqual(REVIEW_READONLY_REF);
-      expect(steps.get('write_tests')?.provider_options).toEqual(EDIT_REF);
-      expect(steps.get('supervise')?.provider_options).toEqual(REVIEW_READONLY_REF);
+      expect(steps.get('plan')?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
+      expect(steps.get('write_tests')?.provider_options).toEqual(EDIT_EXTENDS);
+      expect(steps.get('supervise')?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
       expect(normalizedSteps.get('plan')?.providerOptions).toMatchObject(REVIEW_READONLY_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('write_tests')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('supervise')?.providerOptions).toMatchObject(REVIEW_READONLY_PROVIDER_OPTIONS);
@@ -159,10 +173,10 @@ describe('builtin takt-default provider_options refs', () => {
       const normalized = normalizeBuiltinWorkflow(workflow, locale);
       const normalizedSteps = new Map(normalized.steps.map((step) => [step.name, step]));
 
-      expect(steps.get('implement')?.provider_options).toEqual(EDIT_REF);
-      expect(steps.get('ai-antipattern-review-1st')?.provider_options).toEqual(REVIEW_WEB_REF);
-      expect(steps.get('ai-antipattern-fix')?.provider_options).toEqual(EDIT_REF);
-      expect(steps.get('ai-antipattern-no-fix')?.provider_options).toEqual(REVIEW_FILES_REF);
+      expect(steps.get('implement')?.provider_options).toEqual(EDIT_EXTENDS);
+      expect(steps.get('ai-antipattern-review-1st')?.provider_options).toEqual(REVIEW_WEB_EXTENDS);
+      expect(steps.get('ai-antipattern-fix')?.provider_options).toEqual(EDIT_EXTENDS);
+      expect(steps.get('ai-antipattern-no-fix')?.provider_options).toEqual(REVIEW_FILES_EXTENDS);
       expect(normalizedSteps.get('implement')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('ai-antipattern-review-1st')?.providerOptions).toMatchObject(
         REVIEW_WEB_PROVIDER_OPTIONS,
@@ -171,6 +185,28 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalizedSteps.get('ai-antipattern-no-fix')?.providerOptions).toMatchObject(
         REVIEW_FILES_PROVIDER_OPTIONS,
       );
+    });
+
+    it(`${locale} builtin workflow provider_options refs should be shadowed by project presets`, () => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-builtin-provider-options-shadow-'));
+      try {
+        const projectProviderOptionsDir = join(projectDir, '.takt', 'provider-options');
+        mkdirSync(projectProviderOptionsDir, { recursive: true });
+        writeFileSync(
+          join(projectProviderOptionsDir, 'review-files.yaml'),
+          'claude:\n  allowed_tools:\n    - Write\nopencode:\n  allowed_tools:\n    - write\n',
+          'utf-8',
+        );
+
+        const workflow = loadBuiltinWorkflow(locale, 'draft.yaml');
+        const normalized = normalizeBuiltinWorkflow(workflow, locale, projectDir);
+        const normalizedSteps = new Map(normalized.steps.map((step) => [step.name, step]));
+
+        expect(normalizedSteps.get('ai-antipattern-no-fix')?.providerOptions?.claude?.allowedTools).toEqual(['Write']);
+        expect(normalizedSteps.get('ai-antipattern-no-fix')?.providerOptions?.opencode?.allowedTools).toEqual(['write']);
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
     });
 
     it(`${locale} peer-review subworkflow should resolve provider_options refs for OpenCode tools`, () => {
@@ -187,16 +223,16 @@ describe('builtin takt-default provider_options refs', () => {
       const reviewerNames = [...reviewerSteps.keys()].filter((name) => name !== 'ai-antipattern-review-2nd');
 
       for (const name of reviewerNames) {
-        expect(reviewerSteps.get(name)?.provider_options).toEqual(REVIEW_READONLY_REF);
+        expect(reviewerSteps.get(name)?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
         expect(normalizedReviewerSteps.get(name)?.providerOptions).toMatchObject(
           REVIEW_READONLY_PROVIDER_OPTIONS,
         );
       }
-      expect(reviewerSteps.get('ai-antipattern-review-2nd')?.provider_options).toEqual(REVIEW_WEB_REF);
+      expect(reviewerSteps.get('ai-antipattern-review-2nd')?.provider_options).toEqual(REVIEW_WEB_EXTENDS);
       expect(normalizedReviewerSteps.get('ai-antipattern-review-2nd')?.providerOptions).toMatchObject(
         REVIEW_WEB_PROVIDER_OPTIONS,
       );
-      expect(steps.get('fix')?.provider_options).toEqual(EDIT_REF);
+      expect(steps.get('fix')?.provider_options).toEqual(EDIT_EXTENDS);
       expect(normalizedSteps.get('fix')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
     });
 

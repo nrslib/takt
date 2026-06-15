@@ -2,7 +2,18 @@
 
 🇯🇵 [日本語ドキュメント](./docs/README.ja.md) | 💬 [Discord Community](https://discord.gg/R2Xz3uYWxD)
 
-**T**AKT **A**gent **K**oordination **T**opology — Orchestrate multiple AI agents with structured review loops, managed prompts, and guardrails.
+**Stop babysitting AI coding agents.**
+
+TAKT is an open-source CLI that turns AI coding agents into repeatable development workflows. Define planning, implementation, review, fix loops, human checkpoints, permissions, and output contracts in YAML, then run tasks with isolated worktrees and traceable logs.
+
+Instead of asking one agent to remember the whole process, TAKT gives each step its own role, context, and transition rules. Agents can code, but the workflow decides what happens next.
+
+- Run plan → implement → review → fix loops as explicit workflow steps
+- Keep context focused with step-specific personas, policies, knowledge, instructions, and output contracts
+- Execute queued tasks in isolated worktrees and inspect logs and reports afterward
+- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
+
+**T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with structured review loops, managed prompts, and guardrails.
 
 Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
 
@@ -25,6 +36,37 @@ Reviews cannot be silently skipped. Findings route work back to fix steps, and h
 At its core, TAKT runs reusable agent processes built from roles, phases, judgments, and feedback loops.
 
 The goal is simple: make development processes reusable, reviewable, and reproducible without depending on constant human intervention.
+
+## Try It in 5 Minutes
+
+From a Git repository with at least one commit:
+
+```bash
+npm install -g takt
+
+# Talk to AI, describe a task, use /go, then choose "Queue as task"
+takt
+
+# Execute queued tasks in isolated worktrees
+takt run
+
+# Review diffs, merge, retry, requeue, or delete task branches
+takt list
+```
+
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, and `opencode` can run with Node.js and API keys; CLI-based providers require their external CLIs.
+
+## TAKT vs Plain AI Coding Agents
+
+| Plain AI coding agents | TAKT |
+|------------------------|------|
+| The prompt asks the agent to follow a process | The YAML workflow owns the process |
+| Review steps can be forgotten or skipped | Review and fix loops are explicit transitions |
+| One long context keeps growing | Each step receives only the context it needs |
+| Implementation and review responsibilities blur | Personas, permissions, and output contracts separate responsibilities |
+| Work often lands directly in the current tree | Queued tasks run in isolated worktrees by default |
+| The path from task to result is hard to audit | Logs and reports preserve the path from task to PR |
+| The same process must be recreated by memory | Workflows are reusable, reviewable, and versionable |
 
 ## Requirements
 

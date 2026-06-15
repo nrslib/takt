@@ -53,9 +53,10 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsMcpServers('codex')).toBe(false);
   });
 
-  it('maxTurns capability は claude-terminal を明示的に拒否する', () => {
+  it('maxTurns capability は SDK payload 非対応 provider を明示的に拒否する', () => {
     expect(providerSupportsMaxTurns('claude')).toBe(true);
     expect(providerSupportsMaxTurns('claude-terminal')).toBe(false);
+    expect(providerSupportsMaxTurns('opencode')).toBe(false);
   });
 
   it('native image input capability は SDK に実画像を渡せる provider だけを許可する', () => {

@@ -481,6 +481,17 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();
   });
+
+  it('removes report/status phase maxTurns for OpenCode because the SDK prompt payload does not support it', () => {
+    const step = createStep({ provider: 'opencode', model: 'opencode/big-pickle' });
+    const builder = createBuilder(step);
+
+    const options = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+
+    expect(options.resolvedProvider).toBe('opencode');
+    expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
+    expect(options.maxTurns).toBeUndefined();
+  });
 });
 
 describe('OptionsBuilder.buildNewSessionReportOptions', () => {
@@ -513,6 +524,21 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     });
 
     expect(options.resolvedProvider).toBe('claude-terminal');
+    expect(options.allowedTools).toEqual([]);
+    expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
+    expect(options.maxTurns).toBeUndefined();
+  });
+
+  it('removes new-session report phase maxTurns for OpenCode because the SDK prompt payload does not support it', () => {
+    const step = createStep({ provider: 'opencode', model: 'opencode/big-pickle' });
+    const builder = createBuilder(step);
+
+    const options = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    expect(options.resolvedProvider).toBe('opencode');
     expect(options.allowedTools).toEqual([]);
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();

@@ -22,6 +22,7 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
   - Example: pass request bodies using the defined root shape as-is
   - Example: keep query / path parameters in their defined location instead of moving them into the body
 - Include tests that would catch implementations that incorrectly reuse a response envelope when reading requests
+- When a shared helper, normalizer, builder, or adapter carries a contract, verify that existing equivalent branches preserve return values, side effects, events, and error classification
 - Write tests that are expected to pass after implementation is complete (build errors and test failures are expected at this stage)
 
 **Non-executable asset constraints:**

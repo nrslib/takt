@@ -13,6 +13,7 @@
 {{/if}}
 - **Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.
 - **Do NOT modify project source files.** Only respond with the report content.
+- **TAKT will save your response body to the report file.** Do not write the report file yourself.
 - **Use only the Report Directory files listed below.** Do not search or open reports outside that directory.
 Note: This section is metadata. Follow the language used in the rest of the prompt.
 

@@ -51,7 +51,7 @@ steps:
     knowledge:
       $param: impl_knowledge
     provider_options:
-      $ref: provider-options/edit.yaml
+      extends: edit
     required_permission_mode: edit
     team_leader:
       max_parts: 2
@@ -92,7 +92,7 @@ steps:
       - review
       - ai-antipattern
     provider_options:
-      $ref: provider-options/review-web.yaml
+      extends: review-web
     rules:
       - condition: AI特有の問題なし
         next: COMPLETE
@@ -113,7 +113,7 @@ steps:
     knowledge:
       $param: fix_knowledge
     provider_options:
-      $ref: provider-options/edit.yaml
+      extends: edit
     required_permission_mode: edit
     pass_previous_response: false
     rules:
@@ -129,7 +129,7 @@ steps:
     persona: architecture-reviewer
     policy: review
     provider_options:
-      $ref: provider-options/review-files.yaml
+      extends: review-files
     rules:
       - condition: ai-antipattern-review-1stの指摘が妥当（修正すべき）
         next: ai-antipattern-fix

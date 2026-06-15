@@ -359,20 +359,24 @@ workflow_config:
         allow_unsandboxed_commands: true
 ```
 
-`provider_options` can reference a shared YAML file relative to the workflow file. The referenced file is the base, and inline values override matching leaves.
+`provider_options` can reference a shared YAML preset by name. Names are resolved first-match from `.takt/provider-options`, `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For repertoire packages, package-local `provider-options` is checked first, and `@owner/repo/name` resolves a preset from that package. The referenced file is the base, and inline values override matching leaves.
+
+`provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
 ```yaml
 workflow_config:
   provider_options:
-    $ref: provider-options/review-readonly.yaml
+    extends: review-readonly
 
 steps:
   - name: implement
     provider_options:
-      $ref: provider-options/edit.yaml
+      extends: edit
       opencode:
         allowed_tools: [read, grep, bash]
 ```
+
+Relative file paths from the workflow file are still supported for workflow-local shared files.
 
 Example shared file:
 

@@ -40,9 +40,11 @@ my-takt-repertoire/
       plan.md
   workflows/
     expert.yaml
+  provider-options/
+    review-readonly.yaml
 ```
 
-`facets/` と `workflows/` ディレクトリだけがインポートされます。その他のファイルは無視されます。
+`facets/`、`workflows/`、`provider-options/` ディレクトリだけがインポートされます。その他のファイルは無視されます。
 
 ### takt-repertoire.yaml
 
@@ -65,7 +67,7 @@ takt:
 | フィールド | 必須 | デフォルト | 説明 |
 |-----------|------|-----------|------|
 | `description` | いいえ | - | パッケージの説明 |
-| `path` | いいえ | `.` | `facets/` と `workflows/` 内の workflow 定義を含むディレクトリへのパス |
+| `path` | いいえ | `.` | パッケージコンテンツディレクトリを含むディレクトリへのパス |
 | `takt.min_version` | いいえ | - | 必要な TAKT の最低バージョン（X.Y.Z 形式） |
 
 ## インストール
@@ -81,7 +83,7 @@ takt repertoire add github:{owner}/{repo}@{ref}
 ### インストール時の処理
 
 1. `gh api` 経由で GitHub から tarball をダウンロード
-2. `facets/` と `workflows/` の workflow ファイルのみを展開（`.md`、`.yaml`、`.yml`）
+2. `facets/`、`workflows/`、`provider-options/` からパッケージファイルを展開（`.md`、`.yaml`、`.yml`）
 3. `takt-repertoire.yaml` マニフェストをバリデーション
 4. TAKT バージョン互換性チェック
 5. `~/.takt/repertoire/@{owner}/{repo}/` にファイルをコピー
@@ -118,6 +120,17 @@ steps:
     persona: @nrslib/takt-fullstack/expert-coder
     policy: @nrslib/takt-fullstack/strict-review
     knowledge: @nrslib/takt-fullstack/domain
+```
+
+インストール済みパッケージの provider-options プリセットも、同じ scoped 構文を使って `provider_options.extends` から参照できます。repertoire パッケージ内の workflow では package-local の `provider-options/` がプロジェクト、ユーザー、ビルトインの provider-options ディレクトリより先に検索されます。workflow または step の inline `provider_options` は参照先プリセットを base とし、同じ leaf を上書きします。
+
+`provider_options.extends` は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
+
+```yaml
+provider_options:
+  extends: @nrslib/takt-fullstack/edit
+  opencode:
+    allowed_tools: [read, grep]
 ```
 
 ### 4層ファセット解決
@@ -165,4 +178,6 @@ takt repertoire remove @{owner}/{repo}
         ...
       workflows/              # repertoire パッケージ内の workflow 定義
         expert.yaml
+      provider-options/        # 共有 provider_options プリセット
+        review-readonly.yaml
 ```

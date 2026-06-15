@@ -12,6 +12,8 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Practical fixes | Propose implementable solutions, not theoretical ideals |
 | State consistency | For side effects and state changes, verify that success, failure, and interruption paths have no missing, duplicated, or inconsistent effects |
 | Contract coverage | Verify new contracts across normal entries, derived conditions, validation, evaluation, output, and re-injection paths |
+| Contract consistency | Verify that contracts carried by consolidation or abstraction are applied to existing equivalent branches by the same standard |
+| Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
 
@@ -50,6 +52,7 @@ REJECT without exception if any of the following apply.
 - Replaced code/exports surviving after refactoring
 - Missing cross-validation of related fields (invariants of semantically coupled config values left unverified)
 - Missing caller, producer, consumer, validator, test data, or derived-entry updates after a contract change
+- User-facing contract changes for configuration, CLI, or file formats where documentation or examples omit priority, first-match/merge behavior, inline overrides, scoped/special references, or failure conditions
 - Existing branches with the same contract remain on the old implementation after adding or changing a shared helper, normalizer, builder, or adapter
 - Missing, duplicated, or incorrectly ordered effects in side-effect or state-change paths
 - Sensitive data exposed in logs, error responses, or test output
@@ -260,6 +263,7 @@ The review target is the entire cumulative diff from the task's starting point (
 - Use `order.md`, `plan.md`, and the actual code as primary sources
 - Treat decisions from earlier steps (prior review results, planning decisions) as supplementary
 - When information conflicts, prioritize `order.md` / `plan.md` / actual code
+- When a user-facing specification changes, treat documentation and configuration examples as part of the contract and verify that every behavior listed in the requirements is present
 
 ### Referring to Design Decisions
 

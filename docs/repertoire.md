@@ -40,9 +40,11 @@ my-takt-repertoire/
       plan.md
   workflows/
     expert.yaml
+  provider-options/
+    review-readonly.yaml
 ```
 
-Only `facets/` and `workflows/` directories are imported. Other files are ignored.
+Only `facets/`, `workflows/`, and `provider-options/` directories are imported. Other files are ignored.
 
 ### takt-repertoire.yaml
 
@@ -65,7 +67,7 @@ The manifest can be placed at the repository root (`takt-repertoire.yaml`) or in
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `description` | No | - | Package description |
-| `path` | No | `.` | Path to the directory containing `facets/` and workflow definitions in `workflows/` |
+| `path` | No | `.` | Path to the directory containing package content directories |
 | `takt.min_version` | No | - | Minimum TAKT version required (X.Y.Z format) |
 
 ## Installation
@@ -81,7 +83,7 @@ Before installing, TAKT displays a summary of the package contents (facet counts
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts only `facets/` and workflow files from `workflows/` (`.md`, `.yaml`, `.yml`)
+2. Extracts package files from `facets/`, `workflows/`, and `provider-options/` (`.md`, `.yaml`, `.yml`)
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`
@@ -118,6 +120,17 @@ steps:
     persona: @nrslib/takt-fullstack/expert-coder
     policy: @nrslib/takt-fullstack/strict-review
     knowledge: @nrslib/takt-fullstack/domain
+```
+
+Provider-options presets from installed packages can be referenced with `provider_options.extends` using the same scoped syntax. For workflows provided by a repertoire package, package-local `provider-options/` is checked before project, user, and builtin provider-options directories. Inline `provider_options` in the workflow or step use the referenced preset as the base and override matching leaves.
+
+`provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
+
+```yaml
+provider_options:
+  extends: @nrslib/takt-fullstack/edit
+  opencode:
+    allowed_tools: [read, grep]
 ```
 
 ### 4-layer facet resolution
@@ -165,4 +178,6 @@ Installed packages are stored under `~/.takt/repertoire/`:
         ...
       workflows/              # Workflow definitions in repertoire packages
         expert.yaml
+      provider-options/        # Shared provider_options presets
+        review-readonly.yaml
 ```

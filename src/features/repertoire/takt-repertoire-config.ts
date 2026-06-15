@@ -6,15 +6,16 @@
  * - path field validation (no absolute paths, no directory traversal)
  * - min_version format validation (strict semver X.Y.Z)
  * - Numeric semver comparison
- * - Package content presence check (facets/ or workflows/ must exist)
+ * - Package content presence check (allowed content directory must exist)
  * - Realpath validation to prevent symlink-based traversal outside root
  */
 
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { isPathInside } from '../../shared/utils/index.js';
 import { TAKT_REPERTOIRE_MANIFEST_FILENAME } from './constants.js';
+import { ALLOWED_DIRS } from './file-filter.js';
 
 export interface TaktRepertoireConfig {
   description?: string;
@@ -106,17 +107,38 @@ export function isVersionCompatible(minVersion: string, currentVersion: string):
 }
 
 /**
- * Check that the package root contains at least one of facets/ or workflows/.
- * Throws if neither exists (empty package).
+ * Check that the package root contains at least one allowed content directory.
+ * Throws if none exists (empty package).
  */
 export function checkPackageHasContent(packageRoot: string): void {
-  const hasFacets = existsSync(join(packageRoot, 'facets'));
-  const hasWorkflows = existsSync(join(packageRoot, 'workflows'));
-  if (!hasFacets && !hasWorkflows) {
+  if (!hasAllowedContentDir(packageRoot)) {
     throw new Error(
-      `Package at "${packageRoot}" has neither facets/ nor workflows/ directory — empty package rejected`,
+      `Package at "${packageRoot}" has no supported content directory (${formatAllowedContentDirs()}) — empty package rejected`,
     );
   }
+}
+
+function hasAllowedContentDir(packageRoot: string): boolean {
+  return ALLOWED_DIRS.some((dir) => isExistingDirectory(join(packageRoot, dir)));
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+function isExistingDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function formatAllowedContentDirs(): string {
+  return ALLOWED_DIRS.map((dir) => `${dir}/`).join(', ');
 }
 
 /**
@@ -129,17 +151,14 @@ export function checkPackageHasContentWithContext(
   packageRoot: string,
   context: PackageContentCheckContext,
 ): void {
-  const hasFacets = existsSync(join(packageRoot, 'facets'));
-  const hasWorkflows = existsSync(join(packageRoot, 'workflows'));
-  if (hasFacets || hasWorkflows) return;
+  if (hasAllowedContentDir(packageRoot)) return;
 
-  const checkedFacets = join(packageRoot, 'facets');
-  const checkedWorkflows = join(packageRoot, 'workflows');
+  const checkedDirs = ALLOWED_DIRS.map((dir) => join(packageRoot, dir));
   const configuredPath = context.configuredPath ?? '.';
   const manifestPath = context.manifestPath ?? '(unknown)';
   const hint = configuredPath === '.'
     ? `hint: If your package content is under ".takt/", set "path: .takt" in ${TAKT_REPERTOIRE_MANIFEST_FILENAME}.`
-    : `hint: Verify "path: ${configuredPath}" points to a directory containing facets/ or workflows/.`;
+    : `hint: Verify "path: ${configuredPath}" points to a directory containing ${formatAllowedContentDirs()}.`;
 
   throw new Error(
     [
@@ -147,8 +166,7 @@ export function checkPackageHasContentWithContext(
       `manifest: ${manifestPath}`,
       `configured path: ${configuredPath}`,
       `resolved package root: ${packageRoot}`,
-      `checked: ${checkedFacets}`,
-      `checked: ${checkedWorkflows}`,
+      ...checkedDirs.map((dir) => `checked: ${dir}`),
       hint,
     ].join('\n'),
   );

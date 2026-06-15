@@ -205,6 +205,7 @@ describe('runReportPhase retry with new session', () => {
   });
 
   it('should retry with new session when qwen3-coder-next emits a run tool call during report phase', async () => {
+    // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-opencode.md');
     const onStream = vi.fn();
@@ -236,8 +237,10 @@ describe('runReportPhase retry with new session', () => {
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
+    // When
     await runReportPhase(step, 1, ctx);
 
+    // Then
     expect(readFileSync(join(reportDir, '03-opencode.md'), 'utf-8')).toBe('# Report\nRecovered without tools');
     expect(runAgentMock).toHaveBeenCalledTimes(2);
     expect(onStream).not.toHaveBeenCalled();
@@ -247,6 +250,7 @@ describe('runReportPhase retry with new session', () => {
   });
 
   it('should fail with a clear error when report phase retry also emits a tool call', async () => {
+    // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-opencode-loop.md');
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
@@ -278,6 +282,7 @@ describe('runReportPhase retry with new session', () => {
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
+    // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
       'Report phase failed for 03-opencode-loop.md: Report phase does not allow tool calls, but provider emitted tool "run".',
     );
@@ -286,6 +291,7 @@ describe('runReportPhase retry with new session', () => {
   });
 
   it('should fail report phase attempt when provider emits an unavailable tool result', async () => {
+    // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-unavailable-tool.md');
     const ctx = createContext(reportDir, 'Implemented feature X', undefined);
@@ -311,6 +317,7 @@ describe('runReportPhase retry with new session', () => {
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
+    // When
     let thrownError: unknown;
     try {
       await runReportPhase(step, 1, ctx);
@@ -318,6 +325,7 @@ describe('runReportPhase retry with new session', () => {
       thrownError = error;
     }
 
+    // Then
     expect(thrownError).toBeInstanceOf(Error);
     const errorMessage = (thrownError as Error).message;
     expect(errorMessage).toBe('Report phase failed for 03-unavailable-tool.md: Report phase does not allow tool results.');
@@ -328,6 +336,7 @@ describe('runReportPhase retry with new session', () => {
   });
 
   it('should not forward forbidden report phase tool results to run-agent stream callback', async () => {
+    // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-stream-callback-tool-result.md');
     const ctx = createContext(reportDir, 'Implemented feature X', undefined);
@@ -356,6 +365,7 @@ describe('runReportPhase retry with new session', () => {
       },
     ]);
 
+    // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
       'Report phase failed for 03-stream-callback-tool-result.md: Report phase does not allow tool results.',
     );
@@ -364,6 +374,7 @@ describe('runReportPhase retry with new session', () => {
   });
 
   it('should keep raw response content out of phase complete when provider catches forbidden stream errors', async () => {
+    // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-caught-tool-result.md');
     const ctx = createContext(reportDir, 'Implemented feature X', undefined);
@@ -413,6 +424,7 @@ describe('runReportPhase retry with new session', () => {
       };
     });
 
+    // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
       'Report phase failed for 03-caught-tool-result.md: Report phase does not allow tool results.',
     );
@@ -447,6 +459,7 @@ describe('runReportPhase retry with new session', () => {
   });
 
   it('should retry with new session when resumed report phase emits an invalid tool result', async () => {
+    // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-invalid-tool-retry.md');
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
@@ -479,8 +492,10 @@ describe('runReportPhase retry with new session', () => {
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
+    // When
     await runReportPhase(step, 1, ctx);
 
+    // Then
     expect(readFileSync(join(reportDir, '03-invalid-tool-retry.md'), 'utf-8')).toBe(
       '# Report\nRecovered after invalid tool result',
     );
@@ -494,6 +509,7 @@ describe('runReportPhase retry with new session', () => {
   });
 
   it('should retry with new session when resumed report phase emits an unavailable tool result', async () => {
+    // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-unavailable-tool-retry.md');
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
@@ -526,8 +542,10 @@ describe('runReportPhase retry with new session', () => {
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
+    // When
     await runReportPhase(step, 1, ctx);
 
+    // Then
     expect(readFileSync(join(reportDir, '03-unavailable-tool-retry.md'), 'utf-8')).toBe(
       '# Report\nRecovered after unavailable tool result',
     );

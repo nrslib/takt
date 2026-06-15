@@ -1,5 +1,20 @@
 # AI Antipattern Detection Criteria
 
+Detect assumptions, over-implementation, and superficial fixes that AI-generated changes commonly introduce.
+
+## Principles
+
+| Principle | Criteria |
+|-----------|----------|
+| Requirement fit | Verify that the implementation answers the actual request |
+| Reality check | Do not infer APIs, settings, fields, or wiring paths |
+| Context fit | Match existing naming, structure, error handling, logging, and tests |
+| Minimal diff | Do not mix in unnecessary features, abstractions, settings, or compatibility code |
+| Contract preservation | Do not change UI copy, public APIs, return values, errors, or test expectations out of scope |
+| Direct fixes | Do not replace a fix with tests or documentation explaining the issue |
+| Reachability | Confirm that added or retained code is used by current call paths |
+| Verifiability | Check code paths, usage sites, and execution results instead of explanations |
+
 ## Assumption Verification
 
 AI often makes assumptions. Verify them.
@@ -135,6 +150,22 @@ Questions to ask:
 - Would a developer familiar with this codebase write it this way?
 - Does it feel like it belongs here?
 - Are there unexplained deviations from project conventions?
+
+## Integration Pattern Consistency
+
+Check whether the same kind of API connection, such as REST calls, is implemented in inconsistent ways within the project.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Mixed generated and hand-written clients | Screen A uses Orval-generated hooks, screen B calls axiosInstance directly | REJECT |
+| Different implementations for the same data-fetching pattern | Screen A uses useQuery + axios, screen B uses generated hooks | REJECT |
+| Mixed data type definition styles | Screen A uses generated types, screen B uses hand-written types | REJECT |
+
+Verification approach:
+1. Check the API calling style in the diff
+2. Grep existing code for the style used by code with the same purpose
+3. Check whether the project has API generation config, such as orval.config.ts
+4. If inconsistent, flag unification to the project standard pattern
 
 ## Scope Creep Detection
 

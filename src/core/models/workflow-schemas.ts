@@ -44,17 +44,17 @@ const WorkflowFacetRefListOrParamSchema = z.union([WorkflowFacetRefScalarSchema,
 const WorkflowCallArgsRawSchema = z.record(z.string().min(1), WorkflowFacetRefValueSchema);
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
-  $ref: z.string().min(1).optional(),
-}).optional();
+  extends: z.string().min(1).optional(),
+}).strict().optional();
 
 function hasProviderOptionsTarget(
   providerOptions: NonNullable<z.output<typeof WorkflowStepProviderOptionsSchema>>,
 ): boolean {
-  const { $ref, ...providerOptionsWithoutRef } = providerOptions;
-  return $ref !== undefined || hasProviderOptionsLeaf(providerOptionsWithoutRef);
+  const { extends: providerOptionsExtends, ...providerOptionsWithoutExtends } = providerOptions;
+  return providerOptionsExtends !== undefined || hasProviderOptionsLeaf(providerOptionsWithoutExtends);
 }
 
-const WorkflowProviderOptionsWithRefSchema = z.object({
+const WorkflowProviderOptionsWithExtendsSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
@@ -518,7 +518,7 @@ export const WorkflowConfigRawSchema = z.object({
   description: z.string().optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
   finding_contract: FindingContractConfigRawSchema.optional(),
-  workflow_config: WorkflowProviderOptionsWithRefSchema,
+  workflow_config: WorkflowProviderOptionsWithExtendsSchema,
   rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),

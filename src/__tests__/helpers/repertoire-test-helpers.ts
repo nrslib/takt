@@ -10,6 +10,7 @@ import type { ScanConfig } from '../../features/repertoire/remove.js';
 export function makeScanConfig(tempDir: string): ScanConfig {
   return {
     workflowDirs: [join(tempDir, 'workflows'), join(tempDir, '.takt', 'workflows')],
+    providerOptionsDirs: [join(tempDir, 'provider-options'), join(tempDir, '.takt', 'provider-options')],
     categoriesFiles: [join(tempDir, 'preferences', 'workflow-categories.yaml')],
   };
 }

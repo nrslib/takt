@@ -5,8 +5,10 @@
  *
  * Scanner searches for @scope package references in:
  *   - {root}/workflows/**\/*.yaml
+ *   - {root}/provider-options/**\/*.yaml
  *   - {root}/preferences/workflow-categories.yaml
  *   - {root}/.takt/workflows/**\/*.yaml (project-level)
+ *   - {root}/.takt/provider-options/**\/*.yaml (project-level)
  *
  * Detection criteria:
  *   - Matches "@{owner}/{repo}" substring in file contents
@@ -76,6 +78,53 @@ describe('repertoire reference integrity: detection', () => {
     const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
 
     expect(refs.some((r) => r.filePath === projFile)).toBe(true);
+  });
+
+  it('should detect @scope reference in global provider-options YAML', () => {
+    const providerOptionsDir = join(tempDir, 'provider-options');
+    mkdirSync(providerOptionsDir, { recursive: true });
+    const providerOptionsFile = join(providerOptionsDir, 'review.yaml');
+    writeFileSync(providerOptionsFile, 'claude:\n  allowed_tools: ["@nrslib/takt-ensemble-fixture/tool"]');
+
+    const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
+
+    expect(refs.some((r) => r.filePath === providerOptionsFile)).toBe(true);
+  });
+
+  it('should detect @scope reference in project-level provider-options YAML', () => {
+    const providerOptionsDir = join(tempDir, '.takt', 'provider-options');
+    mkdirSync(providerOptionsDir, { recursive: true });
+    const providerOptionsFile = join(providerOptionsDir, 'review.yaml');
+    writeFileSync(providerOptionsFile, 'extends: "@nrslib/takt-ensemble-fixture/review-readonly"');
+
+    const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', makeScanConfig(tempDir));
+
+    expect(refs.some((r) => r.filePath === providerOptionsFile)).toBe(true);
+  });
+
+  it('should scan workflow, provider-options, and categories targets from explicit config', () => {
+    const workflowsDir = join(tempDir, 'custom-workflows');
+    const providerOptionsDir = join(tempDir, 'custom-provider-options');
+    const categoriesFile = join(tempDir, 'custom-categories.yaml');
+    mkdirSync(workflowsDir, { recursive: true });
+    mkdirSync(providerOptionsDir, { recursive: true });
+    const workflowFile = join(workflowsDir, 'flow.yaml');
+    const providerOptionsFile = join(providerOptionsDir, 'readonly.yaml');
+    writeFileSync(workflowFile, 'persona: "@nrslib/takt-ensemble-fixture/coder"');
+    writeFileSync(providerOptionsFile, 'extends: "@nrslib/takt-ensemble-fixture/review-readonly"');
+    writeFileSync(categoriesFile, 'categories:\n  - "@nrslib/takt-ensemble-fixture/fullstack"');
+
+    const refs = findScopeReferences('@nrslib/takt-ensemble-fixture', {
+      workflowDirs: [workflowsDir],
+      providerOptionsDirs: [providerOptionsDir],
+      categoriesFiles: [categoriesFile],
+    });
+
+    expect(refs.map((ref) => ref.filePath).sort()).toEqual([
+      categoriesFile,
+      providerOptionsFile,
+      workflowFile,
+    ].sort());
   });
 });
 

@@ -78,7 +78,8 @@ describe('renderReportOutputInstruction', () => {
     const result = renderReportOutputInstruction(step, ctx, 'en');
     expect(result).toContain('Report output');
     expect(result).toContain('Report File');
-    expect(result).toContain('Move current content to `logs/reports-history/`');
+    expect(result).toContain('TAKT moves current content to `logs/reports-history/`');
+    expect(result).not.toContain('Move current content to `logs/reports-history/` before overwriting');
   });
 
   it('should render English multi-file instruction', () => {

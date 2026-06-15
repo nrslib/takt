@@ -304,22 +304,25 @@ export function renderReportOutputInstruction(
   const isMulti = step.outputContracts.length > 1;
 
   let heading: string;
+  let saveRule: string;
   let createRule: string;
   let overwriteRule: string;
 
   if (language === 'ja') {
     heading = isMulti
-      ? '**レポート出力:** Report Files に出力してください。'
-      : '**レポート出力:** `Report File` に出力してください。';
-    createRule = '- ファイルが存在しない場合: 新規作成';
-    overwriteRule = '- ファイルが存在する場合: 既存内容を `logs/reports-history/` に退避し、最新内容で上書き';
+      ? '**レポート出力:** Report Files 用の本文を回答してください。'
+      : '**レポート出力:** `Report File` 用の本文を回答してください。';
+    saveRule = '- TAKT があなたの回答本文をレポートファイルに保存します。自分でファイルを書き込まないでください。';
+    createRule = '- ファイルが存在しない場合: TAKT が新規作成します';
+    overwriteRule = '- ファイルが存在する場合: TAKT が既存内容を `logs/reports-history/` に退避し、最新内容で上書きします';
   } else {
     heading = isMulti
-      ? '**Report output:** Output to the `Report Files` specified above.'
-      : '**Report output:** Output to the `Report File` specified above.';
-    createRule = '- If file does not exist: Create new file';
-    overwriteRule = '- If file exists: Move current content to `logs/reports-history/` and overwrite with latest report';
+      ? '**Report output:** Respond with content for the `Report Files` specified above.'
+      : '**Report output:** Respond with content for the `Report File` specified above.';
+    saveRule = '- TAKT will save your response body to the report file. Do not write the file yourself.';
+    createRule = '- If file does not exist: TAKT creates a new file';
+    overwriteRule = '- If file exists: TAKT moves current content to `logs/reports-history/` and overwrites it with the latest report.';
   }
 
-  return `${heading}\n${createRule}\n${overwriteRule}`;
+  return `${heading}\n${saveRule}\n${createRule}\n${overwriteRule}`;
 }

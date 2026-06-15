@@ -18,38 +18,9 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - When a specification change removes an old design, do not leave code or tests that only verify the absence of the old specification
 - After implementation, inspect the full diff and revert unnecessary changes
 
-**Maintenance Scope output contract (create at the start of implementation):**
-```markdown
-# Maintenance Change Scope
-
-## Task
-{One-line task summary}
-
-## Required Changes
-| File | Reason | Requirement Mapping |
-|------|--------|---------------------|
-| {File} | {Reason} | {Mapped requirement} |
-
-## Related Changes
-| File | Reason | Relation to Required Change |
-|------|--------|-----------------------------|
-| {File} | {Reason} | {Relation} |
-
-## Existing Contracts Preserved
-| Contract | Target | Preservation |
-|----------|--------|--------------|
-| {Contract type} | {Target} | {What is preserved} |
-```
-
-**Decisions output contract (at implementation completion, only if decisions were made):**
-```markdown
-# Decision Log
-
-## 1. {Decision}
-- **Context**: {Why the decision was needed}
-- **Options considered**: {List of options}
-- **Rationale**: {Reason for the choice}
-```
+**Output contracts:**
+- At implementation start, organize required changes, related changes, and preserved existing contracts in the shape expected by the `maintenance-scope` output contract.
+- After implementation, only when a non-obvious decision exists, create a decision log following the `coder-decisions` output contract.
 
 **Pre-completion self-check (required):**
 

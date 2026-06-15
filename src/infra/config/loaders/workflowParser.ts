@@ -198,6 +198,7 @@ export function normalizeWorkflowConfig(
     parsed.workflow_config?.model,
     parsed.workflow_config?.provider_options,
     workflowDir,
+    context,
   );
   const steps: WorkflowStep[] = parsed.steps.map((step) =>
     normalizeStepFromRaw(

@@ -6,12 +6,30 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.46.0] - 2026-06-13
+
+### Added
+
+- OTLP エクスポートにプロバイダーサブプロセスの span ネストと実行中トレースの発見性を追加 (#808, #812, #814)。`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃った場合のみ、既存のローカル exporter と並走して span と metric を OTLP HTTP で送信する。`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` による個別 endpoint 上書きも標準環境変数として利用できるが、TAKT 独自の OTLP config キーは追加していない。0.42.0 の「標準 `OTEL_*` 環境変数で自前の collector に接続する」という記述は、#753 以降 `spanProcessors` / `metricReaders` を明示指定したことで成立していなかったため、本変更で実際に送信できるようにした。さらに、起動するプロバイダーのサブプロセスへ W3C トレースコンテキストを伝播するようにし、各プロバイダー CLI の span が独立したトレースにならず親ワークフローのトレース配下にネストするようにした (#812)。あわせて、長時間続くルート span が閉じる前でも実行中のワークフローを Grafana Tempo で発見できるよう、短命な `workflow_start.<name>` span を出力する (#814)
+- OpenCode のツール許可リストと共有 `provider_options` ファイルを追加 (#804)。`provider_options.opencode.allowed_tools` で、ステップやワークフローが利用できる OpenCode ツールを小文字のツール名（例: `read`・`glob`・`grep`・`bash`・`websearch`・`webfetch`）で絞り込める。`provider_options` ブロックはワークフローファイルからの相対パスで共有 YAML ファイルを `$ref` 参照できるようになり、インライン値が一致するリーフを上書きする。再利用できるビルトイン `provider-options/{edit,review-files,review-readonly,review-web}.yaml` プリセットも同梱した
+- Kiro のステップ単位カスタムエージェントを追加 (#796)。`provider_options.kiro.agent` で、ステップ・ワークフロー・ペルソナ・プロジェクト・グローバルの各設定に Kiro CLI のカスタムエージェント名（`kiro-cli chat --agent`）を渡せるようになった。`TAKT_PROVIDER_OPTIONS_KIRO_AGENT` 環境変数による上書きも可能。指定がないステップは Kiro CLI の既定エージェントを使う
+
+### Changed
+
+- `team_leader` のパート上限を `max_concurrency` と `max_total_parts` に分割 (#799)。`max_concurrency`（最大 3）は同時に走るワーカーパート数を、`max_total_parts`（最大 20）はリーダーがそのステップで計画できるパートの総数を制限する。従来の `max_parts` キーは `max_concurrency` の互換エイリアスとして引き続き受け付ける。あわせてチームリーダーの予算エラー検出を厳密化し、ワーカーパートが予算上限に達しても実行全体が中断しないようにした
+- ビルトインのレビュー系・開発系ワークフローに純粋レビューパスを追加。汎用の `pure-reviewer` ペルソナ（`review-pure` インストラクションと `pure-review` 出力契約を伴う）が「この変更は今マージできるか」だけを判定し、未対応の要求・既存挙動の破壊・テスト不足・スコープ外の変更を検出する。peer-review・review・review-fix・backend(-cqrs)・frontend・dual(-cqrs)・terraform・maintenance の各ワークフローに組み込んだ。これにより従来の要件レビュアー（`requirements-reviewer` ペルソナと `requirements-review` 出力契約）は削除した
+- ビルトインのレビュー・テスト系ファセットを強化。レビュアーとテスト作成ガイダンスが、置き換えられた仕様が消えたことだけを確認する「不在のみ」テストに対するガードレールを持つようになり、coding・review・testing ポリシー全体で挙動検証・レビュー検証・命名ポリシーのガイダンスを強化した
+
+### Fixed
+
+- レート制限の誤検出を低減 (#809)。レート制限検出のパターンが過度に広く、単独の `429`、通りすがりの `rate limit` という記述、通常のエージェント出力に含まれる `resets H:MM` のような時刻表記までレート制限と誤読してフォールバックを誘発していた。検出により具体的な表現（例: "too many requests" を伴う `429`、"rate limited" / "rate limit exceeded" / "rate limit error"、"exceeded/hit/reached rate limit"）を要求し、緩い単独時刻のストリームマーカーを廃止した
+- OpenCode のパーミッション処理を修正 (#801, #803, #807)。OpenCode の `doom_loop` パーミッション要求が、有効なパーミッションモードによって拒否される代わりに自動応答されるようになり、非対話実行が停止しなくなった (#803)。パーミッション要求と解決済みパーミッションの要約をログ出力するようにした (#801, #807)。さらに OpenCode 連携を再構成し、編集系ツールが OpenCode の編集パーミッションに対応付くようにし、共有 OpenCode サーバープールを設定ごとにキー分けして適切な取得・解放・中断処理を行うようにした (#807)
+
 ## [0.45.0] - 2026-06-10
 
 ### Added
 
 - フェーズ単位の usage イベントと usage 分析スクリプトを追加 (#785)。`observability.enabled: true` と `observability.usage_events_phase: true` を設定すると、実行ごとにフェーズ単位のトークン usage イベントを `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力する（既存の `logging.usage_events` 出力とは別ストリーム）。イベントはワークフローフェーズ（`phase1_execute`・`phase2_report`・ステータス判定の `phase3_structured` / `phase3_tag` / `phase3_fallback`）ごとに記録され、usage が取得できなかった呼び出しは 0 トークン扱いではなく `usage_missing: true` として記録される。新しい `npm run analyze:usage` スクリプトは、イベントファイルや実行ディレクトリを step × phase × provider × model 単位の Markdown / CSV テーブルに集計し、トークン合計と呼び出しごとの統計を出力する。新設の [Observability ガイド](./observability.ja.md) に記載
-- OTLP exporter の opt-in とローカル可視化手順を追加 (#808)。`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃った場合のみ、既存のローカル exporter と並走して span と metric を OTLP HTTP で送信する。`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` による個別 endpoint 上書きも標準環境変数として利用できるが、TAKT 独自の OTLP config キーは追加していない。0.42.0 の「標準 `OTEL_*` 環境変数で自前の collector に接続する」という記述は、#753 以降 `spanProcessors` / `metricReaders` を明示指定したことで成立していなかったため、本変更で実際に送信できるようにした
 - インタラクティブモードでクリップボード画像ペーストに対応 (#791)。インタラクティブ入力中に Ctrl+V（または新しい `/paste-image` コマンド）で OS のクリップボードから画像を直接添付できるようになった。これまではターミナルがインライン画像（OSC 1337）エスケープシーケンスを送出する場合にのみペーストが機能していた。添付画像はプロバイダー抽象も通るようになり、`claude-sdk` と `codex` はネイティブの画像入力として受け取り、その他のプロバイダーにはプロンプト内に添付ファイルパスの参照が展開されるため、エージェントが自身のツールで画像を開ける
 
 ### Changed

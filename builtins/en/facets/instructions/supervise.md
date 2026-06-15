@@ -22,6 +22,8 @@ Procedure:
    - If a finding does not hold in code, classify it as `false_positive`
    - If a finding holds technically but pushes work beyond the task objective or justified scope, classify it as `overreach`
    - Do not leave `false_positive` / `overreach` reasoning implicit
+5. If the diff adds or changes a shared helper, normalizer, builder, or adapter, reconcile its contract against existing branches with the same responsibility
+   - Even when absent from the requirements table, contract inconsistencies introduced by the diff must be treated as unverified scope or a REJECT reason
 
 ## Report Priority (supervise-specific)
 
@@ -32,72 +34,7 @@ Procedure:
 - Evidence based on mocks, static inspection, or limited unit tests must not be treated as verification beyond that scope
 - If items of evidence conflict, prioritize them in this order: `execution-result report > reviewer report with concrete verification details > summary report`
 
-**Validation output contract:**
-```markdown
-# Final Verification Results
+## Output
 
-## Result: APPROVE / REJECT
-
-## Requirements Fulfillment Check
-
-Extract requirements from the task spec and verify each one individually against actual code.
-
-| # | Requirement (extracted from task spec) | Met | Evidence (file:line) |
-|---|---------------------------------------|-----|---------------------|
-| 1 | {requirement 1} | ✅/❌ | `src/file.ts:42` |
-| 2 | {requirement 2} | ✅/❌ | `src/file.ts:55` |
-
-- If any ❌ exists, REJECT is mandatory
-- ✅ without evidence is invalid (must verify against actual code)
-- Do not mark a row as ✅ when only part of the cases is verified
-- Do not rely on plan report's judgment; independently verify mergeability
-
-## Re-evaluation of Prior Findings
-| finding_id | Prior status | Re-evaluation | Evidence |
-|------------|--------------|---------------|----------|
-| {id} | new / persists / resolved | valid / false_positive / overreach | `src/file.ts:42`, `reports/plan.md` |
-
-- If final judgment differs from prior review conclusions, explain why with evidence
-- If marking `false_positive` or `overreach`, state whether it conflicts with the task objective, the plan, or both
-- If overturning a pure-review conclusion, explain why with concrete evidence
-
-## Verification Summary
-| Item | Status | Verification method |
-|------|--------|-------------------|
-| Tests | ✅ / ⚠️ / ❌ | {Execution log, report, CI result, or why unverified} |
-| Build | ✅ / ⚠️ / ❌ | {Execution log, report, CI result, or why unverified} |
-| Functional check | ✅ / ⚠️ / ❌ | {Evidence used, or state that it was not verified} |
-
-## Unverified Scope
-| Item | Impact | Treatment |
-|------|--------|-----------|
-| {Unverified scope, or "none"} | {Primary or supporting requirement} | APPROVE allowed / REJECT reason |
-
-## Deliverables
-- Created: {Created files}
-- Modified: {Modified files}
-
-## Outstanding items (if REJECT)
-| # | Item | Reason |
-|---|------|--------|
-| 1 | {Item} | {Reason} |
-```
-
-**Summary output contract (only if APPROVE):**
-```markdown
-# Task Completion Summary
-
-## Task
-{Original request in 1-2 sentences}
-
-## Result
-Complete
-
-## Changes
-| Type | File | Summary |
-|------|------|---------|
-| Create | `src/file.ts` | Summary description |
-
-## Verification evidence
-- {Evidence for tests/builds/functional checks}
-```
+- Follow the `supervisor-validation` output contract to record requirements fulfillment, prior finding re-evaluation, verification evidence, and unverified scope
+- Only when APPROVE, follow the `summary` output contract to produce the completion summary

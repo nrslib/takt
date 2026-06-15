@@ -442,6 +442,7 @@ describe('template content integrity', () => {
     const en = loadTemplate('perform_phase2_message', 'en');
     expect(en).toContain('{{#if hasGitRules}}{{gitRules}}');
     expect(en).toContain('Do NOT modify project source files');
+    expect(en).toContain('TAKT will save your response body to the report file');
     expect(en).toContain('## Workflow Context');
     expect(findDeprecatedTerms(en)).toEqual([]);
     expect(en).toContain('## Instructions');
@@ -449,6 +450,7 @@ describe('template content integrity', () => {
     const ja = loadTemplate('perform_phase2_message', 'ja');
     expect(ja).toContain('{{#if hasGitRules}}{{gitRules}}');
     expect(ja).toContain('プロジェクトのソースファイルを変更しないでください');
+    expect(ja).toContain('TAKT があなたの回答本文をレポートファイルに保存します');
     expect(ja).toContain('## Workflow Context');
     expect(findDeprecatedTerms(ja)).toEqual([]);
   });

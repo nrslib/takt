@@ -26,6 +26,18 @@ Extract requirements from the task spec and verify each one individually against
 
 - If final judgment differs from prior review conclusions, explain why with evidence
 - If marking `false_positive` or `overreach`, state whether it conflicts with the task objective, the plan, or both
+- If overturning a pure-review conclusion, explain why with concrete evidence
+
+## Maintenance Scope Check (maintenance workflows only)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| Only required changes remain | ✅/❌ | {Evidence} |
+| Related changes have clear reasons | ✅/❌ | {Evidence} |
+| No unnecessary changes remain | ✅/❌ | {Evidence} |
+| No out-of-scope comment deletion occurred | ✅/❌ | {Evidence} |
+| Type names, file placement, and public APIs did not change out of scope | ✅/❌ | {Evidence} |
+| UI copy, accessible names, and test expectations did not change out of scope | ✅/❌ | {Evidence} |
 
 ## Validation Summary
 | Item | Status | Verification Method |
@@ -37,6 +49,11 @@ Extract requirements from the task spec and verify each one individually against
 - Do not claim success/failure/not-runnable for commands that were never executed
 - When using `⚠️`, explain the missing evidence and the verified scope in the method column
 - If report text conflicts with execution evidence, treat that inconsistency itself as a finding
+
+## Unverified Scope
+| Item | Impact | Treatment |
+|------|--------|-----------|
+| {Unverified scope, or "none"} | {Primary or supporting requirement} | APPROVE allowed / REJECT reason |
 
 ## Current Iteration Findings (new)
 | # | finding_id | Item | Evidence | Reason | Required Action |
@@ -56,6 +73,11 @@ Extract requirements from the task spec and verify each one individually against
 ## Deliverables
 - Created: {Created files}
 - Modified: {Modified files}
+
+## Outstanding Items (if REJECT)
+| # | Item | Reason |
+|---|------|--------|
+| 1 | {Item} | {Reason} |
 
 ## Rejection Gate
 - REJECT is valid only when at least one finding exists in `new` or `persists`

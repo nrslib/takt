@@ -824,9 +824,10 @@ describe('instruction-builder', () => {
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('**Report output:** Output to the `Report File` specified above.');
-      expect(result).toContain('- If file does not exist: Create new file');
-      expect(result).toContain('- If file exists: Move current content to `logs/reports-history/` and overwrite with latest report');
+      expect(result).toContain('**Report output:** Respond with content for the `Report File` specified above.');
+      expect(result).toContain('- TAKT will save your response body to the report file. Do not write the file yourself.');
+      expect(result).toContain('- If file does not exist: TAKT creates a new file');
+      expect(result).toContain('- If file exists: TAKT moves current content to `logs/reports-history/` and overwrites it with the latest report');
     });
 
     it('should include explicit order instead of auto-generated', () => {
@@ -860,14 +861,14 @@ describe('instruction-builder', () => {
       expect(result).toContain('# Plan');
     });
 
-    it('should include overwrite-and-archive rule in report output instruction', () => {
+    it('should include TAKT overwrite-and-archive rule in report output instruction', () => {
       const step = createMinimalStep('Do work');
       step.outputContracts = [{ name: '00-plan.md', format: '00-plan', useJudge: true }];
       const ctx = createReportContext({ stepIteration: 5 });
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('Move current content to `logs/reports-history/` and overwrite with latest report');
+      expect(result).toContain('TAKT moves current content to `logs/reports-history/` and overwrites it with the latest report');
     });
 
     it('should include instruction body text', () => {
@@ -919,7 +920,8 @@ describe('instruction-builder', () => {
       expect(result).toContain('プロジェクトのソースファイルを変更しないでください');
       expect(result).toContain('## Workflow Context');
       expect(findDeprecatedTerms(result)).toEqual([]);
-      expect(result).toContain('**レポート出力:** `Report File` に出力してください。');
+      expect(result).toContain('**レポート出力:** `Report File` 用の本文を回答してください。');
+      expect(result).toContain('- TAKT があなたの回答本文をレポートファイルに保存します。自分でファイルを書き込まないでください。');
     });
 
     it('should throw error when step has no output contracts', () => {
@@ -939,7 +941,7 @@ describe('instruction-builder', () => {
 
       const result = buildReportInstruction(step, ctx);
 
-      expect(result).toContain('**Report output:** Output to the `Report Files` specified above.');
+      expect(result).toContain('**Report output:** Respond with content for the `Report Files` specified above.');
     });
   });
 

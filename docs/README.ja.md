@@ -2,7 +2,18 @@
 
 [English](../README.md) | 💬 [Discord コミュニティ](https://discord.gg/R2Xz3uYWxD)
 
-**T**AKT **A**gent **K**oordination **T**opology — 複数の AI エージェントをオーケストレーションし、レビューループ・プロンプト管理・ガードレールを与えるツールです。
+**AI コーディングエージェントの見張り番をやめる。**
+
+TAKT は、AI コーディングエージェントを再現可能な開発ワークフローとして動かす OSS CLI です。計画、実装、レビュー、修正ループ、人間への確認、権限、出力契約を YAML で定義し、隔離された worktree と追跡可能なログ付きでタスクを実行します。
+
+1つのエージェントにプロセス全体を覚えさせるのではなく、TAKT は step ごとに役割、文脈、遷移ルールを与えます。AI はコードを書きますが、次に何をするかは workflow が決めます。
+
+- 計画 → 実装 → レビュー → 修正ループを明示的な workflow step として実行
+- step ごとに persona、policy、knowledge、instruction、output contract を分け、コンテキストを肥大化させない
+- 積んだタスクを隔離された worktree で実行し、後からログとレポートを確認できる
+- Claude Code、Claude SDK、Codex SDK、OpenCode SDK、Cursor、GitHub Copilot CLI、Kiro を provider として利用できる
+
+**T**AKT **A**gent **K**oordination **T**opology は、複数の AI エージェントをオーケストレーションし、レビューループ・プロンプト管理・ガードレールを与えるツールです。
 
 AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の workflow ファイルで定義されており、エージェント任せにはしません。TAKT は Claude Code、Codex、OpenCode、Cursor、GitHub Copilot CLI、Kiro CLI を、役割・権限・文脈の異なるエージェントとして協調させます。
 
@@ -25,6 +36,37 @@ workflow で工程を定義し、persona・policy・knowledge・instruction・ou
 中核にあるのは「役割・工程・判定・フィードバックループを持つエージェントプロセス」を再利用可能な形で動かすことです。
 
 目的はシンプルです。人間の継続的な介入に依存せず、開発プロセスを再利用可能で、レビュー可能で、再現可能な仕組みにすることです。
+
+## 5分で試す
+
+少なくとも1回 commit 済みの Git リポジトリで実行します。
+
+```bash
+npm install -g takt
+
+# AI と会話し、タスクを説明し、/go の後に「タスクにつむ」を選びます
+takt
+
+# 積んだタスクを隔離された worktree で実行します
+takt run
+
+# diff の確認、マージ、リトライ、リキュー、タスクブランチ削除を行います
+takt list
+```
+
+初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode` などの SDK 経由 provider は Node.js と API キーで動きます。CLI 経由 provider を使う場合は、対応する外部 CLI が必要です。
+
+## TAKT と通常の AI コーディングエージェントの違い
+
+| 通常の AI コーディングエージェント | TAKT |
+|------------------------------------|------|
+| プロンプトでプロセスを守るよう依頼する | YAML workflow がプロセスを管理する |
+| レビュー手順が忘れられたり飛ばされたりする | レビューと修正ループが明示的な遷移になる |
+| 1つの長いコンテキストが肥大化し続ける | 各 step に必要なコンテキストだけを渡す |
+| 実装とレビューの責務が混ざりやすい | persona、権限、output contract で責務を分ける |
+| 作業がカレントツリーに直接入ることが多い | 積んだタスクはデフォルトで隔離された worktree で実行される |
+| タスクから結果までの経路を追いにくい | ログとレポートでタスクから PR までの経路を追跡できる |
+| 同じプロセスを記憶で再現する必要がある | workflow を再利用・レビュー・バージョン管理できる |
 
 ## 必要なもの
 

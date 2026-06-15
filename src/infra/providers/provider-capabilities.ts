@@ -30,7 +30,6 @@ const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
   'claude',
   'claude-sdk',
   'codex',
-  'opencode',
   'cursor',
   'copilot',
   'mock',
