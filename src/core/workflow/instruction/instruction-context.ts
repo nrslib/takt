@@ -9,6 +9,7 @@ import type { AgentResponse, FallbackContext, Language, WorkflowMaxSteps, Workfl
 export interface FindingContractInstructionContext {
   ledgerCopyPath: string;
   ledgerSummary: string;
+  reportLedgerSummary: string;
   rawFindingsJsonSchema?: Record<string, unknown>;
 }
 

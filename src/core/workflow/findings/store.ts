@@ -1,6 +1,4 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import type { FindingLedger, RawFinding } from './types.js';
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
@@ -12,7 +10,6 @@ interface FindingLedgerStoreOptions {
   workflowName: string;
   ledgerPath: string;
   rawFindingsPath: string;
-  authoritativeRoot?: string;
 }
 
 const PRIVATE_DIR_MODE = 0o700;
@@ -137,48 +134,33 @@ function sanitizeFileSegment(value: string): string {
   return sanitized;
 }
 
-function getGlobalConfigDir(): string {
-  return process.env.TAKT_CONFIG_DIR || resolve(homedir(), '.takt');
-}
-
-function projectLedgerNamespace(projectCwd: string): string {
-  const realProjectCwd = realpathSync(projectCwd);
-  return createHash('sha256').update(realProjectCwd).digest('hex').slice(0, 16);
-}
-
-export function resolveFindingLedgerRoot(projectCwd: string): string {
-  return resolve(getGlobalConfigDir(), 'findings', 'projects', projectLedgerNamespace(projectCwd));
-}
-
 export function createFindingLedgerStore(options: FindingLedgerStoreOptions): FindingLedgerStore {
-  const authoritativeRoot = options.authoritativeRoot ?? resolveFindingLedgerRoot(options.projectCwd);
-  mkdirSync(authoritativeRoot, { recursive: true, mode: PRIVATE_DIR_MODE });
-  assertNotSymlink(authoritativeRoot);
-  chmodSync(authoritativeRoot, PRIVATE_DIR_MODE);
-  const ledgerPath = resolveInside(authoritativeRoot, options.ledgerPath);
+  const ledgerRoot = resolveFindingLedgerRoot(options.projectCwd);
+  assertNotSymlink(ledgerRoot);
+  const ledgerPath = resolveInside(ledgerRoot, options.ledgerPath);
   const copyPath = resolveInside(options.reportDir, 'findings-ledger.json');
-  const rawFindingsDir = resolveInside(authoritativeRoot, options.rawFindingsPath);
+  const rawFindingsDir = resolveInside(ledgerRoot, options.rawFindingsPath);
 
   return {
     loadLedger: () => {
       if (!existsSync(ledgerPath)) {
         return createEmptyLedger(options.workflowName);
       }
-      const ledger = readProjectLedgerFile(authoritativeRoot, ledgerPath);
+      const ledger = readProjectLedgerFile(ledgerRoot, ledgerPath);
       assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
       return ledger;
     },
     saveLedger: (ledger) => {
       assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
       assertLedgerIdAllocationInvariant(ledger);
-      prepareWritableFilePath(authoritativeRoot, ledgerPath);
+      prepareWritableFilePath(ledgerRoot, ledgerPath);
       writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
       chmodSync(ledgerPath, PRIVATE_FILE_MODE);
     },
     createRunCopy: () => {
       prepareWritableCopyPath(options.reportDir, copyPath);
       const ledger = existsSync(ledgerPath)
-        ? readProjectLedgerFile(authoritativeRoot, ledgerPath)
+        ? readProjectLedgerFile(ledgerRoot, ledgerPath)
         : createEmptyLedger(options.workflowName);
       assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
       writeFileSync(copyPath, JSON.stringify(ledger, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
@@ -187,7 +169,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     },
     saveRawFindings: (runId, stepName, rawFindings) => {
       const parsedRawFindings = parseRawFindings(rawFindings);
-      prepareWritableDirectory(authoritativeRoot, rawFindingsDir);
+      prepareWritableDirectory(ledgerRoot, rawFindingsDir);
       const baseName = `${sanitizeFileSegment(runId)}.${sanitizeFileSegment(stepName)}`;
       let rawFindingsFile = `${baseName}.json`;
       let generation = 2;
@@ -205,4 +187,8 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       return rawFindingsFilePath;
     },
   };
+}
+
+export function resolveFindingLedgerRoot(projectCwd: string): string {
+  return resolve(projectCwd);
 }

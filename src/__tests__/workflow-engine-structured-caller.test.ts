@@ -190,7 +190,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(judgeOptions).not.toHaveProperty('outputSchema');
   });
 
-  it('finding_contract の engine-owned ledger を読み込み findings rule で遷移する', async () => {
+  it('finding_contract の project ledger を読み込み findings rule で遷移する', async () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings'), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify({
@@ -274,32 +274,10 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
-  it('projectCwd 側の改変済み ledger を rule 評価で信頼しない', async () => {
+  it('projectCwd 側の ledger を rule 評価の正本として信頼する', async () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings'), { recursive: true });
-    mkdirSync(join(cwd, '.takt', 'findings'), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify({
-      version: 1,
-      workflowName: 'finding-engine-test',
-      nextId: 2,
-      updatedAt: '2026-06-13T00:00:00.000Z',
-      findings: [
-        {
-          id: 'F-0001',
-          status: 'open',
-          lifecycle: 'new',
-          severity: 'high',
-          title: 'Blocks release',
-          reviewers: ['architecture-reviewer'],
-          rawFindingIds: ['raw-1'],
-          firstSeen: { runId: 'run-1', stepName: 'review', timestamp: '2026-06-13T00:00:00.000Z' },
-          lastSeen: { runId: 'run-1', stepName: 'review', timestamp: '2026-06-13T00:00:00.000Z' },
-        },
-      ],
-      rawFindings: [],
-      conflicts: [],
-    }), 'utf-8');
-    writeFileSync(join(cwd, '.takt', 'findings', 'peer-review.json'), JSON.stringify({
       version: 1,
       workflowName: 'finding-engine-test',
       nextId: 1,
@@ -361,11 +339,11 @@ describe('WorkflowEngine structured caller defaults', () => {
     }).run();
 
     expect(result.status).toBe('completed');
-    expect(result.stepOutputs.has('fix')).toBe(true);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(result.stepOutputs.has('fix')).toBe(false);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 
-  it('finding_contract の通常 step が正本 ledger を外部変更しても rule state は変わらない', async () => {
+  it('finding_contract の通常 step 実行中に project ledger を外部変更しても現在の rule state は変わらない', async () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings'), { recursive: true });
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {

@@ -89,43 +89,95 @@ function startsWithAggregateStringDelimiter(argsText: string): boolean {
 
 function parseDoubleQuotedArgs(argsText: string): string[] {
   const conditions: string[] = [];
+  let index = 0;
 
-  for (let index = 0; index < argsText.length; index++) {
+  while (index < argsText.length) {
+    index = skipWhitespace(argsText, index);
     if (argsText[index] !== '"') {
-      continue;
+      return [];
     }
     const start = index + 1;
-    for (index = start; index < argsText.length; index++) {
-      if (argsText[index] === '"' && !isEscapedQuote(argsText, index)) {
-        const condition = unescapeAggregateStringArg(argsText.slice(start, index));
-        if (condition.length > 0) {
-          conditions.push(condition);
-        }
-        break;
-      }
+    const end = findUnescapedQuote(argsText, start);
+    if (end < 0) {
+      return [];
+    }
+    const condition = unescapeAggregateStringArg(argsText.slice(start, end));
+    if (condition.length === 0) {
+      throw new Error(`Invalid aggregate condition format: ${argsText}`);
+    }
+    conditions.push(condition);
+    index = skipWhitespace(argsText, end + 1);
+    if (index >= argsText.length) {
+      break;
+    }
+    if (argsText[index] !== ',') {
+      return [];
+    }
+    index++;
+    if (skipWhitespace(argsText, index) >= argsText.length) {
+      throw new Error(`Invalid aggregate condition format: ${argsText}`);
     }
   }
 
   return conditions;
 }
 
+function findUnescapedQuote(value: string, startIndex: number): number {
+  for (let index = startIndex; index < value.length; index++) {
+    if (value[index] === '"' && !isEscapedQuote(value, index)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function skipWhitespace(value: string, startIndex: number): number {
+  let index = startIndex;
+  while (index < value.length) {
+    const current = value[index];
+    if (current === undefined || !/\s/.test(current)) {
+      break;
+    }
+    index++;
+  }
+  return index;
+}
+
 function parseBackslashQuotedArgs(argsText: string): string[] {
   const conditions: string[] = [];
+  let index = 0;
 
-  for (let index = 0; index < argsText.length - 1; index++) {
+  while (index < argsText.length) {
+    index = skipWhitespace(argsText, index);
     if (!isBackslashQuoteDelimiter(argsText, index)) {
-      continue;
+      return [];
     }
     const start = index + 2;
-    for (index = start; index < argsText.length - 1; index++) {
+    let closed = false;
+    for (index = start; index < argsText.length; index++) {
       if (isBackslashQuoteDelimiter(argsText, index)) {
         const condition = unescapeAggregateStringArg(argsText.slice(start, index));
-        if (condition.length > 0) {
-          conditions.push(condition);
+        if (condition.length === 0) {
+          throw new Error(`Invalid aggregate condition format: ${argsText}`);
         }
-        index++;
+        conditions.push(condition);
+        index = skipWhitespace(argsText, index + 2);
+        closed = true;
         break;
       }
+    }
+    if (!closed) {
+      return [];
+    }
+    if (index >= argsText.length) {
+      break;
+    }
+    if (argsText[index] !== ',') {
+      return [];
+    }
+    index++;
+    if (skipWhitespace(argsText, index) >= argsText.length) {
+      throw new Error(`Invalid aggregate condition format: ${argsText}`);
     }
   }
 

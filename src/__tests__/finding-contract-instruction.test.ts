@@ -19,8 +19,19 @@ describe('Finding Contract instruction context', () => {
       findingContract: {
         ledgerCopyPath: '/tmp/project/.takt/runs/run/reports/findings-ledger.json',
         ledgerSummary: JSON.stringify({
-          open: [{ id: 'F-0001', severity: 'high', title: 'Still open' }],
+          open: [{
+            id: 'F-0001',
+            severity: 'high',
+            title: 'Still open',
+            description: 'Do not expose this in phase 2.',
+            suggestion: 'Keep this out of report instructions.',
+          }],
           resolved: [{ id: 'F-0002', severity: 'low', title: 'Already fixed' }],
+        }, null, 2),
+        reportLedgerSummary: JSON.stringify({
+          openFindingIds: ['F-0001'],
+          resolvedFindingIds: ['F-0002'],
+          conflictIds: [],
         }, null, 2),
       },
     }).build();
@@ -28,6 +39,9 @@ describe('Finding Contract instruction context', () => {
     expect(instruction).toContain('## Finding Contract');
     expect(instruction).toContain('F-0001');
     expect(instruction).toContain('F-0002');
+    expect(instruction).not.toContain('Still open');
+    expect(instruction).not.toContain('Do not expose this in phase 2.');
+    expect(instruction).not.toContain('Keep this out of report instructions.');
     expect(instruction).not.toContain('raw findings schema');
   });
 
@@ -50,6 +64,7 @@ describe('Finding Contract instruction context', () => {
       findingContract: {
         ledgerCopyPath: '/tmp/project/.takt/runs/run/reports/findings-ledger.json',
         ledgerSummary: '{\n  "title": "do not close ``` the JSON fence"\n}',
+        reportLedgerSummary: '{"openFindingIds":[],"resolvedFindingIds":[],"conflictIds":[]}',
       },
     }).build();
 
@@ -79,6 +94,7 @@ describe('Finding Contract instruction context', () => {
       findingContract: {
         ledgerCopyPath: '/tmp/project/.takt/runs/run/reports/findings-ledger.json',
         ledgerSummary: '{"open":[],"resolved":[]}',
+        reportLedgerSummary: '{"openFindingIds":[],"resolvedFindingIds":[],"conflictIds":[]}',
         rawFindingsJsonSchema: {
           type: 'object',
           properties: {
@@ -111,13 +127,14 @@ describe('Finding Contract instruction context', () => {
       targetFile: 'review.md',
       findingContract: {
         ledgerCopyPath: '/tmp/project/.takt/runs/run/reports/findings-ledger.json',
-        ledgerSummary: '{\n  "title": "do not close ``` the JSON fence"\n}',
+        ledgerSummary: '{"open":[],"resolved":[]}',
+        reportLedgerSummary: '{\n  "openFindingIds": ["do not close ``` the JSON fence"],\n  "resolvedFindingIds": [],\n  "conflictIds": []\n}',
       },
     }).build();
 
     const lines = instruction.split('\n');
     expect(lines).toContain('````json');
-    expect(lines).toContain('  "title": "do not close ``` the JSON fence"');
+    expect(lines).toContain('    "do not close ``` the JSON fence"');
     expect(lines).toContain('````');
     expect(lines).not.toContain('```json');
   });

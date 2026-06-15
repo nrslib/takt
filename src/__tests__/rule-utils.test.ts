@@ -91,6 +91,9 @@ describe('isDeterministicCondition', () => {
 describe('hasUnquotedFindingsReference', () => {
   it('ignores findings references inside escaped quoted strings', () => {
     expect(hasUnquotedFindingsReference(String.raw`structured.message == "ignore \"findings.open.count\" here"`)).toBe(false);
+  });
+
+  it('detects findings references after a closed quoted string', () => {
     expect(hasUnquotedFindingsReference(String.raw`structured.message == "path \\" && findings.open.count == 0`)).toBe(true);
   });
 });

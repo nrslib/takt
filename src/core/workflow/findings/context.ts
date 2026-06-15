@@ -34,6 +34,18 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
   }, null, 2);
 }
 
+export function renderFindingLedgerReportSummary(ledger: FindingLedger): string {
+  return JSON.stringify({
+    openFindingIds: ledger.findings
+      .filter((finding) => finding.status === 'open')
+      .map((finding) => finding.id),
+    resolvedFindingIds: ledger.findings
+      .filter((finding) => finding.status === 'resolved')
+      .map((finding) => finding.id),
+    conflictIds: ledger.conflicts.map((conflict) => conflict.id),
+  }, null, 2);
+}
+
 export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');

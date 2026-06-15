@@ -37,7 +37,7 @@ import {
   RawFindingsStructuredOutput,
   runFindingManagerForParallelStep,
 } from '../findings/manager-runner.js';
-import { renderFindingLedgerInstructionSummary } from '../findings/context.js';
+import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 
 const log = createLogger('parallel-runner');
 
@@ -214,6 +214,7 @@ export class ParallelRunner {
               ? {
                   ledgerCopyPath: findingLedgerCopyPath,
                   ledgerSummary: this.renderFindingLedgerSummary(),
+                  reportLedgerSummary: this.renderFindingLedgerReportSummary(),
                   rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
                 }
               : undefined,
@@ -552,6 +553,13 @@ export class ParallelRunner {
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
     return renderFindingLedgerInstructionSummary(this.deps.findingLedgerStore.loadLedger());
+  }
+
+  private renderFindingLedgerReportSummary(): string {
+    if (!this.deps.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+    return renderFindingLedgerReportSummary(this.deps.findingLedgerStore.loadLedger());
   }
 
   private withFindingContractStructuredOutput(

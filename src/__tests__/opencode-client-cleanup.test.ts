@@ -1275,11 +1275,22 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.content).not.toContain(unavailableToolError);
   });
 
-  it('should keep unavailable tool message matching as an internal helper', async () => {
-    const unavailableToolLoopModule = await import('../infra/opencode/unavailableToolLoop.js');
+  it('should ignore duplicate unavailable tool observations for the same call', async () => {
+    const { UnavailableToolLoopDetector } = await import('../infra/opencode/unavailable-tool-loop.js');
+    const detector = new UnavailableToolLoopDetector();
 
-    expect(unavailableToolLoopModule).toHaveProperty('UnavailableToolLoopDetector');
-    expect(unavailableToolLoopModule).not.toHaveProperty('isUnavailableToolErrorMessage');
+    expect(detector.observe('call-1', 'run', 'unavailable tool: run')).toBeUndefined();
+    expect(detector.observe('call-1', 'run', 'unavailable tool: run')).toBeUndefined();
+  });
+
+  it('should detect consecutive unavailable tool errors across different calls', async () => {
+    const { UnavailableToolLoopDetector } = await import('../infra/opencode/unavailable-tool-loop.js');
+    const detector = new UnavailableToolLoopDetector();
+
+    expect(detector.observe('call-1', 'run', 'invalid tool: run')).toBeUndefined();
+    expect(detector.observe('call-2', 'run', 'unavailable tool: run')).toBe(
+      'OpenCode unavailable tool loop detected for tool "run": unavailable tool: run',
+    );
   });
 
   it('should pass system prompt separately from user prompt to promptAsync', async () => {

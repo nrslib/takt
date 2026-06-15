@@ -25,7 +25,7 @@ import type { StructuredOutputNormalizerRegistry } from './structured-output-nor
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
-import { renderFindingLedgerInstructionSummary } from '../findings/context.js';
+import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('workflow-engine');
@@ -144,9 +144,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
 
+    const ledger = params.findingLedgerStore.loadLedger();
     return {
       ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
-      ledgerSummary: renderFindingLedgerInstructionSummary(params.findingLedgerStore.loadLedger()),
+      ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
+      reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
       ...(includeRawFindingsSchema
         ? {
             rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,

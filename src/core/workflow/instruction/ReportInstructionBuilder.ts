@@ -128,8 +128,8 @@ export class ReportInstructionBuilder {
       '- Use existing finding IDs from the inline ledger summary when referring to tracked findings.',
       '- Do not assign final finding IDs.',
       '',
-      'Current finding ledger summary:',
-      renderFencedJsonBlock(this.context.findingContract.ledgerSummary),
+      'Current finding ledger IDs:',
+      renderFencedJsonBlock(this.context.findingContract.reportLedgerSummary),
     ].join('\n');
 
     return reportOutput.length > 0

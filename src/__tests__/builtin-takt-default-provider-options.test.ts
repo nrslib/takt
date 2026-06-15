@@ -307,6 +307,22 @@ describe('builtin takt-default provider_options refs', () => {
       const reviewPolicy = readFileSync(policyPath(locale, 'review'), 'utf-8');
       expect(reviewPolicy).toContain('Finding Contract');
       expect(reviewPolicy).toContain('raw finding');
+      if (locale === 'en') {
+        expect(reviewPolicy).toContain('only when it is declared at workflow level');
+        expect(reviewPolicy).toContain('none of these artifacts enables Finding Contract by itself');
+        expect(reviewPolicy).toContain('Do not assign final `finding_id` values or lifecycle states and do not apply the legacy rules');
+        expect(reviewPolicy).toContain('If the workflow does not use `finding_contract` configuration');
+        expect(reviewPolicy).not.toContain('when any of these signals are present');
+        expect(reviewPolicy).not.toContain('use the legacy tracking rules below');
+      } else {
+        expect(reviewPolicy).toContain('workflow レベルの `finding_contract` 設定');
+        expect(reviewPolicy).toContain('それ自体では');
+        expect(reviewPolicy).toContain('最終 `finding_id` や lifecycle 状態は割り当てず');
+        expect(reviewPolicy).toContain('従来ルールも適用しない');
+        expect(reviewPolicy).toContain('`finding_contract` 設定がない workflow では');
+        expect(reviewPolicy).not.toContain('がある場合は Finding Contract workflow と判定する');
+        expect(reviewPolicy).not.toContain('従来ルールへ fallback');
+      }
     });
   }
 });

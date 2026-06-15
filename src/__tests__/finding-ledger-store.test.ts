@@ -40,7 +40,6 @@ function makeLedger(): FindingLedger {
 function createStore(options: {
   projectCwd: string;
   reportDir: string;
-  authoritativeRoot: string;
 }) {
   return createFindingLedgerStore({
     ...options,
@@ -58,30 +57,26 @@ afterEach(() => {
 });
 
 describe('FindingLedgerStore', () => {
-  it('should persist the authoritative ledger under the engine-owned root, not projectCwd or the run report directory', () => {
+  it('should persist the project ledger under projectCwd, not the run report directory', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
 
     store.saveLedger(makeLedger());
 
-    const authoritativeLedgerPath = join(authoritativeRoot, '.takt/findings/peer-review.json');
     const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
     const reportLedgerPath = join(reportDir, '.takt/findings/peer-review.json');
-    expect(existsSync(authoritativeLedgerPath)).toBe(true);
-    expect(existsSync(projectLedgerPath)).toBe(false);
+    expect(existsSync(projectLedgerPath)).toBe(true);
     expect(existsSync(reportLedgerPath)).toBe(false);
-    expect(JSON.parse(readFileSync(authoritativeLedgerPath, 'utf-8'))).toEqual(
+    expect(JSON.parse(readFileSync(projectLedgerPath, 'utf-8'))).toEqual(
       expect.objectContaining({ workflowName: 'peer-review', nextId: 2 }),
     );
   });
 
-  it('should protect authoritative ledger and raw findings with owner-only permissions', () => {
+  it('should protect project ledger and raw findings with owner-only permissions', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
     const rawFinding = {
       rawFindingId: 'raw-secret',
       stepName: 'security-review',
@@ -95,17 +90,15 @@ describe('FindingLedgerStore', () => {
     store.saveLedger(makeLedger());
     const rawFindingsPath = store.saveRawFindings('run-1', 'reviewers', [rawFinding]);
 
-    expect(statSync(authoritativeRoot).mode & 0o777).toBe(0o700);
-    expect(statSync(join(authoritativeRoot, '.takt/findings/peer-review.json')).mode & 0o777).toBe(0o600);
-    expect(statSync(join(authoritativeRoot, '.takt/findings/raw')).mode & 0o777).toBe(0o700);
+    expect(statSync(join(projectCwd, '.takt/findings/peer-review.json')).mode & 0o777).toBe(0o600);
+    expect(statSync(join(projectCwd, '.takt/findings/raw')).mode & 0o777).toBe(0o700);
     expect(statSync(rawFindingsPath).mode & 0o777).toBe(0o600);
   });
 
-  it('should create a run-local copy for agent input without moving the authoritative ledger', () => {
+  it('should create a run-local copy for agent input without moving the project ledger', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
 
     store.saveLedger(makeLedger());
     const copyPath = store.createRunCopy();
@@ -114,15 +107,13 @@ describe('FindingLedgerStore', () => {
     expect(JSON.parse(readFileSync(copyPath, 'utf-8'))).toEqual(
       expect.objectContaining({ workflowName: 'peer-review', nextId: 2 }),
     );
-    expect(existsSync(join(authoritativeRoot, '.takt/findings/peer-review.json'))).toBe(true);
-    expect(existsSync(join(projectCwd, '.takt/findings/peer-review.json'))).toBe(false);
+    expect(existsSync(join(projectCwd, '.takt/findings/peer-review.json'))).toBe(true);
   });
 
   it('should create the run-local ledger copy as owner-only read-only', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
 
     store.saveLedger(makeLedger());
     const copyPath = store.createRunCopy();
@@ -133,8 +124,7 @@ describe('FindingLedgerStore', () => {
   it('should regenerate an existing read-only run-local ledger copy', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
 
     store.saveLedger(makeLedger());
     const copyPath = store.createRunCopy();
@@ -151,14 +141,13 @@ describe('FindingLedgerStore', () => {
   it('should reject a ledger from a different workflow when loading or creating a run copy', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const authoritativeLedgerPath = join(authoritativeRoot, '.takt/findings/peer-review.json');
-    mkdirSync(join(authoritativeRoot, '.takt/findings'), { recursive: true });
-    writeFileSync(authoritativeLedgerPath, JSON.stringify({
+    const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
+    mkdirSync(join(projectCwd, '.takt/findings'), { recursive: true });
+    writeFileSync(projectLedgerPath, JSON.stringify({
       ...makeLedger(),
       workflowName: 'other-workflow',
     }), 'utf-8');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
 
     expect(() => store.loadLedger()).toThrow(
       'Finding ledger workflowName mismatch',
@@ -171,14 +160,13 @@ describe('FindingLedgerStore', () => {
   it('should reject ledgers whose nextId can reuse an existing finding id', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const authoritativeLedgerPath = join(authoritativeRoot, '.takt/findings/peer-review.json');
-    mkdirSync(join(authoritativeRoot, '.takt/findings'), { recursive: true });
-    writeFileSync(authoritativeLedgerPath, JSON.stringify({
+    const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
+    mkdirSync(join(projectCwd, '.takt/findings'), { recursive: true });
+    writeFileSync(projectLedgerPath, JSON.stringify({
       ...makeLedger(),
       nextId: 1,
     }), 'utf-8');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
 
     expect(() => store.loadLedger()).toThrow(
       'Finding ledger nextId 1 must be greater than existing finding id F-0001',
@@ -188,8 +176,7 @@ describe('FindingLedgerStore', () => {
   it('should preserve multiple raw finding generations for the same run and step', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
     const rawFinding = {
       rawFindingId: 'raw-1',
       stepName: 'coding-review',
@@ -205,35 +192,33 @@ describe('FindingLedgerStore', () => {
       { ...rawFinding, rawFindingId: 'raw-2' },
     ]);
 
-    expect(firstPath).toBe(join(authoritativeRoot, '.takt/findings/raw/run-1.reviewers.json'));
-    expect(secondPath).toBe(join(authoritativeRoot, '.takt/findings/raw/run-1.reviewers.2.json'));
+    expect(firstPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.json'));
+    expect(secondPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.2.json'));
     expect(JSON.parse(readFileSync(firstPath, 'utf-8'))).toEqual([rawFinding]);
     expect(JSON.parse(readFileSync(secondPath, 'utf-8'))).toEqual([{ ...rawFinding, rawFindingId: 'raw-2' }]);
   });
 
-  it('should reject symlinked ledger files before writing outside the authoritative root', () => {
+  it('should reject symlinked ledger files before writing outside the projectCwd', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
     const outsideDir = makeTempDir('takt-findings-outside-');
     const outsideLedgerPath = join(outsideDir, 'peer-review.json');
     writeFileSync(outsideLedgerPath, 'outside-ledger', 'utf-8');
-    mkdirSync(join(authoritativeRoot, '.takt', 'findings'), { recursive: true });
-    symlinkSync(outsideLedgerPath, join(authoritativeRoot, '.takt', 'findings', 'peer-review.json'));
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    mkdirSync(join(projectCwd, '.takt', 'findings'), { recursive: true });
+    symlinkSync(outsideLedgerPath, join(projectCwd, '.takt', 'findings', 'peer-review.json'));
+    const store = createStore({ projectCwd, reportDir });
 
     expect(() => store.saveLedger(makeLedger())).toThrow('must not be a symbolic link');
     expect(readFileSync(outsideLedgerPath, 'utf-8')).toBe('outside-ledger');
   });
 
-  it('should reject symlinked raw findings directories before writing outside the authoritative root', () => {
+  it('should reject symlinked raw findings directories before writing outside the projectCwd', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
     const outsideDir = makeTempDir('takt-findings-outside-');
-    mkdirSync(join(authoritativeRoot, '.takt', 'findings'), { recursive: true });
-    symlinkSync(outsideDir, join(authoritativeRoot, '.takt', 'findings', 'raw'), 'dir');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    mkdirSync(join(projectCwd, '.takt', 'findings'), { recursive: true });
+    symlinkSync(outsideDir, join(projectCwd, '.takt', 'findings', 'raw'), 'dir');
+    const store = createStore({ projectCwd, reportDir });
 
     expect(() => store.saveRawFindings('run-1', 'reviewers', [
       {
@@ -243,50 +228,47 @@ describe('FindingLedgerStore', () => {
         familyTag: 'path-escape',
         severity: 'high',
         title: 'Unsafe write',
-        description: 'Raw findings must stay inside the authoritative root.',
+        description: 'Raw findings must stay inside the projectCwd.',
       },
     ])).toThrow('Finding ledger path escapes base directory');
     expect(existsSync(join(outsideDir, 'run-1.reviewers.json'))).toBe(false);
   });
 
-  it('should reject ledger reads through symlinked parent directories outside the authoritative root', () => {
+  it('should reject ledger reads through symlinked parent directories outside the projectCwd', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
     const outsideDir = makeTempDir('takt-findings-outside-');
     mkdirSync(join(outsideDir, 'findings'), { recursive: true });
     writeFileSync(join(outsideDir, 'findings', 'peer-review.json'), JSON.stringify(makeLedger()), 'utf-8');
-    symlinkSync(outsideDir, join(authoritativeRoot, '.takt'), 'dir');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    symlinkSync(outsideDir, join(projectCwd, '.takt'), 'dir');
+    const store = createStore({ projectCwd, reportDir });
 
     expect(() => store.loadLedger()).toThrow('Finding ledger path escapes base directory');
   });
 
-  it('should reject run copy creation from ledgers under symlinked parent directories outside the authoritative root', () => {
+  it('should reject run copy creation from ledgers under symlinked parent directories outside the projectCwd', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
     const outsideDir = makeTempDir('takt-findings-outside-');
     mkdirSync(join(outsideDir, 'findings'), { recursive: true });
     writeFileSync(join(outsideDir, 'findings', 'peer-review.json'), JSON.stringify(makeLedger()), 'utf-8');
-    symlinkSync(outsideDir, join(authoritativeRoot, '.takt'), 'dir');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    symlinkSync(outsideDir, join(projectCwd, '.takt'), 'dir');
+    const store = createStore({ projectCwd, reportDir });
 
     expect(() => store.createRunCopy()).toThrow('Finding ledger path escapes base directory');
     expect(existsSync(join(reportDir, 'findings-ledger.json'))).toBe(false);
   });
 
-  it('should ignore projectCwd ledger tampering when loading the authoritative ledger', () => {
+  it('should overwrite an existing project ledger when saving the project ledger', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
-    const authoritativeRoot = makeTempDir('takt-findings-authoritative-');
     mkdirSync(join(projectCwd, '.takt', 'findings'), { recursive: true });
     writeFileSync(join(projectCwd, '.takt', 'findings', 'peer-review.json'), JSON.stringify({
       ...makeLedger(),
       nextId: 1,
       findings: [],
     }), 'utf-8');
-    const store = createStore({ projectCwd, reportDir, authoritativeRoot });
+    const store = createStore({ projectCwd, reportDir });
 
     store.saveLedger(makeLedger());
 

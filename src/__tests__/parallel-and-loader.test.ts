@@ -6,6 +6,7 @@ import {
   LoopMonitorJudgeSchema,
 } from '../core/models/index.js';
 import {
+  parseAggregateConditionArgs,
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../core/models/workflow-condition-expression.js';
@@ -397,6 +398,22 @@ describe('ai() condition expression parsing', () => {
 });
 
 describe('all()/any() aggregate condition expression parsing', () => {
+  it('should parse aggregate condition arguments through all supported quoting styles', () => {
+    expect(parseAggregateConditionArgs('approved, needs_fix')).toEqual(['approved', 'needs_fix']);
+    expect(parseAggregateConditionArgs('"approved", "needs_fix"')).toEqual(['approved', 'needs_fix']);
+    expect(parseAggregateConditionArgs(String.raw`\"approved\", \"needs_fix\"`)).toEqual(['approved', 'needs_fix']);
+  });
+
+  it('should reject malformed aggregate condition arguments', () => {
+    expect(() => parseAggregateConditionArgs('')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('""')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"approved", ""')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('approved,')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"approved",')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs(String.raw`\"approved\",`)).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"unterminated')).toThrow('Invalid aggregate condition format');
+  });
+
   it('should match all() condition', () => {
     expect(parseAggregateConditionExpression('all("approved")')).toEqual({
       type: 'all',
