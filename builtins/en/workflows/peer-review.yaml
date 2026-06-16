@@ -1,12 +1,5 @@
 name: peer-review
-description: takt-default Phase 2. Six parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop.
-finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
+description: Six parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop.
 subworkflow:
   callable: true
   visibility: internal
@@ -58,7 +51,7 @@ steps:
         output_contracts:
           report:
             - name: architect-review.md
-              format: architecture-review-finding-contract
+              format: architecture-review
       - name: security-review
         edit: false
         persona: security-reviewer
@@ -73,7 +66,7 @@ steps:
         output_contracts:
           report:
             - name: security-review.md
-              format: security-review-finding-contract
+              format: security-review
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -89,7 +82,7 @@ steps:
         output_contracts:
           report:
             - name: qa-review.md
-              format: qa-review-finding-contract
+              format: qa-review
       - name: testing-review
         edit: false
         persona: testing-reviewer
@@ -108,7 +101,7 @@ steps:
         output_contracts:
           report:
             - name: testing-review.md
-              format: testing-review-finding-contract
+              format: testing-review
       - name: pure-review
         edit: false
         persona: pure-reviewer
@@ -122,7 +115,7 @@ steps:
         output_contracts:
           report:
             - name: pure-review.md
-              format: pure-review-finding-contract
+              format: pure-review
       - name: coding-review
         edit: false
         persona: coding-reviewer
@@ -137,7 +130,7 @@ steps:
         output_contracts:
           report:
             - name: coding-review.md
-              format: coding-review-finding-contract
+              format: coding-review
       - name: ai-antipattern-review-2nd
         edit: false
         persona: ai-antipattern-reviewer
@@ -153,18 +146,12 @@ steps:
         output_contracts:
           report:
             - name: ai-antipattern-review.md
-              format: ai-antipattern-review-finding-contract
+              format: ai-antipattern-review
     rules:
-      - condition: all("approved") && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: all("approved")
         next: COMPLETE
-      - condition: any("needs_fix") && findings.conflicts.count == 0
+      - condition: any("needs_fix")
         next: fix
-      - condition: findings.conflicts.count == 0 && findings.open.count > 0
-        next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve the conflict. Do not choose it for reviewer disagreement or cases that need human adjudication.")
-        next: fix
-      - condition: findings.conflicts.count > 0
-        return: need_replan
   - name: fix
     edit: true
     persona: coder

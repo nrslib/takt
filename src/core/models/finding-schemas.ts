@@ -70,9 +70,9 @@ export const ReviewerRawFindingSchema = z.object({
   familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
-  location: nonEmptyString.optional(),
+  location: nonEmptyString,
   description: nonEmptyString,
-  suggestion: nonEmptyString.optional(),
+  suggestion: nonEmptyString,
 }).strict();
 
 export const FindingLedgerConflictSchema = z.object({
@@ -101,7 +101,7 @@ export const FindingManagerOutputSchema = z.object({
   matches: z.array(z.object({
     findingId: nonEmptyString,
     rawFindingIds: z.array(nonEmptyString),
-    evidence: nonEmptyString.optional(),
+    evidence: nonEmptyString.nullable().optional().transform((value) => value ?? undefined),
   }).strict()),
   newFindings: z.array(z.object({
     rawFindingIds: z.array(nonEmptyString),
@@ -139,11 +139,11 @@ export const FindingManagerOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['findingId', 'rawFindingIds'],
+        required: ['findingId', 'rawFindingIds', 'evidence'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
           rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
-          evidence: { type: 'string', minLength: 1 },
+          evidence: { type: ['string', 'null'], minLength: 1 },
         },
       },
     },
@@ -191,7 +191,7 @@ export const FindingManagerOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingIds', 'description'],
+        required: ['findingIds', 'rawFindingIds', 'description'],
         properties: {
           findingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
           rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
@@ -224,7 +224,7 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'familyTag', 'severity', 'title', 'description'],
+        required: ['rawFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
           familyTag: {

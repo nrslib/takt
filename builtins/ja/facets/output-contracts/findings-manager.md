@@ -30,6 +30,7 @@
   ],
   "conflicts": [
     {
+      "findingIds": [],
       "rawFindingIds": ["raw-4", "raw-5"],
       "description": "レビュワー間の矛盾"
     }

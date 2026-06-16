@@ -16,6 +16,19 @@ import {
 } from '../core/models/finding-schemas.js';
 
 describe('finding schemas', () => {
+  it('keeps strict JSON Schema object properties listed in required', () => {
+    const rawFindingItem = RawFindingsOutputJsonSchema.properties.rawFindings.items;
+    expect(rawFindingItem.required).toEqual(Object.keys(rawFindingItem.properties));
+
+    const managerProperties = FindingManagerOutputJsonSchema.properties;
+    expect(managerProperties.matches.items.required).toEqual(Object.keys(managerProperties.matches.items.properties));
+    expect(managerProperties.newFindings.items.required).toEqual(Object.keys(managerProperties.newFindings.items.properties));
+    expect(managerProperties.resolvedFindings.items.required).toEqual(Object.keys(managerProperties.resolvedFindings.items.properties));
+    expect(managerProperties.reopenedFindings.items.required).toEqual(Object.keys(managerProperties.reopenedFindings.items.properties));
+    expect(managerProperties.conflicts.items.required).toEqual(Object.keys(managerProperties.conflicts.items.properties));
+    expect(managerProperties.resolvedConflicts.items.required).toEqual(Object.keys(managerProperties.resolvedConflicts.items.properties));
+  });
+
   it('uses finding type constants for schema enum values', () => {
     expect(FindingSeveritySchema.options).toEqual(FINDING_SEVERITIES);
     expect(FindingStatusSchema.options).toEqual(FINDING_STATUSES);
@@ -35,13 +48,15 @@ describe('finding schemas', () => {
     expect(conflictStatus.status).toBe('active');
   });
 
-  it('requires familyTag in raw finding schemas and structured reviewer output', () => {
+  it('requires structured fields in reviewer raw findings output', () => {
     const reviewerRawFinding = {
       rawFindingId: 'raw-1',
       familyTag: 'missing-edge-case',
       severity: 'high',
       title: 'Structured output omits the family tag',
+      location: 'src/core/workflow/findings/manager-runner.ts:72',
       description: 'The findings manager cannot reconcile findings without familyTag.',
+      suggestion: 'Keep reviewer raw finding fields complete for reconciliation.',
     };
     const persistedRawFinding = {
       ...reviewerRawFinding,
@@ -55,9 +70,13 @@ describe('finding schemas', () => {
       rawFindingId: 'raw-1',
       severity: 'high',
       title: 'Structured output omits the family tag',
+      location: 'src/core/workflow/findings/manager-runner.ts:72',
       description: 'The findings manager cannot reconcile findings without familyTag.',
+      suggestion: 'Keep reviewer raw finding fields complete for reconciliation.',
     })).toThrow();
     expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('familyTag');
+    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('location');
+    expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.required).toContain('suggestion');
     expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.familyTag).toEqual({
       type: 'string',
       minLength: 1,

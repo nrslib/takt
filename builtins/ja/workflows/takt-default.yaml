@@ -73,7 +73,7 @@ steps:
         next: ABORT
   - name: peer-review
     kind: workflow_call
-    call: peer-review
+    call: takt-default-peer-review
     rules:
       - condition: COMPLETE
         next: supervise
