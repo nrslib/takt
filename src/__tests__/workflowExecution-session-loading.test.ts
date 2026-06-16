@@ -321,6 +321,7 @@ describe('executeWorkflow session loading', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreEnv();
     clearRestoredEnv();
     mockCreateUsageEventLogger.mockReturnValue(mockUsageLogger);
     mockInitializeOtelFoundation.mockResolvedValue({

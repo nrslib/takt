@@ -407,9 +407,12 @@ describe('all()/any() aggregate condition expression parsing', () => {
   it('should reject malformed aggregate condition arguments', () => {
     expect(() => parseAggregateConditionArgs('')).toThrow('Invalid aggregate condition format');
     expect(() => parseAggregateConditionArgs('""')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"   "')).toThrow('Invalid aggregate condition format');
     expect(() => parseAggregateConditionArgs('"approved", ""')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"approved", "   "')).toThrow('Invalid aggregate condition format');
     expect(() => parseAggregateConditionArgs('approved,')).toThrow('Invalid aggregate condition format');
     expect(() => parseAggregateConditionArgs('"approved",')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs(String.raw`\"   \"`)).toThrow('Invalid aggregate condition format');
     expect(() => parseAggregateConditionArgs(String.raw`\"approved\",`)).toThrow('Invalid aggregate condition format');
     expect(() => parseAggregateConditionArgs('"unterminated')).toThrow('Invalid aggregate condition format');
   });

@@ -16,12 +16,10 @@ export class UnavailableToolLoopDetector {
 
   observe(toolCallId: string, tool: string, message: string): string | undefined {
     if (!isUnavailableToolErrorMessage(message)) {
-      // A successful or unrelated tool result breaks the consecutive unavailable-tool sequence.
       this.reset();
       return undefined;
     }
 
-    // One tool invocation can be reported more than once; it should count as a single failure.
     if (toolCallId === this.lastUnavailableToolCallId) {
       return undefined;
     }

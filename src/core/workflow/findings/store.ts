@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import type { FindingLedger, RawFinding } from './types.js';
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
@@ -120,6 +120,17 @@ function readProjectLedgerFile(baseDir: string, path: string): FindingLedger {
   return readLedgerFile(path);
 }
 
+function readProjectLedgerOrEmpty(baseDir: string, path: string, workflowName: string): FindingLedger {
+  assertRealPathInside(baseDir, findExistingAncestor(dirname(path)));
+  assertNotSymlink(path);
+  if (!pathExists(path)) {
+    return createEmptyLedger(workflowName);
+  }
+  const ledger = readProjectLedgerFile(baseDir, path);
+  assertLedgerWorkflowName(ledger, workflowName, path);
+  return ledger;
+}
+
 function assertLedgerWorkflowName(ledger: FindingLedger, workflowName: string, source: string): void {
   if (ledger.workflowName !== workflowName) {
     throw new Error(`Finding ledger workflowName mismatch in ${source}: expected "${workflowName}", got "${ledger.workflowName}"`);
@@ -143,12 +154,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
 
   return {
     loadLedger: () => {
-      if (!existsSync(ledgerPath)) {
-        return createEmptyLedger(options.workflowName);
-      }
-      const ledger = readProjectLedgerFile(ledgerRoot, ledgerPath);
-      assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
-      return ledger;
+      return readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
     },
     saveLedger: (ledger) => {
       assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
@@ -158,11 +164,8 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       chmodSync(ledgerPath, PRIVATE_FILE_MODE);
     },
     createRunCopy: () => {
+      const ledger = readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
       prepareWritableCopyPath(options.reportDir, copyPath);
-      const ledger = existsSync(ledgerPath)
-        ? readProjectLedgerFile(ledgerRoot, ledgerPath)
-        : createEmptyLedger(options.workflowName);
-      assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
       writeFileSync(copyPath, JSON.stringify(ledger, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
       chmodSync(copyPath, READ_ONLY_PRIVATE_FILE_MODE);
       return copyPath;

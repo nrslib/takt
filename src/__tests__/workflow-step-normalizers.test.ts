@@ -39,6 +39,17 @@ describe('workflow step normalizer helpers', () => {
     expect(normalized.aggregateGuardCondition).toBe('findings.conflicts.count == 0');
   });
 
+  it('rejects whitespace-only quoted aggregate rules through the rule helper', () => {
+    expect(() => normalizeRule({
+      condition: 'all("   ")',
+      next: 'COMPLETE',
+    })).toThrow('Invalid aggregate condition format');
+    expect(() => normalizeRule({
+      condition: String.raw`any(\"   \")`,
+      next: 'fix',
+    })).toThrow('Invalid aggregate condition format');
+  });
+
   it('normalizes aggregate arguments with escaped quotes through the rule helper', () => {
     const targetCondition = String.raw`condition == "test\"inner"`;
     const normalized = normalizeRule({

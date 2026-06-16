@@ -102,7 +102,7 @@ function parseDoubleQuotedArgs(argsText: string): string[] {
       return [];
     }
     const condition = unescapeAggregateStringArg(argsText.slice(start, end));
-    if (condition.length === 0) {
+    if (condition.trim().length === 0) {
       throw new Error(`Invalid aggregate condition format: ${argsText}`);
     }
     conditions.push(condition);
@@ -157,7 +157,7 @@ function parseBackslashQuotedArgs(argsText: string): string[] {
     for (index = start; index < argsText.length; index++) {
       if (isBackslashQuoteDelimiter(argsText, index)) {
         const condition = unescapeAggregateStringArg(argsText.slice(start, index));
-        if (condition.length === 0) {
+        if (condition.trim().length === 0) {
           throw new Error(`Invalid aggregate condition format: ${argsText}`);
         }
         conditions.push(condition);

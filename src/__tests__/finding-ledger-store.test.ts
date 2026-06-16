@@ -259,6 +259,52 @@ describe('FindingLedgerStore', () => {
     expect(existsSync(join(reportDir, 'findings-ledger.json'))).toBe(false);
   });
 
+  it('should reject empty ledger reads under symlinked parent directories outside the projectCwd', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const outsideDir = makeTempDir('takt-findings-outside-');
+    symlinkSync(outsideDir, join(projectCwd, '.takt'), 'dir');
+    const store = createStore({ projectCwd, reportDir });
+
+    expect(() => store.loadLedger()).toThrow('Finding ledger path escapes base directory');
+    expect(existsSync(join(outsideDir, 'findings', 'peer-review.json'))).toBe(false);
+  });
+
+  it('should reject run copy creation for missing ledgers under symlinked parent directories outside the projectCwd', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const outsideDir = makeTempDir('takt-findings-outside-');
+    symlinkSync(outsideDir, join(projectCwd, '.takt'), 'dir');
+    const store = createStore({ projectCwd, reportDir });
+
+    expect(() => store.createRunCopy()).toThrow('Finding ledger path escapes base directory');
+    expect(existsSync(join(reportDir, 'findings-ledger.json'))).toBe(false);
+    expect(existsSync(join(outsideDir, 'findings', 'peer-review.json'))).toBe(false);
+  });
+
+  it('should reject empty ledger reads from broken symlink ledger paths', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const outsideDir = makeTempDir('takt-findings-outside-');
+    mkdirSync(join(projectCwd, '.takt', 'findings'), { recursive: true });
+    symlinkSync(join(outsideDir, 'missing-peer-review.json'), join(projectCwd, '.takt', 'findings', 'peer-review.json'));
+    const store = createStore({ projectCwd, reportDir });
+
+    expect(() => store.loadLedger()).toThrow('Finding ledger path must not be a symbolic link');
+  });
+
+  it('should reject run copy creation from broken symlink ledger paths', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const outsideDir = makeTempDir('takt-findings-outside-');
+    mkdirSync(join(projectCwd, '.takt', 'findings'), { recursive: true });
+    symlinkSync(join(outsideDir, 'missing-peer-review.json'), join(projectCwd, '.takt', 'findings', 'peer-review.json'));
+    const store = createStore({ projectCwd, reportDir });
+
+    expect(() => store.createRunCopy()).toThrow('Finding ledger path must not be a symbolic link');
+    expect(existsSync(join(reportDir, 'findings-ledger.json'))).toBe(false);
+  });
+
   it('should overwrite an existing project ledger when saving the project ledger', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');

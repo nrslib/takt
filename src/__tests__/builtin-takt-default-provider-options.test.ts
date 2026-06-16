@@ -89,10 +89,6 @@ function outputContractPath(locale: 'en' | 'ja', name: string): string {
   return join(process.cwd(), 'builtins', locale, 'facets', 'output-contracts', `${name}.md`);
 }
 
-function policyPath(locale: 'en' | 'ja', name: string): string {
-  return join(process.cwd(), 'builtins', locale, 'facets', 'policies', `${name}.md`);
-}
-
 function instructionPath(locale: 'en' | 'ja', name: string): string {
   return join(process.cwd(), 'builtins', locale, 'facets', 'instructions', `${name}.md`);
 }
@@ -236,6 +232,14 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalizedSteps.get('fix')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
     });
 
+    it(`${locale} takt-default should not enable Finding Contract`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'takt-default.yaml');
+      const normalized = normalizeBuiltinWorkflow(workflow, locale);
+
+      expect(workflow.finding_contract).toBeUndefined();
+      expect(normalized.findingContract).toBeUndefined();
+    });
+
     it(`${locale} peer-review subworkflow should enable Finding Contract`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
       const normalized = normalizeBuiltinWorkflow(workflow, locale);
@@ -302,26 +306,6 @@ describe('builtin takt-default provider_options refs', () => {
         expect(findingContractContent).not.toContain('resolved');
         expect(findingContractContent).not.toContain('reopened');
         expect(legacyContent).toContain('finding_id');
-      }
-
-      const reviewPolicy = readFileSync(policyPath(locale, 'review'), 'utf-8');
-      expect(reviewPolicy).toContain('Finding Contract');
-      expect(reviewPolicy).toContain('raw finding');
-      if (locale === 'en') {
-        expect(reviewPolicy).toContain('only when it is declared at workflow level');
-        expect(reviewPolicy).toContain('none of these artifacts enables Finding Contract by itself');
-        expect(reviewPolicy).toContain('Do not assign final `finding_id` values or lifecycle states and do not apply the legacy rules');
-        expect(reviewPolicy).toContain('If the workflow does not use `finding_contract` configuration');
-        expect(reviewPolicy).not.toContain('when any of these signals are present');
-        expect(reviewPolicy).not.toContain('use the legacy tracking rules below');
-      } else {
-        expect(reviewPolicy).toContain('workflow レベルの `finding_contract` 設定');
-        expect(reviewPolicy).toContain('それ自体では');
-        expect(reviewPolicy).toContain('最終 `finding_id` や lifecycle 状態は割り当てず');
-        expect(reviewPolicy).toContain('従来ルールも適用しない');
-        expect(reviewPolicy).toContain('`finding_contract` 設定がない workflow では');
-        expect(reviewPolicy).not.toContain('がある場合は Finding Contract workflow と判定する');
-        expect(reviewPolicy).not.toContain('従来ルールへ fallback');
       }
     });
   }

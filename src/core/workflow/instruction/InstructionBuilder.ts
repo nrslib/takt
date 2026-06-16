@@ -20,7 +20,6 @@ import {
   prepareKnowledgeContent as prepareKnowledgeContentGeneric,
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
-export { renderFencedJsonBlock } from './fenced-json.js';
 import { renderFencedJsonBlock } from './fenced-json.js';
 
 const CONTEXT_MAX_CHARS = 2000;

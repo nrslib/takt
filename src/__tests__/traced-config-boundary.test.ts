@@ -6,38 +6,13 @@ import { tmpdir } from 'node:os';
 import { loadGlobalConfigTrace, loadProjectConfigTrace } from '../infra/config/traced/tracedConfigLoader.js';
 import { getGlobalTracedSchema, getProjectTracedSchema } from '../infra/config/traced/tracedConfigSchema.js';
 import { loadTraceEntriesViaRuntime } from '../infra/config/traced/tracedConfigRuntimeBridge.js';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
-let taktEnvSnapshot: Record<string, string | undefined>;
-
-function snapshotTaktEnv(): Record<string, string | undefined> {
-  const snapshot: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith('TAKT_')) {
-      snapshot[key] = value;
-    }
-  }
-  return snapshot;
-}
-
-function restoreTaktEnv(snapshot: Record<string, string | undefined>): void {
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith('TAKT_') && !(key in snapshot)) {
-      delete process.env[key];
-    }
-  }
-
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-      continue;
-    }
-    process.env[key] = value;
-  }
-}
+let taktEnvSnapshot: TaktEnvSnapshot;
 
 describe('traced config boundaries', () => {
   beforeEach(() => {
-    taktEnvSnapshot = snapshotTaktEnv();
+    taktEnvSnapshot = clearTaktEnv();
   });
 
   afterEach(() => {

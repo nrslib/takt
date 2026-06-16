@@ -11,10 +11,10 @@ import { buildGitRules } from './instruction-context.js';
 import { replaceTemplatePlaceholders } from './escape.js';
 import {
   isOutputContractItem,
-  renderFencedJsonBlock,
   renderReportContext,
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
+import { renderFencedJsonBlock } from './fenced-json.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**

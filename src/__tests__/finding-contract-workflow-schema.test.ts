@@ -4,6 +4,23 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
+function makeWorkflowWithFindingContract(findingContract: unknown) {
+  return {
+    name: 'invalid-finding-contract-workflow',
+    finding_contract: findingContract,
+    initial_step: 'peer-review',
+    max_steps: 2,
+    steps: [
+      {
+        name: 'peer-review',
+        persona: 'reviewer',
+        instruction: 'Review the change.',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      },
+    ],
+  };
+}
+
 describe('workflow finding_contract schema', () => {
   it('should normalize top-level finding_contract without changing step definitions', () => {
     const workflow = normalizeWorkflowConfig({
@@ -383,5 +400,37 @@ describe('workflow finding_contract schema', () => {
         ],
       }, '/tmp/project'),
     ).toThrow();
+  });
+
+  it('should reject invalid finding_contract raw shapes', () => {
+    const validFindingContract = {
+      ledger_path: '.takt/findings/peer-review.json',
+      raw_findings_path: '.takt/findings/raw',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        output_contract: 'findings-manager',
+      },
+    };
+    const invalidFindingContracts: unknown[] = [
+      null,
+      { ...validFindingContract, ledger_path: null },
+      { ...validFindingContract, ledger_path: {} },
+      { ...validFindingContract, raw_findings_path: null },
+      { ...validFindingContract, raw_findings_path: {} },
+      { ...validFindingContract, manager: null },
+      { ...validFindingContract, manager: { ...validFindingContract.manager, persona: null } },
+      { ...validFindingContract, manager: { ...validFindingContract.manager, instruction: {} } },
+      { ...validFindingContract, manager: { ...validFindingContract.manager, output_contract: null } },
+    ];
+
+    for (const findingContract of invalidFindingContracts) {
+      expect(() =>
+        normalizeWorkflowConfig(
+          makeWorkflowWithFindingContract(findingContract),
+          '/tmp/project',
+        ),
+      ).toThrow();
+    }
   });
 });
