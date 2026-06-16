@@ -70,9 +70,9 @@ export const ReviewerRawFindingSchema = z.object({
   familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
-  location: nonEmptyString,
+  location: nonEmptyString.optional(),
   description: nonEmptyString,
-  suggestion: nonEmptyString,
+  suggestion: nonEmptyString.optional(),
 }).strict();
 
 export const FindingLedgerConflictSchema = z.object({

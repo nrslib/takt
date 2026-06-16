@@ -240,13 +240,21 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalized.findingContract).toBeUndefined();
     });
 
-    it(`${locale} peer-review subworkflow should enable Finding Contract`, () => {
+    it(`${locale} peer-review subworkflow should not enable Finding Contract`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
       const normalized = normalizeBuiltinWorkflow(workflow, locale);
 
+      expect(workflow.finding_contract).toBeUndefined();
+      expect(normalized.findingContract).toBeUndefined();
+    });
+
+    it(`${locale} takt-default peer-review subworkflow should enable Finding Contract`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'takt-default-peer-review.yaml');
+      const normalized = normalizeBuiltinWorkflow(workflow, locale);
+
       expect(workflow.finding_contract).toEqual({
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
+        ledger_path: '.takt/findings/takt-default-peer-review.json',
+        raw_findings_path: '.takt/findings/takt-default-peer-review/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -254,8 +262,8 @@ describe('builtin takt-default provider_options refs', () => {
         },
       });
       expect(normalized.findingContract).toMatchObject({
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
+        ledgerPath: '.takt/findings/takt-default-peer-review.json',
+        rawFindingsPath: '.takt/findings/takt-default-peer-review/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'findings-manager',
@@ -286,8 +294,20 @@ describe('builtin takt-default provider_options refs', () => {
       });
     });
 
-    it(`${locale} peer-review should use Finding Contract-specific output contracts`, () => {
+    it(`${locale} peer-review should use standard output contracts`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
+      const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
+      const formats = reviewers.flatMap((step) =>
+        (step.output_contracts?.report ?? [])
+          .map((entry) => entry.format)
+          .filter((format): format is string => format !== undefined),
+      );
+
+      expect(formats).toEqual([...PEER_REVIEW_OUTPUT_CONTRACTS]);
+    });
+
+    it(`${locale} takt-default peer-review should use Finding Contract-specific output contracts`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'takt-default-peer-review.yaml');
       const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
       const formats = reviewers.flatMap((step) =>
         (step.output_contracts?.report ?? [])
