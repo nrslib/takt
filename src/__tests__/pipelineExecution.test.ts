@@ -115,12 +115,9 @@ describe('executePipeline', () => {
         };
       }
     });
-    // Default: no Slack webhook
     mockGetSlackWebhookUrl.mockReturnValue(undefined);
-    // Default: git operations succeed
     mockExecFileSync.mockReturnValue('abc1234\n');
     mockGetCurrentBranch.mockReturnValue('current/branch');
-    // Default: no pipeline config
     mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
     mockResolveConfigValue.mockReturnValue(undefined);
   });
@@ -1293,7 +1290,6 @@ describe('executePipeline', () => {
       expect(exitCode).toBe(0);
       expect(mockFetchPrReviewComments).toHaveBeenCalledWith(456, '/tmp/test');
       expect(mockFormatPrReviewAsTask).toHaveBeenCalled();
-      // PR branch checkout
       const checkoutCall = mockExecFileSync.mock.calls.find(
         (call: unknown[]) => call[0] === 'git' && (call[1] as string[])[0] === 'checkout' && (call[1] as string[])[1] === 'fix/auth-bug',
       );

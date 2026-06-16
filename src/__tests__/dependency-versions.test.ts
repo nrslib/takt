@@ -195,7 +195,7 @@ describe('dependency versions', () => {
     expect(getLockedPackage(packageLock, 'node_modules/fast-uri').version).toBe('3.1.2');
     expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.23');
     expect(getLockedPackage(packageLock, 'node_modules/ip-address').version).toBe('10.2.0');
-    expect(getLockedPackage(packageLock, 'node_modules/protobufjs').version).toBe('7.6.1');
+    expect(getLockedPackage(packageLock, 'node_modules/protobufjs').version).toBe('7.6.4');
     expect(getLockedPackage(packageLock, 'node_modules/qs').version).toBe('6.15.2');
   });
 

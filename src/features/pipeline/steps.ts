@@ -98,21 +98,13 @@ function tryResolveCurrentBranch(cwd: string): string | undefined {
   }
 }
 
-function tryResolveReadOnlyBaseBranch(cwd: string): string | undefined {
-  try {
-    return resolveReadOnlyBaseBranch(cwd);
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveSkipGitExecutionContext(
   cwd: string,
   prBranch: string | undefined,
   prBaseBranch: string | undefined,
 ): SkipGitExecutionContext {
   if (prBranch) {
-    const baseBranch = prBaseBranch ?? tryResolveReadOnlyBaseBranch(cwd);
+    const baseBranch = prBaseBranch ?? resolveReadOnlyBaseBranch(cwd);
     return {
       execCwd: cwd,
       isWorktree: false,
@@ -121,7 +113,7 @@ function resolveSkipGitExecutionContext(
     };
   }
   const branch = tryResolveCurrentBranch(cwd);
-  const baseBranch = branch ? tryResolveReadOnlyBaseBranch(cwd) : undefined;
+  const baseBranch = branch ? resolveReadOnlyBaseBranch(cwd) : undefined;
   return {
     execCwd: cwd,
     isWorktree: false,

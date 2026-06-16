@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 let lastRunIdTimestamp = '';
 let runIdSequence = 0;
 
@@ -13,5 +15,6 @@ export function generateRunId(): string {
     runIdSequence = 0;
   }
 
-  return `${timestamp}-${pad(runIdSequence, 3)}`;
+  const randomSuffix = randomBytes(4).toString('hex');
+  return `${timestamp}-${pad(runIdSequence, 3)}-${randomSuffix}`;
 }
