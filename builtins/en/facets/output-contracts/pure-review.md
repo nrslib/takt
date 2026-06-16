@@ -16,9 +16,9 @@
 | 5 | Obvious security, data-protection, or operational risk | No issue / Issue found / Unverified | `src/file.ts:42` | {Notes} |
 
 ## Requirements Cross-Reference
-| # | Requirement (from task) | Status | Evidence (file:line) | Comment |
-|---|-------------------------|--------|----------------------|---------|
-| 1 | {requirement 1} | Satisfied / Unmet / Unverified | `src/file.ts:42` | {Notes} |
+| # | Requirement (from task) | Original Requirement Source | Status | Evidence (file:line) | Exception / Unverified Evidence |
+|---|-------------------------|-----------------------------|--------|----------------------|---------------------------------|
+| 1 | {requirement 1} | `order.md:10` | Satisfied / Unmet / Unverified | `src/file.ts:42` | {none / evidence} |
 
 ## Out-of-Scope Changes and Existing Impact
 | # | Change | File | Judgment | Comment |
@@ -36,9 +36,9 @@
 | 1 | PURE-PERSIST-src-file-L77 | mergeability | `file:line` | `file:line` | Unresolved | Fix suggestion |
 
 ## Resolved Findings (resolved)
-| finding_id | Resolution Evidence |
-|------------|---------------------|
-| PURE-RESOLVED-src-file-L10 | `file:line` resolves the issue |
+| finding_id | Original Expected Result | Resolution Evidence |
+|------------|--------------------------|---------------------|
+| PURE-RESOLVED-src-file-L10 | {Original finding acceptance criteria} | `file:line` resolves the issue |
 
 ## Reopened Findings (reopened)
 | # | finding_id | family_tag | Prior Resolution Evidence | Recurrence Evidence | Issue | Fix Suggestion |

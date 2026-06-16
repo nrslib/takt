@@ -127,6 +127,42 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     expect(mockExecuteTask).toHaveBeenCalled();
   });
 
+  it('skipTaskList: true の直接実行では trace task context を executeTask metadata に変換する', async () => {
+    const options = {
+      workflow: 'default',
+      skipTaskList: true,
+      traceTaskContext: {
+        source: 'issue',
+        issueNumber: 131,
+        branch: 'takt/131/add-trace-metadata',
+        baseBranch: 'main',
+        worktreePath: '/project/.takt/worktrees/131-add-trace-metadata',
+      },
+    } satisfies Parameters<typeof selectAndExecuteTask>[2] & {
+      traceTaskContext: {
+        source: 'issue';
+        issueNumber: number;
+        branch: string;
+        baseBranch: string;
+        worktreePath: string;
+      };
+    };
+
+    await selectAndExecuteTask('/project', 'Add trace metadata from issue', options);
+
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+      traceTaskMetadata?: unknown;
+    };
+    expect(executeArg.traceTaskMetadata).toEqual({
+      taskSummary: 'Add trace metadata from issue',
+      taskSource: 'issue',
+      issueNumber: 131,
+      gitBranch: 'takt/131/add-trace-metadata',
+      gitBaseBranch: 'main',
+      worktreePath: '/project/.takt/worktrees/131-add-trace-metadata',
+    });
+  });
+
   it('skipTaskList: false の場合はタスクリストに追加する', async () => {
     await selectAndExecuteTask('/project', 'test task', {
       workflow: 'default',

@@ -3,7 +3,7 @@
  */
 
 export { executeWorkflow, type WorkflowExecutionResult } from './execute/workflowExecution.js';
-export { executeTask, type TaskExecutionOptions } from './execute/taskExecution.js';
+export { executeTask, type ExecuteTaskOptions, type TaskExecutionOptions } from './execute/taskExecution.js';
 export { runAllTasks } from './execute/runAllTasks.js';
 export { resolveTaskExecution } from './execute/resolveTask.js';
 export { withPersonaSession } from './execute/session.js';

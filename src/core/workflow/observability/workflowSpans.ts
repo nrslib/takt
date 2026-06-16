@@ -2,11 +2,20 @@ import { context, metrics, SpanStatusCode, trace, type Attributes, type Span } f
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import type { WorkflowMaxSteps, WorkflowResumePointEntry, WorkflowStep } from '../../models/types.js';
-import type { JudgeStageEntry, PhaseName, PhasePromptParts, StepProviderInfo, StepRunResult } from '../types.js';
+import type {
+  JudgeStageEntry,
+  PhaseName,
+  PhasePromptParts,
+  StepProviderInfo,
+  StepRunResult,
+  WorkflowTraceTaskMetadata,
+} from '../types.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
 const tracer = trace.getTracer('takt.workflow');
+const TRACE_TASK_SUMMARY_MAX_LENGTH = 80;
 const WORKFLOW_RUN_COUNTER_OPTIONS = {
   description: 'Workflow executions by status',
 };
@@ -44,6 +53,7 @@ export interface WorkflowSpanParams {
   runMode: 'full' | 'single_iteration';
   resumeDepth: number;
   sanitizeText?: (text: string) => string;
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
 }
 
 export interface WorkflowSpanOutcome {
@@ -66,6 +76,7 @@ export interface StepSpanParams {
   sanitizeText?: (text: string) => string;
   providerInfo?: StepProviderInfo;
   getFinalStepIteration?: () => number | undefined;
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
 }
 
 export interface PhaseSpanParams {
@@ -237,6 +248,7 @@ function recordWorkflowStartSpan(params: WorkflowSpanParams): void {
 function buildWorkflowAttributes(params: WorkflowSpanParams): Attributes {
   return compactAttributes({
     'takt.run.id': params.runId,
+    ...traceTaskMetadataAttributes(params.traceTaskMetadata, params.sanitizeText),
     'takt.workflow.name': params.workflowName,
     'takt.workflow.initial_step': params.initialStep,
     'takt.workflow.step_count': params.stepCount,
@@ -250,6 +262,7 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
   return compactAttributes({
     'takt.run.id': params.runId,
     'takt.workflow.name': params.workflowName,
+    ...traceTaskMetadataAttributes(params.traceTaskMetadata, params.sanitizeText),
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
@@ -260,6 +273,45 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
     ...providerAttributes(params.providerInfo),
     ...providerOptionsAttributes(params.providerInfo),
   });
+}
+
+function traceTaskMetadataAttributes(
+  metadata: WorkflowTraceTaskMetadata | undefined,
+  sanitizeText: ((text: string) => string) | undefined,
+): AttributeInput {
+  if (!metadata) {
+    return {};
+  }
+  return {
+    'takt.task.name': sanitizeTraceTaskMetadataText(sanitizeText, metadata.taskName),
+    'takt.task.slug': sanitizeTraceTaskMetadataText(sanitizeText, metadata.taskSlug),
+    'takt.task.summary': sanitizeTraceTaskSummary(sanitizeText, metadata.taskSummary),
+    'takt.task.source': metadata.taskSource,
+    'takt.task.issue_number': metadata.issueNumber,
+    'takt.task.pr_number': metadata.prNumber,
+    'takt.git.branch': sanitizeTraceTaskMetadataText(sanitizeText, metadata.gitBranch),
+    'takt.git.base_branch': sanitizeTraceTaskMetadataText(sanitizeText, metadata.gitBaseBranch),
+    'takt.worktree.path': sanitizeTraceTaskMetadataText(sanitizeText, metadata.worktreePath),
+    'takt.run.dir': sanitizeTraceTaskMetadataText(sanitizeText, metadata.runDir),
+  };
+}
+
+function sanitizeTraceTaskSummary(
+  sanitizeText: ((text: string) => string) | undefined,
+  text: string | undefined,
+): string | undefined {
+  const sanitized = sanitizeTraceTaskMetadataText(sanitizeText, text);
+  return sanitized === undefined
+    ? undefined
+    : sanitized.trim().split('\n')[0]?.slice(0, TRACE_TASK_SUMMARY_MAX_LENGTH);
+}
+
+function sanitizeTraceTaskMetadataText(
+  sanitizeText: ((text: string) => string) | undefined,
+  text: string | undefined,
+): string | undefined {
+  const sanitized = sanitizeSpanText(sanitizeText, text);
+  return sanitized === undefined ? undefined : sanitizeSensitiveText(sanitized);
 }
 
 function buildPhaseAttributes(params: PhaseSpanParams): Attributes {

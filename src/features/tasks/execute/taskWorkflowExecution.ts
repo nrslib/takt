@@ -5,6 +5,8 @@ import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExecuteTaskOptions, WorkflowExecutionOptions, WorkflowExecutionResult } from './types.js';
+import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
+import type { WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 
 const log = createLogger('task');
 
@@ -40,6 +42,7 @@ export async function executeTaskWorkflow(
     initialIterationOverride,
     currentTaskIssueNumber,
   } = options;
+  const traceTaskMetadata = resolveTraceTaskMetadata(options);
   const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd: cwd });
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
@@ -86,5 +89,22 @@ export async function executeTaskWorkflow(
     maxStepsOverride,
     initialIterationOverride,
     currentTaskIssueNumber,
+    traceTaskMetadata,
+  });
+}
+
+function resolveTraceTaskMetadata(options: ExecuteTaskOptions): WorkflowTraceTaskMetadata | undefined {
+  if (options.traceTaskMetadata && options.traceTaskContext) {
+    throw new Error('Use either traceTaskMetadata or traceTaskContext, not both');
+  }
+  if (options.traceTaskMetadata) {
+    return options.traceTaskMetadata;
+  }
+  if (!options.traceTaskContext) {
+    return undefined;
+  }
+  return buildTraceTaskMetadata({
+    taskContent: options.task,
+    ...options.traceTaskContext,
   });
 }

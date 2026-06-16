@@ -103,6 +103,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   let sourceContext: string | undefined;
   let prBranch: string | undefined;
   let prBaseBranch: string | undefined;
+  let sourceIssueNumber: number | undefined;
 
   if (prNumber) {
     try {
@@ -111,6 +112,12 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       sourceContext = prResult.initialInput;
       prBranch = prResult.prBranch;
       prBaseBranch = prResult.baseBranch;
+      selectOptions.traceTaskContext = {
+        source: 'pr_review',
+        prNumber,
+        branch: prBranch,
+        ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+      };
     } catch (e) {
       logError(getErrorMessage(e));
       process.exit(1);
@@ -121,6 +128,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       if (issueResult) {
         directTask = undefined;
         sourceContext = issueResult.initialInput;
+        sourceIssueNumber = issueResult.issueNumber;
+        selectOptions.traceTaskContext = {
+          source: 'issue',
+          ...(sourceIssueNumber !== undefined ? { issueNumber: sourceIssueNumber } : {}),
+        };
       }
     } catch (e) {
       logError(getErrorMessage(e));
@@ -264,6 +276,8 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         : undefined;
       await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
         presetSettings,
+        ...(prNumber !== undefined ? { prNumber } : {}),
+        ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
         ...(result.attachments ? { attachments: result.attachments } : {}),
       });
     },

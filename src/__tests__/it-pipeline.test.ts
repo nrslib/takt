@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 
 // --- Mocks ---
@@ -114,6 +115,8 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 
 import { executePipeline } from '../features/pipeline/index.js';
 
+const mockExecFileSync = vi.mocked(execFileSync);
+
 // --- Test helpers ---
 
 /** Create a minimal test workflow YAML + agent files in a temp directory */
@@ -178,6 +181,15 @@ describe('Pipeline Integration Tests', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      if (Array.isArray(args) && args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
+        return 'test/current\n' as never;
+      }
+      if (Array.isArray(args) && args[0] === 'symbolic-ref' && args[1] === 'refs/remotes/origin/HEAD') {
+        return 'refs/remotes/origin/main\n' as never;
+      }
+      return '' as never;
+    });
     const setup = createTestWorkflowDir();
     testDir = setup.dir;
     workflowPath = setup.workflowPath;

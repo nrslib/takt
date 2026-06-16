@@ -42,6 +42,11 @@ export interface CreateBaseBranchIfMissingConfig {
   };
 }
 
+interface ResolvedBaseBranchCandidate {
+  branch?: string;
+  requiresValidation: boolean;
+}
+
 export async function localBranchExistsAbortable(
   projectDir: string,
   branch: string,
@@ -79,15 +84,19 @@ export async function branchExistsAbortable(
   );
 }
 
-function resolveConfiguredBaseBranch(projectDir: string, explicitBaseBranch?: string): string | undefined {
+function resolveConfiguredBaseBranch(projectDir: string, explicitBaseBranch?: string): ResolvedBaseBranchCandidate {
   if (explicitBaseBranch !== undefined) {
     const normalized = explicitBaseBranch.trim();
     if (normalized.length === 0) {
       throw new Error('Base branch override must not be empty.');
     }
-    return normalized;
+    return { branch: normalized, requiresValidation: true };
   }
-  return resolveConfigValue(projectDir, 'baseBranch');
+  const configBaseBranch = resolveConfigValue(projectDir, 'baseBranch');
+  return {
+    branch: configBaseBranch,
+    requiresValidation: configBaseBranch !== undefined,
+  };
 }
 
 function assertValidBranchRef(projectDir: string, ref: string): void {
@@ -157,18 +166,8 @@ export function resolveBaseBranch(
   projectDir: string,
   explicitBaseBranch?: string,
 ): { branch: string; fetchedCommit?: string } {
-  const configBaseBranch = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const baseBranch = resolveBaseBranchName(projectDir, explicitBaseBranch);
   const autoFetch = resolveConfigValue(projectDir, 'autoFetch');
-
-  const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
-
-  if (explicitBaseBranch !== undefined) {
-    assertExplicitBaseBranch(projectDir, baseBranch);
-  }
-
-  if (explicitBaseBranch !== undefined && !branchExists(projectDir, baseBranch)) {
-    throw new Error(`Base branch does not exist: ${baseBranch}`);
-  }
 
   if (!autoFetch) {
     return { branch: baseBranch };
@@ -193,21 +192,39 @@ export function resolveBaseBranch(
   }
 }
 
+export function resolveBaseBranchName(
+  projectDir: string,
+  explicitBaseBranch?: string,
+): string {
+  const resolved = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const baseBranch = resolved.branch ?? detectDefaultBranch(projectDir);
+
+  if (resolved.requiresValidation) {
+    assertExplicitBaseBranch(projectDir, baseBranch);
+  }
+
+  if (resolved.requiresValidation && !branchExists(projectDir, baseBranch)) {
+    throw new Error(`Base branch does not exist: ${baseBranch}`);
+  }
+
+  return baseBranch;
+}
+
 export async function resolveBaseBranchAbortable(
   projectDir: string,
   explicitBaseBranch?: string,
   abortSignal?: AbortSignal,
 ): Promise<{ branch: string; fetchedCommit?: string }> {
-  const configBaseBranch = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
+  const resolved = resolveConfiguredBaseBranch(projectDir, explicitBaseBranch);
   const autoFetch = resolveConfigValue(projectDir, 'autoFetch');
 
-  const baseBranch = configBaseBranch ?? detectDefaultBranch(projectDir);
+  const baseBranch = resolved.branch ?? detectDefaultBranch(projectDir);
 
-  if (explicitBaseBranch !== undefined) {
+  if (resolved.requiresValidation) {
     assertExplicitBaseBranch(projectDir, baseBranch);
   }
 
-  if (explicitBaseBranch !== undefined && !await branchExistsAbortable(projectDir, baseBranch, abortSignal)) {
+  if (resolved.requiresValidation && !await branchExistsAbortable(projectDir, baseBranch, abortSignal)) {
     throw new Error(`Base branch does not exist: ${baseBranch}`);
   }
 

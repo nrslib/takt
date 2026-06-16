@@ -22,6 +22,7 @@ import {
 import { executeTaskWithResult } from '../execute/taskExecution.js';
 import type { DirectResumeMetadata } from '../execute/runMeta.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
+import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
 import { runDirectInstructMode } from './directInstructMode.js';
 import { findLatestResumableDirectRun, type ResumableDirectRun } from './directRunFinder.js';
 
@@ -192,6 +193,10 @@ async function executeDirectResume(
     retryNote,
     resumePoint: context.resumePoint,
     directResume: buildDirectResumeMetadata(context.run, resumeMode),
+    traceTaskMetadata: buildTraceTaskMetadata({
+      taskContent: context.taskContent,
+      taskSlug: context.run.slug,
+    }),
   });
   return result.success;
 }

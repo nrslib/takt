@@ -213,6 +213,11 @@ describe('resumeDirectRun', () => {
         sourceRunSlug: '20260524-direct-failed',
         resumeMode: 'requeue',
       },
+      traceTaskMetadata: {
+        taskSlug: '20260524-direct-failed',
+        taskSummary: 'Order file instruction',
+        taskSource: 'manual',
+      },
     }));
   });
 

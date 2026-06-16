@@ -219,6 +219,7 @@ async function executeWorkflowInternal(
       taskColorIndex: options.taskColorIndex,
       initialIteration: options.initialIterationOverride,
       currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
+      traceTaskMetadata: options.traceTaskMetadata,
       phase1ProcessSafetyByStep,
       systemStepServicesFactory: createDefaultSystemStepServices,
       workflowCallResolver: createWorkflowCallResolver(workflowExecutionContext),

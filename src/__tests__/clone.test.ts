@@ -1934,7 +1934,9 @@ describe('auto clone path allocation', () => {
 
   it('should sync project-local quality gate assets after creating a temp clone', () => {
     vi.mocked(fs.accessSync).mockImplementation(() => undefined);
-    mockResolveConfigValue.mockReturnValue('/tmp/takt-worktrees');
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'worktreeDir' ? '/tmp/takt-worktrees' : undefined
+    ));
     vi.mocked(fs.existsSync).mockReturnValue(false);
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
@@ -1955,7 +1957,9 @@ describe('auto clone path allocation', () => {
   it('should allocate a suffixed path when the generated clone path already exists', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.123Z'));
-    mockResolveConfigValue.mockReturnValue('/tmp/takt-worktrees');
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'worktreeDir' ? '/tmp/takt-worktrees' : undefined
+    ));
     vi.mocked(fs.existsSync).mockImplementation((value: fs.PathLike) => (
       String(value) === '/tmp/takt-worktrees/20260101T0000-test-task'
     ));

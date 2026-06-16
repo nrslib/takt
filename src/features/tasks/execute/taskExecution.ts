@@ -11,6 +11,7 @@ import type {
   TaskExecutionParallelOptions,
 } from './types.js';
 import { resolveTaskExecution, resolveTaskIssue } from './resolveTask.js';
+import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { postExecutionFlow } from './postExecution.js';
 import {
   buildBooleanTaskResult,
@@ -135,6 +136,14 @@ export async function executeTaskAndCompleteWithResult(
       maxStepsOverride,
       initialIterationOverride,
       currentTaskIssueNumber: issueNumber,
+      traceTaskMetadata: buildTraceTaskMetadata({
+        task,
+        taskContent: taskPrompt ?? task.content,
+        branch,
+        baseBranch,
+        worktreePath,
+        issueNumber,
+      }),
     });
 
     if (taskRunResult.exceeded && taskRunResult.exceededInfo) {

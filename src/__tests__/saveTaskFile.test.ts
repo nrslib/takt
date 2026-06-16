@@ -409,6 +409,18 @@ describe('saveTaskFromInteractive', () => {
     expect(task.issue).toBe(42);
   });
 
+  it('should record PR review metadata in tasks.yaml when prNumber option is provided', async () => {
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await saveTaskFromInteractive(testDir, 'Fix PR review comments', 'default', { prNumber: 456 });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.source).toBe('pr_review');
+    expect(task.pr_number).toBe(456);
+  });
+
   it('should persist image attachments when saving an interactive task with preset settings', async () => {
     const attachment = createTempAttachment(testDir, 'image-1.png', 'interactive-image');
 

@@ -15,12 +15,15 @@ Procedure:
 2. For each requirement, identify the implementing code (file:line)
 3. Verify the code actually fulfills the requirement (read the file, check existing test/build evidence)
    - Do not mark a composite requirement as ✅ based on only one side of the cases
+   - Do not reinterpret required task items as optional, out of scope, or different requirements without explicit evidence
+   - For requirements involving IDs, names, metadata, config, environment variables, or output contracts, verify entry points, execution modes, and missing-value behavior separately
    - Do not rely on the plan report or pure-review judgment; independently verify mergeability
    - For requirements involving side effects or state changes, separate verification of happy paths, failure paths, and cleanup
    - If any requirement is unfulfilled, REJECT
 4. Re-evaluate prior review findings
    - If a finding does not hold in code, classify it as `false_positive`
    - If a finding holds technically but pushes work beyond the task objective or justified scope, classify it as `overreach`
+   - Judge `resolved` against the original finding's expected result, acceptance criteria, and task requirement, not merely against the patch
    - Do not leave `false_positive` / `overreach` reasoning implicit
 5. If the diff adds or changes a shared helper, normalizer, builder, or adapter, reconcile its contract against existing branches with the same responsibility
    - Even when absent from the requirements table, contract inconsistencies introduced by the diff must be treated as unverified scope or a REJECT reason

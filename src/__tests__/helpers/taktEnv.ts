@@ -4,7 +4,7 @@ function isTaktEnvKey(key: string): boolean {
   return key.startsWith('TAKT_');
 }
 
-function snapshotTaktEnv(): TaktEnvSnapshot {
+export function snapshotTaktEnv(): TaktEnvSnapshot {
   const snapshot: TaktEnvSnapshot = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (isTaktEnvKey(key)) {

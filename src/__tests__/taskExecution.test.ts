@@ -286,6 +286,55 @@ describe('executeAndCompleteTask', () => {
     expect(workflowExecutionOptions?.model).toBe('gpt-5.3-codex');
   });
 
+  it('should build trace task metadata from execute task context inside tasks feature', async () => {
+    await executeTask({
+      task: 'Fix the branch-specific bug',
+      cwd: '/project',
+      projectCwd: '/project',
+      workflowIdentifier: 'default',
+      traceTaskContext: {
+        issueNumber: 827,
+        prNumber: 826,
+        branch: 'takt/827/trace-metadata',
+        baseBranch: 'main',
+        taskSlug: 'trace-metadata',
+        worktreePath: '/project/.takt/worktrees/trace-metadata',
+      },
+    });
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      traceTaskMetadata?: unknown;
+    };
+    expect(workflowExecutionOptions?.traceTaskMetadata).toEqual({
+      taskSlug: 'trace-metadata',
+      taskSummary: 'Fix the branch-specific bug',
+      taskSource: 'pr_review',
+      issueNumber: 827,
+      prNumber: 826,
+      gitBranch: 'takt/827/trace-metadata',
+      gitBaseBranch: 'main',
+      worktreePath: '/project/.takt/worktrees/trace-metadata',
+    });
+  });
+
+  it('should reject conflicting trace task metadata inputs before workflow execution', async () => {
+    await expect(executeTask({
+      task: 'Fix the branch-specific bug',
+      cwd: '/project',
+      projectCwd: '/project',
+      workflowIdentifier: 'default',
+      traceTaskMetadata: {
+        taskSummary: 'prebuilt metadata',
+      },
+      traceTaskContext: {
+        issueNumber: 827,
+      },
+    })).rejects.toThrow('Use either traceTaskMetadata or traceTaskContext, not both');
+
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   it('should pass only currentTaskIssueNumber to executeWorkflow for system-step context', async () => {
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/project',
@@ -317,6 +366,96 @@ describe('executeAndCompleteTask', () => {
     };
     expect(workflowExecutionOptions?.currentTaskIssueNumber).toBe(586);
     expect('currentTaskName' in (workflowExecutionOptions ?? {})).toBe(false);
+  });
+
+  it('should pass trace task metadata from task records and resolved execution into executeWorkflow', async () => {
+    const task = {
+      ...createTask('task-with-trace-metadata'),
+      slug: 'trace-metadata',
+      summary: 'Add trace task metadata',
+      worktreePath: '/old/worktree/path',
+      data: {
+        task: 'Add trace task metadata',
+        workflow: 'default',
+        source: 'pr_review' as const,
+        pr_number: 826,
+        issue: 827,
+        branch: 'takt/old-branch',
+        base_branch: 'develop',
+      },
+    };
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: '20260614-091130-task-with-trace-metadata',
+      branch: 'takt/827/trace-metadata',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: 827,
+    });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+    );
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      currentTaskIssueNumber?: number;
+      traceTaskMetadata?: unknown;
+    };
+    expect(workflowExecutionOptions?.currentTaskIssueNumber).toBe(827);
+    expect(workflowExecutionOptions?.traceTaskMetadata).toEqual({
+      taskName: 'task-with-trace-metadata',
+      taskSlug: 'trace-metadata',
+      taskSummary: 'Add trace task metadata',
+      taskSource: 'pr_review',
+      issueNumber: 827,
+      prNumber: 826,
+      gitBranch: 'takt/827/trace-metadata',
+      gitBaseBranch: 'main',
+      worktreePath: '/worktree/clone',
+    });
+  });
+
+  it('should use saved summary for task_dir task trace metadata', async () => {
+    const task = {
+      ...createTask('task-dir-trace-metadata'),
+      summary: 'Saved task directory summary',
+      taskDir: '.takt/tasks/task-dir-trace-metadata',
+      content: 'Implement using only the files in `.takt/runs/context/task`.',
+      data: {
+        task: 'Implement using only the files in `.takt/runs/context/task`.',
+        workflow: 'default',
+        source: 'issue' as const,
+        issue: 827,
+      },
+    };
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+    );
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      traceTaskMetadata?: unknown;
+    };
+    expect(workflowExecutionOptions?.traceTaskMetadata).toMatchObject({
+      taskName: 'task-dir-trace-metadata',
+      taskSummary: 'Saved task directory summary',
+      taskSource: 'issue',
+      issueNumber: 827,
+    });
   });
 
   it('should resolve workflow paths relative to execCwd when running inside a worktree', async () => {

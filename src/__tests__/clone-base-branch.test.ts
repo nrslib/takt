@@ -21,12 +21,18 @@ vi.mock('../infra/task/branchList.js', () => ({
   detectDefaultBranch: vi.fn().mockReturnValue('main'),
 }));
 
+vi.mock('../infra/task/clone-exec.js', () => ({
+  runGitCommandAbortable: vi.fn(),
+}));
+
 import { execFileSync } from 'node:child_process';
 import { resolveConfigValue } from '../infra/config/index.js';
-import { branchExists, createBaseBranchIfMissing, resolveBaseBranch } from '../infra/task/clone-base-branch.js';
+import { runGitCommandAbortable } from '../infra/task/clone-exec.js';
+import { branchExists, createBaseBranchIfMissing, resolveBaseBranch, resolveBaseBranchAbortable } from '../infra/task/clone-base-branch.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockResolveConfigValue = vi.mocked(resolveConfigValue);
+const mockRunGitCommandAbortable = vi.mocked(runGitCommandAbortable);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -178,6 +184,83 @@ describe('resolveBaseBranch — assertValidBranchRef argument correctness', () =
 
     // Then: check-ref-format should not be called (no assertValidBranchRef)
     expect(checkRefFormatCalls).toHaveLength(0);
+  });
+
+  it('should validate and use configured baseBranch when no explicit baseBranch is provided', () => {
+    const checkRefFormatCalls: string[][] = [];
+
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'release/v2' : undefined
+    ));
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        checkRefFormatCalls.push([...argsArr]);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (ref === 'refs/heads/release/v2') {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+      return Buffer.from('');
+    });
+
+    const result = resolveBaseBranch('/project');
+
+    expect(result).toEqual({ branch: 'release/v2' });
+    expect(checkRefFormatCalls[0]).toEqual(['check-ref-format', '--branch', 'release/v2']);
+  });
+
+  it('should reject invalid configured baseBranch when no explicit baseBranch is provided', () => {
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'invalid..ref' : undefined
+    ));
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        throw new Error('invalid ref');
+      }
+      return Buffer.from('');
+    });
+
+    expect(() => resolveBaseBranch('/project')).toThrow(
+      'Invalid base branch: invalid..ref',
+    );
+  });
+
+  it('should reject missing configured baseBranch when no explicit baseBranch is provided', () => {
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'missing/branch' : undefined
+    ));
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'check-ref-format') {
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'show-ref') {
+        throw new Error('branch not found');
+      }
+      return Buffer.from('');
+    });
+
+    expect(() => resolveBaseBranch('/project')).toThrow(
+      'Base branch does not exist: missing/branch',
+    );
+  });
+
+  it('should reject missing configured baseBranch in abortable resolution', async () => {
+    mockResolveConfigValue.mockImplementation((_projectDir, key) => (
+      key === 'baseBranch' ? 'missing/branch' : undefined
+    ));
+    mockExecFileSync.mockReturnValue(Buffer.from(''));
+    mockRunGitCommandAbortable.mockRejectedValue(new Error('branch not found'));
+
+    await expect(resolveBaseBranchAbortable('/project')).rejects.toThrow(
+      'Base branch does not exist: missing/branch',
+    );
   });
 });
 

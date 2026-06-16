@@ -127,7 +127,7 @@ vi.mock('../app/cli/helpers.js', () => ({
 }));
 
 import { formatIssueAsTask, parseIssueNumbers } from '../infra/git/index.js';
-import { selectAndExecuteTask, determineWorkflow, createIssueAndSaveTask } from '../features/tasks/index.js';
+import { selectAndExecuteTask, determineWorkflow, createIssueAndSaveTask, saveTaskFromInteractive } from '../features/tasks/index.js';
 import {
   interactiveMode,
   passthroughMode,
@@ -146,6 +146,7 @@ const mockParseIssueNumbers = vi.mocked(parseIssueNumbers);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
 const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
+const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
 const mockInteractiveMode = vi.mocked(interactiveMode);
 const mockPassthroughMode = vi.mocked(passthroughMode);
 const mockQuietMode = vi.mocked(quietMode);
@@ -284,11 +285,16 @@ describe('Issue resolution in routing', () => {
         undefined,
       );
 
-      // Then: selectAndExecuteTask should be called (issues are used only for initialInput, not selectOptions)
+      // Then: selectAndExecuteTask should receive issue metadata for trace discovery
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.any(Object),
+        expect.objectContaining({
+          traceTaskContext: {
+            source: 'issue',
+            issueNumber: 131,
+          },
+        }),
         undefined,
       );
     });
@@ -311,6 +317,26 @@ describe('Issue resolution in routing', () => {
       expect(mockInteractiveMode).not.toHaveBeenCalled();
 
       mockExit.mockRestore();
+    });
+
+    it('should save issue number when interactive save_task is selected', async () => {
+      mockOpts.issue = 131;
+      const issue131 = createMockIssue(131);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+
+      await executeDefaultAction();
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Saved issue task',
+        'default',
+        expect.objectContaining({
+          issue: 131,
+        }),
+      );
     });
   });
 
@@ -337,12 +363,38 @@ describe('Issue resolution in routing', () => {
         undefined,
       );
 
-      // Then: selectAndExecuteTask should be called
+      // Then: selectAndExecuteTask should receive parsed issue metadata for trace discovery
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.any(Object),
+        expect.objectContaining({
+          traceTaskContext: {
+            source: 'issue',
+            issueNumber: 131,
+          },
+        }),
         undefined,
+      );
+    });
+
+    it('should save parsed issue number when interactive save_task is selected', async () => {
+      const issue131 = createMockIssue(131);
+      mockIsDirectTask.mockReturnValue(true);
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchIssue.mockReturnValue(issue131);
+      mockFormatIssueAsTask.mockReturnValue('## Issue #131: Issue #131');
+      mockParseIssueNumbers.mockReturnValue([131]);
+      mockInteractiveMode.mockResolvedValue({ action: 'save_task', task: 'Saved issue task' });
+
+      await executeDefaultAction('#131');
+
+      expect(mockSaveTaskFromInteractive).toHaveBeenCalledWith(
+        '/test/cwd',
+        'Saved issue task',
+        'default',
+        expect.objectContaining({
+          issue: 131,
+        }),
       );
     });
   });

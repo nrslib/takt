@@ -10,6 +10,7 @@ import {
   remoteBranchExists,
   remoteBranchExistsAbortable,
   resolveBaseBranch as resolveBaseBranchInternal,
+  resolveBaseBranchName as resolveBaseBranchNameInternal,
   resolveBaseBranchAbortable,
 } from './clone-base-branch.js';
 import {
@@ -130,6 +131,13 @@ export class CloneManager {
     explicitBaseBranch?: string,
   ): { branch: string; fetchedCommit?: string } {
     return resolveBaseBranchInternal(projectDir, explicitBaseBranch);
+  }
+
+  static resolveBaseBranchName(
+    projectDir: string,
+    explicitBaseBranch?: string,
+  ): string {
+    return resolveBaseBranchNameInternal(projectDir, explicitBaseBranch);
   }
 
   createSharedClone(projectDir: string, options: WorktreeOptions): WorktreeResult {
@@ -326,6 +334,13 @@ export function resolveBaseBranch(
   explicitBaseBranch?: string,
 ): { branch: string; fetchedCommit?: string } {
   return CloneManager.resolveBaseBranch(projectDir, explicitBaseBranch);
+}
+
+export function resolveBaseBranchName(
+  projectDir: string,
+  explicitBaseBranch?: string,
+): string {
+  return CloneManager.resolveBaseBranchName(projectDir, explicitBaseBranch);
 }
 
 export function resolveCloneBaseDir(projectDir: string): string {

@@ -289,6 +289,88 @@ describe('workflow OpenTelemetry spans', () => {
     ]);
   });
 
+  it('records task discovery metadata on workflow and workflow_start spans but not metrics', async () => {
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithWorkflowSpan({
+      enabled: true,
+      runId: 'run-827',
+      workflowName: 'test-workflow',
+      initialStep: 'implement',
+      stepCount: 2,
+      maxSteps: 3,
+      runMode: 'full',
+      resumeDepth: 0,
+      sanitizeText: (text: string) => text.replaceAll('secret', '[REDACTED]'),
+      traceTaskMetadata: {
+        taskName: 'task-827',
+        taskSlug: 'add-trace-task-metadata',
+        taskSummary: 'Improve secret trace metadata discovery',
+        taskSource: 'pr_review',
+        issueNumber: 827,
+        prNumber: 826,
+        gitBranch: 'takt/827/add-trace-task-metadata',
+        gitBaseBranch: 'main',
+        worktreePath: '/tmp/takt/worktrees/task-827',
+        runDir: '/project/.takt/runs/run-827',
+      },
+    }, async () => ({ done: true }), () => ({ status: 'completed' }));
+
+    const expectedTaskAttributes = {
+      'takt.task.name': 'task-827',
+      'takt.task.slug': 'add-trace-task-metadata',
+      'takt.task.summary': 'Improve [REDACTED] trace metadata discovery',
+      'takt.task.source': 'pr_review',
+      'takt.task.issue_number': 827,
+      'takt.task.pr_number': 826,
+      'takt.git.branch': 'takt/827/add-trace-task-metadata',
+      'takt.git.base_branch': 'main',
+      'takt.worktree.path': '/tmp/takt/worktrees/task-827',
+      'takt.run.dir': '/project/.takt/runs/run-827',
+    };
+    expect(findSpan(spans, 'workflow.test-workflow').attributes).toMatchObject(expectedTaskAttributes);
+    expect(findSpan(spans, 'workflow_start.test-workflow').attributes).toMatchObject(expectedTaskAttributes);
+    for (const record of metricRecords) {
+      expect(record.attributes['takt.task.pr_number']).toBeUndefined();
+      expect(record.attributes['takt.git.branch']).toBeUndefined();
+      expect(record.attributes['takt.worktree.path']).toBeUndefined();
+    }
+  });
+
+  it('redacts and limits task metadata independently of the configured span sanitizer', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const secret = 'sk-12345678901234567890';
+
+    await module.runWithWorkflowSpan({
+      enabled: true,
+      runId: 'run-827',
+      workflowName: 'test-workflow',
+      initialStep: 'implement',
+      stepCount: 2,
+      maxSteps: 3,
+      runMode: 'full',
+      resumeDepth: 0,
+      sanitizeText: (text: string) => text,
+      traceTaskMetadata: {
+        taskName: `task openai_api_key=${secret}`,
+        taskSummary: `Improve trace metadata openai_api_key=${secret} ${'x'.repeat(120)}\nsecond line`,
+        taskSource: 'manual',
+        gitBranch: `takt/token=${secret}`,
+      },
+    }, async () => ({ done: true }), () => ({ status: 'completed' }));
+
+    const attributes = findSpan(spans, 'workflow.test-workflow').attributes;
+    expect(attributes['takt.task.name']).toBe('task openai_api_key=[REDACTED]');
+    expect(attributes['takt.git.branch']).toBe('takt/token=[REDACTED]');
+
+    const summary = attributes['takt.task.summary'];
+    expect(typeof summary).toBe('string');
+    expect(summary).toContain('[REDACTED]');
+    expect(summary).not.toContain(secret);
+    expect(summary).not.toContain('\n');
+    expect(summary).toHaveLength(80);
+  });
+
   it('emits a short-lived workflow_start span before workflow execution continues', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
 
@@ -634,6 +716,37 @@ describe('workflow OpenTelemetry spans', () => {
         'takt.model.name': 'gpt-5',
       }) as unknown,
     }));
+  });
+
+  it('records task discovery metadata on step spans', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithStepSpan({
+      enabled: true,
+      runId: 'run-827',
+      workflowName: 'test-workflow',
+      step: makeStep(),
+      iteration: 1,
+      sanitizeText: (text: string) => text.replaceAll('secret', '[REDACTED]'),
+      traceTaskMetadata: {
+        taskSlug: 'manual-trace-check',
+        taskSummary: 'Manual secret trace check',
+        taskSource: 'manual',
+        gitBranch: 'takt/manual-trace-check',
+        runDir: '/project/.takt/runs/run-827',
+      },
+    }, async () => makeDoneResult());
+
+    expect(findSpan(spans, 'step.implement').attributes).toMatchObject({
+      'takt.run.id': 'run-827',
+      'takt.workflow.name': 'test-workflow',
+      'takt.step.name': 'implement',
+      'takt.task.slug': 'manual-trace-check',
+      'takt.task.summary': 'Manual [REDACTED] trace check',
+      'takt.task.source': 'manual',
+      'takt.git.branch': 'takt/manual-trace-check',
+      'takt.run.dir': '/project/.takt/runs/run-827',
+    });
   });
 
   it('serializes provider options onto step spans for session-log parity', async () => {

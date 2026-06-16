@@ -10,6 +10,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 const testId = randomUUID();
 const testDir = join(tmpdir(), `takt-rcv-test-${testId}`);
@@ -41,10 +42,13 @@ const disabledObservability = {
   usageEventsPhase: false,
 };
 
+let taktEnvSnapshot: TaktEnvSnapshot;
+
 describe('config resolution defaults and project-local priority', () => {
   let projectDir: string;
 
   beforeEach(() => {
+    taktEnvSnapshot = clearTaktEnv();
     projectDir = join(testDir, `project-${randomUUID()}`);
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(globalTaktDir, { recursive: true });
@@ -56,6 +60,7 @@ describe('config resolution defaults and project-local priority', () => {
   afterEach(() => {
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
+    restoreTaktEnv(taktEnvSnapshot);
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }
