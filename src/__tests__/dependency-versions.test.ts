@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 type PackageJson = {
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   engines?: Record<string, string>;
+  overrides?: Record<string, string>;
 };
 
 type PackageLock = {
@@ -193,10 +195,22 @@ describe('dependency versions', () => {
     expect(getLockedPackage(packageLock, 'node_modules/ajv').version).toBe('6.15.0');
     expect(getLockedPackage(packageLock, 'node_modules/express-rate-limit').version).toBe('8.5.2');
     expect(getLockedPackage(packageLock, 'node_modules/fast-uri').version).toBe('3.1.2');
-    expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.23');
+    expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.25');
     expect(getLockedPackage(packageLock, 'node_modules/ip-address').version).toBe('10.2.0');
     expect(getLockedPackage(packageLock, 'node_modules/protobufjs').version).toBe('7.6.4');
     expect(getLockedPackage(packageLock, 'node_modules/qs').version).toBe('6.15.2');
+  });
+
+  it('locks test runner transitive dependencies to Node 18 compatible patched security releases', () => {
+    const packageJson = readPackageJson();
+    const packageLock = readPackageLock();
+
+    expect(packageJson.devDependencies?.vitest).toBe('^3.2.6');
+    expect(packageJson.overrides?.vite).toBe('6.4.3');
+    expect(packageJson.overrides?.esbuild).toBe('0.28.1');
+    expect(getLockedPackage(packageLock, 'node_modules/vitest').version).toBe('3.2.6');
+    expect(getLockedPackage(packageLock, 'node_modules/vite').version).toBe('6.4.3');
+    expect(getLockedPackage(packageLock, 'node_modules/esbuild').version).toBe('0.28.1');
   });
 
   it('resolves traced-config through its public entrypoint', () => {

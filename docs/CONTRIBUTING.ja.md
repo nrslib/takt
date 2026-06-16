@@ -15,6 +15,12 @@ npm test
 npm run lint
 ```
 
+Nix flakes を使う場合は、`nix develop` でこのプロジェクト用の Node.js ランタイムと Bun が入ったシェルを開けます:
+
+```bash
+nix develop
+```
+
 ## 貢献の流れ
 
 1. **Issue を起票** して変更内容を議論する

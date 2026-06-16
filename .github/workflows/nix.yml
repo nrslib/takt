@@ -1,0 +1,38 @@
+name: Nix
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  flake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v17
+      - run: nix flake check -L
+      - run: nix build .#default -L
+      - run: |
+          if find result/lib/node_modules/takt/node_modules -type f \( \
+            -path '*/@anthropic-ai/claude-agent-sdk-*/claude' -o \
+            -path '*/@openai/codex-*/vendor/*/bin/codex' \
+          \) | grep -q .; then
+            echo "Provider CLI binaries must not be included in the Nix package output" >&2
+            exit 1
+          fi
+      - run: NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version
+      - run: NO_UPDATE_NOTIFIER=1 nix run .#default -- --version
+      - run: |
+          nix profile install .#default --profile "$RUNNER_TEMP/takt-profile"
+          NO_UPDATE_NOTIFIER=1 "$RUNNER_TEMP/takt-profile/bin/takt" --version
