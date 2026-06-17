@@ -61,6 +61,7 @@ workflow_categories:
   🎵 TAKT Development:
     workflows:
       - takt-default
+      - takt-default-with-fc
       - takt-default-refresh-all
       - takt-default-refresh-fast
       - auto-improvement-loop

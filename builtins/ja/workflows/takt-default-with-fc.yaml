@@ -1,5 +1,5 @@
-name: takt-default
-description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (parallel reviewers + fix) -> supervise -> COMPLETE).
+name: takt-default-with-fc
+description: Finding Contract 有効版の TAKT 開発ワークフロー（計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（並列レビュー+修正） → 監督 → 完了）
 workflow_config:
   provider_options:
     codex:
@@ -16,16 +16,16 @@ steps:
     provider_options:
       extends: review-readonly
     rules:
-      - condition: Requirements are clear and implementable
+      - condition: 要件が明確で実装可能
         next: write_tests
-      - condition: User is asking a question (not an implementation task)
+      - condition: ユーザーが質問をしている（実装タスクではない）
         next: COMPLETE
-      - condition: Requirements unclear, insufficient info
+      - condition: 要件が不明確、情報不足
         next: ABORT
         appendix: |
-          Items to confirm:
-          - {question 1}
-          - {question 2}
+          確認事項:
+          - {質問1}
+          - {質問2}
     instruction: plan
     output_contracts:
       report:
@@ -47,13 +47,13 @@ steps:
     required_permission_mode: edit
     instruction: write-tests-first
     rules:
-      - condition: Tests written
+      - condition: テスト作成が完了した
         next: draft
-      - condition: Skip test writing because target is not yet implemented
+      - condition: テスト対象が未実装のためテスト作成をスキップする
         next: draft
-      - condition: Cannot proceed with writing tests
+      - condition: テスト作成を進行できない
         next: plan
-      - condition: User input required for confirmation
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
         next: write_tests
         requires_user_input: true
         interactive_only: true
@@ -73,7 +73,7 @@ steps:
         next: ABORT
   - name: peer-review
     kind: workflow_call
-    call: peer-review
+    call: takt-default-peer-review
     rules:
       - condition: COMPLETE
         next: supervise
@@ -90,9 +90,9 @@ steps:
       extends: review-readonly
     pass_previous_response: false
     rules:
-      - condition: All clear
+      - condition: すべて問題なし
         next: COMPLETE
-      - condition: Requirements unmet, tests failing, build errors
+      - condition: 要求未達成、テスト失敗、ビルドエラー
         next: plan
     instruction: supervise
     output_contracts:

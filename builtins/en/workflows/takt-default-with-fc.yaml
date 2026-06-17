@@ -1,5 +1,5 @@
-name: takt-default
-description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (parallel reviewers + fix) -> supervise -> COMPLETE).
+name: takt-default-with-fc
+description: Finding Contract-enabled TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (parallel reviewers + fix) -> supervise -> COMPLETE).
 workflow_config:
   provider_options:
     codex:
@@ -73,7 +73,7 @@ steps:
         next: ABORT
   - name: peer-review
     kind: workflow_call
-    call: peer-review
+    call: takt-default-peer-review
     rules:
       - condition: COMPLETE
         next: supervise
