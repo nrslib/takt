@@ -364,15 +364,19 @@ export class WorkflowEngine extends EventEmitter {
     }
   }
 
-  async run(): Promise<WorkflowState> {
+  async run(): Promise<WorkflowState & { returnValue?: string }> {
     const result = await getWorkflowRunExecutor(this)();
-    return result.state;
+    return {
+      ...result.state,
+      ...(result.returnValue !== undefined ? { returnValue: result.returnValue } : {}),
+    };
   }
 
   async runSingleIteration(): Promise<{
     response: AgentResponse;
     nextStep: string;
     isComplete: boolean;
+    returnValue?: string;
     loopDetected?: boolean;
   }> {
     return this.runWithSystemCleanup(

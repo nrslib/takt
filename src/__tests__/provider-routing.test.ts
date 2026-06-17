@@ -964,6 +964,27 @@ describe('provider_routing provider/model validation', () => {
     } as WorkflowEngineOptions)).toThrow(/model 'sonnet' is a Claude model alias but provider is 'codex'/);
   });
 
+  it('Given routing resolves opencode without a model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'provider-routing-opencode-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          tags: ['opencode-provider'],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+      providerRouting: {
+        tags: {
+          'opencode-provider': { provider: 'opencode' },
+        },
+      },
+    } as WorkflowEngineOptions)).toThrow(/provider 'opencode' requires model/);
+  });
+
   it('Given parallel sub-step routing composes an incompatible provider/model, When validating workflow, Then it fails fast', () => {
     expect(() => validateWorkflowConfig({
       name: 'provider-routing-parallel-validation',

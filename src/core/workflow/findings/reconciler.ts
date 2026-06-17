@@ -9,6 +9,7 @@ import type {
   RawFinding,
 } from './types.js';
 import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
+import { validateFindingManagerOutput } from './manager-output-validation.js';
 
 interface ReconcileFindingLedgerInput {
   previousLedger: FindingLedger;
@@ -356,6 +357,14 @@ function reconcileLedgerConflicts(input: {
 }
 
 export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): FindingLedger {
+  const validation = validateFindingManagerOutput({
+    previousLedger: input.previousLedger,
+    rawFindings: input.rawFindings,
+    managerOutput: input.managerOutput,
+  });
+  if (!validation.ok) {
+    throw new Error(validation.errors.join('\n'));
+  }
   const rawFindingIds = new Set(input.rawFindings.map((finding) => finding.rawFindingId));
   assertUniqueIds(input.rawFindings.map((finding) => finding.rawFindingId), 'raw finding id');
   assertLedgerIdAllocationInvariant(input.previousLedger);
