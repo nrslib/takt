@@ -47,6 +47,26 @@ Useful Tempo TraceQL filters for active workflows include:
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 
+After a workflow completes or aborts, TAKT prints a `TraceQL discovery:` block when observability is enabled. The same discovery data is saved in `.takt/runs/<run>/meta.json` under `observability.traceDiscovery` so the run can be found later. The generated queries always include `takt.run.id` and add filters for available task or git metadata, such as `takt.task.pr_number`, `takt.task.issue_number`, and `takt.git.branch`.
+
+Example CLI output:
+
+```text
+TraceQL discovery:
+  { resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
+  { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }
+  { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }
+  { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-finding-contract" }
+```
+
+When a workflow aborts or errors, the root `workflow.<name>` span also records step-level failure attributes:
+
+| Attribute | Meaning |
+|-----------|---------|
+| `takt.failure.kind` | Abort category, such as `step_error`, `runtime_error`, or `iteration_limit`. |
+| `takt.failure.step` | Current workflow step when the abort was recorded. |
+| `takt.failure.reason` | Sanitized abort reason. |
+
 The base endpoint is required for OTLP export:
 
 | Environment variable | Purpose |

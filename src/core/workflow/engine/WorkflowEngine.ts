@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
-import { createLogger, generateReportDir, isValidReportDirName } from '../../../shared/utils/index.js';
+import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -13,6 +13,7 @@ import type {
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowCallChildEngine,
+  WorkflowAbortKind,
   WorkflowEngineOptions,
   WorkflowRunResult,
   WorkflowSharedRuntimeState,
@@ -24,7 +25,7 @@ import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowR
 import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
-import { runWithWorkflowSpan, type WorkflowSpanParams } from '../observability/workflowSpans.js';
+import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
 import {
   applyRuntimeEnvironment,
@@ -41,6 +42,7 @@ import {
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
 import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
+import { ERROR_MESSAGES } from '../constants.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -248,8 +250,10 @@ export class WorkflowEngine extends EventEmitter {
           status: result.state.status,
           abortKind: result.abort?.kind,
           abortReason: result.abort?.reason,
+          failure: result.abort?.failure,
           iterations: result.state.iteration,
         }),
+        (error) => this.buildWorkflowErrorSpanOutcome(error),
       ),
       () => true,
     ));
@@ -344,6 +348,24 @@ export class WorkflowEngine extends EventEmitter {
     };
   }
 
+  private buildWorkflowErrorSpanOutcome(error: unknown): WorkflowSpanOutcome {
+    const kind: WorkflowAbortKind = this.abortRequested ? 'interrupt' : 'runtime_error';
+    const reason = this.abortRequested
+      ? 'Workflow interrupted by user (SIGINT)'
+      : ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error));
+    return {
+      status: 'error',
+      abortKind: kind,
+      abortReason: reason,
+      failure: {
+        kind,
+        step: this.state.currentStep,
+        reason,
+      },
+      iterations: this.state.iteration,
+    };
+  }
+
   private async runWithSystemCleanup<T>(
     execute: () => Promise<T>,
     shouldCleanup: (result: T | undefined, error: unknown | undefined) => boolean,
@@ -415,9 +437,13 @@ export class WorkflowEngine extends EventEmitter {
         }),
         (result) => ({
           status: result.isComplete ? this.state.status : 'running',
+          abortKind: result.abort?.kind,
+          abortReason: result.abort?.reason,
+          failure: result.abort?.failure,
           nextStep: result.nextStep,
           iterations: this.state.iteration,
         }),
+        (error) => this.buildWorkflowErrorSpanOutcome(error),
       ),
       (result, error) => error !== undefined || result?.isComplete === true || this.state.status !== 'running',
     );

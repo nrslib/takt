@@ -3,7 +3,12 @@ import { resolve } from 'node:path';
 import { isPathInside, isValidReportDirName } from '../../../shared/utils/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
+import type { WorkflowTraceDiscovery } from '../observability/traceDiscovery.js';
 import { buildRunPaths } from './run-paths.js';
+
+export interface RunMetaObservability {
+  traceDiscovery: WorkflowTraceDiscovery;
+}
 
 export interface RunMeta {
   task: string;
@@ -21,6 +26,7 @@ export interface RunMeta {
   currentIteration?: number;
   phase?: 1 | 2 | 3;
   updatedAt?: string;
+  observability?: RunMetaObservability;
   resumePoint?: WorkflowResumePoint;
   sourceRunSlug?: string;
   resumeMode?: 'requeue' | 'retry' | 'instruct';

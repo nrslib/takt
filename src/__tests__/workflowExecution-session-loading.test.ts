@@ -51,6 +51,9 @@ const {
       usageMissing: false,
     },
   };
+  type MockWorkflowOutcome =
+    | { status: 'completed' }
+    | { status: 'aborted'; reason: string };
 
   type PersonaProviderMap = Record<string, { provider?: string; model?: string }>;
 
@@ -68,6 +71,7 @@ const {
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
     static runError: Error | undefined;
+    static runOutcome: MockWorkflowOutcome;
     readonly receivedOptions: Record<string, unknown>;
     private readonly config: WorkflowConfig;
 
@@ -98,10 +102,20 @@ const {
           providerUsage: mockStepResponse.providerUsage,
         }, firstStep.instruction);
       }
+      if (MockWorkflowEngine.runOutcome.status === 'aborted') {
+        this.emit(
+          'workflow:abort',
+          { status: 'aborted', iteration: 1 },
+          MockWorkflowEngine.runOutcome.reason,
+        );
+        return { status: 'aborted', iteration: 1 };
+      }
+
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
     }
   }
+  MockWorkflowEngine.runOutcome = { status: 'completed' };
 
   return {
     MockWorkflowEngine,
@@ -226,7 +240,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 }));
 
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
-import { resolveWorkflowConfigValues } from '../infra/config/index.js';
+import { resolveWorkflowConfigValues, writeFileAtomic } from '../infra/config/index.js';
 import { info } from '../shared/ui/index.js';
 
 const defaultResolvedConfigValues = {
@@ -331,6 +345,7 @@ describe('executeWorkflow session loading', () => {
     mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
     mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
     MockWorkflowEngine.runError = undefined;
+    MockWorkflowEngine.runOutcome = { status: 'completed' };
     mockStepResponse.providerUsage = {
       inputTokens: 3,
       outputTokens: 2,
@@ -489,6 +504,225 @@ describe('executeWorkflow session loading', () => {
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toBe(observability);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
+  });
+
+  it('Given observability is enabled at workflow entry, When workflow completes, Then persists and prints the same TraceQL discovery queries', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'trace-discovery-run',
+      traceTaskMetadata: {
+        taskSource: 'pr_review',
+        issueNumber: 792,
+        prNumber: 826,
+        gitBranch: 'takt/843/add-trace-discovery',
+        gitBaseBranch: 'main',
+      },
+    });
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+    const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
+    expect(metaQueries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-run" }',
+      '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+      '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
+    ]);
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
+      metaQueries?.map((query) => `  ${query}`),
+    );
+  });
+
+  it('Given observability is disabled at workflow entry, When trace metadata is present, Then omits TraceQL discovery output and metadata', async () => {
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability: {
+        enabled: false,
+        monitor: false,
+        sessionLogExporter: false,
+        usageEventsPhase: false,
+      },
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'trace-discovery-disabled-run',
+      traceTaskMetadata: {
+        taskSource: 'pr_review',
+        issueNumber: 792,
+        prNumber: 826,
+        gitBranch: 'takt/843/add-trace-discovery',
+        gitBaseBranch: 'main',
+      },
+    });
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-disabled-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+
+    expect(finalMeta.observability?.traceDiscovery).toBeUndefined();
+    expect(vi.mocked(info)).not.toHaveBeenCalledWith('TraceQL discovery:');
+  });
+
+  it('Given observability is enabled at workflow entry, When workflow aborts, Then persists and prints the same TraceQL discovery queries', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runOutcome = {
+      status: 'aborted',
+      reason: 'step_failed',
+    };
+
+    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'trace-discovery-abort-run',
+      traceTaskMetadata: {
+        taskSource: 'pr_review',
+        issueNumber: 792,
+        prNumber: 826,
+        gitBranch: 'takt/843/add-trace-discovery',
+        gitBaseBranch: 'main',
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('step_failed');
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-abort-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      status?: string;
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+    const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
+    expect(finalMeta.status).toBe('aborted');
+    expect(metaQueries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-abort-run" }',
+      '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+      '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
+    ]);
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
+      metaQueries?.map((query) => `  ${query}`),
+    );
+  });
+
+  it('Given observability is enabled at workflow entry, When workflow run rejects without an abort event, Then persists and prints TraceQL discovery queries', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runError = new Error('workflow engine failed');
+
+    await expect(
+      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        reportDirName: 'trace-discovery-error-run',
+        traceTaskMetadata: {
+          taskSource: 'pr_review',
+          issueNumber: 792,
+          prNumber: 826,
+          gitBranch: 'takt/843/add-trace-discovery',
+          gitBaseBranch: 'main',
+        },
+      }),
+    ).rejects.toThrow('workflow engine failed');
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-error-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      status?: string;
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+    const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
+    expect(finalMeta.status).toBe('aborted');
+    expect(metaQueries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-error-run" }',
+      '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+      '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
+    ]);
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
+      metaQueries?.map((query) => `  ${query}`),
+    );
   });
 
   it('Given enabled observability and an existing child env snapshot, When executing workflow, Then passes run-local child process env without mutating process env', async () => {

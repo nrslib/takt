@@ -47,6 +47,26 @@ active workflow を探す Tempo TraceQL filter 例:
 { resource.service.name = "takt" && name =~ "workflow_start\\..*" }
 ```
 
+workflow の完了時または中断時、observability が有効なら TAKT は `TraceQL discovery:` ブロックを出力します。同じ discovery 情報は `.takt/runs/<run>/meta.json` の `observability.traceDiscovery` に保存され、後から run を探すために使えます。生成される query は常に `takt.run.id` を含み、利用可能な task / git metadata に応じて `takt.task.pr_number`、`takt.task.issue_number`、`takt.git.branch` の filter を追加します。
+
+CLI 出力例:
+
+```text
+TraceQL discovery:
+  { resource.service.name = "takt" && span."takt.run.id" = "<run-id>" }
+  { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }
+  { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }
+  { resource.service.name = "takt" && span."takt.git.branch" = "takt/816/implement-finding-contract" }
+```
+
+workflow が abort/error で終わった場合、root `workflow.<name>` span には step-level の failure 属性も記録されます。
+
+| 属性 | 意味 |
+|------|------|
+| `takt.failure.kind` | `step_error`、`runtime_error`、`iteration_limit` などの abort 種別 |
+| `takt.failure.step` | abort 記録時点の current workflow step |
+| `takt.failure.reason` | sanitize 済みの abort reason |
+
 OTLP export には base endpoint が必要です。
 
 | 環境変数 | 用途 |

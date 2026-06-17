@@ -451,6 +451,47 @@ describe('workflow OpenTelemetry spans', () => {
     }
   });
 
+  it('records sanitized step-level failure metadata for rejected workflow executions with the real OpenTelemetry SDK', async () => {
+    const { module, exporter, shutdown } = await loadWorkflowSpansWithRealSdk();
+    const error = new Error('workflow execution rejected');
+
+    try {
+      await expect(
+        module.runWithWorkflowSpan({
+          enabled: true,
+          runId: 'run-1',
+          workflowName: 'test-workflow',
+          initialStep: 'implement',
+          stepCount: 1,
+          maxSteps: 3,
+          runMode: 'full',
+          resumeDepth: 0,
+          sanitizeText: (text: string) => text.replaceAll('secret', '[REDACTED]'),
+        }, async () => {
+          throw error;
+        }, () => ({ status: 'completed' }), () => ({
+          status: 'error',
+          failure: {
+            kind: 'step_error',
+            step: 'implement',
+            reason: 'Step "implement" failed: secret content',
+          },
+        })),
+      ).rejects.toThrow('workflow execution rejected');
+
+      const workflowSpan = findReadableSpan(exporter.spans, 'workflow.test-workflow');
+      expect(workflowSpan.attributes).toMatchObject({
+        'takt.workflow.status': 'error',
+        'takt.failure.kind': 'step_error',
+        'takt.failure.step': 'implement',
+        'takt.failure.reason': 'Step "implement" failed: [REDACTED] content',
+      });
+      expect(findReadableSpan(exporter.spans, 'workflow_start.test-workflow').attributes['takt.failure.kind']).toBeUndefined();
+    } finally {
+      await shutdown();
+    }
+  });
+
   it('emits workflow_start before failing execution so the active trace stays discoverable', async () => {
     const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
     const error = new Error('workflow failed before first step');
@@ -523,6 +564,44 @@ describe('workflow OpenTelemetry spans', () => {
       'takt.workflow.abort.kind': 'step_error',
       'takt.workflow.abort.reason': 'Step "implement" failed: [REDACTED] content',
     });
+  });
+
+  it('records sanitized step-level failure metadata on the root workflow span only', async () => {
+    const { module, spans, metricRecords } = await loadWorkflowSpansWithMockedApi();
+
+    await module.runWithWorkflowSpan({
+      enabled: true,
+      runId: 'run-1',
+      workflowName: 'test-workflow',
+      initialStep: 'implement',
+      stepCount: 1,
+      maxSteps: 3,
+      runMode: 'full',
+      resumeDepth: 0,
+      sanitizeText: (text: string) => text.replaceAll('secret', '[REDACTED]'),
+    }, async () => ({ aborted: true }), () => ({
+      status: 'aborted',
+      abortKind: 'step_error',
+      abortReason: 'Step "implement" failed: secret content',
+      failure: {
+        kind: 'step_error',
+        step: 'implement',
+        reason: 'Step "implement" failed: secret content',
+      },
+    }));
+
+    const workflowSpan = findSpan(spans, 'workflow.test-workflow');
+    expect(workflowSpan.attributes).toMatchObject({
+      'takt.failure.kind': 'step_error',
+      'takt.failure.step': 'implement',
+      'takt.failure.reason': 'Step "implement" failed: [REDACTED] content',
+    });
+    expect(findSpan(spans, 'workflow_start.test-workflow').attributes['takt.failure.kind']).toBeUndefined();
+    for (const record of metricRecords) {
+      expect(record.attributes['takt.failure.kind']).toBeUndefined();
+      expect(record.attributes['takt.failure.step']).toBeUndefined();
+      expect(record.attributes['takt.failure.reason']).toBeUndefined();
+    }
   });
 
   it('creates nested runtime workflow spans as roots when trace context only exists in env', async () => {

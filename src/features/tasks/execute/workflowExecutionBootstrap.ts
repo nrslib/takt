@@ -16,6 +16,10 @@ import {
   type ConfigValueSource,
 } from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
+import {
+  buildTraceDiscovery,
+  type WorkflowTraceDiscovery,
+} from '../../../core/workflow/observability/traceDiscovery.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
 import { createSessionLog, generateSessionId, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
 import { isQuietMode } from '../../../shared/context.js';
@@ -53,6 +57,7 @@ export interface WorkflowExecutionBootstrap {
   runSlug: string;
   runPaths: ReturnType<typeof buildRunPaths>;
   runMetaManager: RunMetaManager;
+  traceDiscovery?: WorkflowTraceDiscovery;
   sessionLog: SessionLog;
   ndjsonLogPath: string;
   sessionLogger: SessionLogger;
@@ -122,7 +127,6 @@ export async function createWorkflowExecutionBootstrap(
   }
 
   const runPaths = buildRunPaths(cwd, runSlug);
-  const runMetaManager = new RunMetaManager(runPaths, task, workflowConfig.name, options.directResume);
   const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
@@ -138,6 +142,25 @@ export async function createWorkflowExecutionBootstrap(
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
+  const sanitizeObservabilityText = (text: string): string => sanitizeTextForStorage(text, allowSensitiveData);
+  const traceDiscovery = globalConfig.observability.enabled === true
+    ? buildTraceDiscovery({
+        runId: runSlug,
+        workflowName: workflowConfig.name,
+        traceTaskMetadata: {
+          ...options.traceTaskMetadata,
+          runDir: runPaths.runRootAbs,
+        },
+        sanitizeText: sanitizeObservabilityText,
+      })
+    : undefined;
+  const runMetaManager = new RunMetaManager(
+    runPaths,
+    task,
+    workflowConfig.name,
+    options.directResume,
+    traceDiscovery ? { traceDiscovery } : undefined,
+  );
   const workflowSessionId = generateSessionId();
   const ndjsonLogPath = initNdjsonLog(
     workflowSessionId,
@@ -276,10 +299,11 @@ export async function createWorkflowExecutionBootstrap(
     runSlug,
     runPaths,
     runMetaManager,
+    traceDiscovery,
     sessionLog,
     ndjsonLogPath,
     sessionLogger,
-    sanitizeObservabilityText: (text) => sanitizeTextForStorage(text, allowSensitiveData),
+    sanitizeObservabilityText,
     shouldNotifyIterationLimit,
     shouldNotifyWorkflowComplete,
     shouldNotifyWorkflowAbort,

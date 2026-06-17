@@ -10,6 +10,8 @@ import { createWorkflowExecutionBootstrap } from './workflowExecutionBootstrap.j
 import { createWorkflowExecutionContext, createWorkflowCallResolver } from './workflowExecutionContext.js';
 import { bindWorkflowExecutionEvents, type WorkflowExecutionEventBridge } from './workflowExecutionEvents.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { getErrorMessage } from '../../../shared/utils/error.js';
+import { finalizeWorkflowAbort, reportWorkflowAbort } from './workflowExecutionReporting.js';
 import {
   OTEL_EXPORTER_OTLP_ENDPOINT,
   OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
@@ -244,6 +246,7 @@ async function executeWorkflowInternal(
       ndjsonLogPath: bootstrap.ndjsonLogPath,
       shouldNotifyWorkflowComplete: bootstrap.shouldNotifyWorkflowComplete,
       shouldNotifyWorkflowAbort: bootstrap.shouldNotifyWorkflowAbort,
+      traceDiscovery: bootstrap.traceDiscovery,
       writeTraceReportOnce: bootstrap.writeTraceReportOnce,
       getCurrentWorkflowStack,
       initialResumePoint: options.resumePoint,
@@ -263,7 +266,31 @@ async function executeWorkflowInternal(
   } catch (error) {
     if (!bootstrap.runMetaManager.isFinalized) {
       eventBridge?.syncLatestResumePoint();
-      bootstrap.runMetaManager.finalize('aborted');
+      const reason = getErrorMessage(error);
+      const iteration = eventBridge?.state.currentIteration ?? 0;
+      const sessionLog = finalizeWorkflowAbort(
+        eventBridge?.state.sessionLog ?? bootstrap.sessionLog,
+        reason,
+        task,
+        bootstrap.effectiveWorkflowConfig.name,
+        eventBridge?.state.lastStepName,
+        options.projectCwd,
+        bootstrap.out.warn,
+      );
+      if (eventBridge) {
+        eventBridge.state.abortReason = reason;
+        eventBridge.state.sessionLog = sessionLog;
+      }
+      bootstrap.runMetaManager.finalize('aborted', iteration);
+      reportWorkflowAbort(
+        bootstrap.out,
+        sessionLog,
+        iteration,
+        reason,
+        bootstrap.ndjsonLogPath,
+        bootstrap.shouldNotifyWorkflowAbort,
+        bootstrap.traceDiscovery,
+      );
     }
     throw error;
   } finally {

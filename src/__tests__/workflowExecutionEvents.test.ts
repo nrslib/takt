@@ -38,6 +38,7 @@ function createBridgeHarness(options?: {
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
   findingIds?: string[];
+  traceDiscovery?: { queries: string[] };
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 1,
@@ -111,6 +112,7 @@ function createBridgeHarness(options?: {
     shouldNotifyWorkflowComplete: false,
     shouldNotifyWorkflowAbort: false,
     writeTraceReportOnce: vi.fn(),
+    traceDiscovery: options?.traceDiscovery,
     getCurrentWorkflowStack: () => resumePoint.stack,
     initialResumePoint: resumePoint,
     sessionLog: {
@@ -177,6 +179,36 @@ describe('bindWorkflowExecutionEvents', () => {
     engine.emit('findings:ledger', ledger);
 
     expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(ledger);
+  });
+
+  it('workflow complete event が TraceQL discovery を完了出力へ渡す', () => {
+    const { engine, out } = createBridgeHarness({
+      traceDiscovery: {
+        queries: ['{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }'],
+      },
+    });
+
+    engine.emit('workflow:complete', { iteration: 2 });
+
+    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(out.info).toHaveBeenCalledWith(
+      '  { resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
+    );
+  });
+
+  it('workflow abort event が TraceQL discovery を abort 出力へ渡す', () => {
+    const { engine, out } = createBridgeHarness({
+      traceDiscovery: {
+        queries: ['{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }'],
+      },
+    });
+
+    engine.emit('workflow:abort', { iteration: 2 }, 'Step "write_tests" failed');
+
+    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(out.info).toHaveBeenCalledWith(
+      '  { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+    );
   });
 
   it('finding ledger analytics の書き込み失敗後も workflow complete を処理する', () => {

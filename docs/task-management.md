@@ -309,6 +309,8 @@ TAKT writes session logs in NDJSON (Newline-Delimited JSON, `.jsonl`) format. Ea
       latest.md            # Latest previous response (inherited automatically)
 ```
 
+When observability is enabled, `meta.json` also includes `observability.traceDiscovery` with the Tempo TraceQL queries that TAKT printed after completion or abort.
+
 ### Record Types
 
 | Record Type | Description |

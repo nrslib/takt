@@ -1,6 +1,7 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
+import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
@@ -52,6 +53,7 @@ interface WorkflowExecutionEventBridgeDeps {
   ndjsonLogPath: string;
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
+  traceDiscovery?: WorkflowTraceDiscovery;
   writeTraceReportOnce: ReturnType<typeof import('./traceReportWriter.js').createTraceReportWriter>;
   getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined;
   initialResumePoint: WorkflowExecutionOptions['resumePoint'];
@@ -312,6 +314,7 @@ export function bindWorkflowExecutionEvents(
       workflowState.iteration,
       deps.ndjsonLogPath,
       deps.shouldNotifyWorkflowComplete,
+      deps.traceDiscovery,
     );
   });
 
@@ -348,6 +351,7 @@ export function bindWorkflowExecutionEvents(
       reason,
       deps.ndjsonLogPath,
       deps.shouldNotifyWorkflowAbort,
+      deps.traceDiscovery,
     );
   });
 

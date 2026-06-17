@@ -8,14 +8,17 @@ import type {
   PhasePromptParts,
   StepProviderInfo,
   StepRunResult,
+  WorkflowStepFailureSummary,
   WorkflowTraceTaskMetadata,
 } from '../types.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
-import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
+import {
+  sanitizeTraceTaskMetadataText,
+  sanitizeTraceTaskSummary,
+} from './traceDiscovery.js';
 
 const tracer = trace.getTracer('takt.workflow');
-const TRACE_TASK_SUMMARY_MAX_LENGTH = 80;
 const WORKFLOW_RUN_COUNTER_OPTIONS = {
   description: 'Workflow executions by status',
 };
@@ -60,6 +63,7 @@ export interface WorkflowSpanOutcome {
   status?: string;
   abortKind?: string;
   abortReason?: string;
+  failure?: WorkflowStepFailureSummary;
   nextStep?: string;
   iterations?: number;
 }
@@ -121,6 +125,7 @@ export async function runWithWorkflowSpan<T>(
   params: WorkflowSpanParams,
   execute: () => Promise<T>,
   getOutcome: (result: T) => WorkflowSpanOutcome,
+  getErrorOutcome?: (error: unknown) => WorkflowSpanOutcome,
 ): Promise<T> {
   if (!params.enabled) {
     return execute();
@@ -139,10 +144,14 @@ export async function runWithWorkflowSpan<T>(
         recordWorkflowMetrics(params, outcome, Date.now() - startedAt);
         return result;
       } catch (error) {
-        recordWorkflowMetrics(params, {
+        const outcome = getErrorOutcome?.(error) ?? {
           status: 'error',
           abortReason: getErrorMessage(error),
-        }, Date.now() - startedAt);
+        };
+        if (getErrorOutcome) {
+          recordWorkflowOutcome(span, params, outcome);
+        }
+        recordWorkflowMetrics(params, outcome, Date.now() - startedAt);
         throw error;
       }
     },
@@ -282,36 +291,19 @@ function traceTaskMetadataAttributes(
   if (!metadata) {
     return {};
   }
+  const requiredSanitizeText = requireSpanSanitizer(sanitizeText);
   return {
-    'takt.task.name': sanitizeTraceTaskMetadataText(sanitizeText, metadata.taskName),
-    'takt.task.slug': sanitizeTraceTaskMetadataText(sanitizeText, metadata.taskSlug),
-    'takt.task.summary': sanitizeTraceTaskSummary(sanitizeText, metadata.taskSummary),
+    'takt.task.name': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.taskName),
+    'takt.task.slug': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.taskSlug),
+    'takt.task.summary': sanitizeTraceTaskSummary(requiredSanitizeText, metadata.taskSummary),
     'takt.task.source': metadata.taskSource,
     'takt.task.issue_number': metadata.issueNumber,
     'takt.task.pr_number': metadata.prNumber,
-    'takt.git.branch': sanitizeTraceTaskMetadataText(sanitizeText, metadata.gitBranch),
-    'takt.git.base_branch': sanitizeTraceTaskMetadataText(sanitizeText, metadata.gitBaseBranch),
-    'takt.worktree.path': sanitizeTraceTaskMetadataText(sanitizeText, metadata.worktreePath),
-    'takt.run.dir': sanitizeTraceTaskMetadataText(sanitizeText, metadata.runDir),
+    'takt.git.branch': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.gitBranch),
+    'takt.git.base_branch': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.gitBaseBranch),
+    'takt.worktree.path': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.worktreePath),
+    'takt.run.dir': sanitizeTraceTaskMetadataText(requiredSanitizeText, metadata.runDir),
   };
-}
-
-function sanitizeTraceTaskSummary(
-  sanitizeText: ((text: string) => string) | undefined,
-  text: string | undefined,
-): string | undefined {
-  const sanitized = sanitizeTraceTaskMetadataText(sanitizeText, text);
-  return sanitized === undefined
-    ? undefined
-    : sanitized.trim().split('\n')[0]?.slice(0, TRACE_TASK_SUMMARY_MAX_LENGTH);
-}
-
-function sanitizeTraceTaskMetadataText(
-  sanitizeText: ((text: string) => string) | undefined,
-  text: string | undefined,
-): string | undefined {
-  const sanitized = sanitizeSpanText(sanitizeText, text);
-  return sanitized === undefined ? undefined : sanitizeSensitiveText(sanitized);
 }
 
 function buildPhaseAttributes(params: PhaseSpanParams): Attributes {
@@ -375,6 +367,9 @@ function recordWorkflowOutcome(span: Span, params: WorkflowSpanParams, outcome: 
     'takt.workflow.status': outcome.status,
     'takt.workflow.abort.kind': outcome.abortKind,
     'takt.workflow.abort.reason': sanitizeSpanText(params.sanitizeText, outcome.abortReason),
+    'takt.failure.kind': outcome.failure?.kind,
+    'takt.failure.step': sanitizeSpanText(params.sanitizeText, outcome.failure?.step),
+    'takt.failure.reason': sanitizeSpanText(params.sanitizeText, outcome.failure?.reason),
     'takt.workflow.next_step': outcome.nextStep,
     'takt.workflow.iterations': outcome.iterations,
   });
@@ -501,6 +496,10 @@ function recordJudgeStageMetrics(params: JudgeStageSpanParams): void {
 
 const REDACTED_PLACEHOLDER = '[redacted]';
 
+function requireSpanSanitizer(sanitizeText: ((text: string) => string) | undefined): (text: string) => string {
+  return sanitizeText ?? (() => REDACTED_PLACEHOLDER);
+}
+
 function sanitizeSpanText(sanitizeText: ((text: string) => string) | undefined, text: string | undefined): string | undefined {
   if (text === undefined) {
     return undefined;
@@ -508,7 +507,7 @@ function sanitizeSpanText(sanitizeText: ((text: string) => string) | undefined, 
   // Fail closed: observability span attributes must never carry raw text when
   // no sanitizer was threaded to the call site. Returning the raw text here was
   // a silent leak if any future call site forgot to pass sanitizeText.
-  return sanitizeText ? sanitizeText(text) : REDACTED_PLACEHOLDER;
+  return requireSpanSanitizer(sanitizeText)(text);
 }
 
 function workflowStackAttributes(stack: WorkflowResumePointEntry[] | undefined): AttributeInput {

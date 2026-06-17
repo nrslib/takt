@@ -131,9 +131,16 @@ export type WorkflowAbortKind =
   | 'step_transition'
   | 'runtime_error';
 
+export interface WorkflowStepFailureSummary {
+  kind: WorkflowAbortKind;
+  step: string;
+  reason: string;
+}
+
 export interface WorkflowAbortResult {
   kind: WorkflowAbortKind;
   reason: string;
+  failure?: WorkflowStepFailureSummary;
 }
 
 export interface WorkflowRunResult {

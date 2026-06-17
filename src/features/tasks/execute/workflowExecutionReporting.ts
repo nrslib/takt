@@ -5,7 +5,9 @@ import { saveSessionState, type SessionState } from '../../../infra/config/index
 import { getLabel } from '../../../shared/i18n/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import { notifyError, notifySuccess } from '../../../shared/utils/index.js';
+import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
+import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import { createOutputFns } from './outputFns.js';
 import { formatElapsedTime, truncate } from './workflowExecutionUtils.js';
 
@@ -93,10 +95,12 @@ export function reportWorkflowCompletion(
   iteration: number,
   ndjsonLogPath: string,
   shouldNotifyWorkflowComplete: boolean,
+  traceDiscovery?: Pick<WorkflowTraceDiscovery, 'queries'>,
 ): void {
   const elapsed = sessionLog.endTime ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime) : '';
   out.success(`Workflow completed (${iteration} iterations${elapsed ? `, ${elapsed}` : ''})`);
   out.info(`Session log: ${ndjsonLogPath}`);
+  reportTraceDiscovery(out, traceDiscovery);
   if (shouldNotifyWorkflowComplete) {
     notifySuccess('TAKT', getLabel('workflow.notifyComplete', undefined, { iteration: String(iteration) }));
   }
@@ -109,12 +113,27 @@ export function reportWorkflowAbort(
   reason: string,
   ndjsonLogPath: string,
   shouldNotifyWorkflowAbort: boolean,
+  traceDiscovery?: Pick<WorkflowTraceDiscovery, 'queries'>,
 ): void {
   const elapsed = sessionLog.endTime ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime) : '';
   out.error(`Workflow aborted after ${iteration} iterations${elapsed ? ` (${elapsed})` : ''}: ${reason}`);
   out.info(`Session log: ${ndjsonLogPath}`);
+  reportTraceDiscovery(out, traceDiscovery);
   if (shouldNotifyWorkflowAbort) {
     notifyError('TAKT', getLabel('workflow.notifyAbort', undefined, { reason }));
+  }
+}
+
+function reportTraceDiscovery(
+  out: ReturnType<typeof createOutputFns>,
+  traceDiscovery: Pick<WorkflowTraceDiscovery, 'queries'> | undefined,
+): void {
+  if (!traceDiscovery || traceDiscovery.queries.length === 0) {
+    return;
+  }
+  out.info('TraceQL discovery:');
+  for (const query of traceDiscovery.queries) {
+    out.info(`  ${sanitizeTerminalText(query)}`);
   }
 }
 
