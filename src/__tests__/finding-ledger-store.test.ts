@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
@@ -321,6 +321,99 @@ describe('FindingLedgerStore', () => {
     expect(store.loadLedger()).toEqual(expect.objectContaining({
       nextId: 2,
       findings: [expect.objectContaining({ id: 'F-0001' })],
+    }));
+  });
+
+  it('should save manager validation reports under the run report directory', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+
+    const reportPath = store.saveManagerValidationReport({
+      version: 1,
+      runId: 'run-1',
+      stepName: 'reviewers',
+      retryCount: 1,
+      ledgerUpdated: false,
+      finalErrors: ['Raw finding id "raw-1" appears in multiple manager decisions'],
+      attempts: [
+        {
+          attempt: 1,
+          managerOutput: {
+            matches: [],
+            newFindings: [{ rawFindingIds: ['raw-1'], title: 'Issue', severity: 'high' }],
+            resolvedFindings: [],
+            reopenedFindings: [],
+            conflicts: [{ findingIds: [], rawFindingIds: ['raw-1'], description: 'Duplicate.' }],
+            resolvedConflicts: [],
+          },
+          validationErrors: ['Raw finding id "raw-1" appears in multiple manager decisions'],
+        },
+      ],
+    });
+
+    expect(reportPath).toBe(join(reportDir, 'findings-manager-validation.reviewers.json'));
+    expect(existsSync(join(projectCwd, 'findings-manager-validation.reviewers.json'))).toBe(false);
+    expect(JSON.parse(readFileSync(reportPath, 'utf-8'))).toEqual({
+      version: 1,
+      runId: 'run-1',
+      stepName: 'reviewers',
+      retryCount: 1,
+      ledgerUpdated: false,
+      finalErrors: ['Raw finding id "raw-1" appears in multiple manager decisions'],
+      attempts: [
+        {
+          attempt: 1,
+          managerOutput: {
+            matches: [],
+            newFindings: [{ rawFindingIds: ['raw-1'], title: 'Issue', severity: 'high' }],
+            resolvedFindings: [],
+            reopenedFindings: [],
+            conflicts: [{ findingIds: [], rawFindingIds: ['raw-1'], description: 'Duplicate.' }],
+            resolvedConflicts: [],
+          },
+          validationErrors: ['Raw finding id "raw-1" appears in multiple manager decisions'],
+        },
+      ],
+    });
+  });
+
+  it('should version existing manager validation reports before writing the latest report', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+
+    store.saveManagerValidationReport({
+      version: 1,
+      runId: 'run-1',
+      stepName: 'reviewers',
+      retryCount: 1,
+      ledgerUpdated: false,
+      finalErrors: ['first failure'],
+      attempts: [],
+    });
+    store.saveManagerValidationReport({
+      version: 1,
+      runId: 'run-2',
+      stepName: 'reviewers',
+      retryCount: 1,
+      ledgerUpdated: true,
+      finalErrors: [],
+      attempts: [],
+    });
+
+    const latestPath = join(reportDir, 'findings-manager-validation.reviewers.json');
+    const historyFiles = readdirSync(reportDir).filter((name) =>
+      /^findings-manager-validation\.reviewers\.json\.\d{8}T\d{6}Z(?:\.\d+)?$/.test(name),
+    );
+    expect(JSON.parse(readFileSync(latestPath, 'utf-8'))).toEqual(expect.objectContaining({
+      runId: 'run-2',
+      ledgerUpdated: true,
+    }));
+    expect(historyFiles).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(reportDir, historyFiles[0]!), 'utf-8'))).toEqual(expect.objectContaining({
+      runId: 'run-1',
+      ledgerUpdated: false,
     }));
   });
 });

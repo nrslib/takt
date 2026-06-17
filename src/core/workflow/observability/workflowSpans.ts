@@ -148,9 +148,7 @@ export async function runWithWorkflowSpan<T>(
           status: 'error',
           abortReason: getErrorMessage(error),
         };
-        if (getErrorOutcome) {
-          recordWorkflowOutcome(span, params, outcome);
-        }
+        recordWorkflowOutcome(span, params, outcome);
         recordWorkflowMetrics(params, outcome, Date.now() - startedAt);
         throw error;
       }

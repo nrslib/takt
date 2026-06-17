@@ -528,6 +528,10 @@ describe('workflow OpenTelemetry spans', () => {
     expect(workflowSpan.status).toEqual({ code: 2, message: 'workflow failed before first step' });
     expect(workflowSpan.exceptions).toEqual([error]);
     expect(workflowSpan.ended).toBe(true);
+    expect(workflowSpan.attributes).toMatchObject({
+      'takt.workflow.status': 'error',
+      'takt.workflow.abort.reason': 'workflow failed before first step',
+    });
     expect(metricRecords).toContainEqual(expect.objectContaining({
       instrument: 'counter',
       name: 'takt.workflow.runs',

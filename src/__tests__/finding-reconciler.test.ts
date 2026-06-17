@@ -92,6 +92,7 @@ describe('reconcileFindingLedger', () => {
   it('should keep an unmentioned open finding open when the manager omits it', () => {
     const previousLedger = makeLedger({
       nextId: 2,
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-old' })],
       findings: [
         {
           id: 'F-0001',
@@ -630,7 +631,7 @@ describe('reconcileFindingLedger', () => {
           timestamp: '2026-06-13T01:00:00.000Z',
         },
       }),
-    ).toThrow('Finding id "F-0001" appears in multiple manager decisions: match and resolve');
+    ).toThrow('Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]');
   });
 
   it('should mark an existing open finding as resolved only by existing id', () => {
@@ -784,7 +785,7 @@ describe('reconcileFindingLedger', () => {
           timestamp: '2026-06-13T01:00:00.000Z',
         },
       }),
-    ).toThrow('Unknown raw finding id "raw-current"');
+    ).toThrow('Resolved finding "F-0001" references raw finding id "raw-current" that does not belong to the finding');
   });
 
   it('should reject resolving when evidence raw ids do not belong to the target finding', () => {
@@ -820,7 +821,7 @@ describe('reconcileFindingLedger', () => {
           timestamp: '2026-06-13T01:00:00.000Z',
         },
       }),
-    ).toThrow('Unknown raw finding id "raw-other"');
+    ).toThrow('Resolved finding "F-0001" references raw finding id "raw-other" that does not belong to the finding');
   });
 
   it('should reopen a previously resolved finding without allocating a new id', () => {

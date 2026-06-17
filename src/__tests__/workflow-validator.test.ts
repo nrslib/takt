@@ -123,12 +123,196 @@ describe('validateWorkflowConfig', () => {
           edit: false,
           instruction: '{task}',
           passPreviousResponse: true,
-          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [
+            { condition: 'findings.open.count == 0', next: 'COMPLETE' },
+            { condition: 'findings.conflicts.count > 0', returnValue: 'need_replan' },
+          ],
         },
       ],
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('fails fast when a findingContract parallel parent cannot route invalid manager output', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved' }],
+            },
+          ],
+          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid finding_contract step "plan": parallel parent must declare an invalid manager output rule',
+    );
+  });
+
+  it('accepts return needs_fix as the invalid manager output rule', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved' }],
+            },
+          ],
+          rules: [{ condition: 'findings.conflicts.count > 0', returnValue: 'needs_fix' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('accepts non-AI next fix as the invalid manager output rule', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved' }],
+            },
+          ],
+          rules: [{ condition: 'findings.conflicts.count > 0', next: 'fix' }],
+        },
+        {
+          name: 'fix',
+          persona: 'coder',
+          personaDisplayName: 'coder',
+          edit: true,
+          instruction: 'fix',
+          passPreviousResponse: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('rejects AI next fix as the only invalid manager output rule', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          personaDisplayName: 'planner',
+          edit: false,
+          instruction: '{task}',
+          passPreviousResponse: true,
+          parallel: [
+            {
+              name: 'review',
+              persona: 'reviewer',
+              personaDisplayName: 'reviewer',
+              edit: false,
+              instruction: 'review',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved' }],
+            },
+          ],
+          rules: [
+            {
+              condition: 'ai("Invalid manager output can be fixed by code changes")',
+              next: 'fix',
+              isAiCondition: true,
+              aiConditionText: 'Invalid manager output can be fixed by code changes',
+            },
+          ],
+        },
+        {
+          name: 'fix',
+          persona: 'coder',
+          personaDisplayName: 'coder',
+          edit: true,
+          instruction: 'fix',
+          passPreviousResponse: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid finding_contract step "plan": parallel parent must declare an invalid manager output rule',
+    );
   });
 
   it('accepts loop monitor judge findings rules when findingContract is configured', () => {
@@ -217,7 +401,10 @@ describe('validateWorkflowConfig', () => {
               rules: [{ condition: 'findings.open.count == 0' }],
             },
           ],
-          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [
+            { condition: 'findings.open.count == 0', next: 'COMPLETE' },
+            { condition: 'findings.conflicts.count > 0', returnValue: 'need_replan' },
+          ],
         },
       ],
     });

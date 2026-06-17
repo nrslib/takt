@@ -1,5 +1,3 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../models/types.js';
 import { resolveAgentErrorMessage } from '../models/response.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
@@ -12,6 +10,7 @@ import { getReportFiles } from './evaluation/rule-utils.js';
 import type { PhasePromptParts } from './types.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';
+import { writeReportFile } from './report-writer.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -25,50 +24,6 @@ class ReportPhaseToolCallError extends Error {
     super(message);
     this.name = 'ReportPhaseToolCallError';
   }
-}
-
-function formatHistoryTimestamp(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  const hour = String(date.getUTCHours()).padStart(2, '0');
-  const minute = String(date.getUTCMinutes()).padStart(2, '0');
-  const second = String(date.getUTCSeconds()).padStart(2, '0');
-  return `${year}${month}${day}T${hour}${minute}${second}Z`;
-}
-
-function buildVersionedFileName(fileName: string, timestamp: string, sequence: number): string {
-  const duplicateSuffix = sequence === 0 ? '' : `.${sequence}`;
-  return `${fileName}.${timestamp}${duplicateSuffix}`;
-}
-
-function backupExistingReport(reportDir: string, fileName: string, targetPath: string): void {
-  if (!existsSync(targetPath)) {
-    return;
-  }
-
-  const currentContent = readFileSync(targetPath, 'utf-8');
-  const timestamp = formatHistoryTimestamp(new Date());
-  let sequence = 0;
-  let versionedPath = resolve(reportDir, buildVersionedFileName(fileName, timestamp, sequence));
-  while (existsSync(versionedPath)) {
-    sequence += 1;
-    versionedPath = resolve(reportDir, buildVersionedFileName(fileName, timestamp, sequence));
-  }
-
-  writeFileSync(versionedPath, currentContent);
-}
-
-function writeReportFile(reportDir: string, fileName: string, content: string): void {
-  const baseDir = resolve(reportDir);
-  const targetPath = resolve(reportDir, fileName);
-  const basePrefix = baseDir.endsWith(sep) ? baseDir : baseDir + sep;
-  if (!targetPath.startsWith(basePrefix)) {
-    throw new Error(`Report file path escapes report directory: ${fileName}`);
-  }
-  mkdirSync(dirname(targetPath), { recursive: true });
-  backupExistingReport(baseDir, fileName, targetPath);
-  writeFileSync(targetPath, content);
 }
 
 /**

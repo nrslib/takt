@@ -359,7 +359,9 @@ steps:
       - name: coding-review
         edit: false
         persona: coding-reviewer
-        policy: review
+        policy:
+          - review
+          - coding
         provider_options:
           claude:
             allowed_tools:

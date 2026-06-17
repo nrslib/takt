@@ -24,6 +24,7 @@ interface SingleWorkflowIterationResult {
   response: AgentResponse;
   nextStep: string;
   isComplete: boolean;
+  returnValue?: string;
   loopDetected?: boolean;
   abort?: WorkflowAbortResult;
 }
@@ -669,7 +670,13 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
 
   if (transition.returnValue !== undefined) {
     deps.state.status = 'completed';
-    return { response, nextStep: COMPLETE_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+    return {
+      response,
+      nextStep: COMPLETE_STEP,
+      isComplete: true,
+      returnValue: transition.returnValue,
+      loopDetected: loopCheck.isLoop,
+    };
   }
 
   const nextStep = requireNextStep(step, transition);

@@ -311,6 +311,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
 
       expect(result.nextStep).toBe('COMPLETE');
       expect(result.isComplete).toBe(true);
+      expect(result.returnValue).toBe('retry_plan');
       expect(engine.getState().status).toBe('completed');
       expect(result.response.matchedRuleIndex).toBe(0);
     });

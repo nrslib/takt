@@ -186,6 +186,18 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
 - Parallel sub-steps do not support `promotion`
 
+### Finding Contract parallel retry failure routing
+
+When a workflow defines `finding_contract`, each parallel parent must declare a deterministic rule for a Finding Manager output that stays semantically invalid after retry. This rule prevents invalid manager output from aborting the workflow or updating the ledger.
+
+Accepted rules, in selection order:
+
+1. `return: need_replan` (recommended)
+2. `return: needs_fix`
+3. Non-AI `next: fix`
+
+`ai("...")` rules that point to `fix` are not selected for this failure path. If none of the accepted rules exists, workflow validation fails before execution.
+
 ### Arpeggio Step (data-driven batch)
 
 Iterate over a data source (CSV, JSON, etc.) and apply the same step template to each row with bounded concurrency:

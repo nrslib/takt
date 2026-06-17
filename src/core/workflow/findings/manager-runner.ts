@@ -7,8 +7,12 @@ import {
   parseReviewerRawFindings,
 } from './schemas.js';
 import { reconcileFindingLedger } from './reconciler.js';
-import type { FindingLedgerStore } from './store.js';
+import type { FindingLedgerStore, FindingManagerValidationAttemptReport } from './store.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
+import {
+  validateFindingManagerOutput,
+  type FindingManagerValidationResult,
+} from './manager-output-validation.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import type { StepProviderInfo } from '../types.js';
@@ -39,6 +43,24 @@ export const RawFindingsStructuredOutput = {
   schemaRef: RAW_FINDINGS_SCHEMA_REF,
   schema: RawFindingsOutputJsonSchema,
 } as const;
+const FINDING_MANAGER_MAX_SEMANTIC_RETRIES = 1;
+
+export type FindingManagerRunResult =
+  | { status: 'updated'; ledgerPath: string; providerInfo: StepProviderInfo; ledger: FindingLedger }
+  | {
+    status: 'invalid_manager_output';
+    ledgerPath: string;
+    providerInfo: StepProviderInfo;
+    reportPath: string;
+    errors: string[];
+    retryCount: number;
+  };
+
+interface ValidatedManagerOutputRun {
+  managerOutput: FindingManagerOutput;
+  validation: FindingManagerValidationResult;
+  invalidAttempts: FindingManagerValidationAttemptReport[];
+}
 
 function normalizeRawFindingId(input: {
   runId: string;
@@ -62,28 +84,27 @@ function extractStructuredRawFindings(input: {
   stepIteration: number;
   parentStepName: string;
 }): RawFinding[] {
-  const rawFindings: RawFinding[] = [];
-  for (const result of input.subResults) {
+  return input.subResults.flatMap((result) => {
     const structuredOutput = result.response.structuredOutput;
     if (structuredOutput === undefined) {
-      continue;
+      return [];
     }
-    if (Array.isArray(structuredOutput.rawFindings)) {
-      rawFindings.push(...parseReviewerRawFindings(structuredOutput.rawFindings).map((rawFinding) => ({
-        ...rawFinding,
-        reviewer: result.subStep.name,
-        rawFindingId: normalizeRawFindingId({
-          runId: input.runId,
-          parentStepName: input.parentStepName,
-          stepIteration: input.stepIteration,
-          subStepName: result.subStep.name,
-          rawFindingId: rawFinding.rawFindingId,
-        }),
-        stepName: result.subStep.name,
-      })));
+    if (!Array.isArray(structuredOutput.rawFindings)) {
+      return [];
     }
-  }
-  return rawFindings;
+    return parseReviewerRawFindings(structuredOutput.rawFindings).map((rawFinding) => ({
+      ...rawFinding,
+      reviewer: result.subStep.name,
+      rawFindingId: normalizeRawFindingId({
+        runId: input.runId,
+        parentStepName: input.parentStepName,
+        stepIteration: input.stepIteration,
+        subStepName: result.subStep.name,
+        rawFindingId: rawFinding.rawFindingId,
+      }),
+      stepName: result.subStep.name,
+    }));
+  });
 }
 
 function buildManagerStep(contract: FindingContractConfig): AgentWorkflowStep {
@@ -174,6 +195,25 @@ function buildManagerInstruction(input: {
   ].join('\n');
 }
 
+function buildManagerRetryInstruction(input: {
+  originalInstruction: string;
+  validationErrors: readonly string[];
+  managerOutput: FindingManagerOutput;
+}): string {
+  return [
+    input.originalInstruction,
+    '',
+    '## Previous manager output was semantically invalid',
+    'Validation errors:',
+    ...input.validationErrors.map((error) => `- ${error}`),
+    '',
+    'Invalid manager output:',
+    renderFencedJsonBlock(input.managerOutput),
+    '',
+    'Return a corrected manager output. Each raw finding must appear in exactly one manager decision, referenced finding ids must exist in the previous ledger, and state transitions must be valid.',
+  ].join('\n');
+}
+
 function parseManagerOutput(response: AgentResponse): FindingManagerOutput {
   if (response.status !== 'done') {
     const detail = response.error ?? response.content;
@@ -199,9 +239,82 @@ function buildManagerAgentOptions(
   };
 }
 
+async function runManagerAttempt(input: {
+  managerStep: AgentWorkflowStep;
+  instruction: string;
+  optionsBuilder: OptionsBuilder;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+}): Promise<FindingManagerOutput> {
+  const phase1Instruction = input.stepExecutor.buildPhase1Instruction(input.instruction, input.managerStep);
+  const agentOptions = buildManagerAgentOptions(input.optionsBuilder, input.managerStep);
+  const rawResponse = await executeAgent(input.managerStep.persona, phase1Instruction, agentOptions);
+  const response = input.stepExecutor.normalizeStructuredOutput(input.managerStep, rawResponse);
+  return parseManagerOutput(response);
+}
+
+async function runManagerWithSemanticRetry(input: {
+  previousLedger: FindingLedger;
+  rawFindings: RawFinding[];
+  managerStep: AgentWorkflowStep;
+  instruction: string;
+  optionsBuilder: OptionsBuilder;
+  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+}): Promise<ValidatedManagerOutputRun> {
+  const firstManagerOutput = await runManagerAttempt({
+    managerStep: input.managerStep,
+    instruction: input.instruction,
+    optionsBuilder: input.optionsBuilder,
+    stepExecutor: input.stepExecutor,
+  });
+  const firstValidation = validateFindingManagerOutput({
+    previousLedger: input.previousLedger,
+    rawFindings: input.rawFindings,
+    managerOutput: firstManagerOutput,
+  });
+  if (firstValidation.ok) {
+    return { managerOutput: firstManagerOutput, validation: firstValidation, invalidAttempts: [] };
+  }
+
+  const firstAttempt = {
+    attempt: 1,
+    managerOutput: firstManagerOutput,
+    validationErrors: firstValidation.errors,
+  };
+  const retryManagerOutput = await runManagerAttempt({
+    managerStep: input.managerStep,
+    instruction: buildManagerRetryInstruction({
+      originalInstruction: input.instruction,
+      validationErrors: firstValidation.errors,
+      managerOutput: firstManagerOutput,
+    }),
+    optionsBuilder: input.optionsBuilder,
+    stepExecutor: input.stepExecutor,
+  });
+  const retryValidation = validateFindingManagerOutput({
+    previousLedger: input.previousLedger,
+    rawFindings: input.rawFindings,
+    managerOutput: retryManagerOutput,
+  });
+
+  return {
+    managerOutput: retryManagerOutput,
+    validation: retryValidation,
+    invalidAttempts: retryValidation.ok
+      ? [firstAttempt]
+      : [
+        firstAttempt,
+        {
+          attempt: 1 + FINDING_MANAGER_MAX_SEMANTIC_RETRIES,
+          managerOutput: retryManagerOutput,
+          validationErrors: retryValidation.errors,
+        },
+      ],
+  };
+}
+
 export async function runFindingManagerForParallelStep(
   input: RunFindingManagerForParallelStepInput,
-): Promise<{ ledgerPath: string; providerInfo: StepProviderInfo; ledger: FindingLedger }> {
+): Promise<FindingManagerRunResult> {
   const previousLedger = input.ledgerStore.loadLedger();
   const ledgerCopyPath = input.ledgerCopyPath ?? input.ledgerStore.createRunCopy();
   const rawFindings = extractStructuredRawFindings({
@@ -219,11 +332,40 @@ export async function runFindingManagerForParallelStep(
     rawFindingsPath,
     rawFindings,
   });
-  const phase1Instruction = input.stepExecutor.buildPhase1Instruction(instruction, managerStep);
-  const agentOptions = buildManagerAgentOptions(input.optionsBuilder, managerStep);
-  const rawResponse = await executeAgent(managerStep.persona, phase1Instruction, agentOptions);
-  const response = input.stepExecutor.normalizeStructuredOutput(managerStep, rawResponse);
-  const managerOutput = parseManagerOutput(response);
+  const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
+  const {
+    managerOutput,
+    validation,
+    invalidAttempts,
+  } = await runManagerWithSemanticRetry({
+    previousLedger,
+    rawFindings,
+    managerStep,
+    instruction,
+    optionsBuilder: input.optionsBuilder,
+    stepExecutor: input.stepExecutor,
+  });
+
+  if (!validation.ok) {
+    const reportPath = input.ledgerStore.saveManagerValidationReport({
+      version: 1,
+      runId: input.runId,
+      stepName: input.parentStep.name,
+      retryCount: FINDING_MANAGER_MAX_SEMANTIC_RETRIES,
+      ledgerUpdated: false,
+      finalErrors: validation.errors,
+      attempts: invalidAttempts,
+    });
+    return {
+      status: 'invalid_manager_output',
+      ledgerPath: ledgerCopyPath,
+      providerInfo,
+      reportPath,
+      errors: validation.errors,
+      retryCount: FINDING_MANAGER_MAX_SEMANTIC_RETRIES,
+    };
+  }
+
   const nextLedger = reconcileFindingLedger({
     previousLedger,
     rawFindings,
@@ -236,9 +378,21 @@ export async function runFindingManagerForParallelStep(
     },
   });
   input.ledgerStore.saveLedger(nextLedger);
+  if (invalidAttempts.length > 0) {
+    input.ledgerStore.saveManagerValidationReport({
+      version: 1,
+      runId: input.runId,
+      stepName: input.parentStep.name,
+      retryCount: FINDING_MANAGER_MAX_SEMANTIC_RETRIES,
+      ledgerUpdated: true,
+      finalErrors: [],
+      attempts: invalidAttempts,
+    });
+  }
   return {
+    status: 'updated',
     ledgerPath: ledgerCopyPath,
-    providerInfo: input.optionsBuilder.resolveStepProviderModel(managerStep),
+    providerInfo,
     ledger: nextLedger,
   };
 }

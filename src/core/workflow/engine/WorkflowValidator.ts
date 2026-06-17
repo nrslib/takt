@@ -41,12 +41,40 @@ function validateFindingContractParallelStructuredOutput(config: WorkflowConfig)
   }
 }
 
+function hasInvalidManagerOutputRule(rules: readonly WorkflowRule[] | undefined): boolean {
+  if (!rules) {
+    return false;
+  }
+  return rules.some((rule) => (
+    rule.returnValue === 'need_replan'
+    || rule.returnValue === 'needs_fix'
+    || (rule.isAiCondition !== true && rule.next === 'fix')
+  ));
+}
+
+function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig): void {
+  if (!config.findingContract) {
+    return;
+  }
+  for (const step of config.steps) {
+    if ((step.parallel?.length ?? 0) === 0) {
+      continue;
+    }
+    if (!hasInvalidManagerOutputRule(step.rules)) {
+      throw new Error(
+        `Invalid finding_contract step "${step.name}": parallel parent must declare an invalid manager output rule via return need_replan, return needs_fix, or non-AI next fix`,
+      );
+    }
+  }
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
   }
   validateFindingContractParallelStructuredOutput(config);
+  validateFindingContractInvalidManagerOutputRules(config);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);

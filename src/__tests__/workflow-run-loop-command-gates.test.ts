@@ -153,6 +153,49 @@ describe('WorkflowRunLoop command quality gates', () => {
     );
   });
 
+  it('should run command gates before completing a rule return value', async () => {
+    const step = makeStep('reviewers', {
+      qualityGates: [
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+        },
+      ],
+      rules: [{ condition: 'need_replan', returnValue: 'need_replan' }],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const firstResponse = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
+    const secondResponse = makeResponse({ persona: 'reviewers', content: 'invalid manager output after retry' });
+    const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
+    const runStep = vi
+      .fn()
+      .mockImplementationOnce(async (_step: WorkflowStep, instruction: string) => {
+        state.stepOutputs.set(step.name, firstResponse);
+        state.lastOutput = firstResponse;
+        return { response: firstResponse, instruction };
+      })
+      .mockImplementationOnce(async (_step: WorkflowStep, instruction: string) => {
+        state.stepOutputs.set(step.name, secondResponse);
+        state.lastOutput = secondResponse;
+        return { response: secondResponse, instruction };
+      });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValueOnce({ ok: false, response: failureResponse })
+      .mockResolvedValueOnce({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.resolveDoneTransition.mockReturnValue({ returnValue: 'need_replan' });
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.state.status).toBe('completed');
+    expect(result.returnValue).toBe('need_replan');
+    expect(runStep).toHaveBeenCalledTimes(2);
+    expect(runQualityGates).toHaveBeenCalledTimes(2);
+    expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(1);
+  });
+
   it('should snapshot command gate metadata for the next prompt source path with sanitized output', async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'takt-command-gate-snapshot-'));
     try {
@@ -271,6 +314,74 @@ describe('WorkflowRunLoop command quality gates', () => {
     expect(result.isComplete).toBe(false);
     expect(state.status).toBe('running');
     expect(state.currentStep).toBe('implement');
+    expect(state.lastOutput?.content).toBe('Quality gate failed: quality-check');
+    expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
+  });
+
+  it('should run command gates before completing a rule return value in runSingleIteration', async () => {
+    const step = makeStep('reviewers', {
+      qualityGates: [
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+        },
+      ],
+      rules: [{ condition: 'need_replan', returnValue: 'need_replan' }],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValueOnce({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.resolveDoneTransition.mockReturnValue({ returnValue: 'need_replan' });
+
+    const result = await runSingleWorkflowIteration(deps);
+
+    expect(result.nextStep).toBe('COMPLETE');
+    expect(result.isComplete).toBe(true);
+    expect(result.returnValue).toBe('need_replan');
+    expect(state.status).toBe('completed');
+    expect(runQualityGates).toHaveBeenCalledTimes(1);
+    expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(1);
+  });
+
+  it('should keep runSingleIteration on the current step when command gates fail before a rule return value', async () => {
+    const step = makeStep('reviewers', {
+      qualityGates: [
+        {
+          type: 'command',
+          name: 'quality-check',
+          command: './.takt/quality-gates/check.sh',
+        },
+      ],
+      rules: [{ condition: 'need_replan', returnValue: 'need_replan' }],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'reviewers', content: 'invalid manager output' });
+    const failureResponse = makeFailureResponse('Quality gate failed: quality-check');
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValueOnce({ ok: false, response: failureResponse });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+
+    const result = await runSingleWorkflowIteration(deps);
+
+    expect(result.nextStep).toBe('reviewers');
+    expect(result.isComplete).toBe(false);
+    expect(result.returnValue).toBeUndefined();
+    expect(state.status).toBe('running');
     expect(state.lastOutput?.content).toBe('Quality gate failed: quality-check');
     expect(deps.resolveDoneTransition).not.toHaveBeenCalled();
   });

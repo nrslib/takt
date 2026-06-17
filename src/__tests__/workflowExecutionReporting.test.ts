@@ -123,6 +123,29 @@ describe('workflowExecutionReporting', () => {
     expect(out.info).toHaveBeenCalledWith('  { resource.service.name = "takt" && span."takt.task.pr_number" = 826 }');
   });
 
+  it('Given unsafe trace discovery metadata, When reporting workflow completion, Then it sanitizes TraceQL query hints', () => {
+    const out = createOut();
+
+    reportWorkflowCompletion(
+      out as never,
+      {
+        ...createSessionLog(),
+        endTime: '2026-04-14T00:00:01.000Z',
+      },
+      3,
+      '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
+      false,
+      {
+        queries: [
+          '{ span."takt.run.id" = "run-843" }\x1b[31m\n\tbad\x1f',
+        ],
+      },
+    );
+
+    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(out.info).toHaveBeenCalledWith('  { span."takt.run.id" = "run-843" }\\n\\tbad\\x1f');
+  });
+
   it('Given trace discovery metadata, When reporting workflow abort, Then it prints the same TraceQL query hints', () => {
     const out = createOut();
 
