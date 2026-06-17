@@ -33,13 +33,6 @@
             npmDepsHash = "sha256-tANxI74gnVXj594OTSVNWqRkrqPE6Unl2XJu1pzlmhs=";
             nodejs = nodejs;
 
-            postInstall = ''
-              find "$out/lib/node_modules/takt/node_modules" -type f \( \
-                -path '*/@anthropic-ai/claude-agent-sdk-*/claude' -o \
-                -path '*/@openai/codex-*/vendor/*/bin/codex' \
-              \) -delete
-            '';
-
             meta = {
               description = packageJson.description;
               homepage = packageJson.homepage;

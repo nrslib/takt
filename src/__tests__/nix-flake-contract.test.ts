@@ -101,13 +101,12 @@ describe('Nix flake contract', () => {
     expect(flake).not.toContain('tmux');
   });
 
-  it('Given SDK dependencies that ship provider binaries, When the package is installed, Then those binaries are removed from the Nix output', () => {
+  it('Given SDK dependencies that ship provider runtimes, When the package is built, Then those runtimes are preserved', () => {
     const flake = readRequiredFile('flake.nix');
 
-    expect(flake).toContain('postInstall');
-    expect(flake).toContain("@anthropic-ai/claude-agent-sdk-*/claude");
-    expect(flake).toContain("@openai/codex-*/vendor/*/bin/codex");
-    expect(flake).toContain('-delete');
+    expect(flake).not.toContain("@anthropic-ai/claude-agent-sdk-*/claude");
+    expect(flake).not.toContain("@openai/codex-*/vendor/*/bin/codex");
+    expect(flake).not.toContain('-delete');
   });
 
   it('Given the flake lock, When dependencies are resolved, Then nixpkgs is pinned', () => {
@@ -147,10 +146,9 @@ describe('Nix flake contract', () => {
     expect(runCommands).toContain('nix flake check -L');
     expect(runCommands).toContain('nix build .#default -L');
     expect(runCommands.some((command) =>
-      command.includes('Provider CLI binaries must not be included in the Nix package output')
-      && command.includes("@anthropic-ai/claude-agent-sdk-*/claude")
-      && command.includes("@openai/codex-*/vendor/*/bin/codex")
-    )).toBe(true);
+      command.includes("@anthropic-ai/claude-agent-sdk-*/claude")
+      || command.includes("@openai/codex-*/vendor/*/bin/codex")
+    )).toBe(false);
     expect(runCommands).toContain('NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version');
     expect(runCommands).toContain('NO_UPDATE_NOTIFIER=1 nix run .#default -- --version');
     expect(runCommands.some((command) =>
