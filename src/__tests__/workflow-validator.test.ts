@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowRule } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 
 function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
@@ -23,9 +23,56 @@ function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig
   };
 }
 
+function createFindingContractParallelWorkflow(
+  rules: WorkflowRule[],
+  extraSteps: WorkflowConfig['steps'] = [],
+): WorkflowConfig {
+  return createWorkflow({
+    findingContract: {
+      ledgerPath: '.takt/findings/peer-review.json',
+      rawFindingsPath: '.takt/findings/raw',
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'findings-manager',
+        outputContract: 'findings-manager',
+      },
+    },
+    steps: [
+      {
+        name: 'plan',
+        persona: 'planner',
+        personaDisplayName: 'planner',
+        edit: false,
+        instruction: '{task}',
+        passPreviousResponse: true,
+        parallel: [
+          {
+            name: 'review',
+            persona: 'reviewer',
+            personaDisplayName: 'reviewer',
+            edit: false,
+            instruction: 'review',
+            passPreviousResponse: true,
+            rules: [{ condition: 'approved' }],
+          },
+        ],
+        rules,
+      },
+      ...extraSteps,
+    ],
+  });
+}
+
 describe('validateWorkflowConfig', () => {
   it('accepts canonical workflow transitions', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('fails fast when the resolved opencode provider has no model', () => {
+    expect(() => validateWorkflowConfig(createWorkflow(), {
+      projectCwd: process.cwd(),
+      provider: 'opencode',
+    })).toThrow(/provider 'opencode' requires model/);
   });
 
   it('fails fast when a loop monitor judge points to an unknown step', () => {
@@ -170,7 +217,7 @@ describe('validateWorkflowConfig', () => {
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
-      'Invalid finding_contract step "plan": parallel parent must declare an invalid manager output rule',
+      'Invalid finding_contract step "plan": parallel parent must declare an invalid manager output rule via non-AI return need_replan, non-AI return needs_fix, or non-AI next fix',
     );
   });
 
@@ -311,9 +358,27 @@ describe('validateWorkflowConfig', () => {
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
-      'Invalid finding_contract step "plan": parallel parent must declare an invalid manager output rule',
+      'Invalid finding_contract step "plan": parallel parent must declare an invalid manager output rule via non-AI return need_replan, non-AI return needs_fix, or non-AI next fix',
     );
   });
+
+  it.each(['need_replan', 'needs_fix'])(
+    'rejects AI return %s as the only invalid manager output rule',
+    (returnValue) => {
+      const workflow = createFindingContractParallelWorkflow([
+        {
+          condition: 'ai("Invalid manager output should use this return")',
+          returnValue,
+          isAiCondition: true,
+          aiConditionText: 'Invalid manager output should use this return',
+        },
+      ]);
+
+      expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+        'Invalid finding_contract step "plan": parallel parent must declare an invalid manager output rule via non-AI return need_replan, non-AI return needs_fix, or non-AI next fix',
+      );
+    },
+  );
 
   it('accepts loop monitor judge findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({

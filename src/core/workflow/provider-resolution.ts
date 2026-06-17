@@ -94,7 +94,7 @@ export function resolveAgentProviderModel(input: AgentProviderModelInput): Agent
 function resolveTagProviderRoutingEntry(
   providerRouting: ProviderRoutingConfig | undefined,
   tags: readonly string[] | undefined,
-): ProviderRoutingEntry | undefined {
+): Pick<ProviderRoutingEntry, 'provider' | 'model'> | undefined {
   if (!providerRouting?.tags || !tags || tags.length === 0) {
     return undefined;
   }
@@ -108,10 +108,8 @@ function resolveTagProviderRoutingEntry(
     resolved = {
       ...(resolved?.provider !== undefined ? { provider: resolved.provider } : {}),
       ...(resolved?.model !== undefined ? { model: resolved.model } : {}),
-      ...(resolved?.providerOptions !== undefined ? { providerOptions: resolved.providerOptions } : {}),
       ...(entry.provider !== undefined ? { provider: entry.provider } : {}),
       ...(entry.model !== undefined ? { model: entry.model } : {}),
-      ...(entry.providerOptions !== undefined ? { providerOptions: entry.providerOptions } : {}),
     };
   }
   return resolved;

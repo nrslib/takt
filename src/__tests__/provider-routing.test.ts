@@ -378,6 +378,39 @@ describe('provider_routing provider_options resolution', () => {
     });
   });
 
+  it('Given tag routing only defines provider_options, When resolving provider/model, Then fallback provider/model stay separate', () => {
+    const step = createStep({
+      tags: ['edit'],
+    });
+    const providerRouting = {
+      tags: {
+        edit: {
+          providerOptions: {
+            codex: { networkAccess: true },
+          },
+        },
+      },
+    };
+    const builder = createBuilder({ providerRouting });
+
+    expect(resolveStepProviderModel({
+      step,
+      provider: 'mock',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
+      providerRouting,
+    } as Parameters<typeof resolveStepProviderModel>[0])).toEqual({
+      provider: 'mock',
+      model: 'project-model',
+      providerSource: 'project',
+      modelSource: 'project',
+    });
+    expect(builder.buildBaseOptions(step).providerOptions).toEqual({
+      codex: { networkAccess: true },
+    });
+  });
+
   it('Given team_leader part with workflow fallback and tags, When building part options, Then routing overrides workflow fallback', () => {
     const parentStep = createStep({
       name: 'implement',

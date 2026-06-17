@@ -2,7 +2,7 @@
  * Shared rule utility functions used by both engine.ts and instruction-builder.ts.
  */
 
-import type { WorkflowStep, OutputContractEntry } from '../../models/types.js';
+import type { WorkflowStep, WorkflowRule, OutputContractEntry } from '../../models/types.js';
 import { isEscapedQuote } from '../../models/workflow-condition-expression.js';
 
 const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect|findings)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
@@ -42,6 +42,16 @@ export function hasUnquotedFindingsReference(condition: string): boolean {
 
 export function isFindingsCondition(condition: string): boolean {
   return isDeterministicCondition(condition) && hasUnquotedFindingsReference(condition);
+}
+
+export function isNonAiReturnValueRule(rule: WorkflowRule, returnValue: string): boolean {
+  return rule.isAiCondition !== true && rule.returnValue === returnValue;
+}
+
+export function isInvalidManagerOutputRule(rule: WorkflowRule): boolean {
+  return isNonAiReturnValueRule(rule, 'need_replan')
+    || isNonAiReturnValueRule(rule, 'needs_fix')
+    || (rule.isAiCondition !== true && rule.next === 'fix');
 }
 
 /**

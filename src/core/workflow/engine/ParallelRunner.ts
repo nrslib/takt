@@ -39,6 +39,7 @@ import {
   runFindingManagerForParallelStep,
 } from '../findings/manager-runner.js';
 import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 
 const log = createLogger('parallel-runner');
 
@@ -717,12 +718,12 @@ export class ParallelRunner {
       throw new Error(`Invalid finding_contract step "${step.name}": missing invalid manager output rule`);
     }
 
-    const needReplanIndex = rules.findIndex((rule) => rule.returnValue === 'need_replan');
+    const needReplanIndex = rules.findIndex((rule) => isNonAiReturnValueRule(rule, 'need_replan'));
     if (needReplanIndex >= 0) {
       return needReplanIndex;
     }
 
-    const needsFixIndex = rules.findIndex((rule) => rule.returnValue === 'needs_fix');
+    const needsFixIndex = rules.findIndex((rule) => isNonAiReturnValueRule(rule, 'needs_fix'));
     if (needsFixIndex >= 0) {
       return needsFixIndex;
     }

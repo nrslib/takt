@@ -4,7 +4,7 @@ import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
-import { isFindingsCondition } from '../evaluation/rule-utils.js';
+import { isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -58,9 +58,6 @@ function validateAgentStepProviderModel(
     providerRouting: options.providerRouting,
     personaProviders: options.personaProviders,
   });
-  if (providerInfo.provider === undefined) {
-    return;
-  }
   validateProviderModelCompatibility(
     providerInfo.provider,
     providerInfo.model,
@@ -75,11 +72,7 @@ function hasInvalidManagerOutputRule(rules: readonly WorkflowRule[] | undefined)
   if (!rules) {
     return false;
   }
-  return rules.some((rule) => (
-    rule.returnValue === 'need_replan'
-    || rule.returnValue === 'needs_fix'
-    || (rule.isAiCondition !== true && rule.next === 'fix')
-  ));
+  return rules.some(isInvalidManagerOutputRule);
 }
 
 function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig): void {
@@ -92,7 +85,7 @@ function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig
     }
     if (!hasInvalidManagerOutputRule(step.rules)) {
       throw new Error(
-        `Invalid finding_contract step "${step.name}": parallel parent must declare an invalid manager output rule via return need_replan, return needs_fix, or non-AI next fix`,
+        `Invalid finding_contract step "${step.name}": parallel parent must declare an invalid manager output rule via non-AI return need_replan, non-AI return needs_fix, or non-AI next fix`,
       );
     }
   }

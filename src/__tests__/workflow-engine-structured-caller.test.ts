@@ -1367,6 +1367,36 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    { aiReturnValue: 'need_replan', fallbackReturnValue: 'needs_fix' },
+    { aiReturnValue: 'needs_fix', fallbackReturnValue: 'need_replan' },
+  ])(
+    'retry 後も semantic invalid なら AI $aiReturnValue return rule をスキップして非AI $fallbackReturnValue return rule を自動選択する',
+    async ({ aiReturnValue, fallbackReturnValue }) => {
+      const { initialLedger, ledgerPath, ledgerUpdated, result } = await runInvalidManagerRetryFailureWithRules([
+        {
+          condition: 'ai("Invalid manager output should use this return")',
+          returnValue: aiReturnValue,
+          isAiCondition: true,
+          aiConditionText: 'Invalid manager output should use this return',
+        },
+        {
+          condition: 'findings.conflicts.count > 0',
+          returnValue: fallbackReturnValue,
+        },
+      ]);
+
+      expect(result.status).toBe('completed');
+      expect(result.returnValue).toBe(fallbackReturnValue);
+      expect(result.stepOutputs.get('reviewers')?.matchedRuleIndex).toBe(1);
+      expect(result.stepOutputs.get('reviewers')?.matchedRuleMethod).toBe('auto_select');
+      expect(result.stepOutputs.has('fix')).toBe(false);
+      expect(JSON.parse(readFileSync(ledgerPath, 'utf-8'))).toEqual(initialLedger);
+      expect(ledgerUpdated).not.toHaveBeenCalled();
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    },
+  );
+
   it('retry 後も semantic invalid なら非AI next fix rule を自動選択する', async () => {
     const { abortReasons, initialLedger, ledgerPath, ledgerUpdated, result } = await runInvalidManagerRetryFailureWithRules([
       makeRule('ai("Invalid manager output can be fixed by code changes")', 'fix', {
