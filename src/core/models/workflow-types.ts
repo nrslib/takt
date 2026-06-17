@@ -145,6 +145,8 @@ interface WorkflowStepBase {
   name: string;
   description?: string;
   personaDisplayName: string;
+  providerRoutingPersonaKey?: string;
+  tags?: string[];
   instruction: string;
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
@@ -162,10 +164,14 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
   provider?: ProviderType;
+  providerSpecified?: boolean;
   model?: string;
+  modelSpecified?: boolean;
   promotion?: WorkflowPromotionEntry[];
   requiredPermissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
+  directProviderOptions?: StepProviderOptions;
+  workflowProviderOptions?: StepProviderOptions;
   edit?: boolean;
   qualityGates?: QualityGate[];
   structuredOutput?: WorkflowStructuredOutput;

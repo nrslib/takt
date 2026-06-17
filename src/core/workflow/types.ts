@@ -12,7 +12,7 @@ import type {
   RateLimitFallbackConfig,
   FallbackContext,
 } from '../models/types.js';
-import type { PersonaProviderEntry, ResolvedObservabilityConfig } from '../models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig, ResolvedObservabilityConfig } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
@@ -278,6 +278,8 @@ export interface WorkflowEngineOptions {
   providerOptionsOriginResolver?: ProviderOptionsOriginResolver;
   /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
   personaProviders?: Record<string, PersonaProviderEntry>;
+  /** Provider routing by raw persona key, workflow step tag, and workflow step name */
+  providerRouting?: ProviderRoutingConfig;
   /** Resolved provider permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive-only rules and user-input transitions */

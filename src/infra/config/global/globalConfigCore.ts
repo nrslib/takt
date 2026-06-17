@@ -12,6 +12,7 @@ import {
   normalizeWorkflowOverrides,
   normalizePipelineConfig,
   normalizePersonaProviders,
+  normalizeProviderRouting,
   normalizeTaktProviders,
   buildRawTaktProvidersOrThrow,
   normalizeRuntime,
@@ -225,6 +226,13 @@ export class GlobalConfigManager {
           model?: string;
           provider_options?: Record<string, unknown>;
         }> | undefined,
+      ),
+      providerRouting: normalizeProviderRouting(
+        parsed.provider_routing as {
+          personas?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+          tags?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+          steps?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+        } | undefined,
       ),
       branchNameStrategy: parsed.branch_name_strategy as GlobalConfig['branchNameStrategy'],
       minimalOutput: parsed.minimal_output as boolean | undefined,

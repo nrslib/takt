@@ -20,6 +20,7 @@ function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record
 const workflowCallForbiddenFieldCases = [
   { field: 'persona', value: 'coder' },
   { field: 'persona_name', value: 'Coder' },
+  { field: 'tags', value: ['review'] },
   { field: 'policy', value: 'secure-defaults' },
   { field: 'knowledge', value: 'architecture' },
   {

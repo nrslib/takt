@@ -23,6 +23,7 @@ import type {
 } from '../types.js';
 import {
   WorkflowCallExecutor,
+  applyWorkflowCallOverridesToProviderRouting,
   applyWorkflowCallOverridesToPersonaProviders,
   type WorkflowCallExecutionResult,
 } from './WorkflowCallExecutor.js';
@@ -113,6 +114,15 @@ export class WorkflowCallRunner {
     );
   }
 
+  private buildChildProviderRouting(
+    step: WorkflowCallStep,
+  ): WorkflowEngineOptions['providerRouting'] {
+    return applyWorkflowCallOverridesToProviderRouting(
+      this.deps.getOptions().providerRouting,
+      step.overrides,
+    );
+  }
+
   private buildWorkflowCallResponse(
     step: WorkflowCallStep,
     childState: WorkflowState,
@@ -185,6 +195,7 @@ export class WorkflowCallRunner {
       childProviderInfo,
       parentProviderOptions: parentProviderContext.providerOptions,
       personaProviders: this.buildChildPersonaProviders(step),
+      providerRouting: this.buildChildProviderRouting(step),
     });
 
     const response = this.buildWorkflowCallResponse(

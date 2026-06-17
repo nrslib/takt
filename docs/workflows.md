@@ -56,7 +56,8 @@ report_formats:
 steps:
   - name: step-name
     persona: coder                   # Persona key (references personas map)
-    persona_name: coder              # Display name (optional)
+    persona_name: coder              # Display name (optional, does not affect provider_routing.personas)
+    tags: [implementation, edit]     # Provider routing tags (optional)
     policy: coding                   # Policy key (single or array)
     knowledge: architecture          # Knowledge key (single or array)
     instruction: implement           # Instruction key (references instructions map)
@@ -92,6 +93,8 @@ steps:
 ```
 
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
+
+`persona_name` is only a display name. `provider_routing.personas` in config matches the raw `persona` key, while `provider_routing.tags` matches the optional `tags` array in the order written on the step. Later tags override earlier tags for the same provider/model/provider_options leaf.
 
 String `quality_gates` remain AI completion directives and are injected into agent step prompts. `type: command` gates run inside the worktree after an agent step completes and pass only when the command exits with code `0`. Workflow YAML command gates require `workflow_command_gates.custom_scripts: true` in config. On failure, TAKT feeds command metadata, cwd, exit code or timeout/output-limit details, the output log path, and bounded sanitized stdout/stderr back into the same agent step. Raw stdout and stderr are also written to the local output log. `system` and `workflow_call` steps do not accept `quality_gates`.
 
@@ -312,6 +315,8 @@ Promotion is not supported on parallel sub-steps.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `persona` | - | Persona key (references section map) or file path |
+| `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
+| `tags` | - | Ordered provider routing tags matched against `provider_routing.tags` in config |
 | `policy` | - | Policy key or array of keys |
 | `knowledge` | - | Knowledge key or array of keys |
 | `instruction` | - | Instruction key (references section map) |
@@ -347,7 +352,7 @@ interactive_mode: assistant
 
 ### `workflow_config.provider_options`
 
-Workflow-wide provider options. Merged with step / persona / project / global options. Step-level options take priority for the same leaf.
+Workflow-wide provider options. For each provider option leaf, env- or CLI-resolved config values win first; otherwise priority is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
 
 ```yaml
 workflow_config:

@@ -59,6 +59,12 @@ export const AssistantConfigSchema = z.object({
   init_files: z.array(z.string().min(1)).max(MAX_ASSISTANT_INIT_FILES).optional(),
 }).strict();
 
+export const ProviderRoutingSchema = z.object({
+  personas: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
+  tags: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
+  steps: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
+}).strict().optional();
+
 /** Workflow category config schema (recursive) */
 export type WorkflowCategoryConfigNode = {
   workflows?: string[];
@@ -94,6 +100,7 @@ const ProjectConfigObjectSchema = z.object({
   takt_providers: TaktProvidersSchema.optional(),
   assistant: AssistantConfigSchema.optional(),
   persona_providers: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
+  provider_routing: ProviderRoutingSchema,
   branch_name_strategy: z.enum(['romaji', 'ai']).optional(),
   minimal_output: z.boolean().optional(),
   provider_options: StepProviderOptionsSchema,

@@ -2,6 +2,7 @@ import type { GlobalConfig } from '../../../core/models/config-types.js';
 import {
   denormalizeProviderProfiles,
   denormalizePersonaProviders,
+  denormalizeProviderRouting,
   denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
   denormalizeRateLimitFallback,
@@ -215,6 +216,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   const rawPersonaProviders = denormalizePersonaProviders(config.personaProviders);
   if (rawPersonaProviders && Object.keys(rawPersonaProviders).length > 0) {
     raw.persona_providers = rawPersonaProviders;
+  }
+  const rawProviderRouting = denormalizeProviderRouting(config.providerRouting);
+  if (rawProviderRouting) {
+    raw.provider_routing = rawProviderRouting;
   }
   if (config.branchNameStrategy !== undefined) {
     raw.branch_name_strategy = config.branchNameStrategy;

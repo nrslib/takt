@@ -6,7 +6,11 @@ import type {
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
-import type { PersonaProviderEntry } from '../../models/config-types.js';
+import type {
+  PersonaProviderEntry,
+  ProviderRoutingConfig,
+  ProviderRoutingEntry,
+} from '../../models/config-types.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
@@ -26,26 +30,26 @@ function buildWorkflowCallNamespaceSegment(stepName: string, workflowName: strin
   return `iteration-${iteration}--step-${encodeWorkflowNamespaceValue(stepName)}--workflow-${encodeWorkflowNamespaceValue(workflowName)}`;
 }
 
-export function applyWorkflowCallOverridesToPersonaProviders(
-  personaProviders: Record<string, PersonaProviderEntry> | undefined,
+function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEntry>(
+  entries: Record<string, T> | undefined,
   overrides: WorkflowCallStep['overrides'],
-): Record<string, PersonaProviderEntry> | undefined {
-  if (!personaProviders) {
+): Record<string, T> | undefined {
+  if (!entries) {
     return undefined;
   }
   if (overrides?.provider === undefined && overrides?.model === undefined) {
-    return personaProviders;
+    return entries;
   }
 
   return Object.fromEntries(
-    Object.entries(personaProviders).map(([persona, entry]) => {
-      const nextEntry: PersonaProviderEntry = {
+    Object.entries(entries).map(([key, entry]) => {
+      const nextEntry: T = {
         ...(overrides.provider !== undefined
           ? { provider: overrides.provider }
           : entry.provider !== undefined
             ? { provider: entry.provider }
             : {}),
-      };
+      } as T;
 
       if (overrides.model !== undefined) {
         nextEntry.model = overrides.model;
@@ -56,9 +60,34 @@ export function applyWorkflowCallOverridesToPersonaProviders(
         nextEntry.providerOptions = entry.providerOptions;
       }
 
-      return [persona, nextEntry];
+      return [key, nextEntry];
     }),
   );
+}
+
+export function applyWorkflowCallOverridesToPersonaProviders(
+  personaProviders: Record<string, PersonaProviderEntry> | undefined,
+  overrides: WorkflowCallStep['overrides'],
+): Record<string, PersonaProviderEntry> | undefined {
+  return applyWorkflowCallOverridesToProviderEntries(personaProviders, overrides);
+}
+
+export function applyWorkflowCallOverridesToProviderRouting(
+  providerRouting: ProviderRoutingConfig | undefined,
+  overrides: WorkflowCallStep['overrides'],
+): ProviderRoutingConfig | undefined {
+  if (!providerRouting) {
+    return undefined;
+  }
+  if (overrides?.provider === undefined && overrides?.model === undefined) {
+    return providerRouting;
+  }
+
+  return {
+    personas: applyWorkflowCallOverridesToProviderEntries<ProviderRoutingEntry>(providerRouting.personas, overrides),
+    tags: applyWorkflowCallOverridesToProviderEntries<ProviderRoutingEntry>(providerRouting.tags, overrides),
+    steps: applyWorkflowCallOverridesToProviderEntries<ProviderRoutingEntry>(providerRouting.steps, overrides),
+  };
 }
 
 interface WorkflowCallExecutorDeps {
@@ -96,6 +125,7 @@ interface ExecuteWorkflowCallRequest {
   };
   parentProviderOptions: WorkflowEngineOptions['providerOptions'];
   personaProviders: WorkflowEngineOptions['personaProviders'];
+  providerRouting: WorkflowEngineOptions['providerRouting'];
 }
 
 export type WorkflowCallExecutionResult = WorkflowState & {
@@ -207,6 +237,7 @@ export class WorkflowCallExecutor {
         request.step.overrides?.providerOptions,
       ),
       personaProviders: request.personaProviders,
+      providerRouting: request.providerRouting,
       startStep: this.resolveChildResumeStartStep(request.childWorkflow, childResumePoint),
       resumePoint: childResumePoint,
       initialIteration: this.deps.state.iteration,

@@ -49,6 +49,7 @@ export function normalizeProviderReference(
   model: WorkflowStep['model'];
   providerOptions: StepProviderOptions | undefined;
   providerSpecified: boolean;
+  modelSpecified: boolean;
 } {
   const normalizedProviderOptions = resolveWorkflowProviderOptions(
     providerOptions as (Record<string, unknown> & { extends?: string }) | undefined,
@@ -62,6 +63,7 @@ export function normalizeProviderReference(
       model,
       providerOptions: normalizedProviderOptions,
       providerSpecified: providerReference !== undefined,
+      modelSpecified: model !== undefined,
     };
   }
 
@@ -73,6 +75,7 @@ export function normalizeProviderReference(
       normalizedProviderOptions,
     ),
     providerSpecified: true,
+    modelSpecified: providerReference.model !== undefined || model !== undefined,
   };
 }
 
@@ -136,8 +139,11 @@ export function normalizeStepFromRaw(
   workflowSchemas: Record<string, string> | undefined,
   inheritedProvider?: WorkflowStep['provider'],
   inheritedModel?: WorkflowStep['model'],
-  inheritedProviderOptions?: WorkflowStep['providerOptions'],
+  inheritedDirectProviderOptions?: WorkflowStep['providerOptions'],
+  inheritedWorkflowProviderOptions?: WorkflowStep['providerOptions'],
   inheritedAllowGitCommit?: boolean,
+  inheritedProviderIsWorkflowFallback = false,
+  inheritedModelIsWorkflowFallback = inheritedProviderIsWorkflowFallback,
   context?: FacetResolutionContext,
   projectOverrides?: WorkflowOverrides,
   globalOverrides?: WorkflowOverrides,
@@ -167,6 +173,13 @@ export function normalizeStepFromRaw(
   const personaOverrideKey = normalizedRawPersona
     ? (isResourcePath(normalizedRawPersona) ? extractPersonaDisplayName(normalizedRawPersona) : normalizedRawPersona)
     : undefined;
+  const tags = step.tags?.map((tag) => {
+    const normalizedTag = tag.trim();
+    if (normalizedTag.length === 0) {
+      throw new Error(`Step "${step.name}" has an empty tags entry`);
+    }
+    return normalizedTag;
+  });
 
   const policyContents = isSystemStep || isWorkflowCallStep
     ? undefined
@@ -256,20 +269,35 @@ export function normalizeStepFromRaw(
     globalOverrides,
   );
 
+  const directProviderOptions = mergeProviderOptions(inheritedDirectProviderOptions, normalizedProvider.providerOptions);
+  const providerOptions = mergeProviderOptions(inheritedWorkflowProviderOptions, directProviderOptions);
+
   const normalizedStep: AgentWorkflowStep = {
     name: step.name,
     description: step.description,
     kind: 'agent',
     persona: personaSpec,
+    providerRoutingPersonaKey: normalizedRawPersona,
+    tags: tags && tags.length > 0 ? tags : undefined,
     session: step.session,
     personaDisplayName: resolvedPersonaDisplayName,
     personaPath,
     mcpServers: step.mcp_servers,
     provider: normalizedProvider.provider ?? inheritedProvider,
+    providerSpecified: normalizedProvider.providerSpecified
+      || (inheritedProvider !== undefined && !inheritedProviderIsWorkflowFallback),
     model: normalizedProvider.model ?? (normalizedProvider.providerSpecified ? undefined : inheritedModel),
+    modelSpecified: normalizedProvider.modelSpecified
+      || (
+        inheritedModel !== undefined
+        && !inheritedModelIsWorkflowFallback
+        && !normalizedProvider.providerSpecified
+      ),
     promotion,
     requiredPermissionMode: step.required_permission_mode,
-    providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
+    providerOptions,
+    directProviderOptions,
+    workflowProviderOptions: inheritedWorkflowProviderOptions,
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
     instruction: instruction || '{task}',
@@ -299,8 +327,11 @@ export function normalizeStepFromRaw(
         workflowSchemas,
         normalizedStep.provider,
         normalizedStep.model,
-        normalizedStep.providerOptions,
+        normalizedStep.directProviderOptions,
+        normalizedStep.workflowProviderOptions,
         normalizedStep.allowGitCommit,
+        normalizedStep.providerSpecified === false,
+        normalizedStep.modelSpecified === false,
         context,
         projectOverrides,
         globalOverrides,

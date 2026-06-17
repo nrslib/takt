@@ -220,6 +220,43 @@ describe('executeAndCompleteTask', () => {
     });
   });
 
+  it('should pass providerRouting from resolved config into executeWorkflow', async () => {
+    const providerRouting = {
+      personas: {
+        coder: { provider: 'codex', model: 'gpt-5' },
+      },
+      tags: {
+        implementation: { provider: 'opencode', model: 'qwen3-coder-next' },
+      },
+      steps: {
+        implement: { provider: 'claude' },
+      },
+    };
+    mockResolveWorkflowConfigValues.mockReturnValueOnce({
+      language: 'en',
+      personaProviders: {},
+      providerRouting,
+      providerProfiles: {},
+    });
+
+    await executeTask({
+      task: 'Task: provider routing',
+      cwd: '/project',
+      projectCwd: '/project',
+      workflowIdentifier: 'default',
+    });
+
+    expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith(
+      '/project',
+      ['language', 'personaProviders', 'providerRouting', 'providerProfiles'],
+    );
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      providerRouting?: unknown;
+    };
+    expect(workflowExecutionOptions?.providerRouting).toBe(providerRouting);
+  });
+
   it('should pass ignoreIterationLimit from run execution context into executeWorkflow', async () => {
     const task = createTask('task-ignore-exceed');
 

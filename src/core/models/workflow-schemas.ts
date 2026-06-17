@@ -205,6 +205,7 @@ export const ParallelSubStepRawSchema = z.object({
   name: z.string().min(1),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
   policy: WorkflowFacetRefListOrParamSchema.optional(),
   knowledge: WorkflowFacetRefListOrParamSchema.optional(),
   allow_git_commit: z.boolean().optional(),
@@ -304,6 +305,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     session: z.enum(['continue', 'refresh']).optional(),
     persona: z.string().optional(),
     persona_name: z.string().optional(),
+    tags: z.array(z.string().min(1)).optional(),
     policy: WorkflowFacetRefListOrParamSchema.optional(),
     knowledge: WorkflowFacetRefListOrParamSchema.optional(),
     allow_git_commit: z.boolean().optional(),
@@ -402,6 +404,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       for (const field of [
         'persona',
         'persona_name',
+        'tags',
         'policy',
         'knowledge',
         'allow_git_commit',

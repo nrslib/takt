@@ -192,6 +192,8 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
     const reportOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(reportOptions.sessionId).toBeUndefined();
     expect(reportInstruction).toContain('Part audit finished');
+    expect(state.personaSessions.get('audit.part-1:mock')).toBe('part-session-1');
+    expect(state.personaSessions.get('testing-reviewer:mock')).toBe('report-session-1');
   });
 
   it('should complete audit-e2e with a new report session for the audit step', async () => {

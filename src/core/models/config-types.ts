@@ -18,6 +18,14 @@ export interface PersonaProviderEntry {
   providerOptions?: StepProviderOptions;
 }
 
+export type ProviderRoutingEntry = PersonaProviderEntry;
+
+export interface ProviderRoutingConfig {
+  personas?: Record<string, ProviderRoutingEntry>;
+  tags?: Record<string, ProviderRoutingEntry>;
+  steps?: Record<string, ProviderRoutingEntry>;
+}
+
 export interface TaktProviderEntry {
   provider: ProviderType;
   model?: string;
@@ -204,6 +212,8 @@ export interface ProjectConfig {
   assistant?: AssistantConfig;
   /** Per-persona provider/model overrides */
   personaProviders?: Record<string, PersonaProviderEntry>;
+  /** Provider/model/provider_options routing by raw persona key, step tag, and step name */
+  providerRouting?: ProviderRoutingConfig;
   /** Branch name generation strategy */
   branchNameStrategy?: 'romaji' | 'ai';
   /** Minimal output mode */

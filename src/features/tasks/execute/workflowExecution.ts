@@ -206,6 +206,7 @@ async function executeWorkflowInternal(
       providerOptionsSource: options.providerOptionsSource,
       providerOptionsOriginResolver: options.providerOptionsOriginResolver,
       personaProviders: options.personaProviders,
+      providerRouting: options.providerRouting,
       providerProfiles: options.providerProfiles,
       interactive: bootstrap.interactiveUserInput,
       detectRuleIndex,

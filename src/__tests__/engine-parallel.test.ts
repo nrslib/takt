@@ -40,11 +40,13 @@ import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import {
   makeResponse,
+  makeStep,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
   createTestTmpDir,
   applyDefaultMocks,
+  makeRule,
 } from './engine-test-helpers.js';
 
 function normalizeWorkflowConfigWithCommandGateOptIn(raw: unknown, workflowDir: string) {
@@ -146,6 +148,58 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.has('reviewers')).toBe(true);
     expect(state.stepOutputs.get('arch-review')!.content).toBe('Arch content');
     expect(state.stepOutputs.get('security-review')!.content).toBe('Sec content');
+  });
+
+  it('should save routed parallel sub-step sessions with the resolved provider key', async () => {
+    const config = buildDefaultWorkflowConfig({
+      maxSteps: 1,
+      initialStep: 'reviewers',
+      steps: [
+        makeStep('reviewers', {
+          parallel: [
+            makeStep('api-review', {
+              persona: 'coder',
+              personaDisplayName: 'coder',
+              providerRoutingPersonaKey: 'coder',
+              tags: ['implementation'],
+              rules: [
+                makeRule('approved', 'COMPLETE'),
+              ],
+            }),
+          ],
+          rules: [
+            makeRule('all("approved")', 'COMPLETE', {
+              isAggregateCondition: true,
+              aggregateType: 'all',
+              aggregateConditionText: 'approved',
+            }),
+          ],
+        }),
+      ],
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      providerRouting: {
+        tags: {
+          implementation: { provider: 'codex', model: 'gpt-5' },
+        },
+      },
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'coder', content: 'approved', sessionId: 'session-codex-1' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.personaSessions.get('coder:codex')).toBe('session-codex-1');
+    expect(state.personaSessions.has('coder:claude')).toBe(false);
   });
 
   it('should return the parallel parent step when a sub-step command quality gate fails', async () => {

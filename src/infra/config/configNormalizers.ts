@@ -12,6 +12,8 @@ import type {
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
+  ProviderRoutingConfig,
+  ProviderRoutingEntry,
   TaktProviderConfigEntry,
   TaktProvidersConfig,
 } from '../../core/models/config-types.js';
@@ -24,6 +26,13 @@ import {
 type RawCommandQualityGate = Omit<CommandQualityGate, 'timeoutMs'> & {
   timeout_ms?: number;
   timeoutMs?: number;
+};
+
+type RawProviderRoutingEntry = string | {
+  type?: string;
+  provider?: string;
+  model?: string;
+  provider_options?: Record<string, unknown>;
 };
 
 type RawQualityGate = string | RawCommandQualityGate;
@@ -65,8 +74,8 @@ function denormalizeQualityGates(gates: QualityGate[] | undefined): RawQualityGa
   return gates?.map(denormalizeQualityGate);
 }
 
-function assertNormalizedPersonaProviderOptions(
-  persona: string,
+function assertNormalizedProviderOptions(
+  path: string,
   providerOptions: unknown,
 ): void {
   if (providerOptions !== undefined) {
@@ -74,7 +83,7 @@ function assertNormalizedPersonaProviderOptions(
   }
 
   throw new Error(
-    `Configuration error: persona_providers.${persona}.provider_options must include at least one provider-specific option`,
+    `Configuration error: ${path}.provider_options must include at least one provider-specific option`,
   );
 }
 
@@ -233,26 +242,35 @@ export function denormalizeWorkflowOverrides(
 }
 
 export function normalizePersonaProviders(
-  raw: Record<string, string | {
-    type?: string;
-    provider?: string;
-    model?: string;
-    provider_options?: Record<string, unknown>;
-  }> | undefined,
+  raw: Record<string, RawProviderRoutingEntry> | undefined,
 ): Record<string, PersonaProviderEntry> | undefined {
+  return normalizeProviderRoutingEntries(raw, 'persona_providers');
+}
+
+export function denormalizePersonaProviders(
+  personaProviders: Record<string, PersonaProviderEntry> | undefined,
+): Record<string, Record<string, unknown>> | undefined {
+  return denormalizeProviderRoutingEntries(personaProviders, 'persona_providers');
+}
+
+function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
+  raw: Record<string, RawProviderRoutingEntry> | undefined,
+  pathPrefix: string,
+): Record<string, TEntry> | undefined {
   if (!raw) return undefined;
   const entries = Object.entries(raw);
   if (entries.length === 0) return undefined;
 
-  return Object.fromEntries(entries.map(([persona, entry]) => {
+  return Object.fromEntries(entries.map(([key, entry]) => {
+    const path = `${pathPrefix}.${key}`;
     const rawProviderOptions = typeof entry === 'string' ? undefined : entry.provider_options;
     const normalizedReference = normalizeConfigProviderReferenceDetailed(
-      (typeof entry === 'string' ? entry : (entry.provider ?? entry.type)) as ConfigProviderReference<NonNullable<PersonaProviderEntry['provider']>>,
+      (typeof entry === 'string' ? entry : (entry.provider ?? entry.type)) as ConfigProviderReference<NonNullable<TEntry['provider']>>,
       typeof entry === 'string' ? undefined : entry.model,
       rawProviderOptions,
     );
     if (rawProviderOptions !== undefined) {
-      assertNormalizedPersonaProviderOptions(persona, normalizedReference.providerOptions);
+      assertNormalizedProviderOptions(path, normalizedReference.providerOptions);
     }
     const normalizedEntry: PersonaProviderEntry = {
       ...(normalizedReference.provider !== undefined ? { provider: normalizedReference.provider } : {}),
@@ -261,31 +279,42 @@ export function normalizePersonaProviders(
         ? { providerOptions: normalizedReference.providerOptions }
         : {}),
     };
+    if (
+      normalizedEntry.provider === undefined
+      && normalizedEntry.model === undefined
+      && normalizedEntry.providerOptions === undefined
+    ) {
+      throw new Error(
+        `Configuration error: ${path} must include at least one of 'provider', 'model', or 'provider_options'`,
+      );
+    }
     validateProviderModelCompatibility(
       normalizedEntry.provider,
       normalizedEntry.model,
       {
-        modelFieldName: `Configuration error: persona_providers.${persona}.model`,
+        modelFieldName: `Configuration error: ${path}.model`,
         requireProviderQualifiedModelForOpencode: false,
       },
     );
-    return [persona, normalizedEntry];
+    return [key, normalizedEntry as TEntry];
   }));
 }
 
-export function denormalizePersonaProviders(
-  personaProviders: Record<string, PersonaProviderEntry> | undefined,
+function denormalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
+  entriesByKey: Record<string, TEntry> | undefined,
+  pathPrefix: string,
 ): Record<string, Record<string, unknown>> | undefined {
-  if (!personaProviders) {
+  if (!entriesByKey) {
     return undefined;
   }
 
-  const entries = Object.entries(personaProviders);
+  const entries = Object.entries(entriesByKey);
   if (entries.length === 0) {
     return undefined;
   }
 
-  return Object.fromEntries(entries.map(([persona, entry]) => {
+  return Object.fromEntries(entries.map(([key, entry]) => {
+    const path = `${pathPrefix}.${key}`;
     const rawEntry: Record<string, unknown> = {};
     if (entry.provider !== undefined) {
       rawEntry.provider = entry.provider;
@@ -296,7 +325,7 @@ export function denormalizePersonaProviders(
 
     const rawProviderOptions = denormalizeProviderOptions(entry.providerOptions);
     if (entry.providerOptions !== undefined) {
-      assertNormalizedPersonaProviderOptions(persona, rawProviderOptions);
+      assertNormalizedProviderOptions(path, rawProviderOptions);
     }
     if (rawProviderOptions !== undefined) {
       rawEntry.provider_options = rawProviderOptions;
@@ -304,12 +333,44 @@ export function denormalizePersonaProviders(
 
     if (Object.keys(rawEntry).length === 0) {
       throw new Error(
-        `Configuration error: persona_providers.${persona} must include at least one of 'provider', 'model', or 'provider_options'`,
+        `Configuration error: ${path} must include at least one of 'provider', 'model', or 'provider_options'`,
       );
     }
 
-    return [persona, rawEntry];
+    return [key, rawEntry];
   }));
+}
+
+export function normalizeProviderRouting(
+  raw: {
+    personas?: Record<string, RawProviderRoutingEntry>;
+    tags?: Record<string, RawProviderRoutingEntry>;
+    steps?: Record<string, RawProviderRoutingEntry>;
+  } | undefined,
+): ProviderRoutingConfig | undefined {
+  if (!raw) return undefined;
+  const result: ProviderRoutingConfig = {
+    personas: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.personas, 'provider_routing.personas'),
+    tags: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.tags, 'provider_routing.tags'),
+    steps: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.steps, 'provider_routing.steps'),
+  };
+  return result.personas || result.tags || result.steps ? result : undefined;
+}
+
+export function denormalizeProviderRouting(
+  providerRouting: ProviderRoutingConfig | undefined,
+): {
+  personas?: Record<string, Record<string, unknown>>;
+  tags?: Record<string, Record<string, unknown>>;
+  steps?: Record<string, Record<string, unknown>>;
+} | undefined {
+  if (!providerRouting) return undefined;
+  const result = {
+    personas: denormalizeProviderRoutingEntries(providerRouting.personas, 'provider_routing.personas'),
+    tags: denormalizeProviderRoutingEntries(providerRouting.tags, 'provider_routing.tags'),
+    steps: denormalizeProviderRoutingEntries(providerRouting.steps, 'provider_routing.steps'),
+  };
+  return result.personas || result.tags || result.steps ? result : undefined;
 }
 
 export function normalizePipelineConfig(raw: {

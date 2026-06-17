@@ -3,7 +3,7 @@ import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
-import { isWorkflowCallStep } from '../step-kind.js';
+import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { isFindingsCondition } from '../evaluation/rule-utils.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
@@ -41,6 +41,36 @@ function validateFindingContractParallelStructuredOutput(config: WorkflowConfig)
   }
 }
 
+function validateAgentStepProviderModel(
+  step: WorkflowConfig['steps'][number],
+  options: WorkflowEngineOptions,
+  source: string,
+): void {
+  if (getWorkflowStepKind(step) !== 'agent') {
+    return;
+  }
+  const providerInfo = resolveStepProviderModel({
+    step,
+    provider: options.provider,
+    providerSource: options.providerSource,
+    model: options.model,
+    modelSource: options.modelSource,
+    providerRouting: options.providerRouting,
+    personaProviders: options.personaProviders,
+  });
+  if (providerInfo.provider === undefined || providerInfo.model === undefined) {
+    return;
+  }
+  validateProviderModelCompatibility(
+    providerInfo.provider,
+    providerInfo.model,
+    {
+      modelFieldName: `${source}.model`,
+      requireProviderQualifiedModelForOpencode: false,
+    },
+  );
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
@@ -64,6 +94,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   stepNames.add(ABORT_STEP);
 
   for (const step of config.steps) {
+    validateAgentStepProviderModel(step, options, `Configuration error: step "${step.name}"`);
     for (const rule of step.rules ?? []) {
       if (rule.next && !stepNames.has(rule.next)) {
         throw new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`);
@@ -75,6 +106,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       );
     }
     for (const subStep of step.parallel ?? []) {
+      validateAgentStepProviderModel(
+        subStep,
+        options,
+        `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
+      );
       for (const rule of subStep.rules ?? []) {
         validateFindingsRuleContract(
           config.findingContract !== undefined,
@@ -110,6 +146,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       step: triggeringStep,
       provider: options.provider,
       model: options.model,
+      providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
     const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
@@ -117,6 +154,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       triggeringStep,
       provider: triggeringProviderInfo.provider,
       model: triggeringProviderInfo.model,
+      providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
     validateProviderModelCompatibility(

@@ -8,7 +8,9 @@ import type { PhaseRunnerContext } from '../phase-runner.js';
 import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
-  resolvePersonaProviderOptions,
+  resolveDirectStepProviderOptions,
+  resolveStepProviderOptionsLayers,
+  mergeStepProviderOptionsLayers,
   resolveProviderOptionsSources,
 } from '../../../infra/config/providerOptions.js';
 import {
@@ -73,13 +75,17 @@ export class OptionsBuilder {
       providerSource: engineProviderInfo.providerSource,
       model: engineProviderInfo.model,
       modelSource: engineProviderInfo.modelSource,
+      providerRouting: this.engineOptions.providerRouting,
       personaProviders: this.engineOptions.personaProviders,
     });
     const provider = resolved.provider ?? engineProviderInfo.provider;
     const providerOptions = this.resolveMergedProviderOptions(step, provider, runtime);
     const providerOptionsSources = resolveProviderOptionsSources(
-      step.providerOptions,
-      resolvePersonaProviderOptions(this.engineOptions.personaProviders, step.personaDisplayName),
+      resolveDirectStepProviderOptions(step),
+      resolveStepProviderOptionsLayers(step, {
+        providerRouting: this.engineOptions.providerRouting,
+        personaProviders: this.engineOptions.personaProviders,
+      }),
       this.engineOptions.providerOptions,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptionsSource,
@@ -105,20 +111,20 @@ export class OptionsBuilder {
       return runtime.providerInfo.providerOptions;
     }
 
-    const personaProviderOptions = resolvePersonaProviderOptions(
-      this.engineOptions.personaProviders,
-      step.personaDisplayName,
-    );
+    const middleProviderOptions = mergeStepProviderOptionsLayers(step, {
+      providerRouting: this.engineOptions.providerRouting,
+      personaProviders: this.engineOptions.personaProviders,
+    });
 
     if (runtime?.teamLeaderPart) {
       return resolveEffectiveTeamLeaderPartProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptionsOriginResolver,
         this.engineOptions.providerOptions,
-        step.providerOptions,
+        resolveDirectStepProviderOptions(step),
         resolvedProvider,
         runtime.teamLeaderPart.partAllowedTools,
-        personaProviderOptions,
+        middleProviderOptions,
       );
     }
 
@@ -126,8 +132,8 @@ export class OptionsBuilder {
       this.engineOptions.providerOptionsSource,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptions,
-      step.providerOptions,
-      personaProviderOptions,
+      resolveDirectStepProviderOptions(step),
+      middleProviderOptions,
     );
   }
 
@@ -237,7 +243,7 @@ export class OptionsBuilder {
     return {
       ...baseOptions,
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
-      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, runtime?.providerInfo?.provider)) : undefined,
+      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, resolvedProvider)) : undefined,
       allowedTools,
       mcpServers: resolveMcpServersForProvider(step.mcpServers, resolvedProvider),
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
@@ -330,7 +336,7 @@ export class OptionsBuilder {
       buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
         this.buildFindingContractInstructionContext(step, includeRawFindingsSchema),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
-      resolveSessionKey: (step) => buildSessionKey(step, runtime?.providerInfo?.provider),
+      resolveSessionKey: (step) => buildSessionKey(step, this.resolveStepProviderModel(step, runtime).provider),
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
       buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
       updatePersonaSession,

@@ -63,7 +63,7 @@ export async function executeTaskWorkflow(
     steps: workflowConfig.steps.map((s: { name: string }) => s.name),
   });
 
-  const config = resolveWorkflowConfigValues(projectCwd, ['language', 'personaProviders', 'providerProfiles']);
+  const config = resolveWorkflowConfigValues(projectCwd, ['language', 'personaProviders', 'providerRouting', 'providerProfiles']);
   const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
   return workflowExecutor(workflowConfig, task, cwd, {
     projectCwd,
@@ -74,6 +74,7 @@ export async function executeTaskWorkflow(
     providerOptionsSource: providerOptions.source,
     providerOptionsOriginResolver: providerOptions.originResolver,
     personaProviders: config.personaProviders,
+    providerRouting: config.providerRouting,
     providerProfiles: config.providerProfiles,
     interactiveUserInput,
     interactiveMetadata,

@@ -64,22 +64,38 @@ language: en        # UI language: en | ja
 # Interactive mode
 # interactive_preview_steps: 3 # Number of step previews in interactive mode (0-10)
 
-# Per-persona provider/model/provider_options overrides
+# Provider routing for workflow steps (recommended)
+# provider_routing:
+#   personas:
+#     coder:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
+#   tags:
+#     implementation:
+#       provider: codex
+#       model: gpt-5
+#     review:
+#       provider: opencode
+#       model: opencode/qwen3-coder-next
+#     edit:
+#       provider_options:
+#         codex:
+#           network_access: true
+#   steps:
+#     ai-antipattern-review-2nd:
+#       provider: opencode
+#       model: opencode/qwen3-coder-next
+
+# Legacy display-name based provider overrides (deprecated; prefer provider_routing)
 # persona_providers:
 #   coder:
-#     provider: claude
-#     model: opus
-#     provider_options:
-#       claude:
-#         effort: high
-#   reviewer:
 #     provider: codex
-#     model: gpt-5.2-codex
-#     provider_options:
-#       codex:
-#         reasoning_effort: high
+#     model: gpt-5
 
-# Provider-specific options (config defaults; env-resolved leaf overrides win, otherwise step > workflow > persona > project > global)
+# Provider-specific options (config defaults; env-resolved leaf overrides win, otherwise step > provider_routing > deprecated persona_providers > workflow > project > global)
 # provider_options:
 #   codex:
 #     network_access: true

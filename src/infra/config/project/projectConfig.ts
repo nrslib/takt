@@ -14,7 +14,9 @@ import {
   denormalizeProviderProfiles,
   denormalizeProviderOptions,
   denormalizePersonaProviders,
+  denormalizeProviderRouting,
   normalizePersonaProviders,
+  normalizeProviderRouting,
   normalizeTaktProviders,
   buildRawTaktProvidersOrThrow,
   normalizeAssistantConfig,
@@ -86,6 +88,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     assistant,
     takt_providers,
     persona_providers,
+    provider_routing,
     branch_name_strategy,
     minimal_output,
     concurrency,
@@ -115,6 +118,13 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       provider_options?: Record<string, unknown>;
     }> | undefined,
   );
+  const normalizedProviderRouting = normalizeProviderRouting(
+    provider_routing as {
+      personas?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+      tags?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+      steps?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+    } | undefined,
+  );
   const analyticsConfig = normalizeAnalytics(analytics as Record<string, unknown> | undefined);
   const normalizedTaktProviders = normalizeTaktProviders(
     takt_providers as {
@@ -131,6 +141,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     assistant: normalizeAssistantConfig(assistant),
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
+    providerRouting: normalizedProviderRouting,
     branchNameStrategy: branch_name_strategy as ProjectConfig['branchNameStrategy'],
     minimalOutput: minimal_output as boolean | undefined,
     concurrency: concurrency as number | undefined,
@@ -248,6 +259,12 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.persona_providers;
   }
+  const rawProviderRouting = denormalizeProviderRouting(config.providerRouting);
+  if (rawProviderRouting) {
+    savePayload.provider_routing = rawProviderRouting;
+  } else {
+    delete savePayload.provider_routing;
+  }
   const rawTaktProviders = buildRawTaktProvidersOrThrow(config.taktProviders);
   if (rawTaktProviders) {
     savePayload.takt_providers = rawTaktProviders;
@@ -271,7 +288,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

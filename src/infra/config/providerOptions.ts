@@ -3,9 +3,10 @@ import type {
   ClaudeTerminalProviderOptions,
   CodexReasoningEffort,
   CopilotEffort,
+  WorkflowStep,
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
-import type { PersonaProviderEntry } from '../../core/models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../core/models/config-types.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -47,6 +48,16 @@ type RawProviderOptions = {
     agent?: string;
   };
 };
+
+export interface ProviderOptionsLayer {
+  source: ProviderResolutionSource;
+  options: StepProviderOptions | undefined;
+}
+
+interface StepProviderOptionsLayerContext {
+  providerRouting: ProviderRoutingConfig | undefined;
+  personaProviders: Record<string, PersonaProviderEntry> | undefined;
+}
 
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
@@ -254,6 +265,64 @@ export function resolvePersonaProviderOptions(
     return undefined;
   }
   return personaProviders?.[personaDisplayName]?.providerOptions;
+}
+
+export function resolveDirectStepProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  if ('directProviderOptions' in step) {
+    return step.directProviderOptions;
+  }
+  return step.providerOptions;
+}
+
+export function resolveStepWorkflowProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  if ('workflowProviderOptions' in step) {
+    return step.workflowProviderOptions;
+  }
+  return undefined;
+}
+
+export function resolveStepProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+): ProviderOptionsLayer[] {
+  const layers: ProviderOptionsLayer[] = [
+    {
+      source: 'workflow',
+      options: resolveStepWorkflowProviderOptions(step),
+    },
+    {
+      source: 'persona_providers',
+      options: resolvePersonaProviderOptions(context.personaProviders, step.personaDisplayName),
+    },
+  ];
+
+  if (step.providerRoutingPersonaKey) {
+    layers.push({
+      source: 'provider_routing.personas',
+      options: context.providerRouting?.personas?.[step.providerRoutingPersonaKey]?.providerOptions,
+    });
+  }
+  for (const tag of step.tags ?? []) {
+    layers.push({
+      source: 'provider_routing.tags',
+      options: context.providerRouting?.tags?.[tag]?.providerOptions,
+    });
+  }
+  layers.push({
+    source: 'provider_routing.steps',
+    options: context.providerRouting?.steps?.[step.name]?.providerOptions,
+  });
+
+  return layers.filter((layer) => layer.options !== undefined);
+}
+
+export function mergeStepProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+): StepProviderOptions | undefined {
+  return mergeProviderOptions(
+    ...resolveStepProviderOptionsLayers(step, context).map((layer) => layer.options),
+  );
 }
 
 export function resolveEffectiveProviderOptions(
@@ -531,19 +600,18 @@ function originToResolutionSource(origin: ProviderOptionsTraceOrigin): ProviderR
 
 /**
  * Resolve the source layer of a single provider_options path, mirroring
- * `selectProviderValue` precedence (env/cli config beats step/persona,
- * otherwise step > persona > config).
+ * `selectProviderValue` precedence (env/cli config beats step/layers,
+ * otherwise step > routing/persona/workflow layers > config).
  */
 export function resolveProviderOptionSource(
   path: string,
   stepOptions: StepProviderOptions | undefined,
-  personaOptions: StepProviderOptions | undefined,
+  layers: ProviderOptionsLayer[],
   configOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   configSource: ProviderOptionsSource | undefined,
 ): ProviderResolutionSource | undefined {
   const configValue = getValueAtPath(configOptions, path);
-  const personaValue = getValueAtPath(personaOptions, path);
   const stepValue = getValueAtPath(stepOptions, path);
   const origin = resolveProviderOptionOrigin(originResolver, path, configSource);
 
@@ -551,7 +619,11 @@ export function resolveProviderOptionSource(
     return originToResolutionSource(origin);
   }
   if (stepValue !== undefined) return 'step';
-  if (personaValue !== undefined) return 'persona_providers';
+  for (const layer of [...layers].reverse()) {
+    if (getValueAtPath(layer.options, path) !== undefined) {
+      return layer.source;
+    }
+  }
   if (configValue !== undefined) return originToResolutionSource(origin);
   return undefined;
 }
@@ -559,7 +631,7 @@ export function resolveProviderOptionSource(
 /** Compute source per known provider_options path. Returns only paths with values. */
 export function resolveProviderOptionsSources(
   stepOptions: StepProviderOptions | undefined,
-  personaOptions: StepProviderOptions | undefined,
+  layers: ProviderOptionsLayer[],
   configOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   configSource: ProviderOptionsSource | undefined,
@@ -569,7 +641,7 @@ export function resolveProviderOptionsSources(
     const source = resolveProviderOptionSource(
       path,
       stepOptions,
-      personaOptions,
+      layers,
       configOptions,
       originResolver,
       configSource,

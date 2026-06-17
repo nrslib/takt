@@ -544,7 +544,8 @@ export class StepExecutor {
       : incrementStepIteration(state, step.name);
     const instruction = prebuiltInstruction ?? this.buildInstruction(step, stepIteration, state, task, maxSteps);
     const phase1Instruction = this.buildPhase1Instruction(instruction, step, runtime);
-    const sessionKey = buildSessionKey(step, runtime?.providerInfo?.provider);
+    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
+    const sessionKey = buildSessionKey(step, providerInfo.provider);
     log.debug('Running step', {
       step: step.name,
       persona: step.persona ?? '(none)',
@@ -562,7 +563,6 @@ export class StepExecutor {
       phase: 1,
       sequence: 1,
     });
-    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
     const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
     const agentOptions = {
       ...baseAgentOptions,

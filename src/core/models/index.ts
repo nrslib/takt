@@ -43,6 +43,8 @@ export type {
   PartDefinition,
   PartResult,
   TeamLeaderConfig,
+  ProviderRoutingConfig,
+  ProviderRoutingEntry,
   WorkflowRule,
   StepProviderOptions,
   WorkflowStep,

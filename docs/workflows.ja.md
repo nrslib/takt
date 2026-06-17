@@ -56,7 +56,8 @@ report_formats:
 steps:
   - name: step-name
     persona: coder                   # persona キー（personas マップを参照）
-    persona_name: coder              # 表示名（省略可）
+    persona_name: coder              # 表示名（省略可、provider_routing.personas には影響しない）
+    tags: [implementation, edit]     # provider routing 用 tag（省略可）
     policy: coding                   # policy キー（単一またはキー配列）
     knowledge: architecture          # knowledge キー（単一またはキー配列）
     instruction: implement           # instruction キー（instructions マップを参照）
@@ -92,6 +93,8 @@ steps:
 ```
 
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
+
+`persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
 
 `quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、output log path、上限付きでサニタイズされた stdout / stderr が同じ agent step の差し戻し入力に含まれます。raw stdout / stderr はローカルの output log にも保存されます。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
@@ -311,6 +314,8 @@ promotion は並列サブ step ではサポートされません。
 | オプション | デフォルト | 説明 |
 |--------|---------|------|
 | `persona` | - | persona キー（section map 参照）またはファイルパス |
+| `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
+| `tags` | - | config の `provider_routing.tags` に一致させる順序付き routing tag |
 | `policy` | - | policy キーまたはキー配列 |
 | `knowledge` | - | knowledge キーまたはキー配列 |
 | `instruction` | - | instruction キー（section map 参照） |
@@ -346,7 +351,7 @@ interactive_mode: assistant
 
 ### `workflow_config.provider_options`
 
-workflow 全体のプロバイダーオプション。step / persona / project / global の各レイヤーとマージされます。同じ leaf については step レベルが優先されます。
+workflow 全体のプロバイダーオプション。provider option の leaf ごとに、env または CLI 起源の config 値が最優先されます。それ以外は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` の順です。
 
 ```yaml
 workflow_config:

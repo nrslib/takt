@@ -11,7 +11,7 @@ describe('resolveProviderOptionSource', () => {
     const source = resolveProviderOptionSource(
       'claude.effort',
       { claude: { effort: 'xhigh' } },
-      undefined,
+      [],
       undefined,
       undefined,
       undefined,
@@ -23,7 +23,7 @@ describe('resolveProviderOptionSource', () => {
     const source = resolveProviderOptionSource(
       'claude.effort',
       undefined,
-      { claude: { effort: 'high' } },
+      [{ source: 'persona_providers', options: { claude: { effort: 'high' } } }],
       undefined,
       undefined,
       undefined,
@@ -36,7 +36,7 @@ describe('resolveProviderOptionSource', () => {
       resolveProviderOptionSource(
         'claude.effort',
         undefined,
-        undefined,
+        [],
         { claude: { effort: 'medium' } },
         undefined,
         'project',
@@ -46,7 +46,7 @@ describe('resolveProviderOptionSource', () => {
       resolveProviderOptionSource(
         'claude.effort',
         undefined,
-        undefined,
+        [],
         { claude: { effort: 'medium' } },
         undefined,
         'global',
@@ -56,7 +56,7 @@ describe('resolveProviderOptionSource', () => {
       resolveProviderOptionSource(
         'claude.effort',
         undefined,
-        undefined,
+        [],
         { claude: { effort: 'medium' } },
         undefined,
         'default',
@@ -64,11 +64,11 @@ describe('resolveProviderOptionSource', () => {
     ).toBe('default');
   });
 
-  it('Given env/cli origin with config value, Then config wins over step/persona (mirrors selectProviderValue)', () => {
+  it('Given env/cli origin with config value, Then config wins over step/layers (mirrors selectProviderValue)', () => {
     const source = resolveProviderOptionSource(
       'claude.effort',
       { claude: { effort: 'xhigh' } },
-      undefined,
+      [{ source: 'persona_providers', options: { claude: { effort: 'high' } } }],
       { claude: { effort: 'low' } },
       () => 'cli',
       'project',
@@ -81,7 +81,7 @@ describe('resolveProviderOptionSource', () => {
       resolveProviderOptionSource(
         'claude.effort',
         undefined,
-        undefined,
+        [],
         undefined,
         undefined,
         undefined,
@@ -93,7 +93,7 @@ describe('resolveProviderOptionSource', () => {
     const source = resolveProviderOptionSource(
       'codex.reasoningEffort',
       undefined,
-      undefined,
+      [],
       { codex: { reasoningEffort: 'high' } },
       (path) => (path === 'codex.reasoningEffort' ? 'local' : 'default'),
       undefined,
@@ -105,7 +105,7 @@ describe('resolveProviderOptionSource', () => {
     const source = resolveProviderOptionSource(
       'kiro.agent',
       { kiro: { agent: 'step-agent' } },
-      undefined,
+      [],
       { kiro: { agent: 'config-agent' } },
       undefined,
       'project',
@@ -118,7 +118,7 @@ describe('resolveProviderOptionSource', () => {
     const source = resolveProviderOptionSource(
       'kiro.agent',
       { kiro: { agent: 'step-agent' } },
-      undefined,
+      [],
       { kiro: { agent: 'env-agent' } },
       (path) => (path === 'kiro.agent' ? 'env' : 'local'),
       'project',
@@ -131,7 +131,7 @@ describe('resolveProviderOptionSource', () => {
     const source = resolveProviderOptionSource(
       'opencode.variant',
       { opencode: { variant: 'step-low' } },
-      undefined,
+      [],
       { opencode: { variant: 'env-high' } },
       (path) => (path === 'opencode.variant' ? 'env' : 'local'),
       'project',
@@ -147,7 +147,7 @@ describe('resolveProviderOptionSource', () => {
     const source = resolveProviderOptionSource(
       'opencode.allowedTools',
       stepOptions,
-      undefined,
+      [],
       configOptions,
       (path) => (path === 'opencode.allowedTools' ? 'env' : 'local'),
       'project',
@@ -161,7 +161,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
   it('returns only paths with a defined source', () => {
     const result = resolveProviderOptionsSources(
       { claude: { effort: 'xhigh' } },
-      { codex: { reasoningEffort: 'high' } },
+      [{ source: 'persona_providers', options: { codex: { reasoningEffort: 'high' } } }],
       { copilot: { effort: 'medium' } },
       undefined,
       'global',
@@ -170,6 +170,61 @@ describe('resolveProviderOptionsSources (all paths)', () => {
       'claude.effort': 'step',
       'codex.reasoningEffort': 'persona_providers',
       'copilot.effort': 'global',
+    });
+  });
+
+  it('returns workflow and provider_routing layer sources using merge precedence', () => {
+    const result = resolveProviderOptionsSources(
+      { kiro: { agent: 'step-agent' } },
+      [
+        {
+          source: 'workflow',
+          options: {
+            claude: { sandbox: { excludedCommands: ['rm'] } },
+            codex: { reasoningEffort: 'medium' },
+          },
+        },
+        {
+          source: 'persona_providers',
+          options: { codex: { networkAccess: false } },
+        },
+        {
+          source: 'provider_routing.personas',
+          options: { codex: { reasoningEffort: 'high' } },
+        },
+        {
+          source: 'provider_routing.tags',
+          options: {
+            claude: { allowedTools: ['Read'] },
+            opencode: { networkAccess: false },
+          },
+        },
+        {
+          source: 'provider_routing.tags',
+          options: {
+            claude: { allowedTools: ['Read', 'Edit'] },
+            opencode: { networkAccess: true },
+          },
+        },
+        {
+          source: 'provider_routing.steps',
+          options: { opencode: { variant: 'route-step' } },
+        },
+      ],
+      { copilot: { effort: 'medium' } },
+      undefined,
+      'project',
+    );
+
+    expect(result).toEqual({
+      'claude.allowedTools': 'provider_routing.tags',
+      'claude.sandbox.excludedCommands': 'workflow',
+      'codex.networkAccess': 'persona_providers',
+      'codex.reasoningEffort': 'provider_routing.personas',
+      'opencode.networkAccess': 'provider_routing.tags',
+      'opencode.variant': 'provider_routing.steps',
+      'copilot.effort': 'project',
+      'kiro.agent': 'step',
     });
   });
 
@@ -185,7 +240,7 @@ describe('resolveProviderOptionsSources (all paths)', () => {
   it('includes kiro.agent in resolved sources when set', () => {
     const result = resolveProviderOptionsSources(
       { kiro: { agent: 'step-agent' } },
-      undefined,
+      [],
       undefined,
       undefined,
       undefined,

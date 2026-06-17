@@ -64,22 +64,38 @@ language: ja         # 表示言語: ja | en
 # インタラクティブモード
 # interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
 
-# ペルソナ別プロバイダー・モデル・provider_options 指定
+# workflow step の provider routing（推奨）
+# provider_routing:
+#   personas:
+#     coder:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
+#   tags:
+#     implementation:
+#       provider: codex
+#       model: gpt-5
+#     review:
+#       provider: opencode
+#       model: opencode/qwen3-coder-next
+#     edit:
+#       provider_options:
+#         codex:
+#           network_access: true
+#   steps:
+#     ai-antipattern-review-2nd:
+#       provider: opencode
+#       model: opencode/qwen3-coder-next
+
+# display name ベースの旧 provider 上書き（deprecated。新規設定では provider_routing を推奨）
 # persona_providers:
 #   coder:
-#     provider: claude
-#     model: opus
-#     provider_options:
-#       claude:
-#         effort: high
-#   reviewer:
 #     provider: codex
-#     model: gpt-5.2-codex
-#     provider_options:
-#       codex:
-#         reasoning_effort: high
+#     model: gpt-5
 
-# プロバイダー固有オプション（設定既定値。env 起源の leaf が最優先で、それ以外は step > workflow > persona > project > global の順）
+# プロバイダー固有オプション（設定既定値。env 起源の leaf が最優先で、それ以外は step > provider_routing > deprecated persona_providers > workflow > project > global の順）
 # provider_options:
 #   codex:
 #     network_access: true

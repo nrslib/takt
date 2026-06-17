@@ -96,6 +96,8 @@ export type {
 // Configuration types (global and project)
 export type {
   PersonaProviderEntry,
+  ProviderRoutingConfig,
+  ProviderRoutingEntry,
   CustomAgentConfig,
   LoggingConfig,
   ObservabilityConfig,

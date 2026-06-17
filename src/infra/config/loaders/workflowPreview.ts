@@ -1,5 +1,5 @@
 import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
-import type { PersonaProviderEntry } from '../../../core/models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import { resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import {
@@ -11,7 +11,8 @@ import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import { resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
 import {
   resolveEffectiveProviderOptions,
-  resolvePersonaProviderOptions,
+  resolveDirectStepProviderOptions,
+  mergeStepProviderOptionsLayers,
 } from '../providerOptions.js';
 import { loadPersonaPromptFromPath } from './agentLoader.js';
 import { loadWorkflowByIdentifier } from './workflowResolver.js';
@@ -37,6 +38,7 @@ interface PreviewProviderResolution {
   provider: WorkflowStep['provider'];
   model: WorkflowStep['model'];
   personaProviders: Record<string, PersonaProviderEntry> | undefined;
+  providerRouting: ProviderRoutingConfig | undefined;
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
@@ -72,7 +74,8 @@ function resolvePreviewProviderResolution(projectCwd: string): PreviewProviderRe
     provider,
     model,
     personaProviders,
-  } = resolveWorkflowConfigValues(projectCwd, ['provider', 'model', 'personaProviders']);
+    providerRouting,
+  } = resolveWorkflowConfigValues(projectCwd, ['provider', 'model', 'personaProviders', 'providerRouting']);
   const {
     value: providerOptions,
     source: providerOptionsSource,
@@ -83,6 +86,7 @@ function resolvePreviewProviderResolution(projectCwd: string): PreviewProviderRe
     provider,
     model,
     personaProviders,
+    providerRouting,
     providerOptions,
     providerOptionsSource,
     providerOptionsOriginResolver,
@@ -97,16 +101,17 @@ function resolvePreviewAllowedTools(
     resolution.providerOptionsSource,
     resolution.providerOptionsOriginResolver,
     resolution.providerOptions,
-    step.providerOptions,
-    resolvePersonaProviderOptions(
-      resolution.personaProviders,
-      step.personaDisplayName,
-    ),
+    resolveDirectStepProviderOptions(step),
+    mergeStepProviderOptionsLayers(step, {
+      providerRouting: resolution.providerRouting,
+      personaProviders: resolution.personaProviders,
+    }),
   );
   const resolvedProvider = resolveStepProviderModel({
     step,
     provider: resolution.provider,
     model: resolution.model,
+    providerRouting: resolution.providerRouting,
     personaProviders: resolution.personaProviders,
   }).provider;
 

@@ -345,6 +345,40 @@ steps:
     expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
+  it('should resolve preview tools from provider_routing tags', () => {
+    writeProjectConfig(tempDir, `provider: cursor
+provider_routing:
+  tags:
+    edit:
+      provider: claude
+      provider_options:
+        claude:
+          allowed_tools:
+            - Read
+            - Edit
+`);
+
+    const workflowYaml = `name: preview-routing-tools
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: coder
+    tags:
+      - edit
+    instruction: "Implement the task"
+    edit: true
+`;
+
+    const workflowPath = join(tempDir, 'preview-routing-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Edit']);
+  });
+
   it('should silently drop preview tools when configured for a non-Claude provider', () => {
     const workflowYaml = `name: preview-invalid-tools
 initial_step: plan

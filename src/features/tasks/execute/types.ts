@@ -3,7 +3,7 @@
  */
 
 import type { Language } from '../../../core/models/index.js';
-import type { PersonaProviderEntry } from '../../../core/models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
@@ -71,6 +71,8 @@ export interface WorkflowExecutionOptions {
   providerOptionsOriginResolver?: ProviderOptionsOriginResolver;
   /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
   personaProviders?: Record<string, PersonaProviderEntry>;
+  /** Provider routing rules by raw persona key, workflow step tag, and workflow step name */
+  providerRouting?: ProviderRoutingConfig;
   /** Resolved provider permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive user input during step transitions */
