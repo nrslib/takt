@@ -248,13 +248,13 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalized.findingContract).toBeUndefined();
     });
 
-    it(`${locale} takt-default peer-review subworkflow should enable Finding Contract`, () => {
-      const workflow = loadBuiltinWorkflow(locale, 'takt-default-peer-review.yaml');
+    it(`${locale} peer-review-with-fc subworkflow should enable Finding Contract`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'peer-review-with-fc.yaml');
       const normalized = normalizeBuiltinWorkflow(workflow, locale);
 
       expect(workflow.finding_contract).toEqual({
-        ledger_path: '.takt/findings/takt-default-peer-review.json',
-        raw_findings_path: '.takt/findings/takt-default-peer-review/raw',
+        ledger_path: '.takt/findings/peer-review-with-fc.json',
+        raw_findings_path: '.takt/findings/peer-review-with-fc/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -262,8 +262,8 @@ describe('builtin takt-default provider_options refs', () => {
         },
       });
       expect(normalized.findingContract).toMatchObject({
-        ledgerPath: '.takt/findings/takt-default-peer-review.json',
-        rawFindingsPath: '.takt/findings/takt-default-peer-review/raw',
+        ledgerPath: '.takt/findings/peer-review-with-fc.json',
+        rawFindingsPath: '.takt/findings/peer-review-with-fc/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'findings-manager',
@@ -306,8 +306,8 @@ describe('builtin takt-default provider_options refs', () => {
       expect(formats).toEqual([...PEER_REVIEW_OUTPUT_CONTRACTS]);
     });
 
-    it(`${locale} takt-default peer-review should use Finding Contract-specific output contracts`, () => {
-      const workflow = loadBuiltinWorkflow(locale, 'takt-default-peer-review.yaml');
+    it(`${locale} peer-review-with-fc should use Finding Contract-specific output contracts`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'peer-review-with-fc.yaml');
       const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
       const formats = reviewers.flatMap((step) =>
         (step.output_contracts?.report ?? [])
