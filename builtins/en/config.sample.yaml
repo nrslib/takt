@@ -1,0 +1,184 @@
+# TAKT global configuration sample
+# Location: ~/.takt/config.sample.yaml
+#
+# Copy the entries you need into ~/.takt/config.yaml and uncomment them.
+# TAKT reads config.yaml. This file is only a commented catalog.
+
+# =====================================
+# General settings
+# =====================================
+# language: en        # UI language: en | ja
+
+# Default provider and model
+# provider: claude                    # claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# model: sonnet                       # Default model passed directly to the provider
+
+# Execution control
+# worktree_dir: ~/takt-worktrees       # Base directory for shared clone execution
+# prevent_sleep: false                 # Prevent macOS idle sleep while running
+# auto_fetch: false                    # Fetch before clone to keep shared clones up-to-date
+# base_branch: main                    # Base branch to clone from (default: current branch)
+# concurrency: 1                       # Number of tasks to run concurrently in takt run (1-10)
+# task_poll_interval_ms: 500           # Polling interval in ms for picking up new tasks (100-5000)
+# sync_project_local_takt_on_retry: true # Sync root project-local .takt before retry / re-execution
+
+# PR / branch
+# auto_pr: false                       # Auto-create PR after worktree execution
+# draft_pr: false                      # Create PR as draft
+# branch_name_strategy: romaji         # Branch name generation: romaji | ai
+
+# Pipeline execution
+# pipeline:
+#   default_branch_prefix: "takt/"     # Branch prefix for pipeline-created branches
+#   commit_message_template: "{title}" # Variables: {title}, {issue}
+#   pr_body_template: "{report}"       # Variables: {issue_body}, {report}, {issue}
+
+# Output / notifications
+# minimal_output: false                # Suppress detailed agent output
+# notification_sound: true             # Master switch for sounds
+# notification_sound_events:           # Per-event sound toggle (unset means true)
+#   iteration_limit: true
+#   workflow_complete: true
+#   workflow_abort: true
+#   run_complete: true
+#   run_abort: true
+# logging:
+#   level: info                        # debug | info | warn | error
+#   trace: true                        # Generate human-readable execution trace report (trace.md)
+#   debug: false                       # Enable debug.log + prompts.jsonl
+#   provider_events: false             # Persist provider stream events
+#   usage_events: false                # Persist usage event logs
+
+# OpenTelemetry observability
+# observability:
+#   enabled: true                      # Initialize the OpenTelemetry SDK
+#   monitor: true                      # Write .takt/runs/<run>/monitor.json
+#   session_log_exporter: true         # Write a shadow session log from spans
+#   usage_events_phase: true           # Write phase-level usage event logs
+# Set OTEL_EXPORTER_OTLP_ENDPOINT to also export spans and metrics through OTLP HTTP.
+# Optional OTLP overrides: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.
+
+# Analytics
+# analytics:
+#   enabled: true                      # Enable local analytics collection
+#   events_path: ~/.takt/analytics/events
+#   retention_days: 30
+
+# Interactive mode
+# interactive_preview_steps: 3         # Number of step previews in interactive mode (0-10)
+
+# Per-persona provider/model/provider_options overrides
+# persona_providers:
+#   coder:
+#     provider: claude
+#     model: opus
+#     provider_options:
+#       claude:
+#         effort: high
+#   reviewer:
+#     provider: codex
+#     model: gpt-5.2-codex
+#     provider_options:
+#       codex:
+#         reasoning_effort: high
+
+# Provider-specific options
+# provider_options:
+#   codex:
+#     network_access: true
+#   opencode:
+#     variant: high
+#   claude:
+#     sandbox:
+#       allow_unsandboxed_commands: true
+#   kiro:
+#     agent: custom-agent
+
+# Provider permission profiles
+# provider_profiles:
+#   claude:
+#     default_permission_mode: edit
+#   codex:
+#     default_permission_mode: edit
+
+# Runtime environment preparation
+# runtime:
+#   prepare: [node, gradle, ./custom-script.sh]
+
+# Workflow YAML runtime.prepare policy
+# workflow_runtime_prepare:
+#   custom_scripts: false
+
+# Workflow YAML command gate policy
+# workflow_command_gates:
+#   custom_scripts: false
+
+# Workflow MCP server policy
+# workflow_mcp_servers:
+#   stdio: true
+#   sse: true
+#   http: true
+
+# Workflow arpeggio policy
+# workflow_arpeggio:
+#   custom_data_source_modules: false
+#   custom_merge_inline_js: false
+#   custom_merge_files: false
+
+# Rate-limit fallback chain
+# rate_limit_fallback:
+#   switch_chain:
+#     - provider: claude
+#       model: sonnet
+#     - provider: codex
+#       model: gpt-5.2-codex
+
+# Sync conflict resolver
+# sync_conflict_resolver:
+#   auto_approve_tools: false
+
+# Workflow-level overrides
+# workflow_overrides:
+#   quality_gates:
+#     - "All tests pass"
+#     - type: command
+#       name: quality-check
+#       command: "./.takt/quality-gates/check.sh"
+#       timeout_ms: 300000
+#   quality_gates_edit_only: true
+#   steps:
+#     review:
+#       quality_gates:
+#         - "No security vulnerabilities"
+#   personas:
+#     coder:
+#       quality_gates:
+#         - "Code follows conventions"
+
+# Credentials (environment variables take priority)
+# anthropic_api_key: "sk-ant-..."       # Claude API key
+# openai_api_key: "sk-..."              # Codex/OpenAI API key
+# gemini_api_key: "..."                 # Gemini API key
+# google_api_key: "..."                 # Google API key
+# groq_api_key: "..."                   # Groq API key
+# openrouter_api_key: "..."             # OpenRouter API key
+# opencode_api_key: "..."               # OpenCode API key
+# cursor_api_key: "..."                 # Cursor API key
+# kiro_api_key: "..."                   # Kiro API key
+
+# CLI paths
+# codex_cli_path: "/absolute/path/to/codex"
+# claude_cli_path: "/absolute/path/to/claude"
+# cursor_cli_path: "/absolute/path/to/cursor"
+# copilot_cli_path: "/absolute/path/to/copilot"
+# kiro_cli_path: "/absolute/path/to/kiro-cli"
+# copilot_github_token: "ghp_..."
+
+# Misc
+# bookmarks_file: ~/.takt/preferences/bookmarks.yaml
+
+# Workflow list / categories
+# enable_builtin_workflows: true
+# disabled_builtins:
+#   - magi
+# workflow_categories_file: ~/.takt/preferences/workflow-categories.yaml

@@ -10,4 +10,8 @@ export async function resetConfigToDefault(): Promise<void> {
   if (result.backupPath) {
     info(`  backup: ${result.backupPath}`);
   }
+  info(`  sample config: ${result.sampleConfigPath}`);
+  if (result.sampleBackupPath) {
+    info(`  sample backup: ${result.sampleBackupPath}`);
+  }
 }

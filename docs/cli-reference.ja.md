@@ -327,6 +327,15 @@ takt reset config
 takt reset categories
 ```
 
+### takt config
+
+グローバル設定を管理します。
+
+```bash
+# グローバル設定をビルトインテンプレートにリセット（バックアップ付き）
+takt config reset
+```
+
 ### takt metrics
 
 アナリティクスメトリクスを表示します。

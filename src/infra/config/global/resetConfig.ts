@@ -4,12 +4,14 @@ import { parse as parseYaml } from 'yaml';
 import type { Language } from '../../../core/models/index.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { getLanguageResourcesDir } from '../../resources/index.js';
-import { getGlobalConfigPath } from '../paths.js';
+import { getGlobalConfigPath, getGlobalConfigSamplePath } from '../paths.js';
 import { invalidateGlobalConfigCache } from './globalConfig.js';
 
 export interface ResetGlobalConfigResult {
   configPath: string;
   backupPath?: string;
+  sampleConfigPath: string;
+  sampleBackupPath?: string;
   language: Language;
 }
 
@@ -47,25 +49,36 @@ function resolveBackupPath(configPath: string, timestamp: string): string {
   }
 }
 
+function backupExistingFile(filePath: string, timestamp: string): string | undefined {
+  if (!existsSync(filePath)) return undefined;
+  const backupPath = resolveBackupPath(filePath, timestamp);
+  renameSync(filePath, backupPath);
+  return backupPath;
+}
+
 export function resetGlobalConfigToTemplate(now = new Date()): ResetGlobalConfigResult {
   const configPath = getGlobalConfigPath();
+  const sampleConfigPath = getGlobalConfigSamplePath();
   const configDir = dirname(configPath);
   mkdirSync(configDir, { recursive: true });
 
   const language = detectConfigLanguage(configPath);
   const templatePath = join(getLanguageResourcesDir(language), 'config.yaml');
+  const sampleTemplatePath = join(getLanguageResourcesDir(language), 'config.sample.yaml');
   if (!existsSync(templatePath)) {
     throw new Error(`Builtin config template not found: ${templatePath}`);
   }
-
-  let backupPath: string | undefined;
-  if (existsSync(configPath)) {
-    backupPath = resolveBackupPath(configPath, formatTimestamp(now));
-    renameSync(configPath, backupPath);
+  if (!existsSync(sampleTemplatePath)) {
+    throw new Error(`Builtin config sample template not found: ${sampleTemplatePath}`);
   }
 
+  const timestamp = formatTimestamp(now);
+  const backupPath = backupExistingFile(configPath, timestamp);
+  const sampleBackupPath = backupExistingFile(sampleConfigPath, timestamp);
+
   copyFileSync(templatePath, configPath);
+  copyFileSync(sampleTemplatePath, sampleConfigPath);
   invalidateGlobalConfigCache();
 
-  return { configPath, backupPath, language };
+  return { configPath, backupPath, sampleConfigPath, sampleBackupPath, language };
 }

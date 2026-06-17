@@ -15,6 +15,7 @@ import type { ProviderType } from '../../../shared/types/provider.js';
 import {
   getGlobalConfigDir,
   getGlobalConfigPath,
+  getGlobalConfigSamplePath,
   getProjectConfigDir,
   ensureDir,
 } from '../paths.js';
@@ -115,22 +116,36 @@ export async function initGlobalDirs(options?: InitGlobalDirsOptions): Promise<v
     const lang = await promptLanguageSelection();
     const provider = await promptProviderSelection();
 
-    // Copy only config.yaml from language resources
-    copyLanguageConfigYaml(lang);
+    copyLanguageConfigTemplates(lang);
 
     setLanguage(lang);
     setProvider(provider);
   }
 }
 
-/** Copy config.yaml from language resources to ~/.takt/ (if not already present) */
-function copyLanguageConfigYaml(lang: Language): void {
+function copyLanguageConfigTemplates(lang: Language): void {
   const langDir = getLanguageResourcesDir(lang);
-  const srcPath = join(langDir, 'config.yaml');
-  const destPath = getGlobalConfigPath();
-  if (existsSync(srcPath) && !existsSync(destPath)) {
-    writeFileSync(destPath, readFileSync(srcPath));
+  const configTemplatePath = join(langDir, 'config.yaml');
+  const sampleConfigTemplatePath = join(langDir, 'config.sample.yaml');
+  const configPath = getGlobalConfigPath();
+  const sampleConfigPath = getGlobalConfigSamplePath();
+
+  ensureLanguageConfigTemplate(configTemplatePath, configPath);
+  ensureLanguageConfigTemplate(sampleConfigTemplatePath, sampleConfigPath);
+  copyLanguageConfigTemplate(configTemplatePath, configPath);
+  copyLanguageConfigTemplate(sampleConfigTemplatePath, sampleConfigPath);
+}
+
+function ensureLanguageConfigTemplate(srcPath: string, destPath: string): void {
+  if (existsSync(destPath)) return;
+  if (!existsSync(srcPath)) {
+    throw new Error(`Builtin config template not found: ${srcPath}`);
   }
+}
+
+function copyLanguageConfigTemplate(srcPath: string, destPath: string): void {
+  if (existsSync(destPath)) return;
+  writeFileSync(destPath, readFileSync(srcPath));
 }
 
 /**

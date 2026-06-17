@@ -1,0 +1,184 @@
+# TAKT グローバル設定サンプル
+# 配置場所: ~/.takt/config.sample.yaml
+#
+# 必要な項目を ~/.takt/config.yaml にコピーし、コメントを外して使います。
+# TAKT が読み込むのは config.yaml です。このファイルはコメント付きカタログです。
+
+# =====================================
+# 通常設定
+# =====================================
+# language: ja        # 表示言語: ja | en
+
+# デフォルトプロバイダー・モデル
+# provider: claude                    # claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# model: sonnet                       # プロバイダーへそのまま渡すデフォルトモデル
+
+# 実行制御
+# worktree_dir: ~/takt-worktrees       # 共有 clone 作成先ディレクトリ
+# prevent_sleep: false                 # macOS 実行中のスリープ防止
+# auto_fetch: false                    # clone 前に fetch して最新化するか
+# base_branch: main                    # clone のベースブランチ（デフォルト: カレントブランチ）
+# concurrency: 1                       # takt run の同時実行タスク数 (1-10)
+# task_poll_interval_ms: 500           # 新規タスク検出のポーリング間隔（ms, 100-5000）
+# sync_project_local_takt_on_retry: true # Retry / re-execution 前に root の project-local .takt を同期
+
+# PR / ブランチ
+# auto_pr: false                       # worktree 実行後に PR を自動作成
+# draft_pr: false                      # ドラフト PR として作成
+# branch_name_strategy: romaji         # ブランチ名生成: romaji | ai
+
+# パイプライン実行
+# pipeline:
+#   default_branch_prefix: "takt/"     # パイプラインで作成するブランチのプレフィックス
+#   commit_message_template: "{title}" # 変数: {title}, {issue}
+#   pr_body_template: "{report}"       # 変数: {issue_body}, {report}, {issue}
+
+# 出力・通知
+# minimal_output: false                # エージェント詳細出力を抑制
+# notification_sound: true             # 通知音全体の ON/OFF
+# notification_sound_events:           # イベント別通知音（未指定は true 扱い）
+#   iteration_limit: true
+#   workflow_complete: true
+#   workflow_abort: true
+#   run_complete: true
+#   run_abort: true
+# logging:
+#   level: info                        # debug | info | warn | error
+#   trace: true                        # trace.md 実行レポート生成
+#   debug: false                       # debug.log + prompts.jsonl を有効化
+#   provider_events: false             # provider イベントログを記録
+#   usage_events: false                # 使用量イベントログを記録
+
+# OpenTelemetry observability
+# observability:
+#   enabled: true                      # OpenTelemetry SDK を初期化
+#   monitor: true                      # .takt/runs/<run>/monitor.json を出力
+#   session_log_exporter: true         # span 由来の shadow session log を出力
+#   usage_events_phase: true           # phase 粒度の usage event log を出力
+# OTEL_EXPORTER_OTLP_ENDPOINT を設定すると span と metric も OTLP HTTP で送信します。
+# 任意の OTLP 上書き: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.
+
+# アナリティクス
+# analytics:
+#   enabled: true                      # ローカルアナリティクス収集を有効化
+#   events_path: ~/.takt/analytics/events
+#   retention_days: 30
+
+# インタラクティブモード
+# interactive_preview_steps: 3         # step プレビュー数 (0-10)
+
+# ペルソナ別プロバイダー・モデル・provider_options 指定
+# persona_providers:
+#   coder:
+#     provider: claude
+#     model: opus
+#     provider_options:
+#       claude:
+#         effort: high
+#   reviewer:
+#     provider: codex
+#     model: gpt-5.2-codex
+#     provider_options:
+#       codex:
+#         reasoning_effort: high
+
+# プロバイダー固有オプション
+# provider_options:
+#   codex:
+#     network_access: true
+#   opencode:
+#     variant: high
+#   claude:
+#     sandbox:
+#       allow_unsandboxed_commands: true
+#   kiro:
+#     agent: custom-agent
+
+# プロバイダー権限プロファイル
+# provider_profiles:
+#   claude:
+#     default_permission_mode: edit
+#   codex:
+#     default_permission_mode: edit
+
+# ランタイム環境の準備
+# runtime:
+#   prepare: [node, gradle, ./custom-script.sh]
+
+# workflow YAML runtime.prepare ポリシー
+# workflow_runtime_prepare:
+#   custom_scripts: false
+
+# workflow YAML command gate ポリシー
+# workflow_command_gates:
+#   custom_scripts: false
+
+# workflow MCP server ポリシー
+# workflow_mcp_servers:
+#   stdio: true
+#   sse: true
+#   http: true
+
+# workflow arpeggio ポリシー
+# workflow_arpeggio:
+#   custom_data_source_modules: false
+#   custom_merge_inline_js: false
+#   custom_merge_files: false
+
+# Rate-limit fallback chain
+# rate_limit_fallback:
+#   switch_chain:
+#     - provider: claude
+#       model: sonnet
+#     - provider: codex
+#       model: gpt-5.2-codex
+
+# Sync conflict resolver
+# sync_conflict_resolver:
+#   auto_approve_tools: false
+
+# ワークフローレベルのオーバーライド
+# workflow_overrides:
+#   quality_gates:
+#     - "All tests pass"
+#     - type: command
+#       name: quality-check
+#       command: "./.takt/quality-gates/check.sh"
+#       timeout_ms: 300000
+#   quality_gates_edit_only: true
+#   steps:
+#     review:
+#       quality_gates:
+#         - "No security vulnerabilities"
+#   personas:
+#     coder:
+#       quality_gates:
+#         - "Code follows conventions"
+
+# 認証情報（環境変数優先）
+# anthropic_api_key: "sk-ant-..."       # Claude API キー
+# openai_api_key: "sk-..."              # Codex/OpenAI API キー
+# gemini_api_key: "..."                 # Gemini API キー
+# google_api_key: "..."                 # Google API キー
+# groq_api_key: "..."                   # Groq API キー
+# openrouter_api_key: "..."             # OpenRouter API キー
+# opencode_api_key: "..."               # OpenCode API キー
+# cursor_api_key: "..."                 # Cursor API キー
+# kiro_api_key: "..."                   # Kiro API キー
+
+# CLI パス
+# codex_cli_path: "/absolute/path/to/codex"
+# claude_cli_path: "/absolute/path/to/claude"
+# cursor_cli_path: "/absolute/path/to/cursor"
+# copilot_cli_path: "/absolute/path/to/copilot"
+# kiro_cli_path: "/absolute/path/to/kiro-cli"
+# copilot_github_token: "ghp_..."
+
+# その他
+# bookmarks_file: ~/.takt/preferences/bookmarks.yaml
+
+# ワークフロー一覧 / カテゴリ
+# enable_builtin_workflows: true
+# disabled_builtins:
+#   - magi
+# workflow_categories_file: ~/.takt/preferences/workflow-categories.yaml

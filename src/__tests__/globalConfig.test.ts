@@ -26,6 +26,7 @@ import {
 let testConfigPath: string;
 vi.mock('../infra/config/paths.js', () => ({
   getGlobalConfigPath: () => testConfigPath,
+  getGlobalConfigSamplePath: () => join(testConfigPath, '..', 'config.sample.yaml'),
   getGlobalTaktDir: () => join(testConfigPath, '..'),
   getProjectTaktDir: vi.fn(),
   getProjectCwd: vi.fn(),
@@ -83,6 +84,19 @@ describe('globalConfig', () => {
   });
 
   describe('workflow_overrides empty array round-trip', () => {
+    it('should not modify config.sample.yaml when saving global config', () => {
+      const sampleConfigPath = join(testDir, 'config.sample.yaml');
+      const sampleBefore = '# custom sample\n# provider: codex\n';
+      writeFileSync(testConfigPath, 'language: en\n', 'utf-8');
+      writeFileSync(sampleConfigPath, sampleBefore, 'utf-8');
+
+      const manager = GlobalConfigManager.getInstance();
+      const loaded = manager.load();
+      manager.save({ ...loaded, provider: 'codex' });
+
+      expect(readFileSync(sampleConfigPath, 'utf-8')).toBe(sampleBefore);
+    });
+
     it('should preserve empty rate_limit_fallback switch_chain in save/load cycle', () => {
       writeFileSync(testConfigPath, 'rate_limit_fallback:\n  switch_chain: []\n', 'utf-8');
 

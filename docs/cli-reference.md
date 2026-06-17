@@ -327,6 +327,15 @@ takt reset config
 takt reset categories
 ```
 
+### takt config
+
+Manage global config.
+
+```bash
+# Reset global config to builtin template (with backup)
+takt config reset
+```
+
 ### takt metrics
 
 Show analytics metrics.

@@ -148,6 +148,17 @@ const reset = program
   .command('reset')
   .description('Reset settings to defaults');
 
+const config = program
+  .command('config')
+  .description('Manage global config');
+
+config
+  .command('reset')
+  .description('Reset global config to builtin template (with backup)')
+  .action(async () => {
+    await resetConfigToDefault();
+  });
+
 reset
   .command('config')
   .description('Reset global config to builtin template (with backup)')

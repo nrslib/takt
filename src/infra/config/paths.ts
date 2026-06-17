@@ -58,6 +58,10 @@ export function getGlobalConfigPath(): string {
   return join(getGlobalConfigDir(), 'config.yaml');
 }
 
+export function getGlobalConfigSamplePath(): string {
+  return join(getGlobalConfigDir(), 'config.sample.yaml');
+}
+
 /** Get builtin workflows directory (builtins/{lang}/workflows) */
 export function getBuiltinWorkflowsDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'workflows');
