@@ -11,6 +11,7 @@ const requiredSystems = [
   'x86_64-darwin',
   'aarch64-darwin',
 ];
+const pinnedActionPattern = /^[^@\s]+\/[^@\s]+@[0-9a-f]{40}$/;
 
 function readRequiredFile(relativePath: string): string {
   const absolutePath = join(repositoryRoot, relativePath);
@@ -122,15 +123,23 @@ describe('Nix flake contract', () => {
 
   it('Given the Nix workflow, When CI runs, Then it checks the flake, builds the package, and smoke tests the CLI', () => {
     const workflow = YAML.parse(readRequiredFile('.github/workflows/nix.yml')) as {
-      jobs?: Record<string, { steps?: Array<{ run?: string; uses?: string }> }>;
+      jobs?: Record<string, {
+        name?: string;
+        steps?: Array<{ run?: string; uses?: string; with?: Record<string, unknown> }>;
+      }>;
     };
     const jobs = Object.values(workflow.jobs ?? {});
     const steps = jobs.flatMap((job) => job.steps ?? []);
     const runCommands = steps.map((step) => step.run).filter((run): run is string => Boolean(run));
     const uses = steps.map((step) => step.uses).filter((use): use is string => Boolean(use));
+    const checkoutStep = steps.find((step) => step.uses?.startsWith('actions/checkout@'));
 
-    expect(uses).toContain('actions/checkout@v4');
-    expect(uses.some((use) => use.startsWith('DeterminateSystems/nix-installer-action@'))).toBe(true);
+    expect(jobs.some((job) => job.name === 'Build and test Nix flake')).toBe(true);
+    expect(checkoutStep?.uses).toMatch(pinnedActionPattern);
+    expect(checkoutStep?.with?.['persist-credentials']).toBe(false);
+    expect(uses.some((use) =>
+      use.startsWith('DeterminateSystems/nix-installer-action@') && pinnedActionPattern.test(use)
+    )).toBe(true);
     expect(runCommands).toContain('nix flake check -L');
     expect(runCommands).toContain('nix build .#default -L');
     expect(runCommands.some((command) =>
