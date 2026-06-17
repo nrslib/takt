@@ -133,10 +133,14 @@ describe('Nix flake contract', () => {
     const runCommands = steps.map((step) => step.run).filter((run): run is string => Boolean(run));
     const uses = steps.map((step) => step.uses).filter((use): use is string => Boolean(use));
     const checkoutStep = steps.find((step) => step.uses?.startsWith('actions/checkout@'));
+    const externalUses = uses.filter((use) =>
+      !use.startsWith('./') && !use.startsWith('docker://')
+    );
 
     expect(jobs.some((job) => job.name === 'Build and test Nix flake')).toBe(true);
     expect(checkoutStep?.uses).toMatch(pinnedActionPattern);
     expect(checkoutStep?.with?.['persist-credentials']).toBe(false);
+    expect(externalUses.every((use) => pinnedActionPattern.test(use))).toBe(true);
     expect(uses.some((use) =>
       use.startsWith('DeterminateSystems/nix-installer-action@') && pinnedActionPattern.test(use)
     )).toBe(true);
