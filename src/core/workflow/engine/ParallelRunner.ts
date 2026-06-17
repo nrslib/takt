@@ -35,6 +35,7 @@ import type { FindingContractConfig } from '../../models/types.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import {
   RawFindingsStructuredOutput,
+  type FindingManagerRunResult,
   runFindingManagerForParallelStep,
 } from '../findings/manager-runner.js';
 import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
@@ -462,7 +463,18 @@ export class ParallelRunner {
       };
     }
 
-    await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath);
+    const findingManagerResult = await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath);
+    if (findingManagerResult?.status === 'invalid_manager_output') {
+      const response = this.createFindingManagerInvalidOutputResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        managerResult: findingManagerResult,
+        providerInfo: findingManagerResult.providerInfo,
+      });
+      return response;
+    }
 
     // Print completion summary
     if (parallelLogger) {
@@ -514,9 +526,9 @@ export class ParallelRunner {
     stepIteration: number,
     subResults: ParallelSubStepResult[],
     ledgerCopyPath: string | undefined,
-  ): Promise<void> {
+  ): Promise<FindingManagerRunResult | undefined> {
     if (!this.deps.findingContract) {
-      return;
+      return undefined;
     }
     if (!this.deps.findingLedgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
@@ -534,8 +546,11 @@ export class ParallelRunner {
       timestamp: new Date().toISOString(),
       ledgerCopyPath,
     });
-    this.deps.refreshFindingsState();
-    this.deps.emitEvent('findings:ledger', result.ledger);
+    if (result.status === 'updated') {
+      this.deps.refreshFindingsState();
+      this.deps.emitEvent('findings:ledger', result.ledger);
+    }
+    return result;
   }
 
   private prepareFindingContractLedgerCopy(): string | undefined {
@@ -652,6 +667,74 @@ export class ParallelRunner {
         ...options.subResults.map((result) => result.subStep.name),
       ],
     };
+  }
+
+  private createFindingManagerInvalidOutputResult(options: {
+    step: WorkflowStep;
+    state: WorkflowState;
+    stepIteration: number;
+    subResults: ParallelSubStepResult[];
+    managerResult: Extract<FindingManagerRunResult, { status: 'invalid_manager_output' }>;
+    providerInfo: StepRunResult['providerInfo'];
+  }): StepRunResult {
+    const content = [
+      `Finding manager output remained semantically invalid after ${options.managerResult.retryCount} retry.`,
+      '',
+      'Validation errors:',
+      ...options.managerResult.errors.map((error) => `- ${error}`),
+      '',
+      `Validation report: ${options.managerResult.reportPath}`,
+      'Ledger was not updated.',
+    ].join('\n');
+
+    const matchedRuleIndex = this.selectInvalidManagerOutputRuleIndex(options.step);
+    const response: AgentResponse = {
+      persona: options.step.name,
+      status: 'done',
+      content,
+      timestamp: new Date(),
+      ...(matchedRuleIndex !== undefined ? { matchedRuleIndex, matchedRuleMethod: 'auto_select' } : {}),
+    };
+
+    options.state.stepOutputs.set(options.step.name, response);
+    options.state.lastOutput = response;
+    this.deps.stepExecutor.persistPreviousResponseSnapshot(
+      options.state,
+      options.step.name,
+      options.stepIteration,
+      response.content,
+    );
+    this.deps.stepExecutor.emitStepReports(options.step);
+
+    return {
+      response,
+      instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
+      providerInfo: options.providerInfo,
+    };
+  }
+
+  private selectInvalidManagerOutputRuleIndex(step: WorkflowStep): number {
+    const rules = step.rules;
+    if (!rules) {
+      throw new Error(`Invalid finding_contract step "${step.name}": missing invalid manager output rule`);
+    }
+
+    const needReplanIndex = rules.findIndex((rule) => rule.returnValue === 'need_replan');
+    if (needReplanIndex >= 0) {
+      return needReplanIndex;
+    }
+
+    const needsFixIndex = rules.findIndex((rule) => rule.returnValue === 'needs_fix');
+    if (needsFixIndex >= 0) {
+      return needsFixIndex;
+    }
+
+    const fixIndex = rules.findIndex((rule) => !rule.isAiCondition && rule.next === 'fix');
+    if (fixIndex >= 0) {
+      return fixIndex;
+    }
+
+    throw new Error(`Invalid finding_contract step "${step.name}": missing invalid manager output rule`);
   }
 
   private collectTerminalResults(results: ParallelSubStepResult[]): ParallelSubStepResult[] {

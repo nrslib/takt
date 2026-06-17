@@ -3,6 +3,7 @@ import { dirname, resolve, sep } from 'node:path';
 import type { FindingLedger, RawFinding } from './types.js';
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
 import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
+import { writeReportFile } from '../report-writer.js';
 
 interface FindingLedgerStoreOptions {
   projectCwd: string;
@@ -21,6 +22,23 @@ export interface FindingLedgerStore {
   saveLedger: (ledger: FindingLedger) => void;
   createRunCopy: () => string;
   saveRawFindings: (runId: string, stepName: string, rawFindings: RawFinding[]) => string;
+  saveManagerValidationReport: (report: FindingManagerValidationReport) => string;
+}
+
+export interface FindingManagerValidationAttemptReport {
+  attempt: number;
+  managerOutput: unknown;
+  validationErrors: string[];
+}
+
+export interface FindingManagerValidationReport {
+  version: 1;
+  runId: string;
+  stepName: string;
+  retryCount: number;
+  ledgerUpdated: boolean;
+  finalErrors: string[];
+  attempts: FindingManagerValidationAttemptReport[];
 }
 
 function resolveInside(baseDir: string, path: string): string {
@@ -188,6 +206,10 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       });
       chmodSync(rawFindingsFilePath, PRIVATE_FILE_MODE);
       return rawFindingsFilePath;
+    },
+    saveManagerValidationReport: (report) => {
+      const fileName = `findings-manager-validation.${sanitizeFileSegment(report.stepName)}.json`;
+      return writeReportFile(options.reportDir, fileName, JSON.stringify(report, null, 2));
     },
   };
 }

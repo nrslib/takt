@@ -185,6 +185,18 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
 - 並列サブ step は `promotion` をサポートしません
 
+### Finding Contract parallel の retry 失敗ルーティング
+
+workflow に `finding_contract` がある場合、各 parallel 親 step は Finding Manager output が retry 後も意味論的に invalid なときの決定的な rule を宣言する必要があります。この rule により、invalid manager output で workflow を abort したり ledger を更新したりしません。
+
+許可される rule は、選択優先順に次のとおりです。
+
+1. `return: need_replan`（推奨）
+2. `return: needs_fix`
+3. 非AIの `next: fix`
+
+`fix` へ向かう `ai("...")` rule は、この失敗経路では選択されません。許可される rule がない場合、workflow validation が実行前に失敗します。
+
 ### Arpeggio Step（データ駆動バッチ）
 
 CSV / JSON などのデータソースを反復し、同じ step テンプレートを各行に適用します。並列度には上限があります。

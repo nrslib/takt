@@ -496,6 +496,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   response: AgentResponse;
   nextStep: string;
   isComplete: boolean;
+  returnValue?: string;
   loopDetected?: boolean;
 }> {
   const step = deps.getStep(deps.state.currentStep);
@@ -640,7 +641,13 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
 
   if (transition.returnValue !== undefined) {
     deps.state.status = 'completed';
-    return { response, nextStep: COMPLETE_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+    return {
+      response,
+      nextStep: COMPLETE_STEP,
+      isComplete: true,
+      returnValue: transition.returnValue,
+      loopDetected: loopCheck.isLoop,
+    };
   }
 
   const nextStep = requireNextStep(step, transition);
