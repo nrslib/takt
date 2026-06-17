@@ -126,7 +126,9 @@ steps:
       - name: coding-review
         edit: false
         persona: coding-reviewer
-        policy: review
+        policy:
+          - review
+          - coding
         pass_previous_response: false
         provider_options:
           extends: review-readonly
