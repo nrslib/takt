@@ -77,6 +77,17 @@ ProviderAgent.call(prompt, options) → AgentResponse
 4. config.yaml（プロバイダー一致時）
 5. プロバイダーデフォルト
 
+## 補助入口の契約
+
+TAKT では workflow 実行経路だけでなく、preview、doctor、workflow summary、validation、report も利用者に見える契約入口である。設定値、provider、model、tool、権限、出力契約を表示・検証する補助入口は、runtime と同じ正規化済み入力、resolver、override 順を使う。
+
+| 基準 | 判定 |
+|------|------|
+| runtime と preview が別々の入力で provider、model、tool、権限を解決している | REJECT |
+| preview に値が表示されるだけで、runtime と同じ override 条件を検証していない | REJECT |
+| doctor や validation が正常とする設定が runtime では別条件により失敗する | 警告 |
+| runtime と補助入口が同じ正規化済み入力または同じ resolver を共有している | OK |
+
 ## ファセット組み立て
 
 faceted-prompting モジュールは TAKT 本体に依存しない独立モジュール。

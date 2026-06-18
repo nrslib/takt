@@ -113,6 +113,19 @@ When a change standardizes a contract through a shared helper, normalizer, build
 | Return / throw / catch / early return paths in the changed function are not enumerated, causing representative failure paths to be missed | REJECT |
 | Existing branches with the same responsibility have tests for return values, side effects, events, and error classification contracts | OK |
 
+## Contract Test Sufficiency
+
+When adding or changing a config value, option, provider, model, tool, permission, or output contract, tests must prove the branch conditions that change the contract, not merely that a value exists.
+
+| Criteria | Verdict |
+|----------|---------|
+| Only the happy path for a new option is verified | Warning |
+| Requirement-relevant branches among unset, set, invalid value, inherited, non-inherited, override, and unsupported target are not verified | REJECT |
+| A user-facing display or validation entry is not verified to follow the same contract as the primary execution path | REJECT |
+| A test only checks displayed values without verifying they match the resolution input used during execution | REJECT |
+| Absence is verified only by exact string matching, missing order, case, whitespace, or partial-leak differences | Warning |
+| The path from entry point to final call verifies happy, rejection, and non-inheritance cases | OK |
+
 ## Parser and Configuration Boundary Tests
 
 At boundaries that read external files, configuration, YAML/JSON, or CLI input, testing only the ideal typed input is not sufficient.
