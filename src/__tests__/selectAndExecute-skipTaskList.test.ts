@@ -14,7 +14,8 @@ const {
   mockExecuteTask,
   mockPersistTaskResult,
   mockPersistTaskError,
-  mockBuildBooleanTaskResult,
+  mockBuildTaskResult,
+  mockPersistExceededTaskResult,
 } = vi.hoisted(() => ({
   mockAddTask: vi.fn(() => ({
     name: 'test-task',
@@ -27,7 +28,8 @@ const {
   mockExecuteTask: vi.fn(),
   mockPersistTaskResult: vi.fn(),
   mockPersistTaskError: vi.fn(),
-  mockBuildBooleanTaskResult: vi.fn(() => ({ task: 'mock-result' })),
+  mockBuildTaskResult: vi.fn(() => ({ task: 'mock-result' })),
+  mockPersistExceededTaskResult: vi.fn(),
 }));
 
 vi.mock('../shared/prompt/index.js', () => ({
@@ -79,10 +81,17 @@ vi.mock('../infra/github/index.js', () => ({
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeTask: (...args: unknown[]) => mockExecuteTask(...args),
+  executeTaskWithResult: async (...args: unknown[]) => {
+    const result = await mockExecuteTask(...args);
+    return typeof result === 'boolean'
+      ? { success: result, ...(result ? {} : { reason: 'Task failed' }) }
+      : result;
+  },
 }));
 
 vi.mock('../features/tasks/execute/taskResultHandler.js', () => ({
-  buildBooleanTaskResult: (...args: unknown[]) => mockBuildBooleanTaskResult(...args),
+  buildTaskResult: (...args: unknown[]) => mockBuildTaskResult(...args),
+  persistExceededTaskResult: (...args: unknown[]) => mockPersistExceededTaskResult(...args),
   persistTaskResult: (...args: unknown[]) => mockPersistTaskResult(...args),
   persistTaskError: (...args: unknown[]) => mockPersistTaskError(...args),
 }));
@@ -117,11 +126,12 @@ function createTempProject(): string {
 
 describe('skipTaskList option in selectAndExecuteTask', () => {
   it('skipTaskList: true の場合はタスクリストに追加しない', async () => {
-    await selectAndExecuteTask('/project', 'test task', {
+    const result = await selectAndExecuteTask('/project', 'test task', {
       workflow: 'default',
       skipTaskList: true,
     });
 
+    expect(result).toEqual({ success: true, status: 'completed' });
     expect(mockAddTask).not.toHaveBeenCalled();
     expect(mockPersistTaskResult).not.toHaveBeenCalled();
     expect(mockExecuteTask).toHaveBeenCalled();
@@ -170,7 +180,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     });
 
     expect(mockAddTask).toHaveBeenCalled();
-    expect(mockBuildBooleanTaskResult).toHaveBeenCalled();
+    expect(mockBuildTaskResult).toHaveBeenCalled();
     expect(mockPersistTaskResult).toHaveBeenCalled();
     expect(mockExecuteTask).toHaveBeenCalled();
   });
@@ -373,6 +383,186 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     expect(fs.existsSync(path.join(projectCwd, '.takt', 'tasks'))).toBe(false);
     expect(fs.existsSync(path.join(projectCwd, '.takt', 'runs', executeArg.reportDirName, 'context', 'task'))).toBe(true);
     expect(mockPersistTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('skipTaskList: true かつ exitOnFailure: false では taskSuccess false を戻り値で返す', async () => {
+    mockExecuteTask.mockResolvedValue(false);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      const result = await selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        skipTaskList: true,
+        exitOnFailure: false,
+      });
+
+      expect(result).toEqual({ success: false, status: 'failed', reason: 'Task failed' });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(mockAddTask).not.toHaveBeenCalled();
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('skipTaskList: true かつ exitOnFailure: false では non-SIGINT aborted を failed として返す', async () => {
+    mockExecuteTask.mockResolvedValue({
+      success: false,
+      reason: 'Workflow aborted by step transition',
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      const result = await selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        skipTaskList: true,
+        exitOnFailure: false,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        status: 'failed',
+        reason: 'Workflow aborted by step transition',
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(mockAddTask).not.toHaveBeenCalled();
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('skipTaskList: true かつ exitOnFailure: false では user_interrupted を interrupted として返す', async () => {
+    mockExecuteTask.mockResolvedValue({
+      success: false,
+      reason: 'user_interrupted',
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      const result = await selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        skipTaskList: true,
+        exitOnFailure: false,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        status: 'interrupted',
+        reason: 'user_interrupted',
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(mockAddTask).not.toHaveBeenCalled();
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('skipTaskList: true かつ exitOnFailure: false では SIGINT reason を interrupted として返す', async () => {
+    mockExecuteTask.mockResolvedValue({
+      success: false,
+      reason: 'Workflow interrupted by user (SIGINT)',
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      const result = await selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        skipTaskList: true,
+        exitOnFailure: false,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        status: 'interrupted',
+        reason: 'Workflow interrupted by user (SIGINT)',
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(mockAddTask).not.toHaveBeenCalled();
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('skipTaskList: true かつ exitOnFailure: false では SIGINT 文言を含む通常失敗 reason を failed として返す', async () => {
+    const reason = 'Task failed: Workflow interrupted by user (SIGINT) was mentioned by provider';
+    mockExecuteTask.mockResolvedValue({
+      success: false,
+      reason,
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      const result = await selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        skipTaskList: true,
+        exitOnFailure: false,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        status: 'failed',
+        reason,
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(mockAddTask).not.toHaveBeenCalled();
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('skipTaskList: false かつ exitOnFailure: false では exceeded を保存して戻り値で返す', async () => {
+    const exceededInfo = {
+      currentStep: 'reviewers',
+      newMaxSteps: 60,
+      currentIteration: 30,
+    };
+    mockExecuteTask.mockResolvedValue({
+      success: false,
+      exceeded: true,
+      exceededInfo,
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit:1');
+    }) as never);
+
+    try {
+      const result = await selectAndExecuteTask('/project', 'test task', {
+        workflow: 'default',
+        skipTaskList: false,
+        exitOnFailure: false,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        status: 'exceeded',
+        exceededInfo,
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(mockAddTask).toHaveBeenCalled();
+      expect(mockPersistExceededTaskResult).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ name: 'test-task' }),
+        exceededInfo,
+      );
+      expect(mockBuildTaskResult).not.toHaveBeenCalled();
+      expect(mockPersistTaskResult).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 
   it('attachments 付き skipTaskList: false で addTask が失敗した場合は prepared spec と staged spec を削除する', async () => {

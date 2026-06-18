@@ -30,14 +30,18 @@ const {
   mockCheckCliStatus,
   mockFetchIssue,
   mockGetWorkflowDescription,
+  mockPromptContinueAfterTaskResult,
   mockResolveAgentOverrides,
   mockResolveAssistantConfigLayers,
+  mockShouldPromptForInteractiveContinue,
 } = vi.hoisted(() => ({
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockGetWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
+  mockPromptContinueAfterTaskResult: vi.fn(),
   mockResolveAgentOverrides: vi.fn(),
   mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
+  mockShouldPromptForInteractiveContinue: vi.fn(),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -75,6 +79,8 @@ vi.mock('../features/interactive/index.js', () => ({
   loadRunSessionContext: vi.fn(),
   listRecentRuns: vi.fn(() => []),
   normalizeTaskHistorySummary: vi.fn((items: unknown[]) => items),
+  shouldPromptForInteractiveContinue: (...args: unknown[]) => mockShouldPromptForInteractiveContinue(...args),
+  promptContinueAfterTaskResult: (...args: unknown[]) => mockPromptContinueAfterTaskResult(...args),
   dispatchConversationAction: vi.fn(async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
     return handlers[result.action](result);
   }),
@@ -158,6 +164,27 @@ const mockIsDirectTask = vi.mocked(isDirectTask);
 const mockInfo = vi.mocked(info);
 const mockError = vi.mocked(error);
 const mockTaskRunnerListAllTaskItems = vi.mocked(mockListAllTaskItems);
+const completedTaskResult = { success: true, status: 'completed' } as const;
+const failedTaskResult = { success: false, status: 'failed', reason: 'Task failed' } as const;
+const abortedTaskResult = {
+  success: false,
+  status: 'failed',
+  reason: 'Workflow aborted by step transition',
+} as const;
+const exceededTaskResult = {
+  success: false,
+  status: 'exceeded',
+  exceededInfo: {
+    currentStep: 'reviewers',
+    newMaxSteps: 60,
+    currentIteration: 30,
+  },
+} as const;
+const interruptedTaskResult = {
+  success: false,
+  status: 'interrupted',
+  reason: 'Workflow interrupted by user (SIGINT)',
+} as const;
 
 function createMockIssue(number: number): Issue {
   return {
@@ -177,6 +204,7 @@ beforeEach(() => {
   }
   // Default setup
   mockDetermineWorkflow.mockResolvedValue('default');
+  mockSelectAndExecuteTask.mockResolvedValue(completedTaskResult);
   mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockPassthroughMode.mockResolvedValue({ action: 'execute', task: 'passthrough task' });
@@ -185,6 +213,8 @@ beforeEach(() => {
   mockSelectInteractiveMode.mockResolvedValue('assistant');
   mockIsDirectTask.mockReturnValue(false);
   mockResolveAgentOverrides.mockReturnValue(undefined);
+  mockShouldPromptForInteractiveContinue.mockReturnValue(false);
+  mockPromptContinueAfterTaskResult.mockResolvedValue(false);
   mockParseIssueNumbers.mockReturnValue([]);
   mockTaskRunnerListAllTaskItems.mockReturnValue([]);
   mockIsStaleRunningTask.mockReturnValue(false);
@@ -255,6 +285,7 @@ describe('Issue resolution in routing', () => {
         expect.objectContaining({
           workflow: 'migration-workflow',
           interactiveUserInput: true,
+          exitOnFailure: false,
           skipTaskList: true,
         }),
         undefined,
@@ -750,6 +781,330 @@ describe('Issue resolution in routing', () => {
 
       // Then: selectAndExecuteTask should NOT be called
       expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('interactive continue prompt', () => {
+    it('should return to the initial interactive prompt when the user chooses to continue', async () => {
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      mockInteractiveMode
+        .mockResolvedValueOnce({ action: 'execute', task: 'first task' })
+        .mockResolvedValueOnce({ action: 'execute', task: 'second task' });
+
+      await executeDefaultAction('add feature');
+
+      expect(mockSelectInteractiveMode).toHaveBeenCalledTimes(2);
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        1,
+        '/test/cwd',
+        { userMessage: 'add feature' },
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        2,
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(2);
+      expect(mockSelectAndExecuteTask).toHaveBeenNthCalledWith(
+        1,
+        '/test/cwd',
+        'first task',
+        expect.objectContaining({
+          workflow: 'default',
+          interactiveUserInput: true,
+          interactiveMetadata: { confirmed: true, task: 'first task' },
+          skipTaskList: true,
+          exitOnFailure: false,
+        }),
+        undefined,
+      );
+      expect(mockSelectAndExecuteTask).toHaveBeenNthCalledWith(
+        2,
+        '/test/cwd',
+        'second task',
+        expect.objectContaining({
+          workflow: 'default',
+          interactiveUserInput: true,
+          interactiveMetadata: { confirmed: true, task: 'second task' },
+          skipTaskList: true,
+          exitOnFailure: false,
+        }),
+        undefined,
+      );
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(1, true, 'en');
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(2, true, 'en');
+    });
+
+    it('should return to the initial interactive prompt after a persona mode execute action', async () => {
+      mockSelectInteractiveMode
+        .mockResolvedValueOnce('persona')
+        .mockResolvedValueOnce('assistant');
+      mockGetWorkflowDescription.mockReturnValue({
+        name: 'default',
+        description: 'test workflow',
+        workflowStructure: '',
+        stepPreviews: [],
+        firstStep: {
+          personaContent: 'You are a coder.',
+          personaDisplayName: 'Coder',
+          allowedTools: ['Read'],
+        },
+      });
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      mockInteractiveMode.mockResolvedValueOnce({ action: 'execute', task: 'follow up task' });
+
+      await executeDefaultAction('use persona mode');
+
+      expect(mockSelectInteractiveMode).toHaveBeenCalledTimes(2);
+      expect(mockPersonaMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        expect.anything(),
+        { userMessage: 'use persona mode' },
+        expect.anything(),
+      );
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        1,
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(mockShouldPromptForInteractiveContinue).toHaveBeenNthCalledWith(1, { selectedMode: 'persona' });
+      expect(mockShouldPromptForInteractiveContinue).toHaveBeenNthCalledWith(2, { selectedMode: 'assistant' });
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(1, true, 'en');
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(2, true, 'en');
+    });
+
+    it('should return to the initial interactive prompt after a passthrough mode execute action', async () => {
+      mockSelectInteractiveMode
+        .mockResolvedValueOnce('passthrough')
+        .mockResolvedValueOnce('assistant');
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      mockInteractiveMode.mockResolvedValueOnce({ action: 'execute', task: 'follow up task' });
+
+      await executeDefaultAction('use passthrough mode');
+
+      expect(mockSelectInteractiveMode).toHaveBeenCalledTimes(2);
+      expect(mockPassthroughMode).toHaveBeenCalledWith('en', 'use passthrough mode');
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        1,
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(mockShouldPromptForInteractiveContinue).toHaveBeenNthCalledWith(1, { selectedMode: 'passthrough' });
+      expect(mockShouldPromptForInteractiveContinue).toHaveBeenNthCalledWith(2, { selectedMode: 'assistant' });
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(1, true, 'en');
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(2, true, 'en');
+    });
+
+    it('should exit normally after a successful run when the user declines to continue', async () => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult.mockResolvedValue(false);
+
+      await executeDefaultAction();
+
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenCalledWith(true, 'en');
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(mockInteractiveMode).toHaveBeenCalledTimes(1);
+      exitSpy.mockRestore();
+    });
+
+    it('should preserve failure exit code when the user declines to continue after a failed run', async () => {
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult.mockResolvedValue(false);
+      mockSelectAndExecuteTask.mockResolvedValue(failedTaskResult);
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+
+      await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenCalledWith(false, 'en');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      exitSpy.mockRestore();
+    });
+
+    it('should return to the initial interactive prompt after a failed run when the user chooses to continue', async () => {
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      mockSelectAndExecuteTask
+        .mockResolvedValueOnce(failedTaskResult)
+        .mockResolvedValueOnce(completedTaskResult);
+      mockInteractiveMode
+        .mockResolvedValueOnce({ action: 'execute', task: 'failing task' })
+        .mockResolvedValueOnce({ action: 'execute', task: 'recovery task' });
+
+      await executeDefaultAction('retry broken workflow');
+
+      expect(mockSelectInteractiveMode).toHaveBeenCalledTimes(2);
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        1,
+        '/test/cwd',
+        { userMessage: 'retry broken workflow' },
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        2,
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(1, false, 'en');
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(2, true, 'en');
+    });
+
+    it('should return to the initial interactive prompt after a non-SIGINT aborted run when the user continues', async () => {
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      mockSelectAndExecuteTask
+        .mockResolvedValueOnce(abortedTaskResult)
+        .mockResolvedValueOnce(completedTaskResult);
+      mockInteractiveMode
+        .mockResolvedValueOnce({ action: 'execute', task: 'aborted task' })
+        .mockResolvedValueOnce({ action: 'execute', task: 'follow up task' });
+
+      await executeDefaultAction('retry aborted workflow');
+
+      expect(mockSelectInteractiveMode).toHaveBeenCalledTimes(2);
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(1, false, 'en');
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(2, true, 'en');
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        2,
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+    });
+
+    it('should prompt after an exceeded run and return to the initial interactive prompt when the user continues', async () => {
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      mockSelectAndExecuteTask
+        .mockResolvedValueOnce(exceededTaskResult)
+        .mockResolvedValueOnce(completedTaskResult);
+      mockInteractiveMode
+        .mockResolvedValueOnce({ action: 'execute', task: 'limited task' })
+        .mockResolvedValueOnce({ action: 'execute', task: 'follow up task' });
+
+      await executeDefaultAction('run limited workflow');
+
+      expect(mockSelectInteractiveMode).toHaveBeenCalledTimes(2);
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(1, false, 'en');
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenNthCalledWith(2, true, 'en');
+      expect(mockInteractiveMode).toHaveBeenNthCalledWith(
+        2,
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        undefined,
+        undefined,
+        undefined,
+      );
+    });
+
+    it('should treat execution errors as failed runs before asking whether to continue', async () => {
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockPromptContinueAfterTaskResult.mockResolvedValue(false);
+      mockSelectAndExecuteTask.mockRejectedValue(new Error('workflow crashed'));
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+
+      await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+      expect(mockPromptContinueAfterTaskResult).toHaveBeenCalledWith(false, 'en');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      exitSpy.mockRestore();
+    });
+
+    it('should preserve failure exit code without prompting when execution is interrupted by SIGINT', async () => {
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockSelectAndExecuteTask.mockResolvedValue(interruptedTaskResult);
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+
+      try {
+        await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
+
+        expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
+        expect(mockPromptContinueAfterTaskResult).not.toHaveBeenCalled();
+        expect(exitSpy).toHaveBeenCalledWith(1);
+      } finally {
+        exitSpy.mockRestore();
+      }
+    });
+
+    it('should not prompt for direct --task execution', async () => {
+      mockOpts.task = 'scripted task';
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+
+      await executeDefaultAction();
+
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
+        '/test/cwd',
+        'scripted task',
+        expect.objectContaining({
+          workflow: undefined,
+          skipTaskList: true,
+        }),
+        undefined,
+      );
+      expect(mockSelectInteractiveMode).not.toHaveBeenCalled();
+      expect(mockShouldPromptForInteractiveContinue).not.toHaveBeenCalled();
+      expect(mockPromptContinueAfterTaskResult).not.toHaveBeenCalled();
+    });
+
+    it('should not prompt after an execute action selected from quiet mode', async () => {
+      mockSelectInteractiveMode.mockResolvedValueOnce('quiet');
+      mockShouldPromptForInteractiveContinue.mockReturnValue(false);
+
+      await executeDefaultAction();
+
+      expect(mockQuietMode).toHaveBeenCalledTimes(1);
+      expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
+      expect(mockPromptContinueAfterTaskResult).not.toHaveBeenCalled();
     });
   });
 

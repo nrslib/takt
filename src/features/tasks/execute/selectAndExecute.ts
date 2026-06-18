@@ -9,17 +9,60 @@ import { statusLine } from '../../../shared/ui/StatusLine.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import { executeTask } from './taskExecution.js';
-import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
+import { executeTaskWithResult } from './taskExecution.js';
+import type {
+  SelectAndExecuteTaskResult,
+  TaskExecutionOptions,
+  WorktreeConfirmationResult,
+  SelectAndExecuteOptions,
+  WorkflowExecutionResult,
+} from './types.js';
 import { selectWorkflow } from '../../workflowSelection/index.js';
-import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
+import {
+  buildTaskResult,
+  persistExceededTaskResult,
+  persistTaskError,
+  persistTaskResult,
+} from './taskResultHandler.js';
 import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from '../attachments.js';
 import { cleanupStagedTaskSpec, stageTaskSpecForExecution, type StagedTaskSpec } from './taskSpecContext.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 
-export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
+export type { WorktreeConfirmationResult, SelectAndExecuteOptions, SelectAndExecuteTaskResult };
 
 const log = createLogger('selectAndExecute');
+const USER_INTERRUPT_REASON = 'Workflow interrupted by user (SIGINT)';
+
+function toSelectAndExecuteTaskResult(result: WorkflowExecutionResult): SelectAndExecuteTaskResult {
+  if (result.success) {
+    return { success: true, status: 'completed' };
+  }
+  if (isUserInterruptedResult(result)) {
+    return {
+      success: false,
+      status: 'interrupted',
+      ...(result.reason ? { reason: result.reason } : {}),
+    };
+  }
+  if (result.exceeded && result.exceededInfo) {
+    return {
+      success: false,
+      status: 'exceeded',
+      ...(result.reason ? { reason: result.reason } : {}),
+      exceededInfo: result.exceededInfo,
+    };
+  }
+  return {
+    success: false,
+    status: 'failed',
+    ...(result.reason ? { reason: result.reason } : {}),
+  };
+}
+
+function isUserInterruptedResult(result: WorkflowExecutionResult): boolean {
+  return result.reason === 'user_interrupted'
+    || result.reason === USER_INTERRUPT_REASON;
+}
 
 function cleanupTransientTaskSpecs(
   preparedSpecTaskDir: string | undefined,
@@ -94,12 +137,12 @@ export async function selectAndExecuteTask(
   task: string,
   options?: SelectAndExecuteOptions,
   agentOverrides?: TaskExecutionOptions,
-): Promise<void> {
+): Promise<SelectAndExecuteTaskResult> {
   const workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
 
   if (workflowIdentifier === null) {
     info('Cancelled');
-    return;
+    return { success: false, status: 'failed', reason: 'Cancelled' };
   }
 
   const execCwd = cwd;
@@ -138,9 +181,9 @@ export async function selectAndExecuteTask(
   const startedAt = new Date().toISOString();
 
   statusLine.start('Running...');
-  let taskSuccess: boolean;
+  let workflowResult: WorkflowExecutionResult;
   try {
-    taskSuccess = await executeTask({
+    workflowResult = await executeTaskWithResult({
       task: stagedSpec?.taskPrompt ?? task,
       cwd: execCwd,
       workflowIdentifier,
@@ -177,18 +220,25 @@ export async function selectAndExecuteTask(
   const completedAt = new Date().toISOString();
 
   if (taskRecord) {
-    const taskResult = buildBooleanTaskResult({
-      task: taskRecord,
-      taskSuccess,
-      successResponse: 'Task completed successfully',
-      failureResponse: 'Task failed',
-      startedAt,
-      completedAt,
-    });
-    persistTaskResult(taskRunner, taskResult);
+    if (workflowResult.exceeded && workflowResult.exceededInfo) {
+      persistExceededTaskResult(taskRunner, taskRecord, workflowResult.exceededInfo);
+    } else {
+      const taskResult = buildTaskResult({
+        task: taskRecord,
+        runResult: workflowResult,
+        startedAt,
+        completedAt,
+      });
+      persistTaskResult(taskRunner, taskResult);
+    }
   }
 
-  if (!taskSuccess) {
-    process.exit(1);
+  const taskResult = toSelectAndExecuteTaskResult(workflowResult);
+  if (!taskResult.success) {
+    if (options?.exitOnFailure !== false) {
+      process.exit(1);
+    }
   }
+
+  return taskResult;
 }

@@ -46,6 +46,10 @@ takt hello
 3. AI との会話でタスク内容を精緻化
 4. `/go` でタスク指示を確定（`/go 追加の指示` のように追記も可能）、または `/play <task>` でタスクを即座に実行
 5. 実行（workflow 実行、PR 作成）
+6. 結果サマリーの後に `Continue? [Y/n]` に回答
+7. `Y` なら最初のインタラクティブプロンプトに戻り、`n` なら終了
+
+continue prompt は通常のインタラクティブ実行で、completed / failed / aborted / exceeded などの終端結果の後にだけ表示されます。`--pipeline`、直接の `--task` 実行、quiet mode、non-TTY / CI 実行、自動化向けの経路では表示されません。
 
 ### インタラクティブモードの種類
 
@@ -91,6 +95,15 @@ Requirements:
 Proceed with these task instructions? (Y/n) y
 
 [Workflow の実行を開始...]
+
+Task completed
+Continue? [Y/n] y
+
+Select workflow:
+  > default (current)
+    Development/
+    Research/
+    Cancel
 ```
 
 ## 直接タスク実行

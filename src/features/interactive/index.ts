@@ -29,3 +29,8 @@ export { runTaskRetryMode, runDirectRetryMode, buildRetryTemplateVars, type Retr
 export { dispatchConversationAction, type ConversationActionResult } from './actionDispatcher.js';
 export { findPreviousOrderContent } from './orderReader.js';
 export { type InteractiveImageAttachment } from './imageAttachments.js';
+export {
+  shouldPromptForInteractiveContinue,
+  promptContinueAfterTaskResult,
+  type InteractiveContinuePromptOptions,
+} from './continuePrompt.js';

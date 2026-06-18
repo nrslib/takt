@@ -37,6 +37,15 @@ export interface WorkflowExecutionResult {
   exceededInfo?: ExceededInfo;
 }
 
+export type SelectAndExecuteTaskStatus = 'completed' | 'failed' | 'exceeded' | 'interrupted';
+
+export interface SelectAndExecuteTaskResult {
+  success: boolean;
+  status: SelectAndExecuteTaskStatus;
+  reason?: string;
+  exceededInfo?: ExceededInfo;
+}
+
 /** Metadata from interactive mode, passed through to NDJSON logging */
 export interface InteractiveMetadata {
   /** Whether the user confirmed with /go */
@@ -211,6 +220,8 @@ export interface SelectAndExecuteOptions {
   interactiveMetadata?: InteractiveMetadata;
   /** Skip adding task to tasks.yaml */
   skipTaskList?: boolean;
+  /** Exit the process when task execution fails. Defaults to true. */
+  exitOnFailure?: boolean;
   /** Images pasted during interactive task input. */
   attachments?: TaskAttachment[];
   /** Source metadata for direct trace discovery when no task record exists. */

@@ -24,19 +24,23 @@ const {
   mockFetchIssue,
   mockFetchPrReviewComments,
   mockGetWorkflowDescription,
+  mockPromptContinueAfterTaskResult,
   mockResolveConfigValues,
   mockResolveAssistantConfigLayers,
   mockLoadPersonaSessions,
   mockResolveAgentOverrides,
+  mockShouldPromptForInteractiveContinue,
 } = vi.hoisted(() => ({
   mockCheckCliStatus: vi.fn(),
   mockFetchIssue: vi.fn(),
   mockFetchPrReviewComments: vi.fn(),
   mockGetWorkflowDescription: vi.fn(() => ({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] })),
+  mockPromptContinueAfterTaskResult: vi.fn(),
   mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' })),
   mockResolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
   mockLoadPersonaSessions: vi.fn(() => ({})),
   mockResolveAgentOverrides: vi.fn(),
+  mockShouldPromptForInteractiveContinue: vi.fn(),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -76,6 +80,8 @@ vi.mock('../features/interactive/index.js', () => ({
   loadRunSessionContext: vi.fn(),
   listRecentRuns: vi.fn(() => []),
   normalizeTaskHistorySummary: vi.fn((items: unknown[]) => items),
+  shouldPromptForInteractiveContinue: (...args: unknown[]) => mockShouldPromptForInteractiveContinue(...args),
+  promptContinueAfterTaskResult: (...args: unknown[]) => mockPromptContinueAfterTaskResult(...args),
   dispatchConversationAction: vi.fn(async (result: { action: string }, handlers: Record<string, (r: unknown) => unknown>) => {
     return handlers[result.action](result);
   }),
@@ -151,6 +157,7 @@ const mockSaveTaskFromInteractive = vi.mocked(saveTaskFromInteractive);
 const mockCreateIssueAndSaveTask = vi.mocked(createIssueAndSaveTask);
 const mockResolveConfigValuesFn = mockResolveConfigValues;
 const mockLoadPersonaSessionsFn = mockLoadPersonaSessions;
+const completedTaskResult = { success: true, status: 'completed' } as const;
 
 const testAttachment = {
   placeholder: '[Image #1]',
@@ -178,6 +185,7 @@ beforeEach(() => {
     delete mockOpts[key];
   }
   mockDetermineWorkflow.mockResolvedValue('default');
+  mockSelectAndExecuteTask.mockResolvedValue(completedTaskResult);
   mockGetWorkflowDescription.mockReturnValue({ name: 'default', description: 'test workflow', workflowStructure: '', stepPreviews: [] });
   mockInteractiveMode.mockResolvedValue({ action: 'execute', task: 'summarized task' });
   mockPassthroughMode.mockResolvedValue({ action: 'execute', task: 'passthrough task' });
@@ -190,6 +198,8 @@ beforeEach(() => {
   mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
   mockLoadPersonaSessionsFn.mockReturnValue({});
   mockResolveAgentOverrides.mockReturnValue(undefined);
+  mockShouldPromptForInteractiveContinue.mockReturnValue(false);
+  mockPromptContinueAfterTaskResult.mockResolvedValue(false);
 });
 
 describe('interactive image attachment routing', () => {
@@ -578,6 +588,29 @@ describe('PR resolution in routing', () => {
           workflow: 'migration-workflow',
         }),
       );
+
+      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
+    });
+
+    it('should not call interactive continue prompt helpers in pipeline mode', async () => {
+      const programModule = await import('../app/cli/program.js');
+      const originalPipelineMode = programModule.pipelineMode;
+      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
+
+      mockOpts.workflow = 'default';
+      mockShouldPromptForInteractiveContinue.mockReturnValue(true);
+      mockExecutePipeline.mockResolvedValue(0);
+
+      await executeDefaultAction();
+
+      expect(mockExecutePipeline).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflow: 'default',
+        }),
+      );
+      expect(mockSelectInteractiveMode).not.toHaveBeenCalled();
+      expect(mockShouldPromptForInteractiveContinue).not.toHaveBeenCalled();
+      expect(mockPromptContinueAfterTaskResult).not.toHaveBeenCalled();
 
       Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });

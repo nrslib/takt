@@ -63,6 +63,10 @@ interactive:
     userStopped: "⚠️ 前回のタスクはユーザーによって中断されました"
     workflow: "使用ワークフロー: {workflowName}"
     timestamp: "実行時刻: {timestamp}"
+  taskResult:
+    completed: "タスクが完了しました"
+    failed: "タスクが失敗しました"
+    continuePrompt: "続行しますか？"
   commands:
     accept: "最新のアシスタント発言を採用"
     play: "タスクを即実行する"

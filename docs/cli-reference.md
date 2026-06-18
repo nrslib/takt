@@ -46,6 +46,10 @@ takt hello
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
 5. Execute (run workflow, create PR)
+6. After the result summary, answer `Continue? [Y/n]`
+7. `Y` returns to the initial interactive prompt; `n` exits
+
+The continue prompt is only shown for normal interactive execution after terminal results such as completed, failed, aborted, or exceeded. It is not shown for `--pipeline`, direct `--task` execution, quiet mode, non-TTY/CI execution, or paths intended for automation.
 
 ### Interactive Mode Variants
 
@@ -91,6 +95,15 @@ Requirements:
 Proceed with these task instructions? (Y/n) y
 
 [Workflow execution starts...]
+
+Task completed
+Continue? [Y/n] y
+
+Select workflow:
+  > default (current)
+    Development/
+    Research/
+    Cancel
 ```
 
 ## Direct Task Execution
