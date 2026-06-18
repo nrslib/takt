@@ -177,6 +177,7 @@ export const TeamLeaderConfigRawSchema = z.object({
   refill_threshold: z.number().int().min(0).optional(),
   timeout_ms: z.number().int().positive().optional(),
   part_persona: z.string().optional(),
+  part_tags: z.array(z.string().min(1)).optional(),
   part_allowed_tools: z.array(z.string()).optional(),
   part_edit: z.boolean().optional(),
   part_permission_mode: PermissionModeSchema.optional(),

@@ -491,6 +491,109 @@ describe('provider_routing provider_options resolution', () => {
       },
     });
   });
+
+  it('Given team_leader parent tags and part_tags differ, When resolving provider/model, Then parent and part route separately', () => {
+    const parentStep = createStep({
+      name: 'implement',
+      persona: 'leader',
+      providerRoutingPersonaKey: 'leader',
+      tags: ['leader'],
+      teamLeader: {
+        persona: 'planner',
+        maxConcurrency: 3,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 900000,
+        partPersona: 'coder',
+        partTags: ['coding'],
+      },
+    });
+    const part: PartDefinition = {
+      id: 'api',
+      title: 'API',
+      instruction: 'implement api',
+    };
+    const providerRouting = {
+      tags: {
+        leader: { provider: 'codex' as const, model: 'gpt-5.5' },
+        coding: { provider: 'opencode' as const, model: 'ollama-cloud/qwen3-coder-next' },
+      },
+    };
+
+    const partStep = createPartStep(parentStep, part);
+
+    expect(parentStep.tags).toEqual(['leader']);
+    expect(partStep).toMatchObject({
+      name: 'implement.api',
+      providerRoutingPersonaKey: 'coder',
+      tags: ['coding'],
+    });
+    expect(resolveStepProviderModel({
+      step: parentStep,
+      provider: 'mock',
+      model: 'project-model',
+      providerRouting,
+    } as Parameters<typeof resolveStepProviderModel>[0])).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      providerSource: 'provider_routing.tags',
+      modelSource: 'provider_routing.tags',
+    });
+    expect(resolveStepProviderModel({
+      step: partStep,
+      provider: 'mock',
+      model: 'project-model',
+      providerRouting,
+    } as Parameters<typeof resolveStepProviderModel>[0])).toMatchObject({
+      provider: 'opencode',
+      model: 'ollama-cloud/qwen3-coder-next',
+      providerSource: 'provider_routing.tags',
+      modelSource: 'provider_routing.tags',
+    });
+  });
+
+  it('Given team_leader part_persona and part_tags, When resolving provider/model, Then tag routing wins over persona routing', () => {
+    const parentStep = createStep({
+      name: 'implement',
+      persona: 'leader',
+      providerRoutingPersonaKey: 'leader',
+      tags: ['leader'],
+      teamLeader: {
+        persona: 'planner',
+        maxConcurrency: 3,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 900000,
+        partPersona: 'coder',
+        partTags: ['coding'],
+      },
+    });
+    const part: PartDefinition = {
+      id: 'api',
+      title: 'API',
+      instruction: 'implement api',
+    };
+    const partStep = createPartStep(parentStep, part);
+
+    expect(resolveStepProviderModel({
+      step: partStep,
+      provider: 'mock',
+      model: 'project-model',
+      providerRouting: {
+        personas: {
+          coder: { provider: 'codex', model: 'persona-model' },
+        },
+        tags: {
+          coding: { provider: 'opencode', model: 'ollama-cloud/qwen3-coder-next' },
+        },
+      },
+    } as Parameters<typeof resolveStepProviderModel>[0])).toMatchObject({
+      provider: 'opencode',
+      model: 'ollama-cloud/qwen3-coder-next',
+      providerSource: 'provider_routing.tags',
+      modelSource: 'provider_routing.tags',
+    });
+  });
 });
 
 describe('provider_routing config normalization', () => {

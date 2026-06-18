@@ -3,6 +3,61 @@ import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
 import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 
 describe('createPartStep', () => {
+  it('Given teamLeader.partTags, When creating a part step, Then part tags replace parent tags', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'leader',
+      personaDisplayName: 'leader',
+      tags: ['leader'],
+      instruction: 'decompose work',
+      passPreviousResponse: false,
+      teamLeader: {
+        persona: 'leader',
+        maxConcurrency: 3,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 900000,
+        partTags: ['coding'],
+      },
+    };
+    const part: PartDefinition = {
+      id: 'part-1',
+      title: 'API',
+      instruction: 'implement api',
+    };
+
+    const partStep = createPartStep(step, part);
+
+    expect(partStep.tags).toEqual(['coding']);
+  });
+
+  it('Given no teamLeader.partTags, When creating a part step, Then parent tags are inherited', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'leader',
+      personaDisplayName: 'leader',
+      tags: ['leader'],
+      instruction: 'decompose work',
+      passPreviousResponse: false,
+      teamLeader: {
+        persona: 'leader',
+        maxConcurrency: 3,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 900000,
+      },
+    };
+    const part: PartDefinition = {
+      id: 'part-1',
+      title: 'API',
+      instruction: 'implement api',
+    };
+
+    const partStep = createPartStep(step, part);
+
+    expect(partStep.tags).toEqual(['leader']);
+  });
+
   it('keeps parent providerOptions intact so part option resolution stays in OptionsBuilder', () => {
     // Given
     const step: WorkflowStep = {

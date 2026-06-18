@@ -43,7 +43,7 @@ loop_monitors:
 steps:
   - name: implement
     tags:
-      - coding
+      - leader
     edit: true
     persona: coder
     policy:
@@ -57,6 +57,8 @@ steps:
     required_permission_mode: edit
     team_leader:
       max_parts: 2
+      part_tags:
+        - coding
       part_persona: coder
       part_edit: true
       part_permission_mode: edit

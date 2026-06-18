@@ -237,6 +237,7 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
       max_concurrency: 2
       max_total_parts: 8
       timeout_ms: 600000
+      part_tags: [coding]
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
@@ -250,7 +251,7 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
 
 Useful for breaking one large task into independent units that can run in parallel without you having to know the unit boundaries up-front.
 
-`max_concurrency` controls how many parts run at the same time. `max_total_parts` controls the total number of parts the leader may plan across the workflow step, up to 20. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`.
+`max_concurrency` controls how many parts run at the same time. `max_total_parts` controls the total number of parts the leader may plan across the workflow step, up to 20. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`. `part_tags` sets provider routing tags on generated part steps. When omitted, parts inherit the parent step's `tags`. Empty and whitespace-only tags are invalid. `part_tags` is resolved through normal `provider_routing.tags`, so tag routing takes priority over persona routing from `part_persona`.
 
 ### Workflow Call Step (subworkflow)
 

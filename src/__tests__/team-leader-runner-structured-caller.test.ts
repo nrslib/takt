@@ -207,6 +207,142 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
   });
 
+  it('Given teamLeader.partTags, When running multiple decomposed parts, Then each part step gets part tags without changing aggregated output', async () => {
+    mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => {
+      if (instruction.includes('Implement API')) {
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'API done',
+          timestamp: new Date('2026-04-01T00:00:00.000Z'),
+        };
+      }
+      if (instruction.includes('Implement UI')) {
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'UI done',
+          timestamp: new Date('2026-04-01T00:01:00.000Z'),
+        };
+      }
+      throw new Error(`Unexpected instruction: ${instruction}`);
+    });
+    const resolveStepProviderModel = vi.fn().mockImplementation((stepArg: WorkflowStep) => {
+      if (stepArg.name === 'implement') {
+        return { provider: 'codex', model: 'gpt-5.5' };
+      }
+      return { provider: 'opencode', model: 'ollama-cloud/qwen3-coder-next' };
+    });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          { id: 'part-2', title: 'UI', instruction: 'Implement UI' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+    const buildAgentOptions = vi.fn().mockReturnValue({ cwd: '/tmp/project' });
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      tags: ['leader'],
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+        partTags: ['coding', 'edit'],
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    const result = await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    expect(resolveStepProviderModel.mock.calls.map(([stepArg]) => ({
+      name: stepArg.name,
+      tags: stepArg.tags,
+    }))).toEqual([
+      { name: 'implement', tags: ['leader'] },
+      { name: 'implement.part-1', tags: ['coding', 'edit'] },
+      { name: 'implement.part-2', tags: ['coding', 'edit'] },
+    ]);
+    expect(buildAgentOptions.mock.calls.map(([stepArg]) => ({
+      name: stepArg.name,
+      tags: stepArg.tags,
+    }))).toEqual([
+      { name: 'implement.part-1', tags: ['coding', 'edit'] },
+      { name: 'implement.part-2', tags: ['coding', 'edit'] },
+    ]);
+    expect(result.response.status).toBe('done');
+    expect(result.response.content).toContain('## decomposition');
+    expect(result.response.content).toContain('"id": "part-1"');
+    expect(result.response.content).toContain('"id": "part-2"');
+    expect(result.response.content).toContain('## part-1: API');
+    expect(result.response.content).toContain('## part-2: UI');
+    expect(result.response.content).toContain('API done');
+    expect(result.response.content).toContain('UI done');
+  });
+
   it('takt-default の implement では process safety を leader prompt に渡す', async () => {
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',

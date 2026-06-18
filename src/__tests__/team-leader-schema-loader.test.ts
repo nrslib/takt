@@ -168,6 +168,25 @@ describe('team_leader schema', () => {
 
     expect(result.success).toBe(true);
   });
+
+  it('Given team_leader.part_tags, When parsing a step, Then part_tags are preserved', () => {
+    const raw = {
+      name: 'implement',
+      tags: ['leader'],
+      team_leader: {
+        part_tags: ['coding'],
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.data.team_leader?.part_tags).toEqual(['coding']);
+  });
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
@@ -184,6 +203,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
             max_concurrency: 2,
             max_total_parts: 5,
             timeout_ms: 90000,
+            part_tags: [' coding ', 'review'],
             part_persona: 'coder',
             part_allowed_tools: ['Read', 'Edit'],
             part_edit: true,
@@ -205,6 +225,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
       maxTotalParts: 5,
       refillThreshold: 0,
       timeoutMs: 90000,
+      partTags: ['coding', 'review'],
       partPersona: 'coder',
       partPersonaPath: undefined,
       partAllowedTools: ['Read', 'Edit'],
@@ -244,5 +265,23 @@ describe('normalizeWorkflowConfig team_leader', () => {
       partEdit: undefined,
       partPermissionMode: undefined,
     });
+  });
+
+  it('Given a blank team_leader.part_tags entry, When normalizing workflow config, Then it fails fast', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const raw = {
+      name: 'workflow',
+      steps: [
+        {
+          name: 'implement',
+          team_leader: {
+            part_tags: ['  '],
+          },
+          instruction: 'decompose',
+        },
+      ],
+    };
+
+    expect(() => normalizeWorkflowConfig(raw, workflowDir)).toThrow(/team_leader\.part_tags/);
   });
 });

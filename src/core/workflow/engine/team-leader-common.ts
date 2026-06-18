@@ -42,7 +42,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     personaPath: partPersonaPath,
     personaDisplayName: partPersonaDisplayName,
     providerRoutingPersonaKey,
-    tags: step.tags,
+    tags: step.teamLeader.partTags ?? step.tags,
     session: 'refresh',
     providerOptions: step.providerOptions,
     ...('directProviderOptions' in step || 'workflowProviderOptions' in step

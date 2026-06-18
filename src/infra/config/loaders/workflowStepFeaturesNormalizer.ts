@@ -86,6 +86,14 @@ export function normalizeTeamLeader(
 
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, workflowDir, context);
   const { personaSpec: partPersona, personaPath: partPersonaPath } = resolvePersona(raw.part_persona, sections, workflowDir, context);
+  const partTags = raw.part_tags?.map((tag) => {
+    const normalizedTag = tag.trim();
+    if (normalizedTag.length === 0) {
+      throw new Error('team_leader.part_tags contains an empty entry');
+    }
+    return normalizedTag;
+  });
+
   return {
     persona: personaSpec,
     personaPath,
@@ -95,6 +103,7 @@ export function normalizeTeamLeader(
     timeoutMs: raw.timeout_ms ?? 900000,
     partPersona,
     partPersonaPath,
+    partTags,
     partAllowedTools: raw.part_allowed_tools,
     partEdit: raw.part_edit,
     partPermissionMode: raw.part_permission_mode,

@@ -236,6 +236,7 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
       max_concurrency: 2
       max_total_parts: 8
       timeout_ms: 600000
+      part_tags: [coding]
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
@@ -249,7 +250,7 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 
 大きなタスクを「事前にユニット境界を決めなくても並列で進められる単位」に分解したいときに便利です。
 
-`max_concurrency` は同時に実行する part 数、`max_total_parts` はその step 全体で計画できる総 part 数（最大 20）を制御します。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。
+`max_concurrency` は同時に実行する part 数、`max_total_parts` はその step 全体で計画できる総 part 数（最大 20）を制御します。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。`part_tags` は生成される part step の provider routing tag です。未指定時は親 step の `tags` を継承します。空文字や空白のみの tag は無効です。`part_tags` は通常の `provider_routing.tags` として解決されるため、`part_persona` による persona routing より優先されます。
 
 ### Workflow Call Step（サブワークフロー）
 
