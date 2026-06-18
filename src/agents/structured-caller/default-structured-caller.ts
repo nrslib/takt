@@ -10,6 +10,7 @@ import {
   decomposeTask,
   requestMoreParts,
   type DecomposeTaskOptions,
+  type MorePartsOptions,
   type MorePartsResponse,
 } from '../decompose-task-usecase.js';
 import type { StructuredCaller } from './contracts.js';
@@ -54,7 +55,7 @@ export class DefaultStructuredCaller implements StructuredCaller {
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
     maxAdditionalParts: number,
-    options: DecomposeTaskOptions,
+    options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     return requestMoreParts(
       originalInstruction,

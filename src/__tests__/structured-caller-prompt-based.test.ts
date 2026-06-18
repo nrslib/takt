@@ -196,6 +196,36 @@ describe('PromptBasedStructuredCaller', () => {
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
 
+  it('Given inspectTools, When prompt-based decomposeTask runs, Then it passes them to runAgent without outputSchema', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify([
+          { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+        ]),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    });
+
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
+    expect(runOptions).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      permissionMode: 'readonly',
+    }));
+    expect(runOptions).not.toHaveProperty('outputSchema');
+  });
+
   it('should pass resolvedProvider and resolvedModel through decomposeTask to runAgent', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -611,6 +641,38 @@ describe('PromptBasedStructuredCaller', () => {
         provider: 'cursor',
       }),
     );
+  });
+
+  it('prompt-based requestMoreParts は inspect tools を渡さず outputSchema も渡さない', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify({ done: true, reasoning: 'Enough', parts: [] }),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        provider: 'cursor',
+      },
+    );
+
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
+    expect(runOptions).toEqual(expect.objectContaining({
+      allowedTools: [],
+      permissionMode: 'readonly',
+    }));
+    expect(runOptions).not.toHaveProperty('outputSchema');
   });
 
   it('should pass resolvedProvider and resolvedModel through requestMoreParts to runAgent', async () => {

@@ -176,6 +176,7 @@ export const TeamLeaderConfigRawSchema = z.object({
   max_total_parts: z.number().int().positive().max(MAX_TEAM_LEADER_MAX_TOTAL_PARTS).optional(),
   refill_threshold: z.number().int().min(0).optional(),
   timeout_ms: z.number().int().positive().optional(),
+  inspect_tools: z.array(z.string()).optional(),
   part_persona: z.string().optional(),
   part_tags: z.array(z.string().min(1)).optional(),
   part_allowed_tools: z.array(z.string()).optional(),

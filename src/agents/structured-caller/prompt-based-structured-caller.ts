@@ -13,7 +13,7 @@ import {
   type JudgeStatusOptions,
   type JudgeStatusResult,
 } from '../judge-status-usecase.js';
-import type { DecomposeTaskOptions, MorePartsResponse } from '../decompose-task-usecase.js';
+import type { DecomposeTaskOptions, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
 import { TEAM_LEADER_MAX_TURNS } from '../decompose-task-usecase.js';
 import type { StructuredCaller } from './contracts.js';
 import {
@@ -165,7 +165,12 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     maxTotalParts: number,
     options: DecomposeTaskOptions,
   ): Promise<PartDefinition[]> {
-    const prompt = buildPromptBasedDecomposePrompt(instruction, maxTotalParts, options.language);
+    const prompt = buildPromptBasedDecomposePrompt(
+      instruction,
+      maxTotalParts,
+      options.language,
+      options.inspectTools,
+    );
 
     return withRetry(async () => {
       const response = await runAgent(options.persona, prompt, {
@@ -176,7 +181,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         provider: options.provider,
         resolvedModel: options.resolvedModel,
         resolvedProvider: options.resolvedProvider,
-        allowedTools: [],
+        allowedTools: options.inspectTools ?? [],
         permissionMode: 'readonly',
         ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
@@ -199,7 +204,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
     maxAdditionalParts: number,
-    options: DecomposeTaskOptions,
+    options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     const prompt = buildPromptBasedMorePartsPrompt(
       originalInstruction,

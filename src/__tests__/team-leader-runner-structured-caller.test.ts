@@ -84,6 +84,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       engineOptions: {
         projectCwd: '/tmp/project',
         structuredCaller,
+        language: 'ja',
       },
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
@@ -92,7 +93,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       observabilityRunId: 'run-1',
       sanitizeObservabilityText: (text: string) => text,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
-      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
     const step: WorkflowStep = {
@@ -268,12 +269,13 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       engineOptions: {
         projectCwd: '/tmp/project',
         structuredCaller,
+        language: 'ja',
       },
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
-      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
     const step: WorkflowStep = {
@@ -402,12 +404,13 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       engineOptions: {
         projectCwd: '/tmp/project',
         structuredCaller,
+        language: 'ja',
       },
       getCwd: () => '/tmp/project',
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
-      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
     });
 
     const step: WorkflowStep = {
@@ -730,6 +733,339 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       cwd: '/tmp/project',
       allowedTools: ['Read', 'Edit'],
     }));
+  });
+
+  it('Given teamLeader.inspectTools and partAllowedTools, When running a team leader step, Then parent planning uses inspect tools and child parts keep part tools', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi
+      .fn()
+      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' })
+      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const buildAgentOptions = vi.fn().mockImplementation((_step: WorkflowStep, runtime) => ({
+      cwd: '/tmp/project',
+      allowedTools: runtime?.teamLeaderPart?.partAllowedTools,
+    }));
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        inspectTools: ['read', 'glob', 'grep'],
+        partPersona: 'coder',
+        partAllowedTools: ['Read', 'Edit'],
+      } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      language: 'ja',
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
+    expect(requestOptions).not.toHaveProperty('inspectTools');
+    const [, , partOptions] = mockExecuteAgent.mock.calls[0] ?? [];
+    expect(partOptions).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Edit'],
+    }));
+  });
+
+  it('Given teamLeader.inspectTools and OpenCode provider, When running a team leader step, Then parent planning keeps OpenCode tool names', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi
+      .fn()
+      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' })
+      .mockReturnValueOnce({ provider: 'opencode', model: 'opencode/zai-coding-plan/glm-5.1' });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const buildAgentOptions = vi.fn().mockImplementation((_step: WorkflowStep, runtime) => ({
+      cwd: '/tmp/project',
+      allowedTools: runtime?.teamLeaderPart?.partAllowedTools,
+    }));
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+        language: 'ja',
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller; language: 'ja' };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        inspectTools: ['read', 'glob', 'grep'],
+        partPersona: 'coder',
+        partAllowedTools: ['read', 'edit'],
+      } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    const [, , partOptions] = mockExecuteAgent.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: ['read', 'glob', 'grep'],
+    }));
+    expect(requestOptions).not.toHaveProperty('inspectTools');
+    expect(partOptions).toEqual(expect.objectContaining({
+      allowedTools: ['read', 'edit'],
+    }));
+  });
+
+  it('Given teamLeader.inspectTools without partAllowedTools, When running child parts, Then child options do not inherit inspect tools', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi
+      .fn()
+      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' })
+      .mockReturnValueOnce({ provider: 'claude', model: 'sonnet' });
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const buildAgentOptions = vi.fn().mockImplementation((_step: WorkflowStep, runtime) => ({
+      cwd: '/tmp/project',
+      allowedTools: runtime?.teamLeaderPart?.partAllowedTools,
+    }));
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions,
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        inspectTools: ['read', 'glob', 'grep'],
+        partPersona: 'coder',
+      } as WorkflowStep['teamLeader'] & { inspectTools: string[] },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(
+      step,
+      state,
+      'implement feature',
+      5,
+      vi.fn(),
+    );
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    const [, , partOptions] = mockExecuteAgent.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(expect.objectContaining({
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    }));
+    expect(requestOptions).not.toHaveProperty('inspectTools');
+    expect(partOptions.allowedTools).toBeUndefined();
   });
 
   it('resolved provider を含む session key で part session を保存する', async () => {

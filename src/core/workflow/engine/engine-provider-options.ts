@@ -63,6 +63,36 @@ export function resolvePartAllowedToolsForProvider(
   return keepWhenProviderSupports(partAllowedTools, provider, providerSupportsAllowedTools);
 }
 
+export function resolveInspectToolsForProvider(
+  inspectTools: string[] | undefined,
+  provider: ProviderType | undefined,
+): string[] | undefined {
+  if (inspectTools === undefined || inspectTools.length === 0) {
+    return undefined;
+  }
+  if (provider === undefined) {
+    throw new Error('team_leader.inspect_tools requires a resolved provider');
+  }
+  if (providerSupportsOpenCodeAllowedTools(provider) === true) {
+    return inspectTools;
+  }
+  if (providerSupportsClaudeAllowedTools(provider) === true) {
+    return inspectTools.map((tool) => {
+      switch (tool) {
+        case 'read':
+          return 'Read';
+        case 'glob':
+          return 'Glob';
+        case 'grep':
+          return 'Grep';
+        default:
+          throw new Error(`Unsupported team_leader.inspect_tools value "${tool}"`);
+      }
+    });
+  }
+  throw new Error(`Provider "${provider}" does not support team_leader.inspect_tools`);
+}
+
 export function assertProviderResolvedForCapabilitySensitiveOptions(
   provider: ProviderType | undefined,
   options: CapabilitySensitiveStepOptions,

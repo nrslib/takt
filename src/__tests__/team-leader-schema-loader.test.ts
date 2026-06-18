@@ -187,6 +187,52 @@ describe('team_leader schema', () => {
     }
     expect(result.data.team_leader?.part_tags).toEqual(['coding']);
   });
+
+  it('Given team_leader.inspect_tools, When parsing a step, Then inspect_tools are preserved', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        inspect_tools: ['read', 'glob', 'grep'],
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.data.team_leader?.inspect_tools).toEqual(['read', 'glob', 'grep']);
+  });
+
+  it('Given null team_leader.inspect_tools, When parsing a step, Then it fails schema validation', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        inspect_tools: null,
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Given object team_leader.inspect_tools, When parsing a step, Then it fails schema validation', () => {
+    const raw = {
+      name: 'implement',
+      team_leader: {
+        inspect_tools: { read: true },
+      },
+      instruction: 'decompose',
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('normalizeWorkflowConfig team_leader', () => {
@@ -203,6 +249,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
             max_concurrency: 2,
             max_total_parts: 5,
             timeout_ms: 90000,
+            inspect_tools: [' Read ', 'Glob', 'grep'],
             part_tags: [' coding ', 'review'],
             part_persona: 'coder',
             part_allowed_tools: ['Read', 'Edit'],
@@ -225,6 +272,7 @@ describe('normalizeWorkflowConfig team_leader', () => {
       maxTotalParts: 5,
       refillThreshold: 0,
       timeoutMs: 90000,
+      inspectTools: ['read', 'glob', 'grep'],
       partTags: ['coding', 'review'],
       partPersona: 'coder',
       partPersonaPath: undefined,
@@ -259,12 +307,34 @@ describe('normalizeWorkflowConfig team_leader', () => {
       maxTotalParts: 20,
       refillThreshold: 0,
       timeoutMs: 900000,
+      inspectTools: undefined,
       partPersona: undefined,
       partPersonaPath: undefined,
       partAllowedTools: undefined,
       partEdit: undefined,
       partPermissionMode: undefined,
     });
+  });
+
+  it('Given empty team_leader.inspect_tools, When normalizing workflow config, Then it is treated as unset', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const raw = {
+      name: 'workflow',
+      steps: [
+        {
+          name: 'implement',
+          team_leader: {
+            inspect_tools: [],
+          },
+          instruction: 'decompose',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, workflowDir);
+    const step = config.steps[0];
+
+    expect(step?.teamLeader?.inspectTools).toBeUndefined();
   });
 
   it('Given a blank team_leader.part_tags entry, When normalizing workflow config, Then it fails fast', () => {
@@ -283,5 +353,46 @@ describe('normalizeWorkflowConfig team_leader', () => {
     };
 
     expect(() => normalizeWorkflowConfig(raw, workflowDir)).toThrow(/team_leader\.part_tags/);
+  });
+
+  it('Given non-read-only team_leader.inspect_tools, When normalizing workflow config, Then it fails fast', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const invalidTools = ['edit', 'write', 'bash', 'websearch', 'webfetch'];
+
+    for (const invalidTool of invalidTools) {
+      const raw = {
+        name: 'workflow',
+        steps: [
+          {
+            name: 'implement',
+            team_leader: {
+              inspect_tools: ['read', invalidTool],
+            },
+            instruction: 'decompose',
+          },
+        ],
+      };
+
+      expect(() => normalizeWorkflowConfig(raw, workflowDir))
+        .toThrow(new RegExp(`team_leader\\.inspect_tools.*${invalidTool}`));
+    }
+  });
+
+  it('Given a blank team_leader.inspect_tools entry, When normalizing workflow config, Then it fails fast', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const raw = {
+      name: 'workflow',
+      steps: [
+        {
+          name: 'implement',
+          team_leader: {
+            inspect_tools: ['  '],
+          },
+          instruction: 'decompose',
+        },
+      ],
+    };
+
+    expect(() => normalizeWorkflowConfig(raw, workflowDir)).toThrow(/team_leader\.inspect_tools/);
   });
 });

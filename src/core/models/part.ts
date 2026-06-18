@@ -35,6 +35,8 @@ export interface TeamLeaderConfig {
   refillThreshold: number;
   /** Default timeout for parts in milliseconds */
   timeoutMs: number;
+  /** Read-only inspection tools for the parent decomposition call */
+  inspectTools?: string[];
   /** Persona reference for part agents */
   partPersona?: string;
   /** Resolved absolute path for part persona */

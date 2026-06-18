@@ -5,6 +5,7 @@ import { resolveStepProviderModel } from '../../../core/workflow/provider-resolu
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
+  resolveInspectToolsForProvider,
 } from '../../../core/workflow/engine/engine-provider-options.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
@@ -119,6 +120,10 @@ function resolvePreviewAllowedTools(
     stepName: step.name,
     usesStructuredOutput: false,
   });
+
+  if (step.teamLeader) {
+    return resolveInspectToolsForProvider(step.teamLeader.inspectTools, resolvedProvider) ?? [];
+  }
 
   return resolveAllowedToolsForProvider(
     mergedProviderOptions,

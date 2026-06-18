@@ -410,6 +410,26 @@ describe('agent-usecases', () => {
     }));
   });
 
+  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call only', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+
+    await decomposeTask('instruction', 3, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    } as DecomposeTaskOptions & { inspectTools: string[] });
+
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      permissionMode: 'readonly',
+      outputSchema: { type: 'decomposition', maxTotalParts: 3 },
+    }));
+  });
+
   it('decomposeTask は構造化出力がない場合 parseParts にフォールバックする', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('```json [] ```'));
     vi.mocked(parseParts).mockReturnValue([
@@ -534,6 +554,31 @@ describe('agent-usecases', () => {
       outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
       permissionMode: 'readonly',
       maxTurns: 5,
+    }));
+  });
+
+  it('requestMoreParts は inspect tools を feedback planning call に渡さない', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'Enough',
+      parts: [],
+    }));
+
+    await requestMoreParts(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
+      allowedTools: [],
+      outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
+      permissionMode: 'readonly',
     }));
   });
 

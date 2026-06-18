@@ -379,6 +379,77 @@ steps:
     expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Edit']);
   });
 
+  it('should resolve team leader inspect tools for firstStep and step previews', () => {
+    const workflowYaml = `name: preview-team-leader-inspect-tools
+initial_step: implement
+max_steps: 1
+workflow_config:
+  provider: claude
+
+steps:
+  - name: implement
+    persona: lead
+    persona_name: Team Lead
+    instruction: "Split the task"
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Edit
+          - Bash
+    team_leader:
+      max_concurrency: 2
+      inspect_tools:
+        - read
+        - glob
+        - grep
+      part_allowed_tools:
+        - read
+        - edit
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-inspect-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  it('should keep team leader preview tools empty when inspect_tools is unset', () => {
+    const workflowYaml = `name: preview-team-leader-no-inspect-tools
+initial_step: implement
+max_steps: 1
+workflow_config:
+  provider: claude
+
+steps:
+  - name: implement
+    persona: lead
+    instruction: "Split the task"
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Edit
+          - Bash
+    team_leader:
+      max_concurrency: 2
+      part_allowed_tools:
+        - read
+        - edit
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-no-inspect-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual([]);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual([]);
+  });
+
   it('should silently drop preview tools when configured for a non-Claude provider', () => {
     const workflowYaml = `name: preview-invalid-tools
 initial_step: plan

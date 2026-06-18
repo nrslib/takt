@@ -14,6 +14,29 @@ import { DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../../shared/constants.j
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 
+const TEAM_LEADER_INSPECT_TOOLS = new Set(['read', 'glob', 'grep']);
+
+function normalizeTeamLeaderInspectTools(tools: string[] | undefined): string[] | undefined {
+  if (tools === undefined) {
+    return undefined;
+  }
+
+  const normalizedTools = tools.map((tool) => {
+    const normalizedTool = tool.trim().toLowerCase();
+    if (normalizedTool.length === 0) {
+      throw new Error('team_leader.inspect_tools contains an empty entry');
+    }
+    if (!TEAM_LEADER_INSPECT_TOOLS.has(normalizedTool)) {
+      throw new Error(
+        `team_leader.inspect_tools contains non-read-only tool "${normalizedTool}". Allowed values: read, glob, grep`,
+      );
+    }
+    return normalizedTool;
+  });
+
+  return normalizedTools.length > 0 ? normalizedTools : undefined;
+}
+
 export function normalizeOutputContracts(
   raw: { report?: Array<{ name: string; format: string | { $param: string }; use_judge?: boolean; order?: string }> } | undefined,
   workflowDir: string,
@@ -101,6 +124,7 @@ export function normalizeTeamLeader(
     maxTotalParts: raw.max_total_parts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS,
     refillThreshold: raw.refill_threshold ?? 0,
     timeoutMs: raw.timeout_ms ?? 900000,
+    inspectTools: normalizeTeamLeaderInspectTools(raw.inspect_tools),
     partPersona,
     partPersonaPath,
     partTags,

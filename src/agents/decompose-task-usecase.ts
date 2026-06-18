@@ -23,11 +23,14 @@ export interface DecomposeTaskOptions {
   onStream?: StreamCallback;
   workflowMeta?: RunAgentOptions['workflowMeta'];
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  inspectTools?: string[];
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
 }
+
+export type MorePartsOptions = Omit<DecomposeTaskOptions, 'inspectTools' | 'onPromptResolved'>;
 
 export interface MorePartsResponse {
   done: boolean;
@@ -42,7 +45,12 @@ export async function decomposeTask(
   maxTotalParts: number,
   options: DecomposeTaskOptions,
 ): Promise<PartDefinition[]> {
-  const response = await runAgent(options.persona, buildDecomposePrompt(instruction, maxTotalParts, options.language), {
+  const response = await runAgent(options.persona, buildDecomposePrompt(
+    instruction,
+    maxTotalParts,
+    options.language,
+    options.inspectTools,
+  ), {
     cwd: options.cwd,
     personaPath: options.personaPath,
     language: options.language,
@@ -50,7 +58,7 @@ export async function decomposeTask(
     provider: options.provider,
     resolvedModel: options.resolvedModel,
     resolvedProvider: options.resolvedProvider,
-    allowedTools: [],
+    allowedTools: options.inspectTools ?? [],
     permissionMode: 'readonly',
     ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
     outputSchema: loadDecompositionSchema(maxTotalParts),
@@ -78,7 +86,7 @@ export async function requestMoreParts(
   allResults: Array<{ id: string; title: string; status: string; content: string }>,
   existingIds: string[],
   maxAdditionalParts: number,
-  options: DecomposeTaskOptions,
+  options: MorePartsOptions,
 ): Promise<MorePartsResponse> {
   const prompt = buildMorePartsPrompt(
     originalInstruction,

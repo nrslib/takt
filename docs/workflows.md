@@ -237,6 +237,7 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
       max_concurrency: 2
       max_total_parts: 8
       timeout_ms: 600000
+      inspect_tools: [read, glob, grep]
       part_tags: [coding]
       part_persona: coder
       part_edit: true
@@ -252,6 +253,8 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
 Useful for breaking one large task into independent units that can run in parallel without you having to know the unit boundaries up-front.
 
 `max_concurrency` controls how many parts run at the same time. `max_total_parts` controls the total number of parts the leader may plan across the workflow step, up to 20. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`. `part_tags` sets provider routing tags on generated part steps. When omitted, parts inherit the parent step's `tags`. Empty and whitespace-only tags are invalid. `part_tags` is resolved through normal `provider_routing.tags`, so tag routing takes priority over persona routing from `part_persona`.
+
+`inspect_tools` allows only read-only inspection tools (`read`, `glob`, `grep`) during the parent Team Leader task decomposition phase. Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. Inspection tools are supported by providers that expose `allowedTools`, including Claude-family providers and OpenCode. Providers that do not support Team Leader inspection tools fail at runtime with a clear error.
 
 ### Workflow Call Step (subworkflow)
 

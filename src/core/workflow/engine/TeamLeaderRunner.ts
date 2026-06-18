@@ -28,6 +28,7 @@ import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { isPlanningBudgetError } from './team-leader-budget-errors.js';
+import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -103,6 +104,7 @@ export class TeamLeaderRunner {
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
+    const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
     let didEmitPhaseStart = false;
@@ -141,6 +143,8 @@ export class TeamLeaderRunner {
         provider: leaderProvider,
         resolvedModel: leaderModel,
         resolvedProvider: leaderProvider,
+        language: this.deps.engineOptions.language,
+        inspectTools,
         workflowMeta: leaderWorkflowMeta,
         childProcessEnv: this.deps.engineOptions.childProcessEnv,
         onStream: this.deps.engineOptions.onStream,
