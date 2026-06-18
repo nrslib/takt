@@ -161,7 +161,9 @@ describe('Nix flake contract', () => {
       && command.includes("-path '*/@anthropic-ai/claude-agent-sdk-*/claude'")
       && command.includes("codex_runtime=\"$(find result/lib/node_modules/takt/node_modules")
       && command.includes("-path '*/@openai/codex-*/vendor/*/bin/codex'")
+      && command.includes('test -n "$claude_runtime"')
       && command.includes('test -x "$claude_runtime"')
+      && command.includes('test -n "$codex_runtime"')
       && command.includes('test -x "$codex_runtime"')
     )).toBe(true);
     expect(runCommands).toContain('NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version');
