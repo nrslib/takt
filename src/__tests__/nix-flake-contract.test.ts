@@ -12,6 +12,8 @@ const requiredSystems = [
   'aarch64-darwin',
 ];
 const pinnedActionPattern = /^[^@\s]+\/[^@\s]+@[0-9a-f]{40}$/;
+const sdkProviderRuntimePathPattern =
+  /@anthropic-ai\/claude-agent-sdk-[^/'"\s]+\/claude|@openai\/codex-[^/'"\s]+\/vendor\/[^/'"\s]+\/bin\/codex/;
 
 function readRequiredFile(relativePath: string): string {
   const absolutePath = join(repositoryRoot, relativePath);
@@ -104,8 +106,7 @@ describe('Nix flake contract', () => {
   it('Given SDK dependencies that ship provider runtimes, When the package is built, Then those runtimes are preserved', () => {
     const flake = readRequiredFile('flake.nix');
 
-    expect(flake).not.toContain("@anthropic-ai/claude-agent-sdk-*/claude");
-    expect(flake).not.toContain("@openai/codex-*/vendor/*/bin/codex");
+    expect(flake).not.toMatch(sdkProviderRuntimePathPattern);
     expect(flake).not.toContain('-delete');
   });
 
@@ -145,10 +146,7 @@ describe('Nix flake contract', () => {
     )).toBe(true);
     expect(runCommands).toContain('nix flake check -L');
     expect(runCommands).toContain('nix build .#default -L');
-    expect(runCommands.some((command) =>
-      command.includes("@anthropic-ai/claude-agent-sdk-*/claude")
-      || command.includes("@openai/codex-*/vendor/*/bin/codex")
-    )).toBe(false);
+    expect(runCommands.some((command) => sdkProviderRuntimePathPattern.test(command))).toBe(false);
     expect(runCommands).toContain('NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version');
     expect(runCommands).toContain('NO_UPDATE_NOTIFIER=1 nix run .#default -- --version');
     expect(runCommands.some((command) =>
