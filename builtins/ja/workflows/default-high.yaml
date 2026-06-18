@@ -10,6 +10,8 @@ max_steps: 50
 initial_step: plan
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: planner
     knowledge: architecture
@@ -39,6 +41,8 @@ steps:
         - name: plan.md
           format: plan
   - name: write_tests
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -105,6 +109,8 @@ steps:
       - condition: ABORT
         next: ABORT
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: supervisor
     policy: review

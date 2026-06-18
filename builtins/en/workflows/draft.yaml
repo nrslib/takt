@@ -42,6 +42,8 @@ loop_monitors:
           next: COMPLETE
 steps:
   - name: implement
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -86,6 +88,8 @@ steps:
         - name: coder-decisions.md
           format: coder-decisions
   - name: ai-antipattern-review-1st
+    tags:
+      - review
     edit: false
     persona: ai-antipattern-reviewer
     policy:
@@ -104,6 +108,8 @@ steps:
         - name: ai-antipattern-review.md
           format: ai-antipattern-review
   - name: ai-antipattern-fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -125,6 +131,8 @@ steps:
         next: ai-antipattern-no-fix
     instruction: ai-antipattern-fix
   - name: ai-antipattern-no-fix
+    tags:
+      - review
     edit: false
     persona: architecture-reviewer
     policy: review

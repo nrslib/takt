@@ -35,8 +35,12 @@ loop_monitors:
           next: COMPLETE
 steps:
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -53,6 +57,8 @@ steps:
             - name: architect-review.md
               format: architecture-review
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         policy: review
@@ -68,6 +74,8 @@ steps:
             - name: security-review.md
               format: security-review
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         policy:
@@ -84,6 +92,8 @@ steps:
             - name: qa-review.md
               format: qa-review
       - name: testing-review
+        tags:
+          - review
         edit: false
         persona: testing-reviewer
         policy:
@@ -103,6 +113,8 @@ steps:
             - name: testing-review.md
               format: testing-review
       - name: pure-review
+        tags:
+          - review
         edit: false
         persona: pure-reviewer
         policy: review
@@ -117,6 +129,8 @@ steps:
             - name: pure-review.md
               format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
         policy:
@@ -134,6 +148,8 @@ steps:
             - name: coding-review.md
               format: coding-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -155,6 +171,8 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:

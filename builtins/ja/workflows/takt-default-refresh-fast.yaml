@@ -35,6 +35,8 @@ loop_monitors:
           next: supervise
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: planner
     knowledge: architecture
@@ -64,6 +66,8 @@ steps:
         - name: plan.md
           format: plan
   - name: write_tests
+    tags:
+      - coding
     edit: true
     persona: coder
     session: refresh
@@ -104,6 +108,8 @@ steps:
         - name: test-report.md
           format: test-report
   - name: implement
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -159,6 +165,8 @@ steps:
         - name: coder-decisions.md
           format: coder-decisions
   - name: ai-antipattern-review-1st
+    tags:
+      - review
     edit: false
     persona: ai-antipattern-reviewer
     session: refresh
@@ -184,6 +192,8 @@ steps:
         - name: ai-antipattern-review.md
           format: ai-antipattern-review
   - name: ai-antipattern-fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -215,6 +225,8 @@ steps:
         next: ai-antipattern-no-fix
     instruction: ai-antipattern-fix
   - name: ai-antipattern-no-fix
+    tags:
+      - review
     edit: false
     persona: architecture-reviewer
     policy: review
@@ -231,8 +243,12 @@ steps:
         next: reviewers
     instruction: arbitrate
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         session: refresh
@@ -258,6 +274,8 @@ steps:
             - name: architect-review.md
               format: architecture-review
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         session: refresh
@@ -281,6 +299,8 @@ steps:
             - name: security-review.md
               format: security-review
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         session: refresh
@@ -305,6 +325,8 @@ steps:
             - name: qa-review.md
               format: qa-review
       - name: testing-review
+        tags:
+          - review
         edit: false
         persona: testing-reviewer
         session: refresh
@@ -332,6 +354,8 @@ steps:
             - name: testing-review.md
               format: testing-review
       - name: pure-review
+        tags:
+          - review
         edit: false
         persona: pure-reviewer
         session: refresh
@@ -354,6 +378,8 @@ steps:
             - name: pure-review.md
               format: pure-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -381,6 +407,8 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     session: refresh
@@ -410,6 +438,8 @@ steps:
         next: plan
     instruction: fix
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: supervisor
     policy: review

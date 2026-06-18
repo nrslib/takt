@@ -35,6 +35,8 @@ loop_monitors:
           next: supervise
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: planner
     policy:
@@ -63,6 +65,8 @@ steps:
         - name: plan.md
           format: plan-frontend
   - name: write_tests
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -103,6 +107,8 @@ steps:
         - name: test-report.md
           format: test-report
   - name: implement
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -145,6 +151,8 @@ steps:
         - name: coder-decisions.md
           format: coder-decisions
   - name: ai-antipattern-review-1st
+    tags:
+      - review
     edit: false
     persona: ai-antipattern-reviewer
     policy:
@@ -169,6 +177,8 @@ steps:
         - name: ai-antipattern-review.md
           format: ai-antipattern-review
   - name: ai-antipattern-fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -202,6 +212,8 @@ steps:
       - condition: 修正を進行できない
         next: ai-antipattern-no-fix
   - name: ai-antipattern-no-fix
+    tags:
+      - review
     edit: false
     persona: architecture-reviewer
     policy: review
@@ -218,8 +230,12 @@ steps:
         next: reviewers_1
     instruction: arbitrate
   - name: reviewers_1
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -244,6 +260,8 @@ steps:
             - name: architect-review.md
               format: architecture-review
       - name: frontend-review
+        tags:
+          - review
         edit: false
         persona: frontend-reviewer
         policy:
@@ -269,6 +287,8 @@ steps:
             - name: frontend-review.md
               format: frontend-review
       - name: testing-review
+        tags:
+          - review
         edit: false
         persona: testing-reviewer
         policy:
@@ -294,6 +314,8 @@ steps:
             - name: testing-review.md
               format: testing-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -321,8 +343,12 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: reviewers_2
+    tags:
+      - review
     parallel:
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         policy: review
@@ -344,6 +370,8 @@ steps:
             - name: security-review.md
               format: security-review
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         policy:
@@ -366,6 +394,8 @@ steps:
             - name: qa-review.md
               format: qa-review
       - name: pure-review
+        tags:
+          - review
         edit: false
         persona: pure-reviewer
         policy: review
@@ -387,6 +417,8 @@ steps:
             - name: pure-review.md
               format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
         policy:
@@ -415,6 +447,8 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -446,6 +480,8 @@ steps:
         next: plan
     instruction: fix
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: dual-supervisor
     policy: review
@@ -472,6 +508,8 @@ steps:
           format: summary
           use_judge: false
   - name: fix_supervisor
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:

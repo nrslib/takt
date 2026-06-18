@@ -10,8 +10,12 @@ max_steps: 10
 initial_step: evaluate
 steps:
   - name: evaluate
+    tags:
+      - review
     parallel:
       - name: claude-eye
+        tags:
+          - review
         edit: false
         persona: coder
         provider: claude-sdk
@@ -53,6 +57,8 @@ steps:
                 - {action}
                 ```
       - name: codex-eye
+        tags:
+          - review
         edit: false
         persona: coder
         provider: codex
@@ -97,6 +103,8 @@ steps:
       - condition: any("done")
         next: synthesize
   - name: synthesize
+    tags:
+      - review
     edit: false
     persona: supervisor
     provider_options:

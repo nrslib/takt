@@ -29,6 +29,8 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     persona: test-planner
     policy: testing
     knowledge:
@@ -47,6 +49,8 @@ steps:
         next: ABORT
 
   - name: audit
+    tags:
+      - review
     edit: false
     persona: testing-reviewer
     policy:
@@ -69,6 +73,8 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: supervisor
     policy: review
@@ -83,6 +89,8 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     edit: false
     persona: testing-reviewer
     policy:

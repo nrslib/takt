@@ -23,6 +23,8 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     persona: planner
     knowledge:
       - backend
@@ -40,6 +42,8 @@ steps:
         next: ABORT
 
   - name: audit
+    tags:
+      - review
     persona: architecture-reviewer
     policy: review
     knowledge:
@@ -60,6 +64,8 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
     persona: supervisor
     policy: review
     knowledge:
@@ -75,6 +81,8 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     persona: architecture-reviewer
     policy: review
     knowledge:

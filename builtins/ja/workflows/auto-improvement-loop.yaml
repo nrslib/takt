@@ -51,6 +51,8 @@ steps:
         next: plan_fresh_improvement
 
   - name: plan_from_issue
+    tags:
+      - plan
     persona: supervisor
     knowledge:
       - architecture
@@ -136,6 +138,8 @@ steps:
         next: ABORT
 
   - name: plan_fresh_improvement
+    tags:
+      - plan
     persona: supervisor
     knowledge:
       - architecture
@@ -210,6 +214,8 @@ steps:
         next: ABORT
 
   - name: plan_from_existing_pr
+    tags:
+      - plan
     persona: supervisor
     knowledge:
       - architecture

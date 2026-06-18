@@ -10,6 +10,8 @@ max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: planner
     knowledge: terraform-aws
@@ -35,6 +37,8 @@ steps:
         - name: plan.md
           format: plan
   - name: implement
+    tags:
+      - coding
     edit: true
     persona: terraform-coder
     policy:
@@ -72,8 +76,12 @@ steps:
         - name: coder-decisions.md
           format: coder-decisions
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: tf_review
+        tags:
+          - review
         edit: false
         persona: terraform-reviewer
         policy:
@@ -98,6 +106,8 @@ steps:
             - name: terraform-review.md
               format: terraform-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -120,6 +130,8 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: pure-review
+        tags:
+          - review
         edit: false
         persona: pure-reviewer
         policy: review
@@ -141,6 +153,8 @@ steps:
             - name: pure-review.md
               format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
         policy:
@@ -169,6 +183,8 @@ steps:
       - condition: any("規約違反あり", "AI特有の問題あり", "needs_fix")
         next: supervise
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: supervisor
     policy: review
@@ -202,8 +218,12 @@ steps:
           format: summary
           use_judge: false
   - name: fix_both
+    tags:
+      - coding
     parallel:
       - name: ai-antipattern-fix-parallel
+        tags:
+          - coding
         edit: true
         persona: terraform-coder
         policy:
@@ -225,6 +245,8 @@ steps:
           - condition: 判断できない、情報不足
         instruction: ai-antipattern-fix
       - name: supervise_fix_parallel
+        tags:
+          - coding
         edit: true
         persona: terraform-coder
         policy:
@@ -250,6 +272,8 @@ steps:
       - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
         next: implement
   - name: ai-antipattern-fix
+    tags:
+      - coding
     edit: true
     persona: terraform-coder
     policy:
@@ -276,6 +300,8 @@ steps:
         next: implement
     instruction: ai-antipattern-fix
   - name: supervise_fix
+    tags:
+      - coding
     edit: true
     persona: terraform-coder
     policy:

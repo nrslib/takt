@@ -23,6 +23,8 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     persona: planner
     knowledge: architecture
     instruction: architecture-audit-plan
@@ -38,6 +40,8 @@ steps:
         next: ABORT
 
   - name: audit
+    tags:
+      - review
     persona: architecture-reviewer
     policy: review
     knowledge: architecture
@@ -56,6 +60,8 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
     persona: supervisor
     policy: review
     knowledge: architecture
@@ -69,6 +75,8 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     persona: architecture-reviewer
     policy: review
     knowledge: architecture

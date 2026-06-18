@@ -42,8 +42,12 @@ loop_monitors:
           next: COMPLETE
 steps:
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -60,6 +64,8 @@ steps:
             - name: architect-review.md
               format: architecture-review-finding-contract
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         policy: review
@@ -75,6 +81,8 @@ steps:
             - name: security-review.md
               format: security-review-finding-contract
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         policy:
@@ -91,6 +99,8 @@ steps:
             - name: qa-review.md
               format: qa-review-finding-contract
       - name: testing-review
+        tags:
+          - review
         edit: false
         persona: testing-reviewer
         policy:
@@ -110,6 +120,8 @@ steps:
             - name: testing-review.md
               format: testing-review-finding-contract
       - name: pure-review
+        tags:
+          - review
         edit: false
         persona: pure-reviewer
         policy: review
@@ -124,6 +136,8 @@ steps:
             - name: pure-review.md
               format: pure-review-finding-contract
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
         policy:
@@ -141,6 +155,8 @@ steps:
             - name: coding-review.md
               format: coding-review-finding-contract
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -168,6 +184,8 @@ steps:
       - condition: findings.conflicts.count > 0
         return: need_replan
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:

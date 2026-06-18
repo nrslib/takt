@@ -23,6 +23,8 @@ loop_monitors:
 
 steps:
   - name: plan
+    tags:
+      - plan
     persona: planner
     instruction: audit-security-plan
     edit: false
@@ -35,6 +37,8 @@ steps:
         next: audit
 
   - name: audit
+    tags:
+      - review
     persona: security-reviewer
     knowledge: security
     instruction: audit-security-team-leader
@@ -52,6 +56,8 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
     persona: supervisor
     knowledge: security
     instruction: audit-security-supervise
@@ -63,6 +69,8 @@ steps:
         next: review
 
   - name: review
+    tags:
+      - review
     persona: security-reviewer
     knowledge: security
     instruction: audit-security-review

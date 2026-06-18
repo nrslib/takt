@@ -17,6 +17,8 @@ max_steps: 10
 initial_step: plan
 steps:
   - name: plan
+    tags:
+      - plan
     persona: research-planner
     policy: research
     knowledge: research
@@ -27,6 +29,8 @@ steps:
       - condition: Insufficient information to create a plan
         next: ABORT
   - name: dig
+    tags:
+      - plan
     persona: research-digger
     policy: research
     knowledge: research
@@ -37,6 +41,8 @@ steps:
       - condition: Unable to conduct research
         next: ABORT
   - name: supervise
+    tags:
+      - review
     persona: research-supervisor
     policy: research
     knowledge: research

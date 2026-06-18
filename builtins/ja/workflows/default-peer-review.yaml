@@ -28,8 +28,12 @@ loop_monitors:
           next: ABORT
 steps:
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -51,6 +55,8 @@ steps:
             - name: architect-review.md
               format: architecture-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -73,6 +79,8 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: pure-review
+        tags:
+          - review
         edit: false
         persona: pure-reviewer
         policy: review
@@ -94,6 +102,8 @@ steps:
             - name: pure-review.md
               format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
         policy:
@@ -118,6 +128,8 @@ steps:
             - name: coding-review.md
               format: coding-review
       - name: supervise
+        tags:
+          - review
         edit: false
         persona: supervisor
         policy: review
@@ -147,6 +159,8 @@ steps:
       - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix", "要求未達成、テスト失敗、ビルドエラー")
         next: fix
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
