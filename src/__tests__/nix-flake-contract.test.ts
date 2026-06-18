@@ -103,6 +103,16 @@ describe('Nix flake contract', () => {
     expect(flake).not.toContain('tmux');
   });
 
+  it('Given SDK runtime path patterns, When matching package output paths, Then vendored runtimes are detected', () => {
+    expect(sdkProviderRuntimePathPattern.test(
+      'node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude'
+    )).toBe(true);
+    expect(sdkProviderRuntimePathPattern.test(
+      'node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex'
+    )).toBe(true);
+    expect(sdkProviderRuntimePathPattern.test('node_modules/@openai/codex/bin/codex.js')).toBe(false);
+  });
+
   it('Given SDK dependencies that ship provider runtimes, When the package is built, Then those runtimes are preserved', () => {
     const flake = readRequiredFile('flake.nix');
 
@@ -146,7 +156,14 @@ describe('Nix flake contract', () => {
     )).toBe(true);
     expect(runCommands).toContain('nix flake check -L');
     expect(runCommands).toContain('nix build .#default -L');
-    expect(runCommands.some((command) => sdkProviderRuntimePathPattern.test(command))).toBe(false);
+    expect(runCommands.some((command) =>
+      command.includes("claude_runtime=\"$(find result/lib/node_modules/takt/node_modules")
+      && command.includes("-path '*/@anthropic-ai/claude-agent-sdk-*/claude'")
+      && command.includes("codex_runtime=\"$(find result/lib/node_modules/takt/node_modules")
+      && command.includes("-path '*/@openai/codex-*/vendor/*/bin/codex'")
+      && command.includes('test -x "$claude_runtime"')
+      && command.includes('test -x "$codex_runtime"')
+    )).toBe(true);
     expect(runCommands).toContain('NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version');
     expect(runCommands).toContain('NO_UPDATE_NOTIFIER=1 nix run .#default -- --version');
     expect(runCommands.some((command) =>
