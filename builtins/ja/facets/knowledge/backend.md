@@ -258,6 +258,17 @@ class OrderExceptionHandler {
 | try-catch の空 catch | REJECT |
 | Controller 内で例外を握りつぶして 200 を返す | REJECT |
 
+### 例外変換のスコープ
+
+HTTPステータスへの例外変換は、HTTP adapter 境界の例外変換レイヤに分離する。グローバルな変換は認証・入力検証・共通エラー形状など真に横断的なものに限り、特定 API やリソース固有の変換は、その API スコープに閉じた境界で扱う。
+
+| 基準 | 判定 |
+|------|------|
+| 各 endpoint が同じ try-catch や wrapper で例外を HTTP 表現に変換している | REJECT。HTTP adapter 境界の例外変換レイヤに分離 |
+| 特定 API 固有の例外変換を global handler に追加する | スコープ過大。対象 API の境界へ閉じる |
+| 認証失敗、入力検証、共通エラー形状など全 API 共通の変換 | OK。global な境界で扱う |
+| 例外型から HTTP 表現への変換が application/domain 層にある | REJECT。HTTP adapter 境界で扱う |
+
 ## ドメインモデル設計
 
 ### イミュータブル + require

@@ -258,6 +258,17 @@ class OrderExceptionHandler {
 | Empty try-catch blocks | REJECT |
 | Controller swallowing exceptions and returning 200 | REJECT |
 
+### Exception Translation Scope
+
+Translate exceptions into HTTP status codes at an exception translation layer on the HTTP adapter boundary. Global translation should be limited to truly cross-cutting cases such as authentication, input validation, and common error shapes; API- or resource-specific mappings belong in a boundary scoped to that API.
+
+| Criteria | Judgment |
+|----------|----------|
+| Each endpoint maps exceptions to HTTP representation through the same try-catch or wrapper | REJECT. Move it to an exception translation layer at the HTTP adapter boundary |
+| API-specific exception mapping is added to a global handler | Scope is too broad. Keep it inside the target API boundary |
+| Authentication failures, input validation, and common error shapes shared by all APIs | OK. Handle at a global boundary |
+| HTTP representation mapping lives in the application or domain layer | REJECT. Keep it at the HTTP adapter boundary |
+
 ## Domain Model Design
 
 ### Immutable + require
