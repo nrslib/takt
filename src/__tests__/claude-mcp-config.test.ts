@@ -1,5 +1,7 @@
 import { access, readFile, rm, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { prepareClaudeMcpConfig } from '../infra/claude/mcp-config.js';
 
@@ -37,5 +39,37 @@ describe('prepareClaudeMcpConfig', () => {
 
     await prepared.cleanup();
     await expect(access(prepared.path!)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('Given TMPDIR points to a missing directory, When preparing MCP config, Then mkdtemp succeeds', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), 'takt-claude-mcp-parent-'));
+    const missingTmpDir = join(parentDir, 'missing-tmp');
+    tempDirs.push(parentDir);
+    process.env.TMPDIR = missingTmpDir;
+
+    try {
+      const prepared = await prepareClaudeMcpConfig({
+        docs: { type: 'stdio', command: 'docs-mcp' },
+      });
+      expect(prepared.path).toMatch(/mcp-config\.json$/);
+      expect(prepared.path?.startsWith(missingTmpDir)).toBe(true);
+
+      const content = JSON.parse(await readFile(prepared.path!, 'utf-8'));
+      expect(content).toEqual({
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+      });
+
+      await prepared.cleanup();
+      await expect(access(prepared.path!)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+    }
   });
 });

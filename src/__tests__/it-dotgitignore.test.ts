@@ -3,7 +3,7 @@
  *
  * Verifies that .takt/.gitignore patterns correctly track facet directories
  * (workflows, personas, policies, knowledge, instructions, output-contracts)
- * while ignoring runtime directories (tasks, logs, runs, completed).
+ * while ignoring runtime directories (tasks, logs, runs, completed, .runtime).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -96,7 +96,7 @@ describe('dotgitignore patterns', () => {
   });
 
   it('should ignore runtime directories', () => {
-    const runtimeDirs = ['tasks', 'completed', 'logs', 'runs'];
+    const runtimeDirs = ['tasks', 'completed', 'logs', 'runs', '.runtime'];
     for (const dir of runtimeDirs) {
       mkdirSync(join(testDir, '.takt', dir), { recursive: true });
       writeFileSync(join(testDir, '.takt', dir, 'data.json'), '{}');
@@ -109,5 +109,21 @@ describe('dotgitignore patterns', () => {
       const runtimeFiles = tracked.filter(f => f.startsWith(`.takt/${dir}/`));
       expect(runtimeFiles).toEqual([]);
     }
+  });
+
+  it('Given runtime artifacts exist under .takt, When git status is checked, Then runtime and runs are ignored', () => {
+    mkdirSync(join(testDir, '.takt', '.runtime', 'tmp'), { recursive: true });
+    mkdirSync(join(testDir, '.takt', 'runs', 'test-run', 'reports'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', '.runtime', 'tmp', 'cache.txt'), 'cache');
+    writeFileSync(join(testDir, '.takt', 'runs', 'test-run', 'reports', 'test-report.md'), '# Report');
+
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+      cwd: testDir,
+      encoding: 'utf-8',
+    });
+
+    expect(status).toContain('.takt/.gitignore');
+    expect(status).not.toContain('.takt/.runtime/');
+    expect(status).not.toContain('.takt/runs/');
   });
 });

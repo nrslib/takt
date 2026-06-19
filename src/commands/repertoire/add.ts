@@ -8,7 +8,6 @@
 
 import { mkdirSync, mkdtempSync, copyFileSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { stringify as stringifyYaml } from 'yaml';
@@ -45,7 +44,7 @@ import {
 import { getScopedProviderOptionsCandidateKey } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { info, success } from '../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, ensureCurrentTmpDirExists, getErrorMessage } from '../../shared/utils/index.js';
 
 const require = createRequire(import.meta.url);
 const { version: TAKT_VERSION } = require('../../../package.json') as { version: string };
@@ -81,7 +80,7 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
 
   const ref = resolveRef(specRef, owner, repo, execGh);
 
-  const tmpBase = mkdtempSync(join(tmpdir(), 'takt-import-'));
+  const tmpBase = mkdtempSync(join(ensureCurrentTmpDirExists(), 'takt-import-'));
   const tmpTarPath = join(tmpBase, 'archive.tar.gz');
   const tmpExtractDir = join(tmpBase, 'extract');
   const tmpIncludeFile = join(tmpBase, 'include.txt');
