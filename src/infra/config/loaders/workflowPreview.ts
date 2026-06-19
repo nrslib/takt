@@ -7,6 +7,7 @@ import {
   resolveAllowedToolsForProvider,
   resolveInspectToolsForProvider,
 } from '../../../core/workflow/engine/engine-provider-options.js';
+import { createTeamLeaderPlanningStep } from '../../../core/workflow/engine/team-leader-common.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
 import { resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
@@ -68,6 +69,14 @@ function readStepPersona(step: WorkflowStep, projectCwd: string): string {
     log.debug('Failed to read persona file', { path: step.personaPath, error: getErrorMessage(error) });
     return '';
   }
+}
+
+function resolvePreviewStep(step: WorkflowStep): WorkflowStep {
+  return step.teamLeader ? createTeamLeaderPlanningStep(step) : step;
+}
+
+function resolvePreviewCanEdit(step: WorkflowStep): boolean {
+  return !step.teamLeader && step.edit === true;
 }
 
 function resolvePreviewProviderResolution(projectCwd: string): PreviewProviderResolution {
@@ -150,13 +159,14 @@ function buildStepPreviews(
     visited.add(currentName);
     const step = stepMap.get(currentName);
     if (!step) break;
+    const previewStep = resolvePreviewStep(step);
     previews.push({
       name: step.name,
-      personaDisplayName: step.personaDisplayName,
-      personaContent: readStepPersona(step, projectCwd),
-      instructionContent: step.instruction,
-      allowedTools: resolvePreviewAllowedTools(step, resolution),
-      canEdit: step.edit === true,
+      personaDisplayName: previewStep.personaDisplayName,
+      personaContent: readStepPersona(previewStep, projectCwd),
+      instructionContent: previewStep.instruction,
+      allowedTools: resolvePreviewAllowedTools(previewStep, resolution),
+      canEdit: resolvePreviewCanEdit(previewStep),
     });
     currentName = step.rules?.[0]?.next;
   }
@@ -171,10 +181,11 @@ function buildFirstStepInfo(
 ): FirstStepInfo | undefined {
   const step = workflow.steps.find((candidate) => candidate.name === workflow.initialStep);
   if (!step) return undefined;
+  const previewStep = resolvePreviewStep(step);
   return {
-    personaContent: readStepPersona(step, projectCwd),
-    personaDisplayName: step.personaDisplayName,
-    allowedTools: resolvePreviewAllowedTools(step, resolution),
+    personaContent: readStepPersona(previewStep, projectCwd),
+    personaDisplayName: previewStep.personaDisplayName,
+    allowedTools: resolvePreviewAllowedTools(previewStep, resolution),
   };
 }
 

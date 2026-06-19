@@ -61,3 +61,17 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     passPreviousResponse: false,
   };
 }
+
+export function createTeamLeaderPlanningStep(step: WorkflowStep): WorkflowStep {
+  if (!step.teamLeader) {
+    throw new Error(`Step "${step.name}" has no teamLeader configuration`);
+  }
+
+  return {
+    ...step,
+    persona: step.teamLeader.persona ?? step.persona,
+    personaPath: step.teamLeader.personaPath ?? step.personaPath,
+    personaDisplayName: step.teamLeader.personaDisplayName ?? step.personaDisplayName,
+    providerRoutingPersonaKey: step.teamLeader.providerRoutingPersonaKey ?? step.providerRoutingPersonaKey,
+  };
+}

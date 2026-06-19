@@ -664,7 +664,8 @@ describe('PromptBasedStructuredCaller', () => {
       {
         cwd: '/tmp/project',
         provider: 'cursor',
-      },
+        inspectTools: ['Read', 'Glob', 'Grep'],
+      } as Parameters<PromptBasedStructuredCaller['requestMoreParts']>[4] & { inspectTools: string[] },
     );
 
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];

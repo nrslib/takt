@@ -28,6 +28,10 @@ export interface TeamLeaderConfig {
   persona?: string;
   /** Resolved absolute path for team leader persona */
   personaPath?: string;
+  /** Display name used for team leader persona provider resolution */
+  personaDisplayName?: string;
+  /** Raw persona key used for team leader provider_routing.personas lookup */
+  providerRoutingPersonaKey?: string;
   /** Maximum number of parts to run in parallel */
   maxConcurrency: number;
   maxTotalParts: number;

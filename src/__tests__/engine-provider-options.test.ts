@@ -279,6 +279,11 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(result).toEqual(['read', 'glob', 'grep']);
   });
 
+  it('Given an unsafe inspect tool and OpenCode provider, When resolving tools, Then it fails before provider-specific mapping', () => {
+    expect(() => resolveInspectToolsForProvider(['bash'], 'opencode'))
+      .toThrow('Unsupported team_leader.inspect_tools value "bash"');
+  });
+
   it('Given inspect tools and Claude-compatible provider, When resolving tools, Then it returns Claude tool names', () => {
     const result = resolveInspectToolsForProvider(['read', 'glob', 'grep'], 'claude');
 

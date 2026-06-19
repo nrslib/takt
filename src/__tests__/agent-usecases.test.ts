@@ -572,7 +572,8 @@ describe('agent-usecases', () => {
       {
         cwd: '/repo',
         persona: 'team-leader',
-      },
+        inspectTools: ['Read', 'Glob', 'Grep'],
+      } as Parameters<typeof requestMoreParts>[4] & { inspectTools: string[] },
     );
 
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({

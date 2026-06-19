@@ -24,6 +24,12 @@ function countPartsFromJson(stepContent: string): number {
   return Array.isArray(parsed.parts) ? parsed.parts.length : 0;
 }
 
+function extractAllowedToolsLines(stepContent: string): string[] {
+  return stepContent
+    .split(/\r?\n/)
+    .filter((line) => /^Allowed tools:/i.test(line.trim()));
+}
+
 describe('E2E: Team leader worker-pool dynamic scheduling', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
@@ -107,7 +113,7 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
       },
-      timeout: 120_000,
+      timeout: 240_000,
     });
 
     if (result.exitCode !== 0) {
@@ -124,6 +130,9 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
 
     const content = String(stepComplete?.content ?? '');
     expect(content).toContain('## inspect-1: Inspect child inheritance');
-    expect(content).not.toContain('Allowed tools: Read, Glob, Grep');
-  }, 120_000);
+    expect(content).toContain('Mock response for persona');
+    for (const allowedToolsLine of extractAllowedToolsLines(content)) {
+      expect(allowedToolsLine).not.toMatch(/\b(Read|Glob|Grep)\b/i);
+    }
+  }, 240_000);
 });

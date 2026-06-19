@@ -13,6 +13,7 @@
     }
   },
   {
+    "persona": "test-team-leader-inspect",
     "status": "done",
     "content": "no more parts",
     "structured_output": {

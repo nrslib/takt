@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { WorkflowStepRawSchema } from '../core/models/schemas.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
@@ -268,6 +270,8 @@ describe('normalizeWorkflowConfig team_leader', () => {
     expect(step!.teamLeader).toEqual({
       persona: 'team-leader',
       personaPath: undefined,
+      personaDisplayName: 'team-leader',
+      providerRoutingPersonaKey: 'team-leader',
       maxConcurrency: 2,
       maxTotalParts: 5,
       refillThreshold: 0,
@@ -280,6 +284,35 @@ describe('normalizeWorkflowConfig team_leader', () => {
       partEdit: true,
       partPermissionMode: 'edit',
     });
+  });
+
+  it('Given direct path team_leader.persona, When normalizing workflow config, Then provider routing key keeps the raw persona path', () => {
+    const workflowDir = mkdtempSync(join(tmpdir(), 'takt-test-team-leader-persona-'));
+    try {
+      mkdirSync(join(workflowDir, 'agents'), { recursive: true });
+      writeFileSync(join(workflowDir, 'agents', 'lead.md'), 'You are the planning lead.', 'utf-8');
+      const raw = {
+        name: 'workflow',
+        steps: [
+          {
+            name: 'implement',
+            team_leader: {
+              persona: './agents/lead.md',
+              inspect_tools: ['read'],
+            },
+            instruction: 'decompose',
+          },
+        ],
+      };
+
+      const config = normalizeWorkflowConfig(raw, workflowDir);
+      const step = config.steps[0];
+
+      expect(step?.teamLeader?.providerRoutingPersonaKey).toBe('./agents/lead.md');
+      expect(step?.teamLeader?.personaDisplayName).toBe('lead');
+    } finally {
+      rmSync(workflowDir, { recursive: true, force: true });
+    }
   });
 
   it('旧名 max_parts を maxConcurrency として正規化する', () => {
@@ -303,6 +336,8 @@ describe('normalizeWorkflowConfig team_leader', () => {
     expect(step!.teamLeader).toEqual({
       persona: undefined,
       personaPath: undefined,
+      personaDisplayName: undefined,
+      providerRoutingPersonaKey: undefined,
       maxConcurrency: 2,
       maxTotalParts: 20,
       refillThreshold: 0,

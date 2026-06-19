@@ -391,6 +391,7 @@ steps:
     persona: lead
     persona_name: Team Lead
     instruction: "Split the task"
+    edit: true
     provider_options:
       claude:
         allowed_tools:
@@ -414,7 +415,94 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
     expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.firstStep?.personaDisplayName).toBe('Team Lead');
+    expect(result.firstStep?.personaContent).toBe('lead');
     expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.personaDisplayName).toBe('Team Lead');
+    expect(result.stepPreviews[0]?.personaContent).toBe('lead');
+    expect(result.stepPreviews[0]?.canEdit).toBe(false);
+  });
+
+  it('should resolve team leader preview inspect tools with team_leader persona override', () => {
+    writeProjectConfig(tempDir, `provider: opencode
+persona_providers:
+  implementer:
+    provider: opencode
+    model: opencode/test-model
+  lead:
+    provider: claude
+`);
+
+    const workflowYaml = `name: preview-team-leader-persona-override
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: implementer
+    instruction: "Split the task"
+    team_leader:
+      persona: lead
+      max_concurrency: 2
+      inspect_tools:
+        - read
+        - glob
+        - grep
+      part_allowed_tools:
+        - read
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-persona-override.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.firstStep?.personaDisplayName).toBe('lead');
+    expect(result.firstStep?.personaContent).toBe('lead');
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.personaDisplayName).toBe('lead');
+    expect(result.stepPreviews[0]?.personaContent).toBe('lead');
+  });
+
+  it('should resolve team leader preview inspect tools with direct path team_leader persona routing', () => {
+    mkdirSync(join(tempDir, 'agents'), { recursive: true });
+    writeFileSync(join(tempDir, 'agents', 'lead.md'), 'You are the direct path lead.', 'utf-8');
+    writeProjectConfig(tempDir, `provider: opencode
+provider_routing:
+  personas:
+    "./agents/lead.md":
+      provider: claude
+`);
+
+    const workflowYaml = `name: preview-team-leader-direct-path-persona-routing
+initial_step: implement
+max_steps: 1
+
+steps:
+  - name: implement
+    persona: implementer
+    instruction: "Split the task"
+    team_leader:
+      persona: ./agents/lead.md
+      max_concurrency: 2
+      inspect_tools:
+        - read
+        - glob
+        - grep
+`;
+
+    const workflowPath = join(tempDir, 'preview-team-leader-direct-path-persona-routing.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.firstStep?.personaDisplayName).toBe('lead');
+    expect(result.firstStep?.personaContent).toBe('You are the direct path lead.');
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(result.stepPreviews[0]?.personaDisplayName).toBe('lead');
+    expect(result.stepPreviews[0]?.personaContent).toBe('You are the direct path lead.');
   });
 
   it('should keep team leader preview tools empty when inspect_tools is unset', () => {

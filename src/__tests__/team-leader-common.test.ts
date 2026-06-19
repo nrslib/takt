@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
-import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
+import { createPartStep, createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
 
 describe('createPartStep', () => {
   it('Given teamLeader.partTags, When creating a part step, Then part tags replace parent tags', () => {
@@ -132,5 +132,35 @@ describe('createPartStep', () => {
     expect(partStep.persona).toBe('coder');
     expect(partStep.personaDisplayName).toBe('coder');
     expect(partStep.allowGitCommit).toBe(true);
+  });
+});
+
+describe('createTeamLeaderPlanningStep', () => {
+  it('uses team leader persona identity for provider resolution', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      providerRoutingPersonaKey: 'coder',
+      instruction: 'do work',
+      passPreviousResponse: false,
+      teamLeader: {
+        persona: 'lead',
+        personaDisplayName: 'lead',
+        providerRoutingPersonaKey: 'lead',
+        maxConcurrency: 3,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 900000,
+      },
+    };
+
+    const planningStep = createTeamLeaderPlanningStep(step);
+
+    expect(planningStep).toEqual(expect.objectContaining({
+      persona: 'lead',
+      personaDisplayName: 'lead',
+      providerRoutingPersonaKey: 'lead',
+    }));
   });
 });

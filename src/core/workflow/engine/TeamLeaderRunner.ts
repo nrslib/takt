@@ -12,7 +12,7 @@ import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runTeamLeaderExecution } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
-import { resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import { createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
   collectUncoveredPartTimeoutIds,
@@ -84,11 +84,7 @@ export class TeamLeaderRunner {
     const parentIteration = state.iteration;
 
     const stepIteration = incrementStepIteration(state, step.name);
-    const leaderStep: WorkflowStep = {
-      ...step,
-      persona: teamLeaderConfig.persona ?? step.persona,
-      personaPath: teamLeaderConfig.personaPath ?? step.personaPath,
-    };
+    const leaderStep = createTeamLeaderPlanningStep(step);
     const leaderProviderInfo = runtime
       ? this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime)
       : this.deps.optionsBuilder.resolveStepProviderModel(leaderStep);
