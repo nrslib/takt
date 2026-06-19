@@ -137,7 +137,7 @@ describe('dependency versions', () => {
     }
   });
 
-  it('declares Node support compatible with OpenTelemetry dependency engines', () => {
+  it('declares Node support compatible with runtime dependency engines', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();
     const dependencies = packageJson.dependencies;
@@ -149,21 +149,10 @@ describe('dependency versions', () => {
       throw new Error('package.json engines.node is required');
     }
 
-    expect(rootNodeRange).toBe('>=18.19.0');
+    expect(rootNodeRange).toBe('>=20.6.0');
 
     const rootMinimum = getMinimumNodeVersion(rootNodeRange);
-    const otelDependencies = [
-      '@opentelemetry/api',
-      '@opentelemetry/exporter-metrics-otlp-http',
-      '@opentelemetry/exporter-trace-otlp-http',
-      '@opentelemetry/sdk-metrics',
-      '@opentelemetry/sdk-node',
-      '@opentelemetry/sdk-trace-base',
-    ] as const;
-    const incompatibleDependencies = otelDependencies.flatMap((dependencyName) => {
-      if (!dependencies[dependencyName]) {
-        throw new Error(`${dependencyName} is missing from package.json dependencies`);
-      }
+    const incompatibleDependencies = Object.keys(dependencies).sort().flatMap((dependencyName) => {
       const lockedPackage = getLockedPackage(packageLock, `node_modules/${dependencyName}`);
       const dependencyNodeRange = lockedPackage.engines?.node;
       if (!dependencyNodeRange) {
@@ -181,10 +170,10 @@ describe('dependency versions', () => {
     expect(incompatibleDependencies).toEqual([]);
   });
 
-  it('locks yaml to the patched 2.8.3 release', () => {
+  it('locks yaml to the patched 2.9.0 release', () => {
     const packageLock = readPackageLock();
 
-    expect(packageLock.packages?.['node_modules/yaml']?.version).toBe('2.8.3');
+    expect(packageLock.packages?.['node_modules/yaml']?.version).toBe('2.9.0');
   });
 
   it('locks runtime transitive dependencies to patched security releases', () => {
