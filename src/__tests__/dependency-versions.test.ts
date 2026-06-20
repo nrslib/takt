@@ -173,8 +173,10 @@ describe('dependency versions', () => {
   });
 
   it('locks yaml to the patched 2.9.0 release', () => {
+    const packageJson = readPackageJson();
     const packageLock = readPackageLock();
 
+    expect(packageJson.dependencies?.yaml).toBe('^2.9.0');
     expect(packageLock.packages?.['node_modules/yaml']?.version).toBe('2.9.0');
   });
 
@@ -190,7 +192,7 @@ describe('dependency versions', () => {
     expect(getLockedPackage(packageLock, 'node_modules/qs').version).toBe('6.15.2');
   });
 
-  it('locks test runner transitive dependencies to Node 18 compatible patched security releases', () => {
+  it('locks test runner transitive dependencies to patched security releases', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();
 
