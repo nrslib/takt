@@ -112,6 +112,15 @@ Optional:
 npm install -g takt
 ```
 
+With Nix flakes:
+
+```bash
+nix run github:nrslib/takt
+nix profile install github:nrslib/takt
+```
+
+The Nix package installs the TAKT CLI itself. External CLI providers, `git`, and `gh`/`glab` still need to be installed and available on `PATH` or configured separately as described in [Requirements](#requirements).
+
 ### Talk to AI and queue tasks
 
 ```

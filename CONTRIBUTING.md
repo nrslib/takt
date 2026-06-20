@@ -15,6 +15,12 @@ npm test
 npm run lint
 ```
 
+If you use Nix flakes, `nix develop` opens a shell with the project Node.js runtime and Bun available:
+
+```bash
+nix develop
+```
+
 ## How to Contribute
 
 1. **Open an issue** to discuss the change before starting work
