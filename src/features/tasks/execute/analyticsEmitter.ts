@@ -7,21 +7,29 @@
 
 import { readFileSync } from 'node:fs';
 import {
+  createLogger,
+  getErrorMessage,
+} from '../../../shared/utils/index.js';
+import {
   writeAnalyticsEvent,
   parseFindingsFromReport,
+  buildReviewFindingEventsFromLedger,
   extractDecisionFromReport,
   inferSeverity,
   emitFixActionEvents,
   emitRebuttalEvents,
 } from '../../analytics/index.js';
 import type { StepResultEvent, ReviewFindingEvent } from '../../analytics/index.js';
-import type { WorkflowStep, AgentResponse } from '../../../core/models/index.js';
+import type { WorkflowStep, AgentResponse, FindingLedger } from '../../../core/models/index.js';
+
+const log = createLogger('analytics-emitter');
 
 export class AnalyticsEmitter {
   private readonly runSlug: string;
   private currentIteration = 0;
   private currentProvider: string;
   private currentModel: string;
+  private readonly findingContractFindingIds = new Set<string>();
 
   constructor(runSlug: string, initialProvider: string, initialModel: string) {
     this.runSlug = runSlug;
@@ -34,6 +42,13 @@ export class AnalyticsEmitter {
     this.currentIteration = iteration;
     this.currentProvider = provider;
     this.currentModel = model;
+  }
+
+  seedFindingContractFindingIds(findingIds: readonly string[]): void {
+    this.findingContractFindingIds.clear();
+    for (const findingId of findingIds) {
+      this.findingContractFindingIds.add(findingId);
+    }
   }
 
   /** step:complete 時に StepResultEvent と FixAction/Rebuttal を発行する */
@@ -55,11 +70,23 @@ export class AnalyticsEmitter {
     writeAnalyticsEvent(stepResultEvent);
 
     if (step.edit === true && step.name.includes('fix')) {
-      emitFixActionEvents(response.content, this.currentIteration, this.runSlug, response.timestamp);
+      emitFixActionEvents(
+        response.content,
+        this.currentIteration,
+        this.runSlug,
+        response.timestamp,
+        this.findingContractFindingIds,
+      );
     }
 
     if (step.name.includes('no_fix')) {
-      emitRebuttalEvents(response.content, this.currentIteration, this.runSlug, response.timestamp);
+      emitRebuttalEvents(
+        response.content,
+        this.currentIteration,
+        this.runSlug,
+        response.timestamp,
+        this.findingContractFindingIds,
+      );
     }
   }
 
@@ -87,6 +114,29 @@ export class AnalyticsEmitter {
         timestamp: new Date().toISOString(),
       };
       writeAnalyticsEvent(event);
+    }
+  }
+
+  onFindingLedgerUpdated(ledger: FindingLedger): void {
+    try {
+      this.findingContractFindingIds.clear();
+      for (const finding of ledger.findings) {
+        this.findingContractFindingIds.add(finding.id);
+      }
+      const events = buildReviewFindingEventsFromLedger(
+        ledger,
+        this.currentIteration,
+        this.runSlug,
+        new Date(ledger.updatedAt),
+      );
+      for (const event of events) {
+        writeAnalyticsEvent(event);
+      }
+    } catch (error) {
+      log.warn('Failed to emit finding ledger analytics events', {
+        error: getErrorMessage(error),
+        workflowName: ledger.workflowName,
+      });
     }
   }
 }

@@ -2,9 +2,10 @@
  * Shared rule utility functions used by both engine.ts and instruction-builder.ts.
  */
 
-import type { WorkflowStep, OutputContractEntry } from '../../models/types.js';
+import type { WorkflowStep, WorkflowRule, OutputContractEntry } from '../../models/types.js';
+import { isEscapedQuote } from '../../models/workflow-condition-expression.js';
 
-const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
+const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect|findings)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
 
 export function isDeterministicCondition(condition: string): boolean {
   return DETERMINISTIC_CONDITION_PATTERN.test(condition.trim());
@@ -12,6 +13,45 @@ export function isDeterministicCondition(condition: string): boolean {
 
 export function isDeferredDeterministicCondition(condition: string): boolean {
   return condition.trim() === 'true';
+}
+
+function isReferenceBoundary(char: string | undefined): boolean {
+  return char === undefined || !/[A-Za-z0-9_.]/.test(char);
+}
+
+export function hasUnquotedFindingsReference(condition: string): boolean {
+  let inString = false;
+
+  for (let index = 0; index < condition.length; index++) {
+    if (condition[index] === '"') {
+      if (!isEscapedQuote(condition, index)) {
+        inString = !inString;
+      }
+      continue;
+    }
+    if (inString || !condition.startsWith('findings.', index)) {
+      continue;
+    }
+    if (isReferenceBoundary(condition[index - 1])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function isFindingsCondition(condition: string): boolean {
+  return isDeterministicCondition(condition) && hasUnquotedFindingsReference(condition);
+}
+
+export function isNonAiReturnValueRule(rule: WorkflowRule, returnValue: string): boolean {
+  return rule.isAiCondition !== true && rule.returnValue === returnValue;
+}
+
+export function isInvalidManagerOutputRule(rule: WorkflowRule): boolean {
+  return isNonAiReturnValueRule(rule, 'need_replan')
+    || isNonAiReturnValueRule(rule, 'needs_fix')
+    || (rule.isAiCondition !== true && rule.next === 'fix');
 }
 
 /**

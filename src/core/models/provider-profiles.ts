@@ -4,6 +4,8 @@
 
 import type { PermissionMode } from './status.js';
 
+export const DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE: PermissionMode = 'edit';
+
 /** Supported providers for profile-based permission resolution. */
 export type ProviderProfileName =
   | 'claude'
@@ -13,6 +15,7 @@ export type ProviderProfileName =
   | 'opencode'
   | 'cursor'
   | 'copilot'
+  | 'kiro'
   | 'mock';
 
 /** Permission profile for a single provider. */

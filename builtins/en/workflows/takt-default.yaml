@@ -1,5 +1,5 @@
 name: takt-default
-description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (5 parallel reviewers + fix) -> supervise -> COMPLETE).
+description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (parallel reviewers + fix) -> supervise -> COMPLETE).
 workflow_config:
   provider_options:
     codex:
@@ -10,18 +10,13 @@ max_steps: 50
 initial_step: plan
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: planner
     knowledge: architecture
     provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+      extends: review-readonly
     rules:
       - condition: Requirements are clear and implementable
         next: write_tests
@@ -39,6 +34,8 @@ steps:
         - name: plan.md
           format: plan
   - name: write_tests
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -50,16 +47,7 @@ steps:
       - unit-testing
       - e2e-testing
     provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
+      extends: edit
     required_permission_mode: edit
     instruction: write-tests-first
     rules:
@@ -98,19 +86,14 @@ steps:
       - condition: ABORT
         next: ABORT
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: supervisor
     policy: review
     knowledge: architecture
     provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+      extends: review-readonly
     pass_previous_response: false
     rules:
       - condition: All clear

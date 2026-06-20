@@ -15,6 +15,9 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
+import type { ProviderImageAttachment } from '../../infra/providers/types.js';
+import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
+import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
 
 const log = createLogger('ai-caller');
 
@@ -35,6 +38,10 @@ export interface SessionContext {
   sessionId: string | undefined;
 }
 
+interface CallAIWithRetryOptions {
+  imageAttachments?: ProviderImageAttachment[];
+}
+
 /**
  * Call AI with automatic retry on stale/invalid session.
  *
@@ -47,6 +54,7 @@ export async function callAIWithRetry(
   allowedTools: string[],
   cwd: string,
   ctx: SessionContext,
+  options: CallAIWithRetryOptions = {},
 ): Promise<{ result: CallAIResult | null; sessionId: string | undefined }> {
   const display = new StreamDisplay('assistant', isQuietMode());
   const abortController = new AbortController();
@@ -67,14 +75,24 @@ export async function callAIWithRetry(
   let { sessionId } = ctx;
 
   try {
-    const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt });
-    const response = await agent.call(prompt, {
+    const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
+      systemPrompt,
+      ctx.lang,
+      ctx.provider.getRuntimeInstructions(),
+    );
+    const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
+    const promptForProvider = expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
+    const nativeImageAttachments = ctx.provider.supportsNativeImageInput
+      ? options.imageAttachments
+      : undefined;
+    const response = await agent.call(promptForProvider, {
       cwd,
       model: ctx.model,
       sessionId,
       allowedTools,
       abortSignal: abortController.signal,
       onStream: display.createHandler(),
+      imageAttachments: nativeImageAttachments,
     });
     display.flush();
     const success = response.status !== 'blocked' && response.status !== 'error';
@@ -83,14 +101,15 @@ export async function callAIWithRetry(
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
       const retryDisplay = new StreamDisplay('assistant', isQuietMode());
-      const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt });
-      const retry = await retryAgent.call(prompt, {
+      const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
+      const retry = await retryAgent.call(promptForProvider, {
         cwd,
         model: ctx.model,
         sessionId: undefined,
         allowedTools,
         abortSignal: abortController.signal,
         onStream: retryDisplay.createHandler(),
+        imageAttachments: nativeImageAttachments,
       });
       retryDisplay.flush();
       if (retry.sessionId) {

@@ -11,6 +11,7 @@ import {
   hasOnlyOneBranch,
   getAutoSelectedTag,
   getReportFiles,
+  hasUnquotedFindingsReference,
   isDeterministicCondition,
 } from '../core/workflow/evaluation/rule-utils.js';
 import type { OutputContractEntry } from '../core/models/types.js';
@@ -84,6 +85,16 @@ describe('isDeterministicCondition', () => {
 
   it('should return false for plain tag conditions', () => {
     expect(isDeterministicCondition('approved')).toBe(false);
+  });
+});
+
+describe('hasUnquotedFindingsReference', () => {
+  it('ignores findings references inside escaped quoted strings', () => {
+    expect(hasUnquotedFindingsReference(String.raw`structured.message == "ignore \"findings.open.count\" here"`)).toBe(false);
+  });
+
+  it('detects findings references after a closed quoted string', () => {
+    expect(hasUnquotedFindingsReference(String.raw`structured.message == "path \\" && findings.open.count == 0`)).toBe(true);
   });
 });
 

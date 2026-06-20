@@ -1,6 +1,7 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
 import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
+import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
@@ -52,6 +53,7 @@ interface WorkflowExecutionEventBridgeDeps {
   ndjsonLogPath: string;
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
+  traceDiscovery?: WorkflowTraceDiscovery;
   writeTraceReportOnce: ReturnType<typeof import('./traceReportWriter.js').createTraceReportWriter>;
   getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined;
   initialResumePoint: WorkflowExecutionOptions['resumePoint'];
@@ -105,6 +107,11 @@ function emitProviderOptionLines(
     if (effort !== undefined) {
       out.info(`Effort: ${effort}${sourceSuffix('copilot.effort', sources, showSource)}`);
     }
+  } else if (stepProvider === 'kiro') {
+    const agent = options.kiro?.agent;
+    if (agent !== undefined) {
+      out.info(`Agent: ${agent}${sourceSuffix('kiro.agent', sources, showSource)}`);
+    }
   }
 }
 
@@ -112,6 +119,7 @@ export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
   const canReadResumePoint = (): boolean => typeof deps.engine.getResumePoint === 'function';
+  const canReadEngineState = (): boolean => typeof deps.engine.getState === 'function';
   const getResumePoint = (): WorkflowExecutionOptions['resumePoint'] => {
     if (!canReadResumePoint()) {
       return undefined;
@@ -131,6 +139,12 @@ export function bindWorkflowExecutionEvents(
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateResumePoint(state.lastResumePoint);
   };
+  const initialFindingsState = canReadEngineState() ? deps.engine.getState().findings : undefined;
+  deps.analyticsEmitter.seedFindingContractFindingIds(
+    initialFindingsState !== undefined
+      ? initialFindingsState.open.items.map((finding) => finding.id)
+      : [],
+  );
 
   deps.engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
     deps.runMetaManager.updatePhase(step.name, iteration, phase);
@@ -272,6 +286,10 @@ export function bindWorkflowExecutionEvents(
     deps.analyticsEmitter.onStepReport(_step, filePath);
   });
 
+  deps.engine.on('findings:ledger', (ledger) => {
+    deps.analyticsEmitter.onFindingLedgerUpdated(ledger);
+  });
+
   deps.engine.on('workflow:complete', (workflowState) => {
     syncLatestResumePoint();
     state.sessionLog = finalizeWorkflowSuccess(
@@ -296,6 +314,7 @@ export function bindWorkflowExecutionEvents(
       workflowState.iteration,
       deps.ndjsonLogPath,
       deps.shouldNotifyWorkflowComplete,
+      deps.traceDiscovery,
     );
   });
 
@@ -332,6 +351,7 @@ export function bindWorkflowExecutionEvents(
       reason,
       deps.ndjsonLogPath,
       deps.shouldNotifyWorkflowAbort,
+      deps.traceDiscovery,
     );
   });
 

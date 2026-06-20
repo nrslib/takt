@@ -1,0 +1,40 @@
+name: Nix
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  flake:
+    name: Build and test Nix flake
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3
+      - run: nix flake check -L
+      - run: nix build .#default -L
+      - run: |
+          claude_runtime="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@anthropic-ai/claude-agent-sdk-*/claude' -print -quit)"
+          codex_runtime="$(find result/lib/node_modules/takt/node_modules -type f -path '*/@openai/codex-*/vendor/*/bin/codex' -print -quit)"
+          test -n "$claude_runtime"
+          test -x "$claude_runtime"
+          test -n "$codex_runtime"
+          test -x "$codex_runtime"
+      - run: NO_UPDATE_NOTIFIER=1 ./result/bin/takt --version
+      - run: NO_UPDATE_NOTIFIER=1 nix run .#default -- --version
+      - run: |
+          nix profile install .#default --profile "$RUNNER_TEMP/takt-profile"
+          NO_UPDATE_NOTIFIER=1 "$RUNNER_TEMP/takt-profile/bin/takt" --version

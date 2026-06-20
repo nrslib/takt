@@ -56,7 +56,8 @@ report_formats:
 steps:
   - name: step-name
     persona: coder                   # persona キー（personas マップを参照）
-    persona_name: coder              # 表示名（省略可）
+    persona_name: coder              # 表示名（省略可、provider_routing.personas には影響しない）
+    tags: [implementation, edit]     # provider routing 用 tag（省略可）
     policy: coding                   # policy キー（単一またはキー配列）
     knowledge: architecture          # knowledge キー（単一またはキー配列）
     instruction: implement           # instruction キー（instructions マップを参照）
@@ -92,6 +93,8 @@ steps:
 ```
 
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
+
+`persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
 
 `quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、output log path、上限付きでサニタイズされた stdout / stderr が同じ agent step の差し戻し入力に含まれます。raw stdout / stderr はローカルの output log にも保存されます。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
@@ -185,6 +188,18 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
 - 並列サブ step は `promotion` をサポートしません
 
+### Finding Contract parallel の retry 失敗ルーティング
+
+workflow に `finding_contract` がある場合、各 parallel 親 step は Finding Manager output が retry 後も意味論的に invalid なときの決定的な rule を宣言する必要があります。この rule により、invalid manager output で workflow を abort したり ledger を更新したりしません。
+
+許可される rule は、選択優先順に次のとおりです。
+
+1. `return: need_replan`（推奨）
+2. `return: needs_fix`
+3. 非AIの `next: fix`
+
+`fix` へ向かう `ai("...")` rule は、この失敗経路では選択されません。許可される rule がない場合、workflow validation が実行前に失敗します。
+
 ### Arpeggio Step（データ駆動バッチ）
 
 CSV / JSON などのデータソースを反復し、同じ step テンプレートを各行に適用します。並列度には上限があります。
@@ -218,8 +233,11 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 ```yaml
   - name: implement
     team_leader:
-      max_parts: 3
+      max_concurrency: 2
+      max_total_parts: 8
       timeout_ms: 600000
+      inspect_tools: [read, glob, grep]
+      part_tags: [coding]
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
@@ -232,6 +250,10 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 ```
 
 大きなタスクを「事前にユニット境界を決めなくても並列で進められる単位」に分解したいときに便利です。
+
+`max_concurrency` は同時に実行する part 数、`max_total_parts` はその step 全体で計画できる総 part 数（最大 20）を制御します。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。`part_tags` は生成される part step の provider routing tag です。未指定時は親 step の `tags` を継承します。空文字や空白のみの tag は無効です。`part_tags` は通常の `provider_routing.tags` として解決されるため、`part_persona` による persona routing より優先されます。
+
+`inspect_tools` は親 Team Leader のタスク分解フェーズだけで read-only inspection tools (`read`, `glob`, `grep`) を許可します。不正な tool 名は workflow ロード時にエラーになります。生成される子 part には影響せず、子 part の tool は引き続き `part_allowed_tools` で別に制御されます。inspection tools は Claude 系 provider や OpenCode など、`allowedTools` に対応する provider で利用できます。Team Leader inspection tools に対応しない provider では、実行時に明確なエラーになります。
 
 ### Workflow Call Step（サブワークフロー）
 
@@ -308,6 +330,8 @@ promotion は並列サブ step ではサポートされません。
 | オプション | デフォルト | 説明 |
 |--------|---------|------|
 | `persona` | - | persona キー（section map 参照）またはファイルパス |
+| `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
+| `tags` | - | config の `provider_routing.tags` に一致させる順序付き routing tag |
 | `policy` | - | policy キーまたはキー配列 |
 | `knowledge` | - | knowledge キーまたはキー配列 |
 | `instruction` | - | instruction キー（section map 参照） |
@@ -315,10 +339,12 @@ promotion は並列サブ step ではサポートされません。
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`（`xhigh` は Opus 4.7 が必要） |
+| `provider_options.opencode.allowed_tools` | - | OpenCode のツール許可リスト。ツール名は `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` のように lowercase |
 | `provider_options.opencode.variant` | - | OpenCode の model variant。プロバイダー / model 固有の文字列としてパススルー |
 | `provider_options.codex.network_access` | - | Codex サンドボックスからのネットワークアクセスを許可（[configuration ガイド](./configuration.ja.md#ネットワークアクセス-network_access) 参照） |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Claude の Bash を macOS Seatbelt サンドボックス外で実行（[configuration ガイド](./configuration.ja.md#claude-code-の-sandbox-制御-allow_unsandboxed_commands) 参照） |
-| `provider` | - | この step の provider を上書き (`claude`, `claude-sdk`, `codex`, `opencode`, `cursor`, `copilot`) |
+| `provider_options.kiro.agent` | - | Kiro CLI の custom agent 名。`kiro-cli chat --agent` として渡される。未指定の step は Kiro CLI 側の default agent を使用 |
+| `provider` | - | この step の provider を上書き (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, `mock`) |
 | `model` | - | この step の model を上書き |
 | `promotion` | - | 実行回数ごとの provider / model / options 昇格（[Step レベルのプロバイダープロモーション](#step-レベルのプロバイダープロモーション) 参照） |
 | `mcp_servers` | - | step ごとの MCP サーバー設定 (stdio / HTTP / SSE) |
@@ -341,7 +367,7 @@ interactive_mode: assistant
 
 ### `workflow_config.provider_options`
 
-workflow 全体のプロバイダーオプション。step / persona / project / global の各レイヤーとマージされます。同じ leaf については step レベルが優先されます。
+workflow 全体のプロバイダーオプション。provider option の leaf ごとに、env または CLI 起源の config 値が最優先されます。それ以外は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` の順です。
 
 ```yaml
 workflow_config:
@@ -351,6 +377,34 @@ workflow_config:
     claude:
       sandbox:
         allow_unsandboxed_commands: true
+```
+
+`provider_options` は名前で共通 YAML プリセットを参照できます。名前は `.takt/provider-options`、`~/.takt/provider-options`、`builtins/{lang}/provider-options` の順に first-match で解決されます。repertoire package 内の workflow では package-local の `provider-options` が最優先され、`@owner/repo/name` でその package のプリセットも参照できます。参照先が base になり、inline の値が同じ leaf を上書きします。
+
+`provider_options.extends` は、preset または path を解決できない場合、scoped ref が利用可能な repertoire package を指していない場合、参照先 YAML が不正または provider-options object でない場合、extends チェーンが循環している場合、削除済みの `$ref` キーが使われた場合に、設定エラーとして fail fast します。相対 path は workflow file 基準で解決され、symlink 解決後も workflow directory 内に留まる必要があります。絶対 path と、実体が workflow directory 外へ出る path は拒否されます。
+
+```yaml
+workflow_config:
+  provider_options:
+    extends: review-readonly
+
+steps:
+  - name: implement
+    provider_options:
+      extends: edit
+      opencode:
+        allowed_tools: [read, grep, bash]
+```
+
+workflow ファイルからの相対パスも、workflow-local な共通ファイル用に引き続き使用できます。
+
+共通ファイルの例:
+
+```yaml
+claude:
+  allowed_tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch]
+opencode:
+  allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
 
 ### `workflow_config.runtime`

@@ -224,6 +224,7 @@ export function validateSystemStepFields(
     for (const field of [
       'persona',
       'persona_name',
+      'tags',
       'policy',
       'knowledge',
       'allow_git_commit',

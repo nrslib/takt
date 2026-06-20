@@ -9,6 +9,7 @@ import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthro
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
 import type { ClaudeEffort } from '../../core/models/workflow-types.js';
 import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
+import type { ProviderImageAttachment } from '../providers/types.js';
 import type {
   StreamEvent as SharedStreamEvent,
   StreamCallback as SharedStreamCallback,
@@ -129,6 +130,8 @@ export interface ClaudeCallOptions {
   sandbox?: SandboxSettings;
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
+  imageAttachments?: ProviderImageAttachment[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
@@ -165,4 +168,6 @@ export interface ClaudeSpawnOptions {
   sandbox?: SandboxSettings;
   /** Custom path to Claude Code executable */
   pathToClaudeCodeExecutable?: string;
+  imageAttachments?: ProviderImageAttachment[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

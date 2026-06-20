@@ -83,7 +83,7 @@ describe('review-default workflow (EN)', () => {
       'security-review',
       'qa-review',
       'testing-review',
-      'requirements-review',
+      'pure-review',
       'coding-review',
     ]);
   });
@@ -176,7 +176,7 @@ describe('review-default workflow (JA)', () => {
       'security-review',
       'qa-review',
       'testing-review',
-      'requirements-review',
+      'pure-review',
       'coding-review',
     ]);
   });

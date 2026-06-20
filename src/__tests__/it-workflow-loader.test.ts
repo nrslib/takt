@@ -1154,7 +1154,7 @@ describe('Workflow Loader IT: parallel step loading', () => {
     const stage2Names = reviewers2!.parallel!.map((s) => s.name);
     expect(stage2Names).toContain('security-review');
     expect(stage2Names).toContain('qa-review');
-    expect(stage2Names).toContain('requirements-review');
+    expect(stage2Names).toContain('pure-review');
     expect(stage2Names).toContain('coding-review');
   });
 });

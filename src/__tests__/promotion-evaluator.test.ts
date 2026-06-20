@@ -38,6 +38,7 @@ function makeContext(overrides: {
   structuredCaller?: StructuredCaller;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }) {
   return {
     cwd: '/tmp/project',
@@ -46,6 +47,7 @@ function makeContext(overrides: {
     structuredCaller: overrides.structuredCaller ?? makeStructuredCaller(),
     resolvedProvider: overrides.resolvedProvider,
     resolvedModel: overrides.resolvedModel,
+    childProcessEnv: overrides.childProcessEnv,
   };
 }
 
@@ -117,6 +119,31 @@ describe('evaluatePromotion', () => {
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.4',
       }),
+    );
+  });
+
+  it('passes childProcessEnv to promotion ai condition evaluation', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const evaluateCondition = vi.fn().mockResolvedValue(0);
+    const step = makePromotionStep([
+      {
+        condition: 'ai("review found an architectural blocker")',
+        aiConditionText: 'review found an architectural blocker',
+        model: 'gpt-5.5',
+      },
+    ]);
+
+    await evaluatePromotion(step, makeContext({
+      stepIteration: 1,
+      structuredCaller: makeStructuredCaller(evaluateCondition),
+      resolvedProvider: 'codex',
+      childProcessEnv,
+    }));
+
+    expect(evaluateCondition).toHaveBeenCalledWith(
+      'previous output',
+      [expect.objectContaining({ text: 'review found an architectural blocker' })],
+      expect.objectContaining({ childProcessEnv }),
     );
   });
 

@@ -16,6 +16,7 @@ export async function runQualityGates({
   qualityGates,
   projectRoot,
   step,
+  childProcessEnv,
 }: RunQualityGatesOptions): Promise<QualityGateRunResult> {
   if (!qualityGates || qualityGates.length === 0) {
     return { ok: true };
@@ -26,7 +27,7 @@ export async function runQualityGates({
       continue;
     }
 
-    const result = await runCommandQualityGate({ gate, projectRoot });
+    const result = await runCommandQualityGate({ gate, projectRoot, childProcessEnv });
     if (!result.ok) {
       return {
         ok: false,

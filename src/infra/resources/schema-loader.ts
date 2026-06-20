@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getResourcesDir } from './index.js';
+import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -30,9 +31,12 @@ export function loadEvaluationSchema(): JsonSchema {
   return loadSchema('evaluation.json');
 }
 
-export function loadDecompositionSchema(maxParts: number): JsonSchema {
-  if (!Number.isInteger(maxParts) || maxParts <= 0) {
-    throw new Error(`maxParts must be a positive integer: ${maxParts}`);
+export function loadDecompositionSchema(maxTotalParts: number): JsonSchema {
+  if (!Number.isInteger(maxTotalParts) || maxTotalParts <= 0) {
+    throw new Error(`maxTotalParts must be a positive integer: ${maxTotalParts}`);
+  }
+  if (maxTotalParts > MAX_TEAM_LEADER_MAX_TOTAL_PARTS) {
+    throw new Error(`maxTotalParts must be less than or equal to ${MAX_TEAM_LEADER_MAX_TOTAL_PARTS}: ${maxTotalParts}`);
   }
 
   const schema = cloneSchema(loadSchema('decomposition.json'));
@@ -45,7 +49,7 @@ export function loadDecompositionSchema(maxParts: number): JsonSchema {
     throw new Error('decomposition schema is invalid: parts is missing');
   }
 
-  (rawParts as Record<string, unknown>).maxItems = maxParts;
+  (rawParts as Record<string, unknown>).maxItems = maxTotalParts;
   return schema;
 }
 

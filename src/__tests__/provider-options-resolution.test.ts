@@ -4,6 +4,7 @@ import {
   resolveEffectiveTeamLeaderPartProviderOptions,
 } from '../infra/config/providerOptions.js';
 import * as providerOptionsModule from '../infra/config/providerOptions.js';
+import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('resolveEffectiveProviderOptions', () => {
   it('env origin keeps config value only for overridden leaf', () => {
@@ -95,6 +96,92 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('env origin は opencode.allowedTools の leaf にも適用される', () => {
+    const configOptions: StepProviderOptions = {
+      opencode: {
+        allowedTools: ['read', 'grep'],
+        variant: 'env-high',
+      },
+    };
+    const stepOptions: StepProviderOptions = {
+      opencode: {
+        allowedTools: ['read', 'edit'],
+        variant: 'step-low',
+      },
+    };
+
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'opencode.allowedTools' ? 'env' : 'local'),
+      configOptions,
+      stepOptions,
+    );
+
+    expect(result).toEqual({
+      opencode: {
+        allowedTools: ['read', 'grep'],
+        variant: 'step-low',
+      },
+    });
+  });
+
+  it('kiro.agent は step > persona > config の優先で解決される', () => {
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { agent: 'config-agent' } },
+      { kiro: { agent: 'step-agent' } },
+      { kiro: { agent: 'persona-agent' } },
+    )).toEqual({
+      kiro: { agent: 'step-agent' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { agent: 'config-agent' } },
+      undefined,
+      { kiro: { agent: 'persona-agent' } },
+    )).toEqual({
+      kiro: { agent: 'persona-agent' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { agent: 'config-agent' } },
+      undefined,
+      undefined,
+    )).toEqual({
+      kiro: { agent: 'config-agent' },
+    });
+  });
+
+  it('kiro.agent のみ指定でも結果は undefined にならない', () => {
+    const result = resolveEffectiveProviderOptions(
+      'global',
+      undefined,
+      { kiro: { agent: 'global-agent' } },
+      { kiro: { agent: 'step-agent' } },
+    );
+
+    expect(result).toBeDefined();
+    expect(result?.kiro).toEqual({ agent: 'step-agent' });
+  });
+
+  it('env origin は kiro.agent の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'kiro.agent' ? 'env' : 'local'),
+      { kiro: { agent: 'env-agent' } },
+      { kiro: { agent: 'step-agent' } },
+    );
+
+    expect(result).toEqual({
+      kiro: { agent: 'env-agent' },
+    });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -179,6 +266,24 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
         allowedTools: ['Read', 'Edit'],
         sandbox: { allowUnsandboxedCommands: true },
       },
+    });
+  });
+
+  it('claude.allowedTools 除去経路でも kiro.agent は維持される', () => {
+    const result = resolveEffectiveTeamLeaderPartProviderOptions(
+      'project',
+      undefined,
+      { kiro: { agent: 'config-agent' } },
+      {
+        kiro: { agent: 'step-agent' },
+        claude: { allowedTools: ['Read', 'Edit'] },
+      },
+      'kiro',
+      ['Read', 'Edit', 'Write'],
+    );
+
+    expect(result).toEqual({
+      kiro: { agent: 'step-agent' },
     });
   });
 

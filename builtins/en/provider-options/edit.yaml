@@ -1,0 +1,21 @@
+claude:
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+    - Edit
+    - Write
+    - Bash
+    - WebSearch
+    - WebFetch
+opencode:
+  allowed_tools:
+    - read
+    - glob
+    - grep
+    - edit
+    - write
+    - bash
+    - todowrite
+    - websearch
+    - webfetch

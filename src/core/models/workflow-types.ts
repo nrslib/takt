@@ -14,6 +14,7 @@ import type {
   WorkflowEffect,
   WorkflowSystemInput,
 } from './workflow-system-input-types.js';
+import type { FindingContractConfig, FindingsRuleContext } from './finding-types.js';
 
 export type {
   WorkflowPrListWhere,
@@ -25,6 +26,7 @@ export type {
   WorkflowTemplateReference,
   WorkflowEffectScalarReference,
 } from './workflow-system-input-types.js';
+export type { FindingContractConfig, FindingLedger, FindingsRuleContext } from './finding-types.js';
 export {
   normalizeWorkflowPrListWhere,
   workflowPrListWhereEquals,
@@ -44,6 +46,7 @@ export type {
   ClaudeProviderOptions,
   ClaudeTerminalProviderOptions,
   CopilotProviderOptions,
+  KiroProviderOptions,
   StepProviderOptions,
   WorkflowStepKind,
   WorkflowCallOverrides,
@@ -68,6 +71,7 @@ export interface WorkflowRule {
   isAggregateCondition?: boolean;
   aggregateType?: 'all' | 'any';
   aggregateConditionText?: string | string[];
+  aggregateGuardCondition?: string;
 }
 
 export type WorkflowMaxSteps = number | 'infinite';
@@ -141,6 +145,8 @@ interface WorkflowStepBase {
   name: string;
   description?: string;
   personaDisplayName: string;
+  providerRoutingPersonaKey?: string;
+  tags?: string[];
   instruction: string;
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
@@ -158,10 +164,14 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
   provider?: ProviderType;
+  providerSpecified?: boolean;
   model?: string;
+  modelSpecified?: boolean;
   promotion?: WorkflowPromotionEntry[];
   requiredPermissionMode?: PermissionMode;
   providerOptions?: StepProviderOptions;
+  directProviderOptions?: StepProviderOptions;
+  workflowProviderOptions?: StepProviderOptions;
   edit?: boolean;
   qualityGates?: QualityGate[];
   structuredOutput?: WorkflowStructuredOutput;
@@ -182,6 +192,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   call?: never;
   overrides?: never;
   persona?: never;
+  tags?: never;
   allowGitCommit?: never;
   session?: 'continue' | 'refresh';
   mcpServers?: never;
@@ -212,6 +223,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
   persona?: never;
+  tags?: never;
   allowGitCommit?: never;
   session?: never;
   mcpServers?: never;
@@ -286,6 +298,7 @@ export interface WorkflowConfig {
   name: string;
   description?: string;
   subworkflow?: WorkflowSubworkflowConfig;
+  findingContract?: FindingContractConfig;
   schemas?: Record<string, string>;
   provider?: ProviderType;
   model?: string;
@@ -330,6 +343,7 @@ export interface WorkflowState {
   workflowName: string;
   currentStep: string;
   iteration: number;
+  findings?: FindingsRuleContext;
   stepOutputs: Map<string, AgentResponse>;
   structuredOutputs: Map<string, Record<string, unknown>>;
   systemContexts: Map<string, Record<string, unknown>>;

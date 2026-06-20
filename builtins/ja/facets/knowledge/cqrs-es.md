@@ -361,6 +361,8 @@ UseCaseが必要なケース:
 
 UseCaseが不要なケース:
 - Controllerからコマンドを1つ送るだけで完結する単純な操作
+- ControllerからQuery側へ問い合わせてレスポンスへ変換するだけの単純な参照
+- 既存リソースの存在確認・スコープ確認後にコマンドを1つ送るだけの操作
 
 | 基準 | 判定 |
 |------|------|
@@ -368,6 +370,7 @@ UseCaseが不要なケース:
 | UseCaseがHTTPリクエスト/レスポンスに依存 | REJECT。UseCaseはプロトコル非依存 |
 | UseCaseがAggregate内部状態を直接変更 | REJECT。CommandGateway経由 |
 | UseCaseがSubscription Queryで結果を待機 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
+| UseCaseが別の問い合わせ層やコマンド送信への薄い委譲だけで終わる | 削除を検討 |
 
 ## プロジェクション設計
 
@@ -435,6 +438,19 @@ class InventoryReleaseHandler(private val commandGateway: CommandGateway) {
 | EventHandler 内で Repository に save | REJECT。Projection に分離 |
 | 1クラスに Projection と EventHandler の責務が混在 | REJECT。クラスを分離 |
 
+### 外部処理の起動
+
+外部ワーカーや非同期処理の起動は、Aggregate が確定したドメインイベントを起点にする。Application Service や Coordinator が、コマンド送信と外部副作用を同じ制御フローで束ねない。
+
+| 基準 | 判定 |
+|------|------|
+| Application Service や Coordinator がコマンド送信直後に同じ状態遷移の外部処理を起動する | REJECT。確定済みイベントの EventHandler に分離 |
+| Aggregate が生成開始・処理開始を表すイベントを発行し、EventHandler が外部処理を起動する | OK |
+| 外部処理の起動失敗を EventHandler が失敗コマンドとして Aggregate に戻す | OK |
+| 外部処理に必要な入力がイベントまたは安定したIDから再取得できるデータで表現されている | OK |
+| 外部処理の入力がコマンド処理中のローカル変数にしか存在しない | REJECT。イベントまたは再取得可能な参照へ移す |
+| 競合や補償を持たない単純な外部処理起動に Saga を使う | REJECT。EventHandler で十分 |
+
 ## Query側の設計
 
 Query側はイベント駆動のPubSubモデルで動作する。Projection が EventHandler でRead Modelを更新し、Query側はRead Modelを参照する。
@@ -451,6 +467,21 @@ Query側はイベント駆動のPubSubモデルで動作する。Projection が 
 | Controller から Repository を直接参照 | REJECT。UseCase層を経由 |
 | Query側が Command Model を参照 | REJECT |
 | QueryHandler がコマンドを発行 | REJECT |
+| Query側のサービスやハンドラが保存・削除・外部API呼び出しを行う | REJECT |
+| Command と Query を同じサービスに混在させる | REJECT。責務と命名を分離 |
+| Query側で存在確認やスコープ確認を行い、呼び出し元がコマンドを送る | OK |
+
+### QueryHandler と ApplicationService の命名
+
+CQRSではクエリを受けるコンポーネントを QueryHandler と呼び、クエリを送る入口は QueryGateway / QueryBus として扱う。Controller から読み取りユースケースを呼ぶ facade は、QueryHandler と混同しないよう ApplicationService または ReadService と名付ける。
+
+| 基準 | 判定 |
+|------|------|
+| Query を受けて Read Model を参照し、Query結果の型を返す | QueryHandler |
+| Controller から複数Query、認可境界、ページング、DTO組み立てを調整する | ApplicationService または ReadService |
+| Query送信や読み取り調整だけのクラスを QueryService と呼ぶ | 警告。QueryHandler と混同しやすい |
+| QueryHandler がHTTPリクエスト/レスポンスやController都合のエラー変換を知る | REJECT |
+| 追加判断のない単純な読み取り wrapper を作る | 削除を検討。Controller から QueryGateway 直でもよい |
 
 レイヤー間の型:
 - `application/query/` - Query結果の型（例: `OrderDetail`）
@@ -502,6 +533,18 @@ Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
                                                           ↑
                                           QueryHandler がここを参照
 ```
+
+### 非同期コールバックと並行制御
+
+非同期処理の完了通知は重複・遅延・順序逆転を前提に設計する。Controller や単一プロセス内のロックではなく、Aggregate の状態遷移とコマンドの冪等性で守る。
+
+| 基準 | 判定 |
+|------|------|
+| Controllerやアプリケーションプロセス内のロックで重複callbackを防ぐ | REJECT。複数インスタンスで効かない |
+| 処理中かどうかをAggregate状態で判断する | OK |
+| callbackの試行IDや世代をAggregateが検証する | OK |
+| 古いcallbackや重複callbackを状態遷移で冪等に無視する | OK |
+| 並行制御がController、UseCase、Aggregateに重複して散らばる | REJECT |
 
 ## 結果整合性
 

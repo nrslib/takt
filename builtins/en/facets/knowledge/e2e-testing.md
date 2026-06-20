@@ -17,6 +17,29 @@ E2E tests verify the entire user operation flow. Their scope differs from unit a
 | Scenarios spanning multiple commands/pages | E2E test is appropriate |
 | Error message display verification | E2E test is appropriate |
 
+## Behavior Observation
+
+E2E tests observe behavior visible to the user. Checking configuration values, logs, or snapshots alone does not prove that rejection, permission, isolation, or recovery actually occurred.
+
+| Criteria | Judgment |
+|----------|----------|
+| Results from user actions or external inputs are observed | OK |
+| Rejection, error, and recovery paths verify the expected result | OK |
+| Only configuration or internal state is checked, with no user-visible result | REJECT |
+| Only real external-environment verification exists, with no deterministic test for the main boundary | Warning or REJECT |
+
+## Observing Negative Contracts
+
+When E2E tests verify permissions, runtime-selected capabilities, backends, options, configuration, rejection, or isolation, a string-level negation across the whole output is weak evidence.
+Extract the relevant line, event, record, field, or call argument, then check each forbidden value so order, case, whitespace, delimiters, or partial leaks cannot be missed.
+
+| Criteria | Judgment |
+|----------|----------|
+| Treating rejection, non-inheritance, or isolation as verified only because one exact sentence is absent | REJECT |
+| Checking only the displayed allowed value without proving forbidden values do not reach final processing | REJECT |
+| Extracting observable units and checking forbidden, rejected, or non-inherited values per value | OK |
+| Comparing allowed vs rejected and inherited vs non-inherited cases in the same scenario family | OK |
+
 ## UX Route Identification
 
 E2E test completeness depends on thorough UX route identification. Identify entry points from code, not documentation.
@@ -66,6 +89,7 @@ E2E tests are prone to non-deterministic failures.
 | Process leaks | Set timeouts and force-kill |
 | Environment dependency | Explicitly set up prerequisites for test execution |
 | Execution order dependency | Initialize state so each test runs independently |
+| Timeout/cleanup diverges from existing convention | Follow existing same-kind E2E conventions |
 
 ```typescript
 // NG - fixed sleep for timing
@@ -86,4 +110,3 @@ Manage test cases as a list to guarantee E2E test completeness.
 | Classify by entry point | Group by command/page/endpoint |
 | Prioritize | Determine priority by user impact × untested risk |
 | Cross-reference with existing tests | Check existing test coverage before adding new tests |
-

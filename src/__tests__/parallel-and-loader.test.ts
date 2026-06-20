@@ -6,6 +6,7 @@ import {
   LoopMonitorJudgeSchema,
 } from '../core/models/index.js';
 import {
+  parseAggregateConditionArgs,
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../core/models/workflow-condition-expression.js';
@@ -397,6 +398,25 @@ describe('ai() condition expression parsing', () => {
 });
 
 describe('all()/any() aggregate condition expression parsing', () => {
+  it('should parse aggregate condition arguments through all supported quoting styles', () => {
+    expect(parseAggregateConditionArgs('approved, needs_fix')).toEqual(['approved', 'needs_fix']);
+    expect(parseAggregateConditionArgs('"approved", "needs_fix"')).toEqual(['approved', 'needs_fix']);
+    expect(parseAggregateConditionArgs(String.raw`\"approved\", \"needs_fix\"`)).toEqual(['approved', 'needs_fix']);
+  });
+
+  it('should reject malformed aggregate condition arguments', () => {
+    expect(() => parseAggregateConditionArgs('')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('""')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"   "')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"approved", ""')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"approved", "   "')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('approved,')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"approved",')).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs(String.raw`\"   \"`)).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs(String.raw`\"approved\",`)).toThrow('Invalid aggregate condition format');
+    expect(() => parseAggregateConditionArgs('"unterminated')).toThrow('Invalid aggregate condition format');
+  });
+
   it('should match all() condition', () => {
     expect(parseAggregateConditionExpression('all("approved")')).toEqual({
       type: 'all',
@@ -415,6 +435,30 @@ describe('all()/any() aggregate condition expression parsing', () => {
     expect(parseAggregateConditionExpression('all("承認済み")')).toEqual({
       type: 'all',
       argsText: '"承認済み"',
+    });
+  });
+
+  it('should match aggregate condition with deterministic guard', () => {
+    expect(parseAggregateConditionExpression('all("approved") && findings.open.count == 0')).toEqual({
+      type: 'all',
+      argsText: '"approved"',
+      guardCondition: 'findings.open.count == 0',
+    });
+  });
+
+  it('should keep escaped quotes inside aggregate arguments when locating the closing parenthesis', () => {
+    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && findings.open.count == 0')).toEqual({
+      type: 'any',
+      argsText: '"approved with \\"quoted ) text\\""',
+      guardCondition: 'findings.open.count == 0',
+    });
+  });
+
+  it('should treat a quote after an even backslash run as the aggregate argument boundary', () => {
+    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && findings.open.count == 0`)).toEqual({
+      type: 'any',
+      argsText: String.raw`"path ends with \\"`,
+      guardCondition: 'findings.open.count == 0',
     });
   });
 

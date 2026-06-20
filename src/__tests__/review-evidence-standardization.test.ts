@@ -6,7 +6,7 @@ const REVIEW_CONTRACTS = [
   'qa-review',
   'testing-review',
   'security-review',
-  'requirements-review',
+  'pure-review',
 ] as const;
 
 const LANGUAGE_SPECS = {

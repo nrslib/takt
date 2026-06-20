@@ -128,5 +128,6 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
     timestamp: new Date(),
     sessionId,
     structuredOutput,
+    providerUsage: parsed.providerUsage,
   };
 }

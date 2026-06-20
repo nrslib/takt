@@ -23,6 +23,8 @@ loop_monitors:
           next: supervise_fix
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: planner
     knowledge:
@@ -51,6 +53,8 @@ steps:
         - name: plan.md
           format: plan
   - name: implement
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -89,8 +93,12 @@ steps:
         - name: coder-decisions.md
           format: coder-decisions
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -113,6 +121,8 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: supervise
+        tags:
+          - review
         edit: false
         persona: supervisor
         policy: review
@@ -150,8 +160,12 @@ steps:
       - condition: any("要求未達成、テスト失敗、ビルドエラー")
         next: supervise_fix
   - name: fix_both
+    tags:
+      - coding
     parallel:
       - name: ai-antipattern-fix-parallel
+        tags:
+          - coding
         edit: true
         persona: coder
         policy:
@@ -178,6 +192,8 @@ steps:
           - condition: 判断できない、情報不足
         instruction: ai-antipattern-fix
       - name: supervise_fix_parallel
+        tags:
+          - coding
         edit: true
         persona: coder
         policy:
@@ -208,6 +224,8 @@ steps:
       - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
         next: implement
   - name: ai-antipattern-fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -239,6 +257,8 @@ steps:
         next: implement
     instruction: ai-antipattern-fix
   - name: supervise_fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:

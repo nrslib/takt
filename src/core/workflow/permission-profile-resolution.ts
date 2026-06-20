@@ -1,5 +1,9 @@
 import type { PermissionMode } from '../models/types.js';
-import type { ProviderPermissionProfiles, ProviderProfileName } from '../models/provider-profiles.js';
+import {
+  DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE,
+  type ProviderPermissionProfiles,
+  type ProviderProfileName,
+} from '../models/provider-profiles.js';
 
 export interface ResolvePermissionModeInput {
   stepName: string;
@@ -10,14 +14,15 @@ export interface ResolvePermissionModeInput {
 }
 
 export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = {
-  claude: { defaultPermissionMode: 'edit' },
-  'claude-sdk': { defaultPermissionMode: 'edit' },
-  'claude-terminal': { defaultPermissionMode: 'edit' },
-  codex: { defaultPermissionMode: 'edit' },
-  opencode: { defaultPermissionMode: 'edit' },
-  cursor: { defaultPermissionMode: 'edit' },
-  copilot: { defaultPermissionMode: 'edit' },
-  mock: { defaultPermissionMode: 'edit' },
+  claude: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  'claude-sdk': { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  'claude-terminal': { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  codex: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  opencode: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  cursor: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  copilot: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  kiro: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  mock: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
 };
 
 export function resolveStepPermissionMode(input: ResolvePermissionModeInput): PermissionMode {

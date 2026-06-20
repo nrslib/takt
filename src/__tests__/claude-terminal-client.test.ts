@@ -131,6 +131,28 @@ describe('Claude terminal client', () => {
     expect(backend.stop).not.toHaveBeenCalled();
   });
 
+  it('Given childProcessEnv, When call starts terminal, Then backend receives the same snapshot', async () => {
+    const backend = createBackend();
+    const transcriptReader = createTranscriptReader({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    await callClaudeTerminal('coder', 'implement task', {
+      cwd: '/tmp/worktree',
+      backend: 'tmux',
+      terminalBackend: backend,
+      transcriptReader,
+      childProcessEnv,
+    });
+
+    expect(backend.start).toHaveBeenCalledWith(expect.objectContaining({
+      childProcessEnv,
+    }));
+  });
+
   it('Given abortSignal fires during transcript wait, When call is running, Then terminal session is stopped and external_abort is returned', async () => {
     const backend = createBackend();
     const controller = new AbortController();

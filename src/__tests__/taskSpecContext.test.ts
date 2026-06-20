@@ -26,17 +26,18 @@ describe('stageTaskSpecForExecution', () => {
     const execCwd = createTempProjectDir();
     const taskDir = '.takt/tasks/spec-task';
     const sourceTaskDir = path.join(projectCwd, taskDir);
-    const orderContent = '# Task\n\nImplement exactly this.';
+    const sourceOrderContent = '# Task\n\nImplement exactly this.';
     fs.mkdirSync(sourceTaskDir, { recursive: true });
-    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), orderContent, 'utf-8');
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), sourceOrderContent, 'utf-8');
 
-    const { taskPrompt, orderContent: stagedOrderContent } = stageTaskSpecForExecution(projectCwd, execCwd, taskDir, '20260216-spec-task');
+    const { taskPrompt, orderContent, stagedOrderContent } = stageTaskSpecForExecution(projectCwd, execCwd, taskDir, '20260216-spec-task');
     const stagedOrderPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'order.md');
 
     expect(taskPrompt).toContain('Implement using only the files in `.takt/runs/20260216-spec-task/context/task`.');
     expect(taskPrompt).toContain('Primary spec: `.takt/runs/20260216-spec-task/context/task/order.md`.');
-    expect(stagedOrderContent).toBe(orderContent);
-    expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(orderContent);
+    expect(orderContent).toBe(sourceOrderContent);
+    expect(stagedOrderContent).toBe(sourceOrderContent);
+    expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(sourceOrderContent);
   });
 
   it('run コンテキストへ task 添付画像を配置する', () => {
@@ -47,7 +48,7 @@ describe('stageTaskSpecForExecution', () => {
     const orderContent = [
       '# Task',
       '',
-      'Use [Image #1] as the reference.',
+      'Use [Image #1] (`attachments/image-1.png`) as the reference.',
       '',
       '## 添付画像',
       '',
@@ -59,9 +60,53 @@ describe('stageTaskSpecForExecution', () => {
 
     const result = stageTaskSpecForExecution(projectCwd, execCwd, taskDir, '20260216-spec-task');
     const stagedAttachmentPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'attachments', 'image-1.png');
+    const stagedOrderContent = fs.readFileSync(path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'order.md'), 'utf-8');
 
     expect(result.taskPrompt).toContain('Primary spec: `.takt/runs/20260216-spec-task/context/task/order.md`.');
+    expect(result.orderContent).toContain('Use [Image #1] (`attachments/image-1.png`) as the reference.');
+    expect(result.orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
+    expect(result.stagedOrderContent).toContain('Use [Image #1] (`.takt/runs/20260216-spec-task/context/task/attachments/image-1.png`) as the reference.');
+    expect(result.stagedOrderContent).toContain('- [Image #1]: `.takt/runs/20260216-spec-task/context/task/attachments/image-1.png`');
+    expect(stagedOrderContent).toContain('Use [Image #1] (`.takt/runs/20260216-spec-task/context/task/attachments/image-1.png`) as the reference.');
+    expect(stagedOrderContent).toContain('- [Image #1]: `.takt/runs/20260216-spec-task/context/task/attachments/image-1.png`');
     expect(fs.readFileSync(stagedAttachmentPath, 'utf-8')).toBe('png-data');
+  });
+
+  it('裸の attachments path も run コンテキスト path へ書き換える', () => {
+    const projectCwd = createTempProjectDir();
+    const execCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const orderContent = [
+      '# Task',
+      '',
+      'Use attachments/image-1.png as the reference.',
+      '',
+      '- [Image #1]: attachments/image-1.png',
+    ].join('\n');
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), orderContent, 'utf-8');
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments', 'image-1.png'), 'png-data', 'utf-8');
+
+    const result = stageTaskSpecForExecution(projectCwd, execCwd, taskDir, '20260216-spec-task');
+
+    expect(result.orderContent).toContain('Use attachments/image-1.png as the reference.');
+    expect(result.orderContent).toContain('- [Image #1]: attachments/image-1.png');
+    expect(result.stagedOrderContent).toContain('Use `.takt/runs/20260216-spec-task/context/task/attachments/image-1.png` as the reference.');
+    expect(result.stagedOrderContent).toContain('- [Image #1]: `.takt/runs/20260216-spec-task/context/task/attachments/image-1.png`');
+  });
+
+  it('task 添付 path が attachments 外へ出る場合は拒否する', () => {
+    const projectCwd = createTempProjectDir();
+    const execCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    fs.mkdirSync(sourceTaskDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Use `attachments/../secret.png`.', 'utf-8');
+
+    expect(() => stageTaskSpecForExecution(projectCwd, execCwd, taskDir, '20260216-spec-task')).toThrow(
+      'Invalid task attachment path: attachments/../secret.png',
+    );
   });
 
   it('symlink の order.md は拒否する', () => {

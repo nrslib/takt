@@ -7,6 +7,7 @@ import { createLogger } from '../../shared/utils/index.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
 import type { StepProviderInfo } from './types.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
+import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflowSpans.js';
 
 const log = createLogger('phase-runner');
 
@@ -79,6 +80,7 @@ export async function runStatusJudgmentPhase(
   if (!step.rules || step.rules.length === 0) {
     throw new Error(`Status judgment requires rules for step "${step.name}"`);
   }
+  const rules = step.rules;
 
   const baseContext = buildBaseContext(step, ctx);
   if (!baseContext) {
@@ -104,7 +106,9 @@ export async function runStatusJudgmentPhase(
   });
 
   let didEmitPhaseStart = false;
+  let resolvedPromptParts: { systemPrompt: string; userInstruction: string } | undefined;
   const emitPhaseStart = (promptParts: { systemPrompt: string; userInstruction: string }): void => {
+    resolvedPromptParts = promptParts;
     ctx.onPhaseStart?.(step, 3, 'judge', structuredInstruction, promptParts, phaseExecutionId, ctx.iteration);
     didEmitPhaseStart = true;
   };
@@ -118,24 +122,59 @@ export async function runStatusJudgmentPhase(
 
   try {
     const stepProvider = resolveStepProviderInfo(step, ctx);
-    const result = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, step.rules, {
-      cwd: ctx.cwd,
-      stepName: step.name,
-      provider: stepProvider.provider,
-      resolvedProvider: stepProvider.provider,
-      resolvedModel: stepProvider.model,
-      language: ctx.language,
-      interactive: ctx.interactive,
-      onStream: ctx.onStream,
-      onStructuredPromptResolved: (promptParts) => {
-        if (!didEmitPhaseStart) {
-          emitPhaseStart(promptParts);
-        }
+    const result = await runWithPhaseSpan(
+      {
+        enabled: ctx.observabilityEnabled === true,
+        runId: ctx.observabilityRunId,
+        workflowName: ctx.workflowName,
+        step,
+        iteration: ctx.iteration,
+        phase: 3,
+        phaseName: 'judge',
+        instruction: structuredInstruction,
+        phaseExecutionId,
+        workflowStack: ctx.getCurrentWorkflowStack?.(),
+        sanitizeText: ctx.sanitizeObservabilityText,
+        providerInfo: stepProvider,
+        getPromptParts: () => resolvedPromptParts,
       },
-      onJudgeStage: (entry) => {
-        ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration);
-      },
-    });
+      () => ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, rules, {
+        cwd: ctx.cwd,
+        stepName: step.name,
+        provider: stepProvider.provider,
+        resolvedProvider: stepProvider.provider,
+        resolvedModel: stepProvider.model,
+        language: ctx.language,
+        interactive: ctx.interactive,
+        childProcessEnv: ctx.childProcessEnv,
+        onStream: ctx.onStream,
+        onStructuredPromptResolved: (promptParts) => {
+          if (!didEmitPhaseStart) {
+            emitPhaseStart(promptParts);
+          }
+        },
+        onJudgeStage: (entry) => {
+          recordJudgeStageSpan({
+            enabled: ctx.observabilityEnabled === true,
+            runId: ctx.observabilityRunId,
+            workflowName: ctx.workflowName,
+            step,
+            iteration: ctx.iteration,
+            phaseExecutionId,
+            workflowStack: ctx.getCurrentWorkflowStack?.(),
+            entry,
+            sanitizeText: ctx.sanitizeObservabilityText,
+            providerInfo: stepProvider,
+          });
+          ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration);
+        },
+      }), (judgeResult) => ({
+        status: 'done',
+        content: `[${step.name.toUpperCase()}:${judgeResult.ruleIndex + 1}]`,
+        matchedRuleIndex: judgeResult.ruleIndex,
+        matchedRuleMethod: judgeResult.method,
+      }),
+    );
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:3`);
     }

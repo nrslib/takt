@@ -57,6 +57,7 @@ describe('ClaudeTerminalProvider wiring', () => {
     const onStream = vi.fn();
     const onPermissionRequest = vi.fn();
     const onAskUserQuestion = vi.fn();
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
     const mcpServers = {
       docs: { type: 'stdio' as const, command: 'docs-mcp', args: ['serve'] },
     };
@@ -87,6 +88,7 @@ describe('ClaudeTerminalProvider wiring', () => {
       onPermissionRequest,
       onAskUserQuestion,
       outputSchema: SCHEMA,
+      childProcessEnv,
     });
 
     expect(result.structuredOutput).toEqual({ decision: 'approved' });
@@ -110,6 +112,7 @@ describe('ClaudeTerminalProvider wiring', () => {
       onAskUserQuestion,
       outputSchema: SCHEMA,
       pathToClaudeCodeExecutable: '/opt/claude/bin/claude',
+      childProcessEnv,
     }));
   });
 

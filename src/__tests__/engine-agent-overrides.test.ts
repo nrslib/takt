@@ -135,4 +135,32 @@ describe('WorkflowEngine agent overrides', () => {
     expect(options.resolvedProvider).toBe('claude');
     expect(options.resolvedModel).toBe('step-model');
   });
+
+  it('passes engine childProcessEnv to normal step AgentRunner options', async () => {
+    const step = makeStep('plan', {
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'child-env-test',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'child env task', {
+      projectCwd: '/tmp/project',
+      childProcessEnv,
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.childProcessEnv).toEqual(childProcessEnv);
+  });
 });

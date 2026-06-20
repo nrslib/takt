@@ -199,6 +199,35 @@ export function emitToolResult(
   onStream({ type: 'tool_result', data: { content, isError } });
 }
 
+export function emitPermissionAsked(
+  onStream: StreamCallback | undefined,
+  data: {
+    requestId: string;
+    sessionId: string;
+    permission: string;
+    patterns: string[];
+    always: string[];
+    reply: string;
+  },
+): void {
+  if (!onStream) return;
+  onStream({ type: 'permission_asked', data });
+}
+
+export function emitPermissionSummary(
+  onStream: StreamCallback | undefined,
+  data: {
+    sessionId: string;
+    permissionMode?: string;
+    allowedTools?: readonly string[];
+    networkAccess?: boolean;
+    resolvedPermissions: Array<{ permission: string; pattern: string; action: string }>;
+  },
+): void {
+  if (!onStream) return;
+  onStream({ type: 'permission_summary', data });
+}
+
 export function emitResult(
   onStream: StreamCallback | undefined,
   success: boolean,

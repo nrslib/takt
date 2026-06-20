@@ -5,7 +5,10 @@
  * retry runs (startStep / retryNote) load persisted sessions.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 
@@ -51,6 +54,9 @@ const {
       usageMissing: false,
     },
   };
+  type MockWorkflowOutcome =
+    | { status: 'completed' }
+    | { status: 'aborted'; reason: string };
 
   type PersonaProviderMap = Record<string, { provider?: string; model?: string }>;
 
@@ -68,6 +74,7 @@ const {
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
     static runError: Error | undefined;
+    static runOutcome: MockWorkflowOutcome;
     readonly receivedOptions: Record<string, unknown>;
     private readonly config: WorkflowConfig;
 
@@ -98,10 +105,20 @@ const {
           providerUsage: mockStepResponse.providerUsage,
         }, firstStep.instruction);
       }
+      if (MockWorkflowEngine.runOutcome.status === 'aborted') {
+        this.emit(
+          'workflow:abort',
+          { status: 'aborted', iteration: 1 },
+          MockWorkflowEngine.runOutcome.reason,
+        );
+        return { status: 'aborted', iteration: 1 };
+      }
+
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
     }
   }
+  MockWorkflowEngine.runOutcome = { status: 'completed' };
 
   return {
     MockWorkflowEngine,
@@ -186,7 +203,8 @@ vi.mock('../infra/fs/index.js', () => ({
   appendNdjsonLine: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn().mockReturnValue({
     debug: vi.fn(),
     info: vi.fn(),
@@ -226,7 +244,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 }));
 
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
-import { resolveWorkflowConfigValues } from '../infra/config/index.js';
+import { resolveWorkflowConfigValues, writeFileAtomic } from '../infra/config/index.js';
 import { info } from '../shared/ui/index.js';
 
 const defaultResolvedConfigValues = {
@@ -276,8 +294,60 @@ function makeConfigWithStep(overrides: Record<string, unknown>): WorkflowConfig 
 }
 
 describe('executeWorkflow session loading', () => {
+  const temporaryDirs: string[] = [];
+  const restoredEnvKeys = [
+    'TAKT_OBSERVABILITY',
+    'OTEL_EXPORTER_OTLP_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+    'OTEL_EXPORTER_OTLP_HEADERS',
+    'OTEL_EXPORTER_OTLP_TRACES_HEADERS',
+    'OTEL_EXPORTER_OTLP_METRICS_HEADERS',
+    'OTEL_EXPORTER_OTLP_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_TRACES_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_METRICS_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_COMPRESSION',
+    'OTEL_EXPORTER_OTLP_TRACES_COMPRESSION',
+    'OTEL_EXPORTER_OTLP_METRICS_COMPRESSION',
+    'OTEL_EXPORTER_OTLP_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE',
+    'OTEL_EXPORTER_OTLP_CLIENT_KEY',
+    'OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY',
+    'OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY',
+    'OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE',
+  ] as const;
+  const originalEnv = new Map(restoredEnvKeys.map((key) => [key, process.env[key]]));
+
+  function restoreEnv(): void {
+    for (const [key, value] of originalEnv) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+
+  function clearRestoredEnv(): void {
+    for (const key of restoredEnvKeys) {
+      delete process.env[key];
+    }
+  }
+
+  function createTempDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    temporaryDirs.push(dir);
+    return dir;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreEnv();
+    clearRestoredEnv();
     mockCreateUsageEventLogger.mockReturnValue(mockUsageLogger);
     mockInitializeOtelFoundation.mockResolvedValue({
       shutdown: mockObservabilityShutdown,
@@ -286,12 +356,20 @@ describe('executeWorkflow session loading', () => {
     mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
     mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
     MockWorkflowEngine.runError = undefined;
+    MockWorkflowEngine.runOutcome = { status: 'completed' };
     mockStepResponse.providerUsage = {
       inputTokens: 3,
       outputTokens: 2,
       totalTokens: 5,
       usageMissing: false,
     };
+  });
+
+  afterEach(() => {
+    restoreEnv();
+    for (const dir of temporaryDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('should pass empty initialSessions on normal run', async () => {
@@ -365,20 +443,26 @@ describe('executeWorkflow session loading', () => {
 
   it('should load worktree sessions on retry when cwd differs from projectCwd', async () => {
     // Given: retry execution in a worktree (cwd !== projectCwd)
-    await executeWorkflow(makeConfig(), 'task', '/tmp/worktree', {
-      projectCwd: '/tmp/project',
+    const projectDir = createTempDir('takt-session-project-');
+    const worktreeDir = createTempDir('takt-session-worktree-');
+
+    await executeWorkflow(makeConfig(), 'task', worktreeDir, {
+      projectCwd: projectDir,
       startStep: 'implement',
     });
 
     // Then: loadWorktreeSessions is called instead of loadPersonaSessions
-    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith('/tmp/project', '/tmp/worktree', 'claude');
+    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(projectDir, worktreeDir, 'claude');
     expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
   });
 
   it('should not load sessions for worktree normal run', async () => {
     // Given: normal execution in a worktree (no retry)
-    await executeWorkflow(makeConfig(), 'task', '/tmp/worktree', {
-      projectCwd: '/tmp/project',
+    const projectDir = createTempDir('takt-session-project-');
+    const worktreeDir = createTempDir('takt-session-worktree-');
+
+    await executeWorkflow(makeConfig(), 'task', worktreeDir, {
+      projectCwd: projectDir,
     });
 
     // Then: neither session loader is called
@@ -437,9 +521,446 @@ describe('executeWorkflow session loading', () => {
       projectCwd: '/tmp/project',
     });
 
-    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toBe(observability);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
+  });
+
+  it('Given observability is enabled at workflow entry, When workflow completes, Then persists and prints the same TraceQL discovery queries', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'trace-discovery-run',
+      traceTaskMetadata: {
+        taskSource: 'pr_review',
+        issueNumber: 792,
+        prNumber: 826,
+        gitBranch: 'takt/843/add-trace-discovery',
+        gitBaseBranch: 'main',
+      },
+    });
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+    const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
+    expect(metaQueries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-run" }',
+      '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+      '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
+    ]);
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
+      metaQueries?.map((query) => `  ${query}`),
+    );
+  });
+
+  it('Given observability is disabled at workflow entry, When trace metadata is present, Then omits TraceQL discovery output and metadata', async () => {
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability: {
+        enabled: false,
+        monitor: false,
+        sessionLogExporter: false,
+        usageEventsPhase: false,
+      },
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'trace-discovery-disabled-run',
+      traceTaskMetadata: {
+        taskSource: 'pr_review',
+        issueNumber: 792,
+        prNumber: 826,
+        gitBranch: 'takt/843/add-trace-discovery',
+        gitBaseBranch: 'main',
+      },
+    });
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-disabled-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+
+    expect(finalMeta.observability?.traceDiscovery).toBeUndefined();
+    expect(vi.mocked(info)).not.toHaveBeenCalledWith('TraceQL discovery:');
+  });
+
+  it('Given observability is enabled at workflow entry, When workflow aborts, Then persists and prints the same TraceQL discovery queries', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runOutcome = {
+      status: 'aborted',
+      reason: 'step_failed',
+    };
+
+    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      reportDirName: 'trace-discovery-abort-run',
+      traceTaskMetadata: {
+        taskSource: 'pr_review',
+        issueNumber: 792,
+        prNumber: 826,
+        gitBranch: 'takt/843/add-trace-discovery',
+        gitBaseBranch: 'main',
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('step_failed');
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-abort-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      status?: string;
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+    const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
+    expect(finalMeta.status).toBe('aborted');
+    expect(metaQueries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-abort-run" }',
+      '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+      '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
+    ]);
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
+      metaQueries?.map((query) => `  ${query}`),
+    );
+  });
+
+  it('Given observability is enabled at workflow entry, When workflow run rejects without an abort event, Then persists and prints TraceQL discovery queries', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runError = new Error('workflow engine failed');
+
+    await expect(
+      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        reportDirName: 'trace-discovery-error-run',
+        traceTaskMetadata: {
+          taskSource: 'pr_review',
+          issueNumber: 792,
+          prNumber: 826,
+          gitBranch: 'takt/843/add-trace-discovery',
+          gitBaseBranch: 'main',
+        },
+      }),
+    ).rejects.toThrow('workflow engine failed');
+
+    const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
+      path === '/tmp/project/.takt/runs/trace-discovery-error-run/meta.json'
+    ));
+    expect(metaWrites.length).toBeGreaterThan(0);
+    const finalMetaWrite = metaWrites.at(-1);
+    if (!finalMetaWrite) {
+      throw new Error('Expected run meta to be written');
+    }
+    const finalMeta = JSON.parse(String(finalMetaWrite[1])) as {
+      status?: string;
+      observability?: {
+        traceDiscovery?: {
+          queries?: string[];
+        };
+      };
+    };
+    const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
+    expect(finalMeta.status).toBe('aborted');
+    expect(metaQueries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-error-run" }',
+      '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+      '{ resource.service.name = "takt" && span."takt.git.branch" = "takt/843/add-trace-discovery" }',
+    ]);
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(mockInfo.mock.calls.map(([line]) => line).filter((line) => line.startsWith('  {'))).toEqual(
+      metaQueries?.map((query) => `  ${query}`),
+    );
+  });
+
+  it('Given enabled observability and an existing child env snapshot, When executing workflow, Then passes run-local child process env without mutating process env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = ' https://collector.example.test ';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'https://collector.example.test/custom/traces';
+    process.env.OTEL_EXPORTER_OTLP_HEADERS = 'authorization=Bearer%20token';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS = 'x-trace=enabled';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS = 'x-metric=enabled';
+    process.env.OTEL_EXPORTER_OTLP_TIMEOUT = '15000';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = '12000';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_TIMEOUT = '13000';
+    process.env.OTEL_EXPORTER_OTLP_COMPRESSION = 'gzip';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_COMPRESSION = 'none';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_COMPRESSION = 'gzip';
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = '/certs/root.pem';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = '/certs/traces-root.pem';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE = '/certs/metrics-root.pem';
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE = '/certs/client.pem';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = '/certs/traces-client.pem';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE = '/certs/metrics-client.pem';
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_KEY = '/certs/client.key';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY = '/certs/traces-client.key';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY = '/certs/metrics-client.key';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE = 'delta';
+    const observability = {
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: true,
+      usageEventsPhase: true,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+      TAKT_OBSERVABILITY: JSON.stringify({
+        enabled: true,
+        monitor: true,
+        session_log_exporter: true,
+        usage_events_phase: true,
+      }),
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://collector.example.test/custom/traces',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://collector.example.test/v1/metrics',
+      OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer%20token',
+      OTEL_EXPORTER_OTLP_TRACES_HEADERS: 'x-trace=enabled',
+      OTEL_EXPORTER_OTLP_METRICS_HEADERS: 'x-metric=enabled',
+      OTEL_EXPORTER_OTLP_TIMEOUT: '15000',
+      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+      OTEL_EXPORTER_OTLP_METRICS_TIMEOUT: '13000',
+      OTEL_EXPORTER_OTLP_COMPRESSION: 'gzip',
+      OTEL_EXPORTER_OTLP_TRACES_COMPRESSION: 'none',
+      OTEL_EXPORTER_OTLP_METRICS_COMPRESSION: 'gzip',
+      OTEL_EXPORTER_OTLP_CERTIFICATE: '/certs/root.pem',
+      OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE: '/certs/traces-root.pem',
+      OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE: '/certs/metrics-root.pem',
+      OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: '/certs/client.pem',
+      OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE: '/certs/traces-client.pem',
+      OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE: '/certs/metrics-client.pem',
+      OTEL_EXPORTER_OTLP_CLIENT_KEY: '/certs/client.key',
+      OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY: '/certs/traces-client.key',
+      OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY: '/certs/metrics-client.key',
+      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'delta',
+    });
+    expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false}');
+    expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe(' https://collector.example.test ');
+    expect(process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe('https://collector.example.test/custom/traces');
+    expect(process.env.OTEL_EXPORTER_OTLP_HEADERS).toBe('authorization=Bearer%20token');
+  });
+
+  it('Given enabled observability and only unsafe signal endpoints, When executing workflow, Then omits raw endpoints from child process env', async () => {
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'https://user:pass@collector.example.test/v1/traces?token=top-secret';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'https://collector.example.test/v1/metrics#top-secret';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = '12000';
+    const observability = {
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: true,
+      usageEventsPhase: true,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+      TAKT_OBSERVABILITY: JSON.stringify({
+        enabled: true,
+        monitor: true,
+        session_log_exporter: true,
+        usage_events_phase: true,
+      }),
+      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+    });
+  });
+
+  it('Given disabled observability and no child env snapshot, When executing workflow, Then does not create TAKT_OBSERVABILITY', async () => {
+    delete process.env.TAKT_OBSERVABILITY;
+    const observability = {
+      enabled: false,
+      monitor: true,
+      sessionLogExporter: true,
+      usageEventsPhase: true,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toBeUndefined();
+    expect(process.env.TAKT_OBSERVABILITY).toBeUndefined();
+  });
+
+  it('Given enabled observability and workflow failure, When executing workflow, Then keeps process env unchanged', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false,"monitor":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://collector.example.test:4318';
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: true,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+    MockWorkflowEngine.runError = new Error('workflow engine failed');
+
+    await expect(
+      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+      }),
+    ).rejects.toThrow('workflow engine failed');
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
+      TAKT_OBSERVABILITY: JSON.stringify({
+        enabled: true,
+        monitor: false,
+        session_log_exporter: true,
+        usage_events_phase: false,
+      }),
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector.example.test:4318',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://collector.example.test:4318/v1/traces',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'http://collector.example.test:4318/v1/metrics',
+    });
+    expect(process.env.TAKT_OBSERVABILITY).toBe('{"enabled":false,"monitor":false}');
+    expect(process.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('http://collector.example.test:4318');
+  });
+
+  it('should pass shadow session log exporter options when observability exporter is enabled', async () => {
+    const observability = {
+      enabled: true,
+      monitor: false,
+      sessionLogExporter: true,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(
+      observability,
+      {
+        sessionLogExporter: {
+          runId: 'test-report-dir',
+          shadowLogPath: '/tmp/project/.takt/runs/test-report-dir/logs/test-session-id-otel-session-shadow.jsonl',
+          sanitizedTask: 'task',
+          workflowName: 'test-workflow',
+        },
+      },
+    );
+  });
+
+  it('should pass monitor JSON exporter options when observability monitor is enabled', async () => {
+    const observability = {
+      enabled: true,
+      monitor: true,
+      sessionLogExporter: false,
+      usageEventsPhase: false,
+    };
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      ...defaultResolvedConfigValues,
+      observability,
+    });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(
+      observability,
+      {
+        monitorJsonExporter: {
+          runId: 'test-report-dir',
+          monitorPath: '/tmp/project/.takt/runs/test-report-dir/monitor.json',
+        },
+      },
+    );
   });
 
   it('should shutdown observability when workflow execution throws', async () => {
@@ -461,7 +982,7 @@ describe('executeWorkflow session loading', () => {
       }),
     ).rejects.toThrow('workflow engine failed');
 
-    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 
@@ -485,7 +1006,7 @@ describe('executeWorkflow session loading', () => {
       }),
     ).rejects.toThrow('workflow engine failed');
 
-    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability);
+    expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 

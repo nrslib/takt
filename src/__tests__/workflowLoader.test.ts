@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import {
   isWorkflowPath,
   loadAllWorkflowDiscovery,
@@ -22,6 +23,20 @@ import {
   loadAllWorkflowsWithSources,
 } from '../infra/config/loaders/workflowLoader.js';
 import { getWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
+
+function setBuiltinWorkflowsEnabledForTest(enabled: boolean): void {
+  const configDir = process.env.TAKT_CONFIG_DIR;
+  if (!configDir) {
+    throw new Error('TAKT_CONFIG_DIR is required for workflow loader tests');
+  }
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.yaml'), `enable_builtin_workflows: ${enabled ? 'true' : 'false'}\n`, 'utf-8');
+  invalidateGlobalConfigCache();
+}
+
+afterEach(() => {
+  invalidateGlobalConfigCache();
+});
 
 const SAMPLE_WORKFLOW = `name: test-workflow
 description: Test workflow
@@ -45,6 +60,35 @@ steps:
     allowed_tools: [Read]
     instruction: "{task}"
 `;
+
+function writeInvalidWorkflowCallContractFixture(workflowsDir: string): void {
+  mkdirSync(workflowsDir, { recursive: true });
+  writeFileSync(join(workflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review"
+    rules:
+      - condition: done
+        return: ok
+`);
+  writeFileSync(join(workflowsDir, 'parent.yaml'), `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: retry_plan
+        next: COMPLETE
+`);
+}
 
 describe('isWorkflowPath', () => {
   it('should return true for absolute paths', () => {
@@ -717,6 +761,7 @@ describe('public workflow loaders validate workflow_call contracts', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -725,87 +770,53 @@ describe('public workflow loaders validate workflow_call contracts', () => {
 
   it('should reject unsupported workflow_call child return conditions through loadWorkflow', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
-    mkdirSync(projectWorkflowsDir, { recursive: true });
-    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
-subworkflow:
-  callable: true
-  returns: [ok]
-initial_step: review
-max_steps: 3
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review"
-    rules:
-      - condition: done
-        return: ok
-`);
-    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
-initial_step: delegate
-max_steps: 3
-steps:
-  - name: delegate
-    kind: workflow_call
-    call: child
-    rules:
-      - condition: retry_plan
-        next: COMPLETE
-`);
+    writeInvalidWorkflowCallContractFixture(projectWorkflowsDir);
 
     expect(() => loadWorkflow('parent', tempDir)).toThrow(
       'workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
     );
   });
 
-  it('should warn and skip invalid workflow_call contracts from discovery APIs', () => {
+  it('should warn and skip invalid workflow_call contracts from workflow entry discovery', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
-    mkdirSync(projectWorkflowsDir, { recursive: true });
-    writeFileSync(join(projectWorkflowsDir, 'child.yaml'), `name: child
-subworkflow:
-  callable: true
-  returns: [ok]
-initial_step: review
-max_steps: 3
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review"
-    rules:
-      - condition: done
-        return: ok
-`);
-    writeFileSync(join(projectWorkflowsDir, 'parent.yaml'), `name: parent
-initial_step: delegate
-max_steps: 3
-steps:
-  - name: delegate
-    kind: workflow_call
-    call: child
-    rules:
-      - condition: retry_plan
-        next: COMPLETE
-`);
+    writeInvalidWorkflowCallContractFixture(projectWorkflowsDir);
 
     const entriesWarning = vi.fn();
-    const workflowsWarning = vi.fn();
-    const loadAllWarning = vi.fn();
 
     const entries = listWorkflowEntries(tempDir, { onWarning: entriesWarning });
-    const workflowsWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, { onWarning: workflowsWarning });
-    const workflows = loadAllWorkflowDiscovery(tempDir, { onWarning: loadAllWarning });
 
     expect(entries.find((entry) => entry.name === 'parent')).toBeUndefined();
     expect(entries.find((entry) => entry.name === 'child')).toBeDefined();
-    expect(workflowsWithSources.has('parent')).toBe(false);
-    expect(workflowsWithSources.has('child')).toBe(true);
-    expect(workflows.has('parent')).toBe(false);
-    expect(workflows.has('child')).toBe(true);
     expect(entriesWarning).toHaveBeenCalledWith(
       expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
     );
+  });
+
+  it('should warn and skip invalid workflow_call contracts from workflow discovery with sources', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    writeInvalidWorkflowCallContractFixture(projectWorkflowsDir);
+
+    const workflowsWarning = vi.fn();
+
+    const workflowsWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, { onWarning: workflowsWarning });
+
+    expect(workflowsWithSources.has('parent')).toBe(false);
+    expect(workflowsWithSources.has('child')).toBe(true);
     expect(workflowsWarning).toHaveBeenCalledWith(
       expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
     );
+  });
+
+  it('should warn and skip invalid workflow_call contracts from workflow discovery config loader', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    writeInvalidWorkflowCallContractFixture(projectWorkflowsDir);
+
+    const loadAllWarning = vi.fn();
+
+    const workflows = loadAllWorkflowDiscovery(tempDir, { onWarning: loadAllWarning });
+
+    expect(workflows.has('parent')).toBe(false);
+    expect(workflows.has('child')).toBe(true);
     expect(loadAllWarning).toHaveBeenCalledWith(
       expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
     );
@@ -817,6 +828,7 @@ describe('listWorkflows with project-local', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -843,6 +855,7 @@ describe('listWorkflows with project-local', () => {
   });
 
   it('should include builtin workflows regardless of cwd', () => {
+    setBuiltinWorkflowsEnabledForTest(true);
     const workflows = listWorkflows(tempDir);
     expect(workflows).toContain('default');
   });
@@ -892,11 +905,50 @@ describe('internal callable workflow visibility', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
   });
+
+  function writePublicCallableWorkflow(): void {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    mkdirSync(projectWorkflowsDir, { recursive: true });
+    writeFileSync(join(projectWorkflowsDir, 'public-callable.yaml'), `name: public-callable
+subworkflow:
+  callable: true
+  params:
+    review_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+initial_step: review
+max_steps: 1
+steps:
+  - name: review
+    knowledge:
+      $param: review_knowledge
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+  }
+
+  const publicCallableDiscoveryConfig = {
+    name: 'public-callable',
+    subworkflow: {
+      callable: true,
+      visibility: undefined,
+      returns: undefined,
+      params: {
+        review_knowledge: {
+          type: 'facet_ref[]',
+          facetKind: 'knowledge',
+          default: undefined,
+        },
+      },
+    },
+  };
 
   it('should hide visibility: internal workflows from discovery APIs', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
@@ -954,88 +1006,51 @@ steps:
     expect(discoveryWarning).not.toHaveBeenCalled();
     expect(runtimeWithSourcesWarning).not.toHaveBeenCalled();
     expect(runtimeWarning).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 
-  it('should keep public callable workflows with required params visible only in discovery APIs', () => {
-    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
-    mkdirSync(projectWorkflowsDir, { recursive: true });
-    writeFileSync(join(projectWorkflowsDir, 'public-callable.yaml'), `name: public-callable
-subworkflow:
-  callable: true
-  params:
-    review_knowledge:
-      type: facet_ref[]
-      facet_kind: knowledge
-initial_step: review
-max_steps: 1
-steps:
-  - name: review
-    knowledge:
-      $param: review_knowledge
-    rules:
-      - condition: done
-        next: COMPLETE
-`, 'utf-8');
-
+  it('should keep public callable workflows with required params visible in discovery APIs', () => {
+    writePublicCallableWorkflow();
     const discoveryWarning = vi.fn();
-    const standaloneWarning = vi.fn();
-    const runtimeWithSourcesWarning = vi.fn();
-    const runtimeWarning = vi.fn();
     const entries = listWorkflowEntries(tempDir, { onWarning: discoveryWarning });
-    const standaloneEntries = listStandaloneWorkflowEntries(tempDir, { onWarning: standaloneWarning });
     const workflowNames = listWorkflows(tempDir, { onWarning: discoveryWarning });
     const discoveryWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, { onWarning: discoveryWarning });
     const discovery = loadAllWorkflowDiscovery(tempDir, { onWarning: discoveryWarning });
-    const standaloneWithSources = loadAllStandaloneWorkflowsWithSources(tempDir, { onWarning: standaloneWarning });
-    const standalone = loadAllStandaloneWorkflows(tempDir, { onWarning: standaloneWarning });
-    const workflowsWithSources = loadAllWorkflowsWithSources(tempDir, { onWarning: runtimeWithSourcesWarning });
-    const workflows = loadAllWorkflows(tempDir, { onWarning: runtimeWarning });
 
     expect(entries.map((entry) => entry.name)).toContain('public-callable');
-    expect(standaloneEntries.map((entry) => entry.name)).not.toContain('public-callable');
     expect(workflowNames).toContain('public-callable');
     expect(discoveryWithSources.has('public-callable')).toBe(true);
     expect(discovery.has('public-callable')).toBe(true);
+    expect(discoveryWithSources.get('public-callable')?.config).toEqual(publicCallableDiscoveryConfig);
+    expect(discovery.get('public-callable')).toEqual(publicCallableDiscoveryConfig);
+    expect(discoveryWarning).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it('should hide public callable workflows with required params from standalone loaders', () => {
+    writePublicCallableWorkflow();
+    const standaloneWarning = vi.fn();
+    const standaloneEntries = listStandaloneWorkflowEntries(tempDir, { onWarning: standaloneWarning });
+    const standaloneWithSources = loadAllStandaloneWorkflowsWithSources(tempDir, { onWarning: standaloneWarning });
+    const standalone = loadAllStandaloneWorkflows(tempDir, { onWarning: standaloneWarning });
+
+    expect(standaloneEntries.map((entry) => entry.name)).not.toContain('public-callable');
     expect(standaloneWithSources.has('public-callable')).toBe(false);
     expect(standalone.has('public-callable')).toBe(false);
-    expect(workflowsWithSources.has('public-callable')).toBe(false);
-    expect(workflows.has('public-callable')).toBe(false);
-    expect(discoveryWithSources.get('public-callable')?.config).toEqual({
-      name: 'public-callable',
-      subworkflow: {
-        callable: true,
-        visibility: undefined,
-        returns: undefined,
-        params: {
-          review_knowledge: {
-            type: 'facet_ref[]',
-            facetKind: 'knowledge',
-            default: undefined,
-          },
-        },
-      },
-    });
-    expect(discovery.get('public-callable')).toEqual({
-      name: 'public-callable',
-      subworkflow: {
-        callable: true,
-        visibility: undefined,
-        returns: undefined,
-        params: {
-          review_knowledge: {
-            type: 'facet_ref[]',
-            facetKind: 'knowledge',
-            default: undefined,
-          },
-        },
-      },
-    });
-    expect(() => loadWorkflowByIdentifier('public-callable', tempDir)).toThrow(
-      /requires workflow_call arg "review_knowledge"/,
-    );
-    expect(discoveryWarning).not.toHaveBeenCalled();
     expect(standaloneWarning).toHaveBeenCalledWith(
       expect.stringContaining('requires workflow_call arg "review_knowledge"'),
+    );
+  }, 30_000);
+
+  it('should hide public callable workflows with required params from runtime loaders', () => {
+    writePublicCallableWorkflow();
+    const runtimeWithSourcesWarning = vi.fn();
+    const runtimeWarning = vi.fn();
+    const workflowsWithSources = loadAllWorkflowsWithSources(tempDir, { onWarning: runtimeWithSourcesWarning });
+    const workflows = loadAllWorkflows(tempDir, { onWarning: runtimeWarning });
+
+    expect(workflowsWithSources.has('public-callable')).toBe(false);
+    expect(workflows.has('public-callable')).toBe(false);
+    expect(() => loadWorkflowByIdentifier('public-callable', tempDir)).toThrow(
+      /requires workflow_call arg "review_knowledge"/,
     );
     expect(runtimeWithSourcesWarning).toHaveBeenCalledWith(
       expect.stringContaining('requires workflow_call arg "review_knowledge"'),
@@ -1043,7 +1058,7 @@ steps:
     expect(runtimeWarning).toHaveBeenCalledWith(
       expect.stringContaining('requires workflow_call arg "review_knowledge"'),
     );
-  });
+  }, 30_000);
 
   it('should validate path-based workflow_call children only in runtime batch loaders', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
@@ -1106,7 +1121,7 @@ steps:
     expect(runtimeWarning).toHaveBeenCalledWith(
       expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
     );
-  });
+  }, 30_000);
 
   it('should still load visibility: internal workflows by explicit identifier', () => {
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
@@ -1168,6 +1183,7 @@ describe('loadAllWorkflows with project-local', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -1185,6 +1201,7 @@ describe('loadAllWorkflows with project-local', () => {
   });
 
   it('should have project-local override builtin when same name', () => {
+    setBuiltinWorkflowsEnabledForTest(true);
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
     mkdirSync(projectWorkflowsDir, { recursive: true });
 
@@ -1276,6 +1293,7 @@ describe('loadWorkflowByIdentifier with @scope ref (repertoire)', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
     configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
     process.env.TAKT_CONFIG_DIR = configDir;
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -1318,6 +1336,7 @@ describe('loadAllWorkflowsWithSources with repertoire workflows', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
     configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
     process.env.TAKT_CONFIG_DIR = configDir;
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {

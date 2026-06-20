@@ -9,10 +9,15 @@ import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
 import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 
 export interface DirectResumeMetadata {
   readonly sourceRunSlug: string;
   readonly resumeMode: 'requeue' | 'retry' | 'instruct';
+}
+
+export interface RunMetaManagerOptions {
+  readonly traceDiscovery?: WorkflowTraceDiscovery;
 }
 
 type PersistedRunMeta = Omit<RunMeta, 'resumePoint' | 'sourceRunSlug' | 'resumeMode'> & {
@@ -31,6 +36,7 @@ export class RunMetaManager {
     task: string,
     workflowName: string,
     directResume?: DirectResumeMetadata,
+    options?: RunMetaManagerOptions,
   ) {
     this.metaAbs = runPaths.metaAbs;
     this.runMeta = {
@@ -46,6 +52,11 @@ export class RunMetaManager {
       ...(directResume ? {
         sourceRunSlug: directResume.sourceRunSlug,
         resumeMode: directResume.resumeMode,
+      } : {}),
+      ...(options?.traceDiscovery ? {
+        observability: {
+          traceDiscovery: options.traceDiscovery,
+        },
       } : {}),
     };
     ensureDir(runPaths.runRootAbs);

@@ -101,6 +101,33 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
+  it('should pass childProcessEnv through evaluateCondition to runAgent', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    mockRunAgent.mockResolvedValue({
+      persona: 'default',
+      status: 'done',
+      content: '[JUDGE:1]',
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.evaluateCondition(
+      'agent output',
+      [{ index: 0, text: 'approved' }],
+      {
+        cwd: '/tmp/project',
+        provider: 'cursor',
+        childProcessEnv,
+      },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.stringContaining('[JUDGE:N]'),
+      expect.objectContaining({ childProcessEnv }),
+    );
+  });
+
   it('should omit maxTurns for prompt-based evaluateCondition when resolved provider does not support it', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'default',
@@ -166,6 +193,36 @@ describe('PromptBasedStructuredCaller', () => {
       }),
     );
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
+    expect(runOptions).not.toHaveProperty('outputSchema');
+  });
+
+  it('Given inspectTools, When prompt-based decomposeTask runs, Then it passes them to runAgent without outputSchema', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify([
+          { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+        ]),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    });
+
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
+    expect(runOptions).toEqual(expect.objectContaining({
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      permissionMode: 'readonly',
+    }));
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
 
@@ -272,6 +329,36 @@ describe('PromptBasedStructuredCaller', () => {
         cwd: '/tmp/project',
         workflowMeta,
       }),
+    );
+  });
+
+  it('should pass childProcessEnv through decomposeTask to runAgent', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify([
+          { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+        ]),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+      childProcessEnv,
+    });
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json'),
+      expect.objectContaining({ childProcessEnv }),
     );
   });
 
@@ -556,6 +643,39 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
+  it('prompt-based requestMoreParts は inspect tools を渡さず outputSchema も渡さない', async () => {
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify({ done: true, reasoning: 'Enough', parts: [] }),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        provider: 'cursor',
+        inspectTools: ['Read', 'Glob', 'Grep'],
+      } as Parameters<PromptBasedStructuredCaller['requestMoreParts']>[4] & { inspectTools: string[] },
+    );
+
+    const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
+    expect(runOptions).toEqual(expect.objectContaining({
+      allowedTools: [],
+      permissionMode: 'readonly',
+    }));
+    expect(runOptions).not.toHaveProperty('outputSchema');
+  });
+
   it('should pass resolvedProvider and resolvedModel through requestMoreParts to runAgent', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -668,6 +788,39 @@ describe('PromptBasedStructuredCaller', () => {
         cwd: '/tmp/project',
         workflowMeta,
       }),
+    );
+  });
+
+  it('should pass childProcessEnv through requestMoreParts to runAgent', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        persona: 'team-leader',
+        childProcessEnv,
+      },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json ... ```'),
+      expect.objectContaining({ childProcessEnv }),
     );
   });
 

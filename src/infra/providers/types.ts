@@ -8,6 +8,11 @@ export interface AgentSetup {
   systemPrompt?: string;
 }
 
+export interface ProviderImageAttachment {
+  placeholder: string;
+  path: string;
+}
+
 export interface ProviderCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
@@ -27,7 +32,10 @@ export interface ProviderCallOptions {
   opencodeApiKey?: string;
   cursorApiKey?: string;
   copilotGithubToken?: string;
+  kiroApiKey?: string;
   outputSchema?: Record<string, unknown>;
+  imageAttachments?: ProviderImageAttachment[];
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface ProviderAgent {
@@ -36,6 +44,9 @@ export interface ProviderAgent {
 
 export interface Provider {
   supportsStructuredOutput: boolean;
+  supportsNativeImageInput: boolean;
+  getRuntimeInstructions(): string | null;
+  keepsAllowedToolWithoutEdit(tool: string): boolean;
   setup(config: AgentSetup): ProviderAgent;
 }
 

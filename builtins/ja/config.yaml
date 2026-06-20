@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude                    # デフォルトプロバイダー: claude | codex | opencode | cursor | copilot | mock
+# provider: claude                    # デフォルトプロバイダー: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
@@ -46,6 +46,15 @@ language: ja         # 表示言語: ja | en
 #   provider_events: false         # providerイベントログを記録
 #   usage_events: false            # 使用量イベントログを記録
 
+# OpenTelemetry observability
+# observability:
+#   enabled: true                  # OpenTelemetry SDK を初期化
+#   monitor: true                  # .takt/runs/<run>/monitor.json を出力
+#   session_log_exporter: true     # span 由来の shadow session log を出力
+#   usage_events_phase: true       # phase 粒度の usage event log を出力
+# OTEL_EXPORTER_OTLP_ENDPOINT を設定すると span と metric も OTLP HTTP で送信します。
+# 任意の OTLP 上書き: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.
+
 # アナリティクス
 # analytics:
 #   enabled: true                  # ローカルアナリティクス収集を有効化
@@ -55,22 +64,38 @@ language: ja         # 表示言語: ja | en
 # インタラクティブモード
 # interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
 
-# ペルソナ別プロバイダー・モデル・provider_options 指定
+# workflow step の provider routing（推奨）
+# provider_routing:
+#   personas:
+#     coder:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
+#   tags:
+#     implementation:
+#       provider: codex
+#       model: gpt-5
+#     review:
+#       provider: opencode
+#       model: opencode/qwen3-coder-next
+#     edit:
+#       provider_options:
+#         codex:
+#           network_access: true
+#   steps:
+#     ai-antipattern-review-2nd:
+#       provider: opencode
+#       model: opencode/qwen3-coder-next
+
+# display name ベースの旧 provider 上書き（deprecated。新規設定では provider_routing を推奨）
 # persona_providers:
 #   coder:
-#     provider: claude
-#     model: opus
-#     provider_options:
-#       claude:
-#         effort: high
-#   reviewer:
 #     provider: codex
-#     model: gpt-5.2-codex
-#     provider_options:
-#       codex:
-#         reasoning_effort: high
+#     model: gpt-5
 
-# プロバイダー固有オプション（設定既定値。env 起源の leaf が最優先で、それ以外は step > workflow > persona > project > global の順）
+# プロバイダー固有オプション（設定既定値。env 起源の leaf が最優先で、それ以外は step > provider_routing > deprecated persona_providers > workflow > project > global の順）
 # provider_options:
 #   codex:
 #     network_access: true
@@ -122,12 +147,14 @@ language: ja         # 表示言語: ja | en
 # openrouter_api_key: "..."        # OpenRouter APIキー
 # opencode_api_key: "..."          # OpenCode APIキー
 # cursor_api_key: "..."            # Cursor APIキー
+# kiro_api_key: "..."              # Kiro APIキー
 
 # CLIパス
 # codex_cli_path: "/absolute/path/to/codex"    # Codex CLI絶対パス
 # claude_cli_path: "/absolute/path/to/claude"  # Claude Code CLI絶対パス
 # cursor_cli_path: "/absolute/path/to/cursor"  # cursor-agent CLI絶対パス
 # copilot_cli_path: "/absolute/path/to/copilot" # Copilot CLI絶対パス
+# kiro_cli_path: "/absolute/path/to/kiro-cli"   # Kiro CLI絶対パス
 # copilot_github_token: "ghp_..."              # Copilot GitHubトークン
 
 # その他

@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import type { Language } from '../../../core/models/index.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
 import {
   getGlobalConfigDir,
   getGlobalConfigPath,
@@ -19,6 +20,8 @@ import {
 } from '../paths.js';
 import { copyProjectResourcesToDir, getLanguageResourcesDir } from '../../resources/index.js';
 import { setLanguage, setProvider } from './globalConfig.js';
+
+type InitialSetupProvider = Exclude<ProviderType, 'mock'>;
 
 /**
  * Check if initial setup is needed.
@@ -56,12 +59,10 @@ export async function promptLanguageSelection(): Promise<Language> {
  * Prompt user to select provider for resources.
  * Exits process if cancelled (initial setup is required).
  */
-export async function promptProviderSelection(): Promise<
-  'claude' | 'claude-sdk' | 'claude-terminal' | 'codex' | 'opencode' | 'cursor' | 'copilot'
-> {
+export async function promptProviderSelection(): Promise<InitialSetupProvider> {
   const options: {
     label: string;
-    value: 'claude' | 'claude-sdk' | 'claude-terminal' | 'codex' | 'opencode' | 'cursor' | 'copilot';
+    value: InitialSetupProvider;
   }[] = [
     { label: 'Claude Code (headless CLI)', value: 'claude' },
     { label: 'Claude Agent SDK', value: 'claude-sdk' },
@@ -70,6 +71,7 @@ export async function promptProviderSelection(): Promise<
     { label: 'OpenCode', value: 'opencode' },
     { label: 'Cursor Agent', value: 'cursor' },
     { label: 'GitHub Copilot', value: 'copilot' },
+    { label: 'Kiro CLI', value: 'kiro' },
   ];
 
   const result = await selectOptionWithDefault(

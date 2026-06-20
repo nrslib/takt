@@ -1,0 +1,14 @@
+claude:
+  allowed_tools:
+    - Read
+    - Glob
+    - Grep
+    - WebSearch
+    - WebFetch
+opencode:
+  allowed_tools:
+    - read
+    - glob
+    - grep
+    - websearch
+    - webfetch

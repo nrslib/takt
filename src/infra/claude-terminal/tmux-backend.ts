@@ -4,6 +4,10 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { stripAnsi } from '../../shared/utils/text.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import {
+  buildEnvWithNestedObservabilitySnapshot,
+  pickNestedObservabilityEnv,
+} from '../../shared/telemetry/index.js';
 import { createClaudeTerminalSessionName } from './command.js';
 import type { TerminalBackend, TerminalSession, TerminalStartOptions } from './types.js';
 
@@ -57,25 +61,44 @@ function formatTmuxError(error: unknown): Error {
   return new Error('tmux command failed.');
 }
 
-async function runTmux(args: string[], options?: { cwd?: string }): Promise<string> {
+async function runTmux(args: string[], options?: {
+  cwd?: string;
+  childProcessEnv?: Readonly<Record<string, string>>;
+}): Promise<string> {
   if (!childProcess.execFile) {
     throw new Error('node:child_process.execFile is required to run tmux.');
   }
   const execFileAsync = promisify(childProcess.execFile) as (
     file: string,
     args: string[],
-    options: { cwd?: string; encoding: BufferEncoding; maxBuffer: number },
+    options: { cwd?: string; encoding: BufferEncoding; maxBuffer: number; env?: NodeJS.ProcessEnv },
   ) => Promise<{ stdout: string; stderr: string }>;
+  const env = buildEnvWithNestedObservabilitySnapshot(process.env, options?.childProcessEnv);
   try {
     const result = await execFileAsync('tmux', args, {
       cwd: options?.cwd,
       encoding: 'utf-8',
       maxBuffer: 1024 * 1024 * 4,
+      env,
     });
     return result.stdout;
   } catch (error) {
     throw formatTmuxError(error as ExecFileException);
   }
+}
+
+function buildNewSessionEnvArgs(
+  childProcessEnv: Readonly<Record<string, string>> | undefined,
+): string[] {
+  return Object.entries(pickNestedObservabilityEnv(childProcessEnv))
+    .filter(([key, value]) => value !== undefined && isTmuxArgSafeEnvKey(key))
+    .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
+}
+
+function isTmuxArgSafeEnvKey(key: string): boolean {
+  return !key.endsWith('_HEADERS')
+    && !key.endsWith('_CLIENT_CERTIFICATE')
+    && !key.endsWith('_CLIENT_KEY');
 }
 
 async function loadBuffer(bufferName: string, text: string): Promise<void> {
@@ -154,9 +177,10 @@ export class TmuxTerminalBackend implements TerminalBackend {
       name,
       '-c',
       options.cwd,
+      ...buildNewSessionEnvArgs(options.childProcessEnv),
       options.command.executable,
       ...options.command.args,
-    ], { cwd: options.cwd });
+    ], { cwd: options.cwd, childProcessEnv: options.childProcessEnv });
     return { id: name, name };
   }
 

@@ -12,6 +12,7 @@ import {
   normalizeWorkflowOverrides,
   normalizePipelineConfig,
   normalizePersonaProviders,
+  normalizeProviderRouting,
   normalizeTaktProviders,
   buildRawTaktProvidersOrThrow,
   normalizeRuntime,
@@ -154,7 +155,9 @@ export class GlobalConfigManager {
       claudeCliPath: expandOptionalHomePath(parsed.claude_cli_path),
       cursorCliPath: expandOptionalHomePath(parsed.cursor_cli_path),
       copilotCliPath: expandOptionalHomePath(parsed.copilot_cli_path),
+      kiroCliPath: expandOptionalHomePath(parsed.kiro_cli_path),
       copilotGithubToken: parsed.copilot_github_token,
+      kiroApiKey: parsed.kiro_api_key,
       opencodeApiKey: parsed.opencode_api_key,
       cursorApiKey: parsed.cursor_api_key,
       bookmarksFile: expandOptionalHomePath(parsed.bookmarks_file),
@@ -163,7 +166,7 @@ export class GlobalConfigManager {
       rateLimitFallback: normalizeRateLimitFallback(parsed.rate_limit_fallback),
       providerProfiles: normalizeProviderProfiles(
         parsed.provider_profiles as Record<string, {
-          default_permission_mode: string;
+          default_permission_mode: 'readonly' | 'edit' | 'full';
           step_permission_overrides?: Record<string, string>;
         }> | undefined,
       ),
@@ -223,6 +226,13 @@ export class GlobalConfigManager {
           model?: string;
           provider_options?: Record<string, unknown>;
         }> | undefined,
+      ),
+      providerRouting: normalizeProviderRouting(
+        parsed.provider_routing as {
+          personas?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+          tags?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+          steps?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
+        } | undefined,
       ),
       branchNameStrategy: parsed.branch_name_strategy as GlobalConfig['branchNameStrategy'],
       minimalOutput: parsed.minimal_output as boolean | undefined,

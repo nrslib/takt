@@ -1,16 +1,35 @@
 import { EventEmitter } from 'node:events';
+import { writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
+import type { FindingLedger, WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
+import { initAnalyticsWriter } from '../features/analytics/index.js';
+import { resetAnalyticsWriter } from '../features/analytics/writer.js';
+import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 
 class TestEngine extends EventEmitter {
-  constructor(private readonly resumePoint: WorkflowResumePoint) {
+  constructor(
+    private readonly resumePoint: WorkflowResumePoint,
+    private readonly findingIds: string[] = [],
+  ) {
     super();
   }
 
   getResumePoint(): WorkflowResumePoint {
     return this.resumePoint;
+  }
+
+  getState() {
+    return {
+      findings: {
+        open: {
+          items: this.findingIds.map((id) => ({ id })),
+        },
+      },
+    };
   }
 }
 
@@ -18,6 +37,8 @@ function createBridgeHarness(options?: {
   currentProvider?: string;
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
+  findingIds?: string[];
+  traceDiscovery?: { queries: string[] };
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 1,
@@ -25,7 +46,7 @@ function createBridgeHarness(options?: {
     iteration: 2,
     elapsed_ms: 100,
   } satisfies WorkflowResumePoint;
-  const engine = new TestEngine(resumePoint);
+  const engine = new TestEngine(resumePoint, options?.findingIds);
   const out = {
     info: vi.fn(),
     blankLine: vi.fn(),
@@ -43,6 +64,13 @@ function createBridgeHarness(options?: {
     updatePhase: vi.fn(),
     updateResumePoint: vi.fn(),
     finalize: vi.fn(),
+  };
+  const analyticsEmitter = {
+    updateProviderInfo: vi.fn(),
+    onStepComplete: vi.fn(),
+    onStepReport: vi.fn(),
+    onFindingLedgerUpdated: vi.fn(),
+    seedFindingContractFindingIds: vi.fn(),
   };
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
@@ -68,11 +96,7 @@ function createBridgeHarness(options?: {
       setProvider: vi.fn(),
       logUsage: vi.fn(),
     } as never,
-    analyticsEmitter: {
-      updateProviderInfo: vi.fn(),
-      onStepComplete: vi.fn(),
-      onStepReport: vi.fn(),
-    } as never,
+    analyticsEmitter: analyticsEmitter as never,
     sessionLogger: {
       onPhaseStart: vi.fn(),
       setIteration: vi.fn(),
@@ -88,6 +112,7 @@ function createBridgeHarness(options?: {
     shouldNotifyWorkflowComplete: false,
     shouldNotifyWorkflowAbort: false,
     writeTraceReportOnce: vi.fn(),
+    traceDiscovery: options?.traceDiscovery,
     getCurrentWorkflowStack: () => resumePoint.stack,
     initialResumePoint: resumePoint,
     sessionLog: {
@@ -101,7 +126,7 @@ function createBridgeHarness(options?: {
     },
   });
 
-  return { bridge, engine, out, runMetaManager, resumePoint };
+  return { bridge, engine, out, runMetaManager, resumePoint, analyticsEmitter };
 }
 
 describe('bindWorkflowExecutionEvents', () => {
@@ -137,6 +162,101 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(bridge.state.lastStepName).toBe('review');
     expect(bridge.state.lastStepContent).toBe('approved');
     expect(bridge.state.sessionLog.iterations).toBe(1);
+  });
+
+  it('findings ledger event を analytics emitter に渡す', () => {
+    const { engine, analyticsEmitter } = createBridgeHarness();
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: '2026-06-13T01:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    };
+
+    engine.emit('findings:ledger', ledger);
+
+    expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(ledger);
+  });
+
+  it('workflow complete event が TraceQL discovery を完了出力へ渡す', () => {
+    const { engine, out } = createBridgeHarness({
+      traceDiscovery: {
+        queries: ['{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }'],
+      },
+    });
+
+    engine.emit('workflow:complete', { iteration: 2 });
+
+    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(out.info).toHaveBeenCalledWith(
+      '  { resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
+    );
+  });
+
+  it('workflow abort event が TraceQL discovery を abort 出力へ渡す', () => {
+    const { engine, out } = createBridgeHarness({
+      traceDiscovery: {
+        queries: ['{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }'],
+      },
+    });
+
+    engine.emit('workflow:abort', { iteration: 2 }, 'Step "write_tests" failed');
+
+    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
+    expect(out.info).toHaveBeenCalledWith(
+      '  { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+    );
+  });
+
+  it('finding ledger analytics の書き込み失敗後も workflow complete を処理する', () => {
+    const analyticsPath = join(tmpdir(), `takt-test-ledger-analytics-failure-${Date.now()}`);
+    writeFileSync(analyticsPath, 'not a directory', 'utf-8');
+    initAnalyticsWriter(true, analyticsPath);
+    try {
+      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model');
+      const { engine, runMetaManager, analyticsEmitter } = createBridgeHarness();
+      analyticsEmitter.onFindingLedgerUpdated.mockImplementation((ledger: FindingLedger) => {
+        actualAnalyticsEmitter.onFindingLedgerUpdated(ledger);
+      });
+      const ledger: FindingLedger = {
+        version: 1,
+        workflowName: 'peer-review',
+        nextId: 2,
+        updatedAt: '2026-06-13T02:30:00.000Z',
+        findings: [
+          {
+            id: 'F-0001',
+            status: 'open',
+            lifecycle: 'new',
+            severity: 'high',
+            title: 'Analytics write should not abort workflow',
+            reviewers: ['architecture-reviewer'],
+            rawFindingIds: ['run:reviewers:1:architecture-review:raw-1'],
+            firstSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
+            lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
+          },
+        ],
+        rawFindings: [],
+        conflicts: [],
+      };
+
+      expect(() => engine.emit('findings:ledger', ledger)).not.toThrow();
+      expect(() => engine.emit('workflow:complete', { iteration: 3 })).not.toThrow();
+
+      expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 3);
+    } finally {
+      resetAnalyticsWriter();
+      rmSync(analyticsPath, { force: true });
+    }
+  });
+
+  it('event bridge 初期化時に既存 open finding id を analytics emitter に渡す', () => {
+    const { analyticsEmitter } = createBridgeHarness({ findingIds: ['F-0001', 'F-0002'] });
+
+    expect(analyticsEmitter.seedFindingContractFindingIds).toHaveBeenCalledWith(['F-0001', 'F-0002']);
   });
 
   it('OpenCode variant を step start の provider option 表示に含める', () => {
@@ -177,6 +297,76 @@ describe('bindWorkflowExecutionEvents', () => {
     });
 
     expect(out.info).toHaveBeenCalledWith('Reasoning effort: high');
+  });
+
+  it('Kiro agent を step start の provider option 表示に含める', () => {
+    const { engine, out } = createBridgeHarness({
+      currentProvider: 'kiro',
+      configuredModel: 'kiro-default',
+    });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', {
+      provider: 'kiro',
+      model: 'kiro-default',
+      providerOptions: { kiro: { agent: 'reviewer-agent' } },
+    });
+
+    expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent');
+  });
+
+  it('Kiro agent 未指定なら Agent 行を表示しない', () => {
+    const { engine, out } = createBridgeHarness({
+      currentProvider: 'kiro',
+      configuredModel: 'kiro-default',
+    });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', {
+      provider: 'kiro',
+      model: 'kiro-default',
+      providerOptions: { opencode: { variant: 'high' } },
+    });
+
+    const agentLines = out.info.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].startsWith('Agent:'),
+    );
+    expect(agentLines).toEqual([]);
+  });
+
+  it('verbose 時に Kiro agent の解決ソースを表示する', () => {
+    resetDebugLogger();
+    setVerboseConsole(true);
+    try {
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'kiro',
+        configuredModel: 'kiro-default',
+      });
+      const step = {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'kiro',
+        model: 'kiro-default',
+        providerOptions: { kiro: { agent: 'reviewer-agent' } },
+        providerOptionsSources: { 'kiro.agent': 'step' },
+      });
+
+      expect(out.info).toHaveBeenCalledWith('Agent: reviewer-agent (source: step)');
+    } finally {
+      resetDebugLogger();
+    }
   });
 
   it('verbose 時に OpenCode variant の解決ソースを表示する', () => {

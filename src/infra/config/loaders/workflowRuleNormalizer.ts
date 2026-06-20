@@ -1,23 +1,9 @@
 import type { WorkflowRule } from '../../../core/models/index.js';
 import {
+  parseAggregateConditionArgs,
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../../../core/models/workflow-condition-expression.js';
-
-function parseAggregateConditions(argsText: string): string[] {
-  const conditions: string[] = [];
-  const regex = /"([^"]+)"/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(argsText)) !== null) {
-    if (match[1]) {
-      conditions.push(match[1]);
-    }
-  }
-  if (conditions.length === 0) {
-    throw new Error(`Invalid aggregate condition format: ${argsText}`);
-  }
-  return conditions;
-}
 
 export function normalizeRule(rule: {
   condition?: string;
@@ -49,7 +35,7 @@ export function normalizeRule(rule: {
 
   const aggregateExpression = parseAggregateConditionExpression(condition);
   if (aggregateExpression) {
-    const conditions = parseAggregateConditions(aggregateExpression.argsText);
+    const conditions = parseAggregateConditionArgs(aggregateExpression.argsText);
     return {
       condition,
       next,
@@ -60,6 +46,9 @@ export function normalizeRule(rule: {
       isAggregateCondition: true,
       aggregateType: aggregateExpression.type,
       aggregateConditionText: conditions.length === 1 ? conditions[0]! : conditions,
+      ...(aggregateExpression.guardCondition !== undefined
+        ? { aggregateGuardCondition: aggregateExpression.guardCondition }
+        : {}),
     };
   }
 

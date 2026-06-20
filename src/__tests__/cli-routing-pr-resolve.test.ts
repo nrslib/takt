@@ -312,6 +312,7 @@ describe('PR resolution in routing', () => {
         'Saved PR task',
         'default',
         expect.objectContaining({
+          prNumber: 456,
           presetSettings: expect.objectContaining({
             worktree: true,
             branch: 'feat/my-pr-branch',
@@ -325,7 +326,10 @@ describe('PR resolution in routing', () => {
     it('should execute task after resolving PR review comments', async () => {
       // Given
       mockOpts.pr = 456;
-      const prReview = createMockPrReview({ headRefName: 'feat/my-pr-branch' });
+      const prReview = createMockPrReview({
+        headRefName: 'feat/my-pr-branch',
+        baseRefName: 'release/main',
+      });
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(prReview);
 
@@ -336,7 +340,14 @@ describe('PR resolution in routing', () => {
       expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
         '/test/cwd',
         'summarized task',
-        expect.any(Object),
+        expect.objectContaining({
+          traceTaskContext: {
+            source: 'pr_review',
+            prNumber: 456,
+            branch: 'feat/my-pr-branch',
+            baseBranch: 'release/main',
+          },
+        }),
         undefined,
       );
     });

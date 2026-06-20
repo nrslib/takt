@@ -11,6 +11,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { delimiter, dirname } from 'node:path';
 import type { PermissionMode } from '../../core/models/index.js';
+import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import { taktPermissionModeToClaudeExpression } from './permission-mode-expression.js';
 import type {
@@ -24,9 +25,7 @@ import { AskUserQuestionDeniedError, createAskUserQuestionHandler } from './ask-
 const log = createLogger('claude-sdk');
 
 function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
-  const env: Record<string, string> = {
-    ...process.env as Record<string, string>,
-  };
+  const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv) as Record<string, string>;
 
   if (options.anthropicApiKey) {
     env.ANTHROPIC_API_KEY = options.anthropicApiKey;

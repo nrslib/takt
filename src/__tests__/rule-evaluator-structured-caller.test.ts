@@ -103,6 +103,43 @@ describe('RuleEvaluator with structuredCaller', () => {
     );
   });
 
+  it('passes childProcessEnv to ai() condition structured caller evaluation', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    const structuredCaller = {
+      evaluateCondition: vi.fn().mockResolvedValue(0),
+    };
+    const step = makeStep({
+      name: 'review',
+      rules: [
+        { condition: 'approved', next: 'COMPLETE', isAiCondition: true, aiConditionText: 'is it approved?' },
+      ],
+    });
+
+    const evaluator = new RuleEvaluator(
+      step,
+      {
+        state: makeState(),
+        cwd: '/tmp/project',
+        provider: 'codex',
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.2-codex',
+        childProcessEnv,
+        detectRuleIndex: vi.fn().mockReturnValue(-1),
+        structuredCaller,
+      } as ConstructorParameters<typeof RuleEvaluator>[1] & {
+        structuredCaller: { evaluateCondition: typeof structuredCaller.evaluateCondition };
+      },
+    );
+
+    await evaluator.evaluate('agent output', '');
+
+    expect(structuredCaller.evaluateCondition).toHaveBeenCalledWith(
+      'agent output',
+      [{ index: 0, text: 'is it approved?' }],
+      expect.objectContaining({ childProcessEnv }),
+    );
+  });
+
   it('should delegate final fallback evaluation to structuredCaller instead of the removed legacy judge path', async () => {
     const structuredCaller = {
       evaluateCondition: vi.fn().mockResolvedValue(1),

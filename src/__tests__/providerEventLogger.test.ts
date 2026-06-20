@@ -108,6 +108,48 @@ describe('providerEventLogger', () => {
     expect(logger.filepath.endsWith('-usage-events.jsonl')).toBe(false);
   });
 
+  it('should normalize permission_asked events for provider logs', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-permission',
+      runId: 'run-permission',
+      provider: 'opencode',
+      step: 'reviewers',
+      enabled: true,
+    });
+
+    const wrapped = logger.wrapCallback();
+
+    wrapped({
+      type: 'permission_asked',
+      data: {
+        requestId: 'perm-1',
+        sessionId: 'opencode-session-1',
+        permission: 'bash',
+        patterns: ['**'],
+        always: [],
+        reply: 'reject',
+      },
+    });
+
+    const lines = readFileSync(logger.filepath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+
+    const parsed = JSON.parse(lines[0]!) as {
+      event_type: string;
+      session_id?: string;
+      request_id?: string;
+      data: Record<string, unknown>;
+    };
+
+    expect(parsed.event_type).toBe('permission_asked');
+    expect(parsed.session_id).toBe('opencode-session-1');
+    expect(parsed.request_id).toBe('perm-1');
+    expect(parsed.data['permission']).toBe('bash');
+    expect(parsed.data['patterns']).toEqual(['**']);
+    expect(parsed.data['reply']).toBe('reject');
+  });
+
   it('should update step and provider for subsequent events', () => {
     const logger = createProviderEventLogger({
       logsDir: tempDir,

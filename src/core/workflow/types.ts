@@ -12,13 +12,15 @@ import type {
   RateLimitFallbackConfig,
   FallbackContext,
 } from '../models/types.js';
-import type { PersonaProviderEntry, ResolvedObservabilityConfig } from '../models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig, ResolvedObservabilityConfig } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
+import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
+import type { FindingLedger } from '../models/finding-types.js';
 
 import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
 export type {
@@ -77,6 +79,7 @@ export interface JudgeStageEntry {
   status: 'done' | 'error' | 'skipped';
   instruction: string;
   response: string;
+  providerUsage?: ProviderUsageSnapshot;
 }
 
 export interface StepProviderInfo {
@@ -128,9 +131,16 @@ export type WorkflowAbortKind =
   | 'step_transition'
   | 'runtime_error';
 
+export interface WorkflowStepFailureSummary {
+  kind: WorkflowAbortKind;
+  step: string;
+  reason: string;
+}
+
 export interface WorkflowAbortResult {
   kind: WorkflowAbortKind;
   reason: string;
+  failure?: WorkflowStepFailureSummary;
 }
 
 export interface WorkflowRunResult {
@@ -159,6 +169,7 @@ export interface WorkflowEvents {
   'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo) => void;
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
+  'findings:ledger': (ledger: FindingLedger) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
@@ -252,6 +263,12 @@ export interface WorkflowEngineOptions {
   projectCwd: string;
   /** Resolved observability opt-in config for workflow instrumentation. */
   observability?: ResolvedObservabilityConfig;
+  /** Run-local identifier used to route observability artifacts in the shared SDK. */
+  observabilityRunId?: string;
+  /** Redacts text before it is attached to observability spans. */
+  sanitizeObservabilityText?: (text: string) => string;
+  /** Run-local environment values passed to trusted child processes. */
+  childProcessEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
   provider?: ProviderType;
@@ -268,6 +285,8 @@ export interface WorkflowEngineOptions {
   providerOptionsOriginResolver?: ProviderOptionsOriginResolver;
   /** Per-persona provider and model overrides (e.g., { coder: { provider: 'codex', model: 'o3-mini' } }) */
   personaProviders?: Record<string, PersonaProviderEntry>;
+  /** Provider routing by raw persona key, workflow step tag, and workflow step name */
+  providerRouting?: ProviderRoutingConfig;
   /** Resolved provider permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive-only rules and user-input transitions */
@@ -301,11 +320,26 @@ export interface WorkflowEngineOptions {
     issueNumber?: number;
     runSlug?: string;
   };
+  /** Task metadata used only for trace discovery attributes. */
+  traceTaskMetadata?: WorkflowTraceTaskMetadata;
   phase1ProcessSafetyByStep?: Record<string, { protectedParentRunPid: number }>;
   systemStepServicesFactory?: SystemStepServicesFactory;
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+}
+
+export interface WorkflowTraceTaskMetadata {
+  taskName?: string | undefined;
+  taskSlug?: string | undefined;
+  taskSummary?: string | undefined;
+  taskSource?: 'issue' | 'pr_review' | 'manual' | undefined;
+  issueNumber?: number | undefined;
+  prNumber?: number | undefined;
+  gitBranch?: string | undefined;
+  gitBaseBranch?: string | undefined;
+  worktreePath?: string | undefined;
+  runDir?: string | undefined;
 }
 
 /** Loop detection result */

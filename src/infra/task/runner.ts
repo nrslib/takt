@@ -66,8 +66,8 @@ export class TaskRunner {
     return this.lifecycle.claimNextTasks(count);
   }
 
-  recoverInterruptedRunningTasks(): number {
-    return this.lifecycle.recoverInterruptedRunningTasks();
+  failInterruptedRunningTasks(): number {
+    return this.lifecycle.failInterruptedRunningTasks();
   }
 
   completeTask(result: TaskResult): string {

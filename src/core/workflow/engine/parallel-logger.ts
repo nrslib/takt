@@ -137,7 +137,7 @@ export class ParallelLogger {
    *
    * - `text`: buffered line-by-line with prefix
    * - `tool_use`, `tool_result`, `tool_output`, `thinking`: prefixed per-line, no buffering
-   * - `init`, `result`, `error`: delegated to parent callback (no prefix)
+   * - `init`, `result`, `error`, diagnostics: delegated to parent callback (no prefix)
    */
   createStreamHandler(subStepName: string, index: number): StreamCallback {
     const prefix = this.buildPrefix(subStepName, index);
@@ -157,6 +157,8 @@ export class ParallelLogger {
 
         case 'init':
         case 'result':
+        case 'permission_asked':
+        case 'permission_summary':
         case 'assistant_error':
         case 'rate_limit':
         case 'error':

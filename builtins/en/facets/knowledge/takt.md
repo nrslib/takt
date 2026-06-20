@@ -77,6 +77,17 @@ Models resolve through 5-level priority. Higher takes precedence.
 4. config.yaml (when resolved provider matches)
 5. Provider default
 
+## Auxiliary Entry Contracts
+
+In TAKT, workflow runtime is not the only user-visible contract entry. Preview, doctor, workflow summary, validation, and report paths are also contract entries. Auxiliary entries that display or validate config values, providers, models, tools, permissions, or output contracts should use the same normalized input, resolver, and override order as runtime.
+
+| Criteria | Judgment |
+|----------|----------|
+| Runtime and preview resolve provider, model, tool, or permission from different inputs | REJECT |
+| Preview only displays a value without verifying the same override conditions as runtime | REJECT |
+| Doctor or validation accepts config that fails at runtime due to different conditions | Warning |
+| Runtime and auxiliary entries share the same normalized input or resolver | OK |
+
 ## Facet Assembly
 
 The faceted-prompting module is independent from TAKT core.

@@ -9,11 +9,12 @@ import {
   notifySuccess,
   sendSlackNotification,
   buildSlackRunSummary,
+  generateRunId,
 } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { runWithWorkerPool } from './parallelExecution.js';
-import { generateRunId, toSlackTaskDetail } from './slackSummaryAdapter.js';
+import { toSlackTaskDetail } from './slackSummaryAdapter.js';
 
 export async function runAllTasks(
   cwd: string,
@@ -39,9 +40,9 @@ export async function runAllTasks(
     && globalConfig.notificationSoundEvents?.runAbort !== false;
   const concurrency = globalConfig.concurrency;
   const slackWebhookUrl = getSlackWebhookUrl();
-  const recovered = taskRunner.recoverInterruptedRunningTasks();
-  if (recovered > 0) {
-    info(`Recovered ${recovered} interrupted running task(s) to pending.`);
+  const failedInterrupted = taskRunner.failInterruptedRunningTasks();
+  if (failedInterrupted > 0) {
+    info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
   }
 
   const initialTasks = taskRunner.claimNextTasks(concurrency);

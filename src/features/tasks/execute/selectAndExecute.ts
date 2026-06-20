@@ -15,6 +15,7 @@ import { selectWorkflow } from '../../workflowSelection/index.js';
 import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from '../attachments.js';
 import { cleanupStagedTaskSpec, stageTaskSpecForExecution, type StagedTaskSpec } from './taskSpecContext.js';
+import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
@@ -134,7 +135,6 @@ export async function selectAndExecuteTask(
     }
   }
   const preparedSpecTaskDirToCleanup = options?.skipTaskList === true ? preparedSpec?.taskDir : undefined;
-  const stagedSpecToCleanup = options?.skipTaskList === true ? stagedSpec : undefined;
   const startedAt = new Date().toISOString();
 
   statusLine.start('Running...');
@@ -149,6 +149,17 @@ export async function selectAndExecuteTask(
       interactiveUserInput: options?.interactiveUserInput === true,
       interactiveMetadata: options?.interactiveMetadata,
       ...(reportDirName ? { reportDirName } : {}),
+      traceTaskMetadata: buildTraceTaskMetadata({
+        task: taskRecord ?? undefined,
+        taskContent: stagedSpec?.taskPrompt ?? task,
+        source: options?.traceTaskContext?.source,
+        issueNumber: options?.traceTaskContext?.issueNumber,
+        prNumber: options?.traceTaskContext?.prNumber,
+        branch: options?.traceTaskContext?.branch,
+        baseBranch: options?.traceTaskContext?.baseBranch,
+        taskSlug: options?.traceTaskContext?.taskSlug,
+        worktreePath: options?.traceTaskContext?.worktreePath,
+      }),
     });
   } catch (err) {
     const completedAt = new Date().toISOString();
@@ -160,7 +171,7 @@ export async function selectAndExecuteTask(
     throw err;
   } finally {
     statusLine.stop();
-    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup, stagedSpecToCleanup);
+    cleanupTransientTaskSpecs(preparedSpecTaskDirToCleanup, undefined);
   }
 
   const completedAt = new Date().toISOString();

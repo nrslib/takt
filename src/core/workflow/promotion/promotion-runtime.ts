@@ -1,4 +1,5 @@
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { AgentWorkflowStep, WorkflowStep } from '../../models/types.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
@@ -9,6 +10,7 @@ export interface PromotionRuntimeContext {
   cwd: string;
   previousResponseContent: string;
   structuredCaller?: StructuredCaller;
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
 }
 
@@ -128,6 +130,7 @@ export async function resolvePromotionRuntime(
     structuredCaller: context.structuredCaller,
     resolvedProvider: baseProviderInfo.provider,
     resolvedModel: baseProviderInfo.model,
+    childProcessEnv: context.childProcessEnv,
   });
   if (!promotion) {
     return runtime;

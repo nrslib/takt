@@ -22,11 +22,14 @@ const CLAUDE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
   'mock',
 ]);
 
+const OPENCODE_ALLOWED_TOOLS_PROVIDERS = new Set<ProviderType>([
+  'opencode',
+]);
+
 const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
   'claude',
   'claude-sdk',
   'codex',
-  'opencode',
   'cursor',
   'copilot',
   'mock',
@@ -34,9 +37,11 @@ const MAX_TURNS_PROVIDERS = new Set<ProviderType>([
 
 interface ProviderCapabilities {
   supportsStructuredOutput: boolean;
+  supportsNativeImageInput: boolean;
   supportsMcpServers: boolean;
   supportsAllowedTools: boolean;
   supportsClaudeAllowedTools: boolean;
+  supportsOpenCodeAllowedTools: boolean;
   supportsMaxTurns: boolean;
 }
 
@@ -47,11 +52,15 @@ function resolveProviderCapabilities(
     return undefined;
   }
 
+  const providerImpl = getProvider(provider);
+
   return {
-    supportsStructuredOutput: getProvider(provider).supportsStructuredOutput,
+    supportsStructuredOutput: providerImpl.supportsStructuredOutput,
+    supportsNativeImageInput: providerImpl.supportsNativeImageInput,
     supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
+    supportsOpenCodeAllowedTools: OPENCODE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsMaxTurns: MAX_TURNS_PROVIDERS.has(provider),
   };
 }
@@ -60,6 +69,12 @@ export function providerSupportsStructuredOutput(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsStructuredOutput;
+}
+
+export function providerSupportsNativeImageInput(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsNativeImageInput;
 }
 
 export function providerSupportsMcpServers(
@@ -80,8 +95,25 @@ export function providerSupportsClaudeAllowedTools(
   return resolveProviderCapabilities(provider)?.supportsClaudeAllowedTools;
 }
 
+export function providerSupportsOpenCodeAllowedTools(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsOpenCodeAllowedTools;
+}
+
 export function providerSupportsMaxTurns(
   provider: ProviderType | undefined,
 ): boolean | undefined {
   return resolveProviderCapabilities(provider)?.supportsMaxTurns;
+}
+
+export function providerKeepsAllowedToolWithoutEdit(
+  provider: ProviderType | undefined,
+  tool: string,
+): boolean {
+  if (provider === undefined) {
+    return true;
+  }
+
+  return getProvider(provider).keepsAllowedToolWithoutEdit(tool);
 }

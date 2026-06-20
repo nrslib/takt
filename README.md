@@ -1,10 +1,32 @@
 # TAKT
 
-🇯🇵 [日本語ドキュメント](./docs/README.ja.md) | 💬 [Discord Community](https://discord.gg/R2Xz3uYWxD)
+<p align="center">
+  <a href="https://www.npmjs.com/package/takt"><img src="https://img.shields.io/npm/v/takt?label=npm" alt="npm version"></a>
+  <a href="https://github.com/nrslib/takt/stargazers"><img src="https://img.shields.io/github/stars/nrslib/takt?logo=github&label=stars" alt="GitHub stars"></a>
+  <a href="https://github.com/nrslib/takt/actions/workflows/ci.yml"><img src="https://github.com/nrslib/takt/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/nrslib/takt" alt="license"></a>
+  <a href="https://discord.gg/R2Xz3uYWxD"><img src="https://img.shields.io/badge/dynamic/json?label=discord&query=approximate_member_count&url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FR2Xz3uYWxD%3Fwith_counts%3Dtrue&suffix=%20members&logo=discord&logoColor=white&color=5865F2" alt="Discord members"></a>
+</p>
 
-**T**AKT **A**gent **K**oordination **T**opology — Orchestrate multiple AI agents with structured review loops, managed prompts, and guardrails.
+<p align="center">
+  <a href="./README.md">English</a> |
+  <a href="./docs/README.ja.md">日本語</a>
+</p>
 
-Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Cursor, and GitHub Copilot CLI as agents with different roles, permissions, and context.
+**Stop babysitting AI coding agents.**
+
+TAKT is an open-source CLI that turns AI coding agents into repeatable development workflows. Define planning, implementation, review, fix loops, human checkpoints, permissions, and output contracts in YAML, then run tasks with isolated worktrees and traceable logs.
+
+Instead of asking one agent to remember the whole process, TAKT gives each step its own role, context, and transition rules. Agents can code, but the workflow decides what happens next.
+
+- Run plan → implement → review → fix loops as explicit workflow steps
+- Keep context focused with step-specific personas, policies, knowledge, instructions, and output contracts
+- Execute queued tasks in isolated worktrees and inspect logs and reports afterward
+- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
+
+**T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with structured review loops, managed prompts, and guardrails.
+
+Talk to AI to define what you want, queue it as a task, and run it with `takt run`. Planning, implementation, review, and fix loops are defined in YAML workflow files, so the process is not left to the agent's discretion. TAKT coordinates Claude Code, Codex, OpenCode, Cursor, GitHub Copilot CLI, and Kiro CLI as agents with different roles, permissions, and context.
 
 TAKT is built primarily for AI coding workflows, but the same model applies beyond coding: any task where multiple AI agents need to coordinate, or where review, judgment, and feedback loops can improve task quality.
 
@@ -26,6 +48,37 @@ At its core, TAKT runs reusable agent processes built from roles, phases, judgme
 
 The goal is simple: make development processes reusable, reviewable, and reproducible without depending on constant human intervention.
 
+## Try It in 5 Minutes
+
+From a Git repository with at least one commit:
+
+```bash
+npm install -g takt
+
+# Talk to AI, describe a task, use /go, then choose "Queue as task"
+takt
+
+# Execute queued tasks in isolated worktrees
+takt run
+
+# Review diffs, merge, retry, requeue, or delete task branches
+takt list
+```
+
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, and `opencode` can run with Node.js and API keys; CLI-based providers require their external CLIs.
+
+## TAKT vs Plain AI Coding Agents
+
+| Plain AI coding agents | TAKT |
+|------------------------|------|
+| The prompt asks the agent to follow a process | The YAML workflow owns the process |
+| Review steps can be forgotten or skipped | Review and fix loops are explicit transitions |
+| One long context keeps growing | Each step receives only the context it needs |
+| Implementation and review responsibilities blur | Personas, permissions, and output contracts separate responsibilities |
+| Work often lands directly in the current tree | Queued tasks run in isolated worktrees by default |
+| The path from task to result is hard to audit | Logs and reports preserve the path from task to PR |
+| The same process must be recreated by memory | Workflows are reusable, reviewable, and versionable |
+
 ## Requirements
 
 The provider you choose determines whether you need to install an external CLI or can run on Node.js alone via a TypeScript SDK.
@@ -42,6 +95,7 @@ These providers require an external CLI:
 - `claude-terminal` — [Claude Code](https://claude.ai/code) driven in an interactive terminal session (also requires [`tmux`](https://github.com/tmux/tmux))
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
+- `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
 
 Optional:
 
@@ -57,6 +111,15 @@ Optional:
 ```bash
 npm install -g takt
 ```
+
+With Nix flakes:
+
+```bash
+nix run github:nrslib/takt
+nix profile install github:nrslib/takt
+```
+
+The Nix package installs the TAKT CLI itself. External CLI providers, `git`, and `gh`/`glab` still need to be installed and available on `PATH` or configured separately as described in [Requirements](#requirements).
 
 ### Talk to AI and queue tasks
 
@@ -184,7 +247,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, or copilot
+provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
@@ -197,6 +260,7 @@ export TAKT_OPENAI_API_KEY=sk-...          # OpenAI (Codex)
 export TAKT_OPENCODE_API_KEY=...           # OpenCode
 export TAKT_CURSOR_API_KEY=...             # Cursor Agent (optional if logged in)
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
+export TAKT_KIRO_API_KEY=...               # Kiro CLI
 ```
 
 See the [Configuration Guide](./docs/configuration.md) for all options, provider profiles, and model resolution.
@@ -282,6 +346,7 @@ See [External Integrations](./docs/external-integrations.md) for other community
 | [Tutorial](./docs/tutorial.md) | Improve one example over three phases while queuing, running, and inspecting tasks |
 | [CLI Reference](./docs/cli-reference.md) | All commands and options |
 | [Configuration](./docs/configuration.md) | Global and project settings |
+| [Observability](./docs/observability.md) | Phase-level usage events and analysis workflow |
 | [Design Philosophy](./docs/design-philosophy.md) | Why TAKT is built around workflows, facets, feedback loops, and traceability |
 | [Workflow Guide](./docs/workflows.md) | Creating and customizing workflows |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin workflows and personas |

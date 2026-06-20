@@ -7,6 +7,11 @@
 # Project configuration
 !config.yaml
 
+# Quality gate scripts (version-controlled; logs stay local)
+!quality-gates/
+!quality-gates/**
+quality-gates/logs/
+
 # Facets and pieces (version-controlled)
 !workflows/
 !workflows/**

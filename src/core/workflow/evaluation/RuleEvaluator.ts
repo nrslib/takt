@@ -12,12 +12,13 @@ import type {
   RuleMatchMethod,
 } from '../../models/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { ProviderType, RuleIndexDetector } from '../types.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
-import { isDeferredDeterministicCondition, isDeterministicCondition } from './rule-utils.js';
+import { isDeferredDeterministicCondition, isDeterministicCondition, isFindingsCondition } from './rule-utils.js';
 
 const log = createLogger('rule-evaluator');
 
@@ -35,6 +36,7 @@ export interface RuleEvaluatorContext {
   provider?: ProviderType;
   resolvedProvider?: ProviderType;
   resolvedModel?: string;
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
   /** Rule tag index detector */
@@ -69,18 +71,24 @@ export class RuleEvaluator {
 
   private structuredCallerJudgeOptions(): Pick<
     RuleEvaluatorContext,
-    'cwd' | 'provider' | 'resolvedProvider' | 'resolvedModel'
+    'cwd' | 'provider' | 'resolvedProvider' | 'resolvedModel' | 'childProcessEnv'
   > {
     return {
       cwd: this.ctx.cwd,
       provider: this.ctx.provider,
       resolvedProvider: this.ctx.resolvedProvider,
       resolvedModel: this.ctx.resolvedModel,
+      childProcessEnv: this.ctx.childProcessEnv,
     };
   }
 
   async evaluate(agentContent: string, tagContent: string): Promise<RuleMatch | undefined> {
     if (!this.step.rules || this.step.rules.length === 0) return undefined;
+    if (this.hasFindingsCondition()) {
+      if (this.ctx.state.findings == null) {
+        throw new Error('Missing workflow findings state');
+      }
+    }
     const interactiveEnabled = this.ctx.interactive === true;
 
     // 1. Aggregate conditions (all/any) — only meaningful for parallel parent steps
@@ -153,6 +161,16 @@ export class RuleEvaluator {
     }
 
     throw new Error(`Status not found for step "${this.step.name}": no rule matched after all detection phases`);
+  }
+
+  private hasFindingsCondition(): boolean {
+    return this.step.rules?.some((rule) => {
+      if (rule.isAiCondition) {
+        return false;
+      }
+      return isFindingsCondition(rule.condition)
+        || (rule.aggregateGuardCondition !== undefined && isFindingsCondition(rule.aggregateGuardCondition));
+    }) === true;
   }
 
   private resolveTaggedRuleIndex(content: string, interactiveEnabled: boolean): number {

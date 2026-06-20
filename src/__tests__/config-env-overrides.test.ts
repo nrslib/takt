@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { unexpectedConfigEnv } from '../../test/helpers/unknown-contract-test-keys.js';
 import { envVarNameFromPath } from '../infra/config/env/config-env-overrides.js';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 const removedConfigEnv = unexpectedConfigEnv;
 
@@ -34,36 +35,10 @@ const { loadGlobalConfig, invalidateGlobalConfigCache } = await import('../infra
 const { loadProjectConfig } = await import('../infra/config/project/projectConfig.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 
-let taktEnvSnapshot: Record<string, string | undefined>;
-
-function snapshotTaktEnv(): Record<string, string | undefined> {
-  const snapshot: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith('TAKT_')) {
-      snapshot[key] = value;
-    }
-  }
-  return snapshot;
-}
-
-function restoreTaktEnv(snapshot: Record<string, string | undefined>): void {
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith('TAKT_') && !(key in snapshot)) {
-      delete process.env[key];
-    }
-  }
-
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-      continue;
-    }
-    process.env[key] = value;
-  }
-}
+let taktEnvSnapshot: TaktEnvSnapshot;
 
 beforeEach(() => {
-  taktEnvSnapshot = snapshotTaktEnv();
+  taktEnvSnapshot = clearTaktEnv();
 });
 
 afterEach(() => {
@@ -157,6 +132,48 @@ describe('config traced env overrides', () => {
         networkAccess: false,
         variant: 'high',
       },
+    });
+  });
+
+  it('project config は kiro.agent の env override を traced-config 経由で反映する', () => {
+    const projectDir = join(testRoot, 'project-kiro-agent-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  kiro:',
+        '    agent: config-agent',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_KIRO_AGENT = 'env-agent';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      kiro: { agent: 'env-agent' },
+    });
+  });
+
+  it('global config は provider_options.kiro.agent を読み込む', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      [
+        'provider: kiro',
+        'provider_options:',
+        '  kiro:',
+        '    agent: global-default-agent',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+
+    expect(config.providerOptions).toEqual({
+      kiro: { agent: 'global-default-agent' },
     });
   });
 

@@ -319,6 +319,42 @@ const storage = createStorage(config)
 return storage.upload(file, options)
 ```
 
+## 命名
+
+名前は実装機構ではなく、実際の役割・効果を表す。読み手が名前から挙動、責務、副作用を誤読するコードは悪いコード。
+
+| パターン | 例 | 判定 |
+|---------|-----|------|
+| 名前が実際の効果と矛盾 | 毎回副作用を起こすように読めるが、実体はキャッシュ済み値の取得 | REJECT |
+| 副作用や実行頻度が読めない | 初期化、取得、更新のどれが起きるか名前から判断できない | REJECT |
+| 近接する API と区別できない | ラップ元や委譲先と同じ名前で、どちらの責務か読めない | REJECT |
+| 役割・効果で命名 | 実際に提供する値、状態変化、責務が名前から読める | OK |
+
+```typescript
+// REJECT - 名前は毎回副作用を起こすように読めるが、実体はメモ化アクセサ
+let resourcePromise: Promise<Resource> | null = null
+function openResource(): Promise<Resource> {
+  if (!resourcePromise) {
+    resourcePromise = createResource()
+  }
+  return resourcePromise
+}
+
+// OK - 実際の役割である「利用可能なリソースの取得」を表す
+function getResource(): Promise<Resource> {
+  if (!resourcePromise) {
+    resourcePromise = createResource()
+  }
+  return resourcePromise
+}
+```
+
+判断基準:
+1. 名前は実際の役割・効果を表しているか
+2. 名前から想像される副作用、実行頻度、責務と実装が一致しているか
+3. ラップ元、委譲先、近接する API と紛らわしい名前になっていないか
+4. 既存コードの命名慣習と矛盾していないか
+
 ## 構造
 
 ### 分割の基準

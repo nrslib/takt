@@ -14,6 +14,7 @@ import type {
   AgentResponse,
   Language,
   FallbackContext,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepRunResult } from '../types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
@@ -36,10 +37,13 @@ import { validateStructuredOutputAgainstSchema } from './structured-output-schem
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
 import { resolveReportHandles } from '../instruction/report-handles.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
+import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('step-executor');
 
@@ -56,6 +60,10 @@ export interface StepExecutorDeps {
   readonly getWorkflowName: () => string;
   readonly getWorkflowDescription: () => string | undefined;
   readonly getRetryNote: () => string | undefined;
+  readonly getObservabilityRunId?: () => string | undefined;
+  readonly observabilityEnabled?: () => boolean;
+  readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
@@ -108,6 +116,19 @@ export class StepExecutor {
   ): string {
     const safeStepName = slugify(stepName) || 'step';
     return `${safeStepName}.${stepIteration}.${timestamp}.md`;
+  }
+
+  private buildFindingContractInstructionContext(
+    step: WorkflowStep,
+    explicitContext: FindingContractInstructionContext | undefined,
+  ): FindingContractInstructionContext | undefined {
+    if (explicitContext !== undefined) {
+      return explicitContext;
+    }
+    return this.deps.optionsBuilder.buildFindingContractInstructionContext?.(
+      step,
+      false,
+    );
   }
 
   private writeSnapshot(
@@ -203,7 +224,7 @@ export class StepExecutor {
     ].join('\n');
   }
 
-  private normalizeStructuredOutput(
+  normalizeStructuredOutput(
     step: WorkflowStep,
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
@@ -340,6 +361,7 @@ export class StepExecutor {
     task: string,
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
+    findingContract?: FindingContractInstructionContext,
   ): string {
     this.ensurePreviousResponseSnapshot(state, step.name, stepIteration);
     const policySnapshot = this.writeFacetSnapshot(
@@ -390,6 +412,7 @@ export class StepExecutor {
       previousResponseSourcePath: state.previousResponseSourcePath,
       fallbackContext: fallbackContext ?? state.pendingFallback,
       workflowState: state,
+      findingContract: this.buildFindingContractInstructionContext(step, findingContract),
     }).build();
     if (fallbackContext === undefined) {
       state.pendingFallback = undefined;
@@ -483,6 +506,7 @@ export class StepExecutor {
       provider: stepProviderModel.provider,
       resolvedProvider: stepProviderModel.provider,
       resolvedModel: stepProviderModel.model,
+      childProcessEnv: phaseCtx.childProcessEnv,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,
@@ -520,7 +544,8 @@ export class StepExecutor {
       : incrementStepIteration(state, step.name);
     const instruction = prebuiltInstruction ?? this.buildInstruction(step, stepIteration, state, task, maxSteps);
     const phase1Instruction = this.buildPhase1Instruction(instruction, step, runtime);
-    const sessionKey = buildSessionKey(step, runtime?.providerInfo?.provider);
+    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
+    const sessionKey = buildSessionKey(step, providerInfo.provider);
     log.debug('Running step', {
       step: step.name,
       persona: step.persona ?? '(none)',
@@ -531,22 +556,48 @@ export class StepExecutor {
 
     // Phase 1: main execution (Write excluded if step has report)
     let didEmitPhaseStart = false;
-    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
+    let resolvedPromptParts: PhasePromptParts | undefined;
+    const phaseExecutionId = buildPhaseExecutionId({
+      step: step.name,
+      iteration: state.iteration,
+      phase: 1,
+      sequence: 1,
+    });
     const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
     const agentOptions = {
       ...baseAgentOptions,
       onPromptResolved: (promptParts: PhasePromptParts) => {
-        this.deps.onPhaseStart?.(step, 1, 'execute', phase1Instruction, promptParts, undefined, state.iteration);
+        resolvedPromptParts = promptParts;
+        this.deps.onPhaseStart?.(step, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, state.iteration);
         didEmitPhaseStart = true;
       },
     };
-    let response = await executeAgent(step.persona, phase1Instruction, agentOptions);
+    let response = await runWithPhaseSpan({
+      enabled: this.deps.observabilityEnabled?.() === true,
+      runId: this.deps.getObservabilityRunId?.(),
+      workflowName: this.deps.getWorkflowName(),
+      step,
+      iteration: state.iteration,
+      phase: 1,
+      phaseName: 'execute',
+      instruction: phase1Instruction,
+      phaseExecutionId,
+      workflowStack: this.deps.getCurrentWorkflowStack?.(),
+      sanitizeText: this.deps.sanitizeObservabilityText,
+      providerInfo,
+      getPromptParts: () => resolvedPromptParts,
+    }, () => executeAgent(step.persona, phase1Instruction, agentOptions), (result) => ({
+      status: result.status,
+      content: result.content,
+      error: result.error,
+      providerUsage: result.providerUsage,
+    }));
     response = this.normalizeStructuredOutput(step, response, runtime);
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
     }
     updatePersonaSession(sessionKey, response.sessionId);
-    this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, undefined, state.iteration);
+    this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, phaseExecutionId, state.iteration);
 
     // Provider failures should abort immediately.
     if (response.status === 'error' || response.status === 'rate_limited') {

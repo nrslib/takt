@@ -3,9 +3,10 @@ import type {
   ClaudeTerminalProviderOptions,
   CodexReasoningEffort,
   CopilotEffort,
+  WorkflowStep,
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
-import type { PersonaProviderEntry } from '../../core/models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../core/models/config-types.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -16,6 +17,7 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabilities.js';
 
 type RawProviderOptions = {
+  extends?: string;
   codex?: {
     network_access?: boolean;
     reasoning_effort?: CodexReasoningEffort;
@@ -23,6 +25,7 @@ type RawProviderOptions = {
   opencode?: {
     network_access?: boolean;
     variant?: string;
+    allowed_tools?: string[];
   };
   claude?: {
     allowed_tools?: string[];
@@ -41,7 +44,20 @@ type RawProviderOptions = {
   copilot?: {
     effort?: CopilotEffort;
   };
+  kiro?: {
+    agent?: string;
+  };
 };
+
+export interface ProviderOptionsLayer {
+  source: ProviderResolutionSource;
+  options: StepProviderOptions | undefined;
+}
+
+interface StepProviderOptionsLayerContext {
+  providerRouting: ProviderRoutingConfig | undefined;
+  personaProviders: Record<string, PersonaProviderEntry> | undefined;
+}
 
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
@@ -52,6 +68,10 @@ export function normalizeProviderOptions(
   }
 
   const options = raw as RawProviderOptions;
+  if (options.extends !== undefined) {
+    throw new Error('Configuration error: provider_options.extends must be resolved before provider options normalization.');
+  }
+
   const result: StepProviderOptions = {};
   if (options.codex?.network_access !== undefined || options.codex?.reasoning_effort !== undefined) {
     result.codex = {
@@ -63,13 +83,20 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  if (options.opencode?.network_access !== undefined || options.opencode?.variant !== undefined) {
+  if (
+    options.opencode?.network_access !== undefined
+    || options.opencode?.variant !== undefined
+    || options.opencode?.allowed_tools !== undefined
+  ) {
     result.opencode = {
       ...(options.opencode.network_access !== undefined
         ? { networkAccess: options.opencode.network_access }
         : {}),
       ...(options.opencode.variant !== undefined
         ? { variant: options.opencode.variant }
+        : {}),
+      ...(options.opencode.allowed_tools !== undefined
+        ? { allowedTools: options.opencode.allowed_tools }
         : {}),
     };
   }
@@ -104,6 +131,9 @@ export function normalizeProviderOptions(
   }
   if (options.copilot?.effort !== undefined) {
     result.copilot = { effort: options.copilot.effort };
+  }
+  if (options.kiro?.agent !== undefined) {
+    result.kiro = { agent: options.kiro.agent };
   }
   if (
     options.claude_terminal?.backend !== undefined
@@ -162,6 +192,14 @@ export function mergeProviderOptions(
         ...result.copilot,
         ...(layer.copilot.effort !== undefined
           ? { effort: layer.copilot.effort }
+          : {}),
+      };
+    }
+    if (layer.kiro) {
+      result.kiro = {
+        ...result.kiro,
+        ...(layer.kiro.agent !== undefined
+          ? { agent: layer.kiro.agent }
           : {}),
       };
     }
@@ -227,6 +265,64 @@ export function resolvePersonaProviderOptions(
     return undefined;
   }
   return personaProviders?.[personaDisplayName]?.providerOptions;
+}
+
+export function resolveDirectStepProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  if ('directProviderOptions' in step) {
+    return step.directProviderOptions;
+  }
+  return step.providerOptions;
+}
+
+export function resolveStepWorkflowProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  if ('workflowProviderOptions' in step) {
+    return step.workflowProviderOptions;
+  }
+  return undefined;
+}
+
+export function resolveStepProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+): ProviderOptionsLayer[] {
+  const layers: ProviderOptionsLayer[] = [
+    {
+      source: 'workflow',
+      options: resolveStepWorkflowProviderOptions(step),
+    },
+    {
+      source: 'persona_providers',
+      options: resolvePersonaProviderOptions(context.personaProviders, step.personaDisplayName),
+    },
+  ];
+
+  if (step.providerRoutingPersonaKey) {
+    layers.push({
+      source: 'provider_routing.personas',
+      options: context.providerRouting?.personas?.[step.providerRoutingPersonaKey]?.providerOptions,
+    });
+  }
+  for (const tag of step.tags ?? []) {
+    layers.push({
+      source: 'provider_routing.tags',
+      options: context.providerRouting?.tags?.[tag]?.providerOptions,
+    });
+  }
+  layers.push({
+    source: 'provider_routing.steps',
+    options: context.providerRouting?.steps?.[step.name]?.providerOptions,
+  });
+
+  return layers.filter((layer) => layer.options !== undefined);
+}
+
+export function mergeStepProviderOptionsLayers(
+  step: WorkflowStep,
+  context: StepProviderOptionsLayerContext,
+): StepProviderOptions | undefined {
+  return mergeProviderOptions(
+    ...resolveStepProviderOptionsLayers(step, context).map((layer) => layer.options),
+  );
 }
 
 export function resolveEffectiveProviderOptions(
@@ -300,11 +396,23 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.opencode?.variant,
     resolveProviderOptionOrigin(originResolver, 'opencode.variant', source),
   );
+  const opencodeAllowedTools = selectProviderValue(
+    resolvedConfigOptions.opencode?.allowedTools,
+    personaOptions?.opencode?.allowedTools,
+    stepOptions?.opencode?.allowedTools,
+    resolveProviderOptionOrigin(originResolver, 'opencode.allowedTools', source),
+  );
   const copilotEffort = selectProviderValue(
     resolvedConfigOptions.copilot?.effort,
     personaOptions?.copilot?.effort,
     stepOptions?.copilot?.effort,
     resolveProviderOptionOrigin(originResolver, 'copilot.effort', source),
+  );
+  const kiroAgent = selectProviderValue(
+    resolvedConfigOptions.kiro?.agent,
+    personaOptions?.kiro?.agent,
+    stepOptions?.kiro?.agent,
+    resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
@@ -340,10 +448,11 @@ export function resolveEffectiveProviderOptions(
           }
         : undefined,
     opencode:
-      opencodeNetworkAccess !== undefined || opencodeVariant !== undefined
+      opencodeNetworkAccess !== undefined || opencodeVariant !== undefined || opencodeAllowedTools !== undefined
         ? {
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
+            ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
           }
         : undefined,
     claude:
@@ -351,6 +460,7 @@ export function resolveEffectiveProviderOptions(
         ? claude
         : undefined,
     copilot: copilotEffort !== undefined ? { effort: copilotEffort } : undefined,
+    kiro: kiroAgent !== undefined ? { agent: kiroAgent } : undefined,
     claudeTerminal:
       claudeTerminalBackend !== undefined
       || claudeTerminalTimeoutMs !== undefined
@@ -367,7 +477,7 @@ export function resolveEffectiveProviderOptions(
         : undefined,
   };
 
-  return result.codex || result.opencode || result.claude || result.copilot || result.claudeTerminal
+  return result.codex || result.opencode || result.claude || result.copilot || result.kiro || result.claudeTerminal
     ? result
     : undefined;
 }
@@ -402,6 +512,9 @@ function stripClaudeAllowedTools(
       : {}),
     ...(providerOptions.copilot !== undefined
       ? { copilot: { ...providerOptions.copilot } }
+      : {}),
+    ...(providerOptions.kiro !== undefined
+      ? { kiro: { ...providerOptions.kiro } }
       : {}),
     ...(providerOptions.claudeTerminal !== undefined
       ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
@@ -451,7 +564,9 @@ export const PROVIDER_OPTION_PATHS = [
   'codex.reasoningEffort',
   'opencode.networkAccess',
   'opencode.variant',
+  'opencode.allowedTools',
   'copilot.effort',
+  'kiro.agent',
   'claudeTerminal.backend',
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',
@@ -485,19 +600,18 @@ function originToResolutionSource(origin: ProviderOptionsTraceOrigin): ProviderR
 
 /**
  * Resolve the source layer of a single provider_options path, mirroring
- * `selectProviderValue` precedence (env/cli config beats step/persona,
- * otherwise step > persona > config).
+ * `selectProviderValue` precedence (env/cli config beats step/layers,
+ * otherwise step > routing/persona/workflow layers > config).
  */
 export function resolveProviderOptionSource(
   path: string,
   stepOptions: StepProviderOptions | undefined,
-  personaOptions: StepProviderOptions | undefined,
+  layers: ProviderOptionsLayer[],
   configOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   configSource: ProviderOptionsSource | undefined,
 ): ProviderResolutionSource | undefined {
   const configValue = getValueAtPath(configOptions, path);
-  const personaValue = getValueAtPath(personaOptions, path);
   const stepValue = getValueAtPath(stepOptions, path);
   const origin = resolveProviderOptionOrigin(originResolver, path, configSource);
 
@@ -505,7 +619,11 @@ export function resolveProviderOptionSource(
     return originToResolutionSource(origin);
   }
   if (stepValue !== undefined) return 'step';
-  if (personaValue !== undefined) return 'persona_providers';
+  for (const layer of [...layers].reverse()) {
+    if (getValueAtPath(layer.options, path) !== undefined) {
+      return layer.source;
+    }
+  }
   if (configValue !== undefined) return originToResolutionSource(origin);
   return undefined;
 }
@@ -513,7 +631,7 @@ export function resolveProviderOptionSource(
 /** Compute source per known provider_options path. Returns only paths with values. */
 export function resolveProviderOptionsSources(
   stepOptions: StepProviderOptions | undefined,
-  personaOptions: StepProviderOptions | undefined,
+  layers: ProviderOptionsLayer[],
   configOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver | undefined,
   configSource: ProviderOptionsSource | undefined,
@@ -523,7 +641,7 @@ export function resolveProviderOptionsSources(
     const source = resolveProviderOptionSource(
       path,
       stepOptions,
-      personaOptions,
+      layers,
       configOptions,
       originResolver,
       configSource,

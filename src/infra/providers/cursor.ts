@@ -30,12 +30,22 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     onStream: options.onStream,
     cursorApiKey: options.cursorApiKey ?? resolveCursorApiKey(),
     cursorCliPath: resolveCursorCliPath(),
+    childProcessEnv: options.childProcessEnv,
   };
 }
 
 /** Cursor provider — delegates to Cursor Agent CLI */
 export class CursorProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsNativeImageInput = false;
+
+  getRuntimeInstructions(): string | null {
+    return null;
+  }
+
+  keepsAllowedToolWithoutEdit(_tool: string): boolean {
+    return true;
+  }
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

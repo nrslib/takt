@@ -1,15 +1,103 @@
-import type { WorkflowConfig } from '../../models/types.js';
+import type { LoopMonitorRule, WorkflowConfig, WorkflowRule } from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
-import { isWorkflowCallStep } from '../step-kind.js';
+import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
+import { isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
+
+function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
+  if ('isAiCondition' in rule && rule.isAiCondition === true) {
+    return false;
+  }
+  return isFindingsCondition(rule.condition)
+    || ('aggregateGuardCondition' in rule
+      && rule.aggregateGuardCondition !== undefined
+      && isFindingsCondition(rule.aggregateGuardCondition));
+}
+
+function validateFindingsRuleContract(
+  findingContractConfigured: boolean,
+  rule: WorkflowRule | LoopMonitorRule,
+  source: string,
+): void {
+  if (!findingContractConfigured && isFindingsRule(rule)) {
+    throw new Error(`${source}: findings.* conditions require finding_contract`);
+  }
+}
+
+function validateFindingContractParallelStructuredOutput(config: WorkflowConfig): void {
+  if (!config.findingContract) {
+    return;
+  }
+  for (const step of config.steps) {
+    for (const subStep of step.parallel ?? []) {
+      if (subStep.structuredOutput) {
+        throw new Error(
+          `Invalid parallel sub-step "${subStep.name}" in step "${step.name}": cannot combine finding_contract raw findings with structured_output`,
+        );
+      }
+    }
+  }
+}
+
+function validateAgentStepProviderModel(
+  step: WorkflowConfig['steps'][number],
+  options: WorkflowEngineOptions,
+  source: string,
+): void {
+  if (getWorkflowStepKind(step) !== 'agent') {
+    return;
+  }
+  const providerInfo = resolveStepProviderModel({
+    step,
+    provider: options.provider,
+    providerSource: options.providerSource,
+    model: options.model,
+    modelSource: options.modelSource,
+    providerRouting: options.providerRouting,
+    personaProviders: options.personaProviders,
+  });
+  validateProviderModelCompatibility(
+    providerInfo.provider,
+    providerInfo.model,
+    {
+      modelFieldName: `${source}.model`,
+      requireProviderQualifiedModelForOpencode: false,
+    },
+  );
+}
+
+function hasInvalidManagerOutputRule(rules: readonly WorkflowRule[] | undefined): boolean {
+  if (!rules) {
+    return false;
+  }
+  return rules.some(isInvalidManagerOutputRule);
+}
+
+function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig): void {
+  if (!config.findingContract) {
+    return;
+  }
+  for (const step of config.steps) {
+    if ((step.parallel?.length ?? 0) === 0) {
+      continue;
+    }
+    if (!hasInvalidManagerOutputRule(step.rules)) {
+      throw new Error(
+        `Invalid finding_contract step "${step.name}": parallel parent must declare an invalid manager output rule via non-AI return need_replan, non-AI return needs_fix, or non-AI next fix`,
+      );
+    }
+  }
+}
 
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
   }
+  validateFindingContractParallelStructuredOutput(config);
+  validateFindingContractInvalidManagerOutputRules(config);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);
@@ -27,9 +115,29 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   stepNames.add(ABORT_STEP);
 
   for (const step of config.steps) {
+    validateAgentStepProviderModel(step, options, `Configuration error: step "${step.name}"`);
     for (const rule of step.rules ?? []) {
       if (rule.next && !stepNames.has(rule.next)) {
         throw new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`);
+      }
+      validateFindingsRuleContract(
+        config.findingContract !== undefined,
+        rule,
+        `Invalid rule in step "${step.name}"`,
+      );
+    }
+    for (const subStep of step.parallel ?? []) {
+      validateAgentStepProviderModel(
+        subStep,
+        options,
+        `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
+      );
+      for (const rule of subStep.rules ?? []) {
+        validateFindingsRuleContract(
+          config.findingContract !== undefined,
+          rule,
+          `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+        );
       }
     }
   }
@@ -44,6 +152,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       if (!stepNames.has(rule.next)) {
         throw new Error(`Invalid loop_monitor judge rule: target step "${rule.next}" does not exist`);
       }
+      validateFindingsRuleContract(
+        config.findingContract !== undefined,
+        rule,
+        'Invalid loop_monitor judge rule',
+      );
     }
 
     const triggeringStep = config.steps.find((step) => step.name === monitor.cycle[monitor.cycle.length - 1]);
@@ -54,6 +167,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       step: triggeringStep,
       provider: options.provider,
       model: options.model,
+      providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
     const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
@@ -61,6 +175,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       triggeringStep,
       provider: triggeringProviderInfo.provider,
       model: triggeringProviderInfo.model,
+      providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
     validateProviderModelCompatibility(

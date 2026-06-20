@@ -22,11 +22,15 @@ export interface DecomposeTaskOptions {
   resolvedProvider?: ProviderType;
   onStream?: StreamCallback;
   workflowMeta?: RunAgentOptions['workflowMeta'];
+  childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  inspectTools?: string[];
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
 }
+
+export type MorePartsOptions = Omit<DecomposeTaskOptions, 'inspectTools' | 'onPromptResolved'>;
 
 export interface MorePartsResponse {
   done: boolean;
@@ -38,10 +42,15 @@ export const TEAM_LEADER_MAX_TURNS = 5;
 
 export async function decomposeTask(
   instruction: string,
-  maxParts: number,
+  maxTotalParts: number,
   options: DecomposeTaskOptions,
 ): Promise<PartDefinition[]> {
-  const response = await runAgent(options.persona, buildDecomposePrompt(instruction, maxParts, options.language), {
+  const response = await runAgent(options.persona, buildDecomposePrompt(
+    instruction,
+    maxTotalParts,
+    options.language,
+    options.inspectTools,
+  ), {
     cwd: options.cwd,
     personaPath: options.personaPath,
     language: options.language,
@@ -49,12 +58,13 @@ export async function decomposeTask(
     provider: options.provider,
     resolvedModel: options.resolvedModel,
     resolvedProvider: options.resolvedProvider,
-    allowedTools: [],
+    allowedTools: options.inspectTools ?? [],
     permissionMode: 'readonly',
     ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
-    outputSchema: loadDecompositionSchema(maxParts),
+    outputSchema: loadDecompositionSchema(maxTotalParts),
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,
+    childProcessEnv: options.childProcessEnv,
     onPromptResolved: options.onPromptResolved,
   });
 
@@ -65,10 +75,10 @@ export async function decomposeTask(
 
   const parts = response.structuredOutput?.parts;
   if (parts != null) {
-    return toPartDefinitions(parts, maxParts);
+    return toPartDefinitions(parts, maxTotalParts);
   }
 
-  return parseParts(response.content, maxParts);
+  return parseParts(response.content, maxTotalParts);
 }
 
 export async function requestMoreParts(
@@ -76,7 +86,7 @@ export async function requestMoreParts(
   allResults: Array<{ id: string; title: string; status: string; content: string }>,
   existingIds: string[],
   maxAdditionalParts: number,
-  options: DecomposeTaskOptions,
+  options: MorePartsOptions,
 ): Promise<MorePartsResponse> {
   const prompt = buildMorePartsPrompt(
     originalInstruction,
@@ -100,6 +110,7 @@ export async function requestMoreParts(
     outputSchema: loadMorePartsSchema(maxAdditionalParts),
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,
+    childProcessEnv: options.childProcessEnv,
   });
 
   if (response.status !== 'done') {

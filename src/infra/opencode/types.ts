@@ -5,10 +5,16 @@
 import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
+import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 
 /** OpenCode permission reply values */
 export type OpenCodePermissionReply = 'once' | 'always' | 'reject';
 export type OpenCodePermissionAction = 'ask' | 'allow' | 'deny';
+export type OpenCodePermissionRule = {
+  permission: string;
+  pattern: string;
+  action: OpenCodePermissionAction;
+};
 
 /** Map TAKT PermissionMode to OpenCode permission reply */
 export function mapToOpenCodePermissionReply(mode: PermissionMode): OpenCodePermissionReply {
@@ -20,6 +26,48 @@ export function mapToOpenCodePermissionReply(mode: PermissionMode): OpenCodePerm
   return mapping[mode];
 }
 
+const OPEN_CODE_DOOM_LOOP_PERMISSION = 'doom_loop';
+
+export function resolveOpenCodePermissionReply(
+  mode: PermissionMode | undefined,
+  permission?: string,
+  allowedToolsRuleset?: readonly OpenCodePermissionRule[],
+): OpenCodePermissionReply {
+  if (permission === OPEN_CODE_DOOM_LOOP_PERMISSION) {
+    return 'once';
+  }
+
+  if (!permission || !isOpenCodePermissionKey(permission)) {
+    return 'reject';
+  }
+
+  if (allowedToolsRuleset !== undefined) {
+    return isPermissionAllowedByRuleset(permission, allowedToolsRuleset)
+      ? mapAllowedRulesetReply(mode)
+      : 'reject';
+  }
+
+  return mode ? mapToOpenCodePermissionReply(mode) : 'once';
+}
+
+function mapAllowedRulesetReply(mode: PermissionMode | undefined): OpenCodePermissionReply {
+  return mode === 'full' ? 'always' : 'once';
+}
+
+function isPermissionAllowedByRuleset(
+  permission: string | undefined,
+  ruleset: readonly OpenCodePermissionRule[],
+): boolean {
+  if (!permission) {
+    return false;
+  }
+
+  return ruleset.some((rule) => (
+    rule.action === 'allow'
+    && (rule.permission === permission || rule.permission === '*')
+  ));
+}
+
 const OPEN_CODE_PERMISSION_KEYS = [
   'read',
   'glob',
@@ -28,6 +76,7 @@ const OPEN_CODE_PERMISSION_KEYS = [
   'write',
   'bash',
   'task',
+  'todowrite',
   'websearch',
   'webfetch',
   'question',
@@ -46,12 +95,20 @@ function buildPermissionMap(mode?: PermissionMode): OpenCodePermissionMap {
     write: 'deny',
     bash: 'deny',
     task: 'deny',
+    todowrite: 'deny',
     websearch: 'deny',
     webfetch: 'deny',
     question: 'deny',
   };
 
-  if (mode === 'readonly') return allDeny;
+  if (mode === 'readonly') {
+    return {
+      ...allDeny,
+      read: 'allow',
+      glob: 'allow',
+      grep: 'allow',
+    };
+  }
 
   if (mode === 'full') {
     return {
@@ -63,6 +120,7 @@ function buildPermissionMap(mode?: PermissionMode): OpenCodePermissionMap {
       write: 'allow',
       bash: 'allow',
       task: 'allow',
+      todowrite: 'allow',
       websearch: 'allow',
       webfetch: 'allow',
       question: 'allow',
@@ -79,6 +137,7 @@ function buildPermissionMap(mode?: PermissionMode): OpenCodePermissionMap {
       write: 'allow',
       bash: 'allow',
       task: 'allow',
+      todowrite: 'allow',
       websearch: 'allow',
       webfetch: 'allow',
       question: 'deny',
@@ -94,6 +153,7 @@ function buildPermissionMap(mode?: PermissionMode): OpenCodePermissionMap {
     write: 'ask',
     bash: 'ask',
     task: 'ask',
+    todowrite: 'ask',
     websearch: 'ask',
     webfetch: 'ask',
     question: 'deny',
@@ -116,21 +176,19 @@ function applyNetworkAccessOverride(
   };
 }
 
-export function buildOpenCodePermissionConfig(
-  mode?: PermissionMode,
-  networkAccess?: boolean,
-): OpenCodePermissionAction | Record<string, OpenCodePermissionAction> {
-  if (networkAccess === undefined) {
-    if (mode === 'readonly') return 'deny';
-    if (mode === 'full') return 'allow';
-  }
-  return applyNetworkAccessOverride(buildPermissionMap(mode), networkAccess);
-}
-
 export function buildOpenCodePermissionRuleset(
   mode?: PermissionMode,
   networkAccess?: boolean,
-): Array<{ permission: string; pattern: string; action: OpenCodePermissionAction }> {
+  allowedTools?: OpenCodeAllowedTools,
+): OpenCodePermissionRule[] {
+  if (allowedTools !== undefined) {
+    return buildOpenCodeAllowedToolsRuleset(mode, networkAccess, allowedTools);
+  }
+
+  if (mode === 'full' && networkAccess === undefined) {
+    return [{ permission: '*', pattern: '*', action: 'allow' }];
+  }
+
   const permissionMap = applyNetworkAccessOverride(buildPermissionMap(mode), networkAccess);
   return OPEN_CODE_PERMISSION_KEYS.map((permission) => ({
     permission,
@@ -139,44 +197,92 @@ export function buildOpenCodePermissionRuleset(
   }));
 }
 
-const BUILTIN_TOOL_MAP: Record<string, string> = {
-  Read: 'read',
-  Glob: 'glob',
-  Grep: 'grep',
-  Edit: 'edit',
-  Write: 'write',
-  Bash: 'bash',
-  WebSearch: 'websearch',
-  WebFetch: 'webfetch',
-};
+export type OpenCodeAllowedTools = readonly string[];
 
-export function mapToOpenCodeTools(allowedTools?: string[]): Record<string, boolean> | undefined {
-  if (!allowedTools) {
-    return undefined;
-  }
+function buildOpenCodeAllowedToolsRuleset(
+  mode: PermissionMode | undefined,
+  networkAccess: boolean | undefined,
+  allowedTools: OpenCodeAllowedTools,
+): OpenCodePermissionRule[] {
   if (allowedTools.length === 0) {
-    return {};
+    return OPEN_CODE_PERMISSION_KEYS.map((permission) => ({
+      permission,
+      pattern: '**',
+      action: 'deny',
+    }));
   }
 
-  const mapped = new Set<string>();
-  for (const tool of allowedTools) {
-    const normalized = tool.trim();
-    if (!normalized) {
-      continue;
-    }
-    const mappedTool = BUILTIN_TOOL_MAP[normalized] ?? normalized;
-    mapped.add(mappedTool);
+  const allowed = allowedTools
+    .map(toOpenCodeAllowedPermission)
+    .filter((permission): permission is string => (
+      permission !== null
+      && isAllowedByPermissionMode(permission, mode)
+      && (networkAccess !== false || !isOpenCodeWebPermission(permission))
+    ));
+  const uniqueAllowed = Array.from(new Set(allowed));
+
+  return [
+    { permission: '*', pattern: '*', action: 'deny' },
+    ...uniqueAllowed.map((permission) => ({ permission, pattern: '*', action: 'allow' as const })),
+  ];
+}
+
+function isOpenCodeWebPermission(permission: string): boolean {
+  return permission === 'websearch' || permission === 'webfetch';
+}
+
+function isAllowedByPermissionMode(permission: string, mode: PermissionMode | undefined): boolean {
+  if (!isOpenCodePermissionKey(permission)) {
+    return false;
   }
 
-  if (mapped.size === 0) {
-    return {};
+  if (mode === undefined || mode === 'full') {
+    return true;
   }
 
-  const tools: Record<string, boolean> = {};
-  for (const tool of mapped) {
-    tools[tool] = true;
+  const permissionMap = buildPermissionMap(mode);
+  return permissionMap[permission] === 'allow';
+}
+
+function isOpenCodePermissionKey(permission: string): permission is OpenCodePermissionKey {
+  return (OPEN_CODE_PERMISSION_KEYS as readonly string[]).includes(permission);
+}
+
+function toOpenCodeAllowedPermission(tool: string): string | null {
+  const trimmed = tool.trim();
+  if (!trimmed) {
+    return null;
   }
-  return tools;
+  if (trimmed.includes('*')) {
+    throw new Error(`OpenCode allowedTools does not accept wildcard permission: ${trimmed}`);
+  }
+  if (mapsToOpenCodeEditPermission(trimmed)) {
+    return 'edit';
+  }
+
+  switch (trimmed.toLowerCase()) {
+    case 'read':
+      return 'read';
+    case 'glob':
+      return 'glob';
+    case 'grep':
+      return 'grep';
+    case 'bash':
+      return 'bash';
+    case 'task':
+      return 'task';
+    case 'todowrite':
+    case 'todo_write':
+      return 'todowrite';
+    case 'websearch':
+      return 'websearch';
+    case 'webfetch':
+      return 'webfetch';
+    case 'question':
+      return 'question';
+    default:
+      return trimmed;
+  }
 }
 
 /** Options for calling OpenCode */
@@ -186,13 +292,14 @@ export interface OpenCodeCallOptions {
   sessionId?: string;
   model: string;
   systemPrompt?: string;
-  allowedTools?: string[];
+  /** Resolved OpenCode tool allowlist from provider_options.opencode.allowed_tools. */
+  allowedTools?: OpenCodeAllowedTools;
   permissionMode?: PermissionMode;
   networkAccess?: boolean;
   variant?: string;
   onStream?: StreamCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
   opencodeApiKey?: string;
-  outputSchema?: Record<string, unknown>;
   interactionTimeoutMs?: number;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

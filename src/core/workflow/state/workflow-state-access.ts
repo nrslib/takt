@@ -1,15 +1,15 @@
 import type { WorkflowState } from '../../models/types.js';
 
-type WorkflowStateRoot = 'context' | 'structured' | 'effect';
+type WorkflowStateRoot = 'context' | 'structured' | 'effect' | 'findings';
 interface ParsedWorkflowStateReference {
   root: WorkflowStateRoot;
-  scope: string;
+  scope?: string;
   path: string[];
 }
 
 export function resolveWorkflowStateRoot(
   state: WorkflowState,
-  root: WorkflowStateRoot,
+  root: Exclude<WorkflowStateRoot, 'findings'>,
 ): Map<string, Record<string, unknown>> {
   if (root === 'context') {
     return state.systemContexts;
@@ -27,8 +27,11 @@ function parseWorkflowStateReference(reference: string): ParsedWorkflowStateRefe
   }
 
   const [root, scope, ...path] = segments;
-  if (root !== 'context' && root !== 'structured' && root !== 'effect') {
+  if (root !== 'context' && root !== 'structured' && root !== 'effect' && root !== 'findings') {
     throw new Error(`Unsupported workflow state root "${root}"`);
+  }
+  if (root === 'findings') {
+    return { root, path: segments.slice(1) };
   }
   if (!scope) {
     throw new Error(`Invalid workflow state reference "${reference}"`);
@@ -95,7 +98,18 @@ function resolveArrayAccess(current: unknown[], key: string, reference: string):
 export function resolveWorkflowStateReference(reference: string, state: WorkflowState): unknown {
   const { root, scope, path } = parseWorkflowStateReference(reference);
 
-  let current: unknown = resolveWorkflowStateRoot(state, root).get(scope);
+  let current: unknown;
+  if (root === 'findings') {
+    current = state.findings;
+    if (current == null) {
+      throw new Error('Missing workflow findings state');
+    }
+  } else {
+    if (!scope) {
+      throw new Error(`Invalid workflow state reference "${reference}"`);
+    }
+    current = resolveWorkflowStateRoot(state, root).get(scope);
+  }
   if (current == null) {
     throw new Error(`Missing workflow state scope "${scope}" in ${root}`);
   }

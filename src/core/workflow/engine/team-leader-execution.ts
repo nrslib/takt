@@ -1,7 +1,7 @@
 import type { MorePartsResponse } from '../../../agents/agent-usecases.js';
 import type { PartDefinition, PartResult } from '../../models/types.js';
-
-const DEFAULT_MAX_TOTAL_PARTS = 20;
+import { DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../../shared/constants.js';
+import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 
 export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
@@ -38,7 +38,11 @@ export interface TeamLeaderExecutionResult {
 export async function runTeamLeaderExecution(
   options: TeamLeaderExecutionOptions,
 ): Promise<TeamLeaderExecutionResult> {
-  const maxTotalParts = options.maxTotalParts ?? DEFAULT_MAX_TOTAL_PARTS;
+  const maxTotalParts = options.maxTotalParts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS;
+  if (options.initialParts.length > maxTotalParts) {
+    throw new Error(`Initial team leader parts exceed max_total_parts: ${options.initialParts.length} > ${maxTotalParts}`);
+  }
+
   const queue: PartDefinition[] = [...options.initialParts];
   const plannedParts: PartDefinition[] = [...options.initialParts];
   const partResults: PartResult[] = [];
@@ -114,6 +118,7 @@ export async function runTeamLeaderExecution(
         return;
       }
 
+      assertPlannedPartsWithinLimit(plannedParts.length, newParts.length, maxTotalParts);
       plannedParts.push(...newParts);
       queue.push(...newParts);
       deferredDoneReason = undefined;
@@ -123,6 +128,9 @@ export async function runTeamLeaderExecution(
         totalPlanned: plannedParts.length,
       });
     } catch (error) {
+      if (isPlanningBudgetError(error)) {
+        throw error;
+      }
       options.onPlanningError?.(error);
       leaderDone = true;
     }
@@ -165,4 +173,15 @@ export async function runTeamLeaderExecution(
 
 function isSuccessfulPartResult(result: PartResult): boolean {
   return result.response.status === 'done';
+}
+
+function assertPlannedPartsWithinLimit(
+  currentPlannedCount: number,
+  newPartCount: number,
+  maxTotalParts: number,
+): void {
+  const totalPlannedParts = currentPlannedCount + newPartCount;
+  if (totalPlannedParts > maxTotalParts) {
+    throw new Error(`Team leader planned parts exceed max_total_parts: ${totalPlannedParts} > ${maxTotalParts}`);
+  }
 }

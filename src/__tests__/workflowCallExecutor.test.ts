@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
-import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
+import type { AgentResponse, FindingLedger, WorkflowConfig, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
 import type { WorkflowCallChildEngine, WorkflowRunResult } from '../core/workflow/types.js';
 
 function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
@@ -71,11 +71,21 @@ describe('WorkflowCallExecutor', () => {
     const createEngine = vi.fn().mockReturnValue(childEngine);
     const emit = vi.fn();
     const setActiveResumePoint = vi.fn();
+    const traceTaskMetadata = {
+      taskSummary: 'Review PR #827 trace metadata',
+      taskSource: 'pr_review',
+      prNumber: 827,
+      gitBranch: 'takt/827/add-trace-task-metadata',
+      gitBaseBranch: 'main',
+      worktreePath: '/tmp/project',
+      runDir: '/tmp/project/.takt/runs/run',
+    } as const;
     const executor = new WorkflowCallExecutor({
       getConfig: () => parentConfig,
       getOptions: () => ({
         projectCwd: '/tmp/project',
         reportDirName: 'run',
+        traceTaskMetadata,
       }),
       getMaxSteps: () => 10,
       updateMaxSteps: vi.fn(),
@@ -111,11 +121,26 @@ describe('WorkflowCallExecutor', () => {
         model: 'test-model',
         reportDirName: 'run',
         runPathNamespace: ['subworkflows', expect.stringContaining('step-delegate')],
+        traceTaskMetadata,
       }),
     );
+    const childOptions = createEngine.mock.calls[0]?.[3];
+    expect(childOptions?.traceTaskMetadata).toBe(traceTaskMetadata);
     expect(childEngine.on).toHaveBeenCalledWith('step:start', expect.any(Function));
     listeners.get('step:start')?.('payload');
     expect(emit).toHaveBeenCalledWith('step:start', 'payload');
+    expect(childEngine.on).toHaveBeenCalledWith('findings:ledger', expect.any(Function));
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: '2026-06-13T02:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    };
+    listeners.get('findings:ledger')?.(ledger);
+    expect(emit).toHaveBeenCalledWith('findings:ledger', ledger);
     expect(state.iteration).toBe(4);
     expect(state.personaSessions.get('coder')).toBe('session-2');
     expect(setActiveResumePoint).toHaveBeenCalledWith(step, 4);

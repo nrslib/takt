@@ -20,6 +20,7 @@ import {
   prepareKnowledgeContent as prepareKnowledgeContentGeneric,
   preparePolicyContent as preparePolicyContentGeneric,
 } from 'faceted-prompting';
+import { renderFencedJsonBlock } from './fenced-json.js';
 
 const CONTEXT_MAX_CHARS = 2000;
 
@@ -128,14 +129,14 @@ export class InstructionBuilder {
       : '';
 
     // Instructions (step instruction with placeholder processing)
-    const instructions = replaceTemplatePlaceholders(
+    const instructions = this.appendFindingContractInstruction(replaceTemplatePlaceholders(
       tmpl,
       this.step,
       {
         ...this.context,
         previousResponseText: previousResponsePrepared || undefined,
       },
-    );
+    ));
 
     // Workflow name and description
     const workflowName = this.context.workflowName ?? '';
@@ -225,6 +226,37 @@ export class InstructionBuilder {
     });
     return [structureHeader, ...stepLines].join('\n');
   }
+
+  private appendFindingContractInstruction(instructions: string): string {
+    if (!this.context.findingContract) {
+      return instructions;
+    }
+
+    const lines = [
+      instructions,
+      '',
+      '## Finding Contract',
+      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
+      '- Use existing finding IDs from the ledger when referring to tracked findings.',
+      '- Do not assign final finding IDs.',
+      '',
+      'Current finding ledger summary:',
+      renderFencedJsonBlock(this.context.findingContract.ledgerSummary),
+    ];
+
+    if (this.context.findingContract.rawFindingsJsonSchema) {
+      lines.push(
+        '',
+        '- Report every issue you observe as structured raw findings.',
+        '- Use rawFindingId values that are unique within this response.',
+        '- Copy each Observed Findings family_tag value into the structured familyTag field.',
+        '- Return structured output matching this raw findings schema:',
+        renderFencedJsonBlock(this.context.findingContract.rawFindingsJsonSchema),
+      );
+    }
+
+    return lines.join('\n');
+  }
 }
 
 /**
@@ -271,22 +303,25 @@ export function renderReportOutputInstruction(
   const isMulti = step.outputContracts.length > 1;
 
   let heading: string;
+  let saveRule: string;
   let createRule: string;
   let overwriteRule: string;
 
   if (language === 'ja') {
     heading = isMulti
-      ? '**レポート出力:** Report Files に出力してください。'
-      : '**レポート出力:** `Report File` に出力してください。';
-    createRule = '- ファイルが存在しない場合: 新規作成';
-    overwriteRule = '- ファイルが存在する場合: 既存内容を `logs/reports-history/` に退避し、最新内容で上書き';
+      ? '**レポート出力:** Report Files 用の本文を回答してください。'
+      : '**レポート出力:** `Report File` 用の本文を回答してください。';
+    saveRule = '- TAKT があなたの回答本文をレポートファイルに保存します。自分でファイルを書き込まないでください。';
+    createRule = '- ファイルが存在しない場合: TAKT が新規作成します';
+    overwriteRule = '- ファイルが存在する場合: TAKT が既存内容を `logs/reports-history/` に退避し、最新内容で上書きします';
   } else {
     heading = isMulti
-      ? '**Report output:** Output to the `Report Files` specified above.'
-      : '**Report output:** Output to the `Report File` specified above.';
-    createRule = '- If file does not exist: Create new file';
-    overwriteRule = '- If file exists: Move current content to `logs/reports-history/` and overwrite with latest report';
+      ? '**Report output:** Respond with content for the `Report Files` specified above.'
+      : '**Report output:** Respond with content for the `Report File` specified above.';
+    saveRule = '- TAKT will save your response body to the report file. Do not write the file yourself.';
+    createRule = '- If file does not exist: TAKT creates a new file';
+    overwriteRule = '- If file exists: TAKT moves current content to `logs/reports-history/` and overwrites it with the latest report.';
   }
 
-  return `${heading}\n${createRule}\n${overwriteRule}`;
+  return `${heading}\n${saveRule}\n${createRule}\n${overwriteRule}`;
 }

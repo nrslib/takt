@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { WorkflowStep, WorkflowState, Language } from '../../models/types.js';
+import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
@@ -8,7 +8,9 @@ import type { PhaseRunnerContext } from '../phase-runner.js';
 import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
-  resolvePersonaProviderOptions,
+  resolveDirectStepProviderOptions,
+  resolveStepProviderOptionsLayers,
+  mergeStepProviderOptionsLayers,
   resolveProviderOptionsSources,
 } from '../../../infra/config/providerOptions.js';
 import {
@@ -32,6 +34,7 @@ import type {
 import { buildSessionKey } from '../session-key.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 export class OptionsBuilder {
   constructor(
@@ -44,6 +47,11 @@ export class OptionsBuilder {
     private readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>,
     private readonly getWorkflowName: () => string,
     private readonly getWorkflowDescription: () => string | undefined,
+    private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
+    private readonly getFindingContractInstructionContext?: (
+      step: WorkflowStep,
+      includeRawFindingsSchema: boolean,
+    ) => FindingContractInstructionContext | undefined,
   ) {}
 
   private resolveEngineProviderModel(): StepProviderInfo {
@@ -67,13 +75,17 @@ export class OptionsBuilder {
       providerSource: engineProviderInfo.providerSource,
       model: engineProviderInfo.model,
       modelSource: engineProviderInfo.modelSource,
+      providerRouting: this.engineOptions.providerRouting,
       personaProviders: this.engineOptions.personaProviders,
     });
     const provider = resolved.provider ?? engineProviderInfo.provider;
     const providerOptions = this.resolveMergedProviderOptions(step, provider, runtime);
     const providerOptionsSources = resolveProviderOptionsSources(
-      step.providerOptions,
-      resolvePersonaProviderOptions(this.engineOptions.personaProviders, step.personaDisplayName),
+      resolveDirectStepProviderOptions(step),
+      resolveStepProviderOptionsLayers(step, {
+        providerRouting: this.engineOptions.providerRouting,
+        personaProviders: this.engineOptions.personaProviders,
+      }),
       this.engineOptions.providerOptions,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptionsSource,
@@ -99,20 +111,20 @@ export class OptionsBuilder {
       return runtime.providerInfo.providerOptions;
     }
 
-    const personaProviderOptions = resolvePersonaProviderOptions(
-      this.engineOptions.personaProviders,
-      step.personaDisplayName,
-    );
+    const middleProviderOptions = mergeStepProviderOptionsLayers(step, {
+      providerRouting: this.engineOptions.providerRouting,
+      personaProviders: this.engineOptions.personaProviders,
+    });
 
     if (runtime?.teamLeaderPart) {
       return resolveEffectiveTeamLeaderPartProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptionsOriginResolver,
         this.engineOptions.providerOptions,
-        step.providerOptions,
+        resolveDirectStepProviderOptions(step),
         resolvedProvider,
         runtime.teamLeaderPart.partAllowedTools,
-        personaProviderOptions,
+        middleProviderOptions,
       );
     }
 
@@ -120,8 +132,8 @@ export class OptionsBuilder {
       this.engineOptions.providerOptionsSource,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptions,
-      step.providerOptions,
-      personaProviderOptions,
+      resolveDirectStepProviderOptions(step),
+      middleProviderOptions,
     );
   }
 
@@ -165,6 +177,7 @@ export class OptionsBuilder {
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
       workflowMeta,
+      childProcessEnv: this.engineOptions.childProcessEnv,
     };
     return baseOptions;
   }
@@ -180,6 +193,13 @@ export class OptionsBuilder {
     const processSafety = runtime?.teamLeaderPart?.processSafety
       ?? this.engineOptions.phase1ProcessSafetyByStep?.[workflowMeta.currentStep];
     return buildPhase1WorkflowMeta(workflowMeta, processSafety);
+  }
+
+  buildFindingContractInstructionContext(
+    step: WorkflowStep,
+    includeRawFindingsSchema: boolean,
+  ): FindingContractInstructionContext | undefined {
+    return this.getFindingContractInstructionContext?.(step, includeRawFindingsSchema);
   }
 
   private resolveSupportedMaxTurns(
@@ -223,7 +243,7 @@ export class OptionsBuilder {
     return {
       ...baseOptions,
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
-      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, runtime?.providerInfo?.provider)) : undefined,
+      sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, resolvedProvider)) : undefined,
       allowedTools,
       mcpServers: resolveMcpServersForProvider(step.mcpServers, resolvedProvider),
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
@@ -304,11 +324,19 @@ export class OptionsBuilder {
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,
       lastResponse,
+      workflowName: this.getWorkflowName(),
+      observabilityRunId: this.engineOptions.observabilityRunId,
+      observabilityEnabled: this.engineOptions.observability?.enabled === true,
+      sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
+      getCurrentWorkflowStack: this.getCurrentWorkflowStack,
+      childProcessEnv: this.engineOptions.childProcessEnv,
       onStream: this.engineOptions.onStream,
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
+      buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
+        this.buildFindingContractInstructionContext(step, includeRawFindingsSchema),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
-      resolveSessionKey: (step) => buildSessionKey(step, runtime?.providerInfo?.provider),
+      resolveSessionKey: (step) => buildSessionKey(step, this.resolveStepProviderModel(step, runtime).provider),
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
       buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
       updatePersonaSession,

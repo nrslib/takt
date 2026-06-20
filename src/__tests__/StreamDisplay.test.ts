@@ -247,6 +247,21 @@ describe('StreamDisplay', () => {
       expect(fullOutput).toContain('Error message');
       expect(fullOutput).not.toContain('\x1b[31m');
     });
+
+    it('should strip ANSI and OSC codes from result error content', () => {
+      const display = new StreamDisplay('test-agent', false);
+      display.showResult(false, '\x1b]52;c;secret\x07Cursor failed: \x1b[41mparse error\x1b[0m');
+
+      const errorLine = consoleLogSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && (call[0] as string).includes('Cursor failed'),
+      );
+      expect(errorLine).toBeDefined();
+      const fullOutput = errorLine!.join(' ');
+      expect(fullOutput).toContain('Cursor failed: parse error');
+      expect(fullOutput).not.toContain('secret');
+      expect(fullOutput).not.toContain('\x1b]52');
+      expect(fullOutput).not.toContain('\x1b[41m');
+    });
   });
 
   describe('showToolUse spinner suppression', () => {

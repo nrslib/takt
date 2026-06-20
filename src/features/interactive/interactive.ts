@@ -58,6 +58,7 @@ export interface InteractiveUIText {
   retryUnavailable: string;
   resumeUnavailable: string;
   directExecuteUnavailable: string;
+  pasteImageUnavailable: string;
 }
 
 /**

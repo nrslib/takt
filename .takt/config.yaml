@@ -1,3 +1,6 @@
+workflow_command_gates:
+  custom_scripts: true
+
 workflow_overrides:
   steps:
     implement:
@@ -6,11 +9,6 @@ workflow_overrides:
         - "Run `npm run lint` and verify lint passes"
         - "Run `npm test` and verify all tests pass"
         - "Run `npm run test:e2e:mock` and verify all E2E tests pass"
-        # command gate example: machine-executed after agent step completion
-        # - type: command
-        #   name: quality-check
-        #   command: "./.takt/quality-gates/check.sh"
-        #   timeout_ms: 300000
     fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
@@ -18,6 +16,18 @@ workflow_overrides:
         - "Run `npm test` and verify all tests pass"
         - "Run `npm run test:e2e:mock` and verify all E2E tests pass"
     ai_fix:
+      quality_gates:
+        - "Run `npm run build` and verify the build succeeds"
+        - "Run `npm run lint` and verify lint passes"
+        - "Run `npm test` and verify all tests pass"
+        - "Run `npm run test:e2e:mock` and verify all E2E tests pass"
+    ai-antipattern-fix:
+      quality_gates:
+        - "Run `npm run build` and verify the build succeeds"
+        - "Run `npm run lint` and verify lint passes"
+        - "Run `npm test` and verify all tests pass"
+        - "Run `npm run test:e2e:mock` and verify all E2E tests pass"
+    fix_supervisor:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"

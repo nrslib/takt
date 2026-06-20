@@ -3,7 +3,7 @@
  *
  * Validates that:
  * - dual and dual-cqrs workflows load successfully via loadWorkflow
- * - dual has 2-stage review: reviewers_1 (arch, frontend, testing) → reviewers_2 (security, qa, requirements)
+ * - dual has 2-stage review: reviewers_1 (arch, frontend, testing, ai-antipattern) → reviewers_2 (security, qa, pure, coding)
  * - dual-cqrs has single-stage reviewers (cqrs-es, frontend, security, qa)
  * - ai_review routes to reviewers_1 (dual) / reviewers (dual-cqrs)
  * - fix step routes back to reviewers_1 (dual) / reviewers (dual-cqrs)
@@ -58,12 +58,12 @@ describe('dual workflow parallel structure', () => {
     expect(reviewers2!.parallel!.length).toBe(4);
   });
 
-  it('should have security-review, qa-review, requirements-review, coding-review in reviewers_2', () => {
+  it('should have security-review, qa-review, pure-review, coding-review in reviewers_2', () => {
     const reviewers2 = workflow!.steps.find((s) => s.name === 'reviewers_2');
     const subNames = reviewers2!.parallel!.map((s) => s.name);
     expect(subNames).toContain('security-review');
     expect(subNames).toContain('qa-review');
-    expect(subNames).toContain('requirements-review');
+    expect(subNames).toContain('pure-review');
     expect(subNames).toContain('coding-review');
   });
 
@@ -145,7 +145,8 @@ describe('dual workflow parallel structure', () => {
     const implement = workflow!.steps.find((s) => s.name === 'implement');
     expect(implement).toBeDefined();
     expect(implement!.teamLeader).toBeDefined();
-    expect(implement!.teamLeader!.maxParts).toBe(2);
+    expect(implement!.teamLeader!.maxConcurrency).toBe(2);
+    expect(implement!.teamLeader!.maxTotalParts).toBe(20);
   });
 
   it('should not have fix_supervisor step', () => {
@@ -166,7 +167,7 @@ describe('dual-cqrs workflow parallel structure', () => {
     const reviewers = workflow!.steps.find((s) => s.name === 'reviewers');
     expect(reviewers).toBeDefined();
     expect(reviewers!.parallel).toBeDefined();
-    expect(reviewers!.parallel!.length).toBe(6);
+    expect(reviewers!.parallel!.length).toBe(7);
   });
 
   it('should have cqrs-es-review instead of arch-review', () => {
@@ -178,6 +179,7 @@ describe('dual-cqrs workflow parallel structure', () => {
     expect(subNames).toContain('security-review');
     expect(subNames).toContain('qa-review');
     expect(subNames).toContain('ai-antipattern-review-2nd');
+    expect(subNames).toContain('pure-review');
   });
 
   it('should have aggregate rules on reviewers step', () => {

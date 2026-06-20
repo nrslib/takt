@@ -6,6 +6,103 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.47.0] - 2026-06-18
+
+### Added
+
+- Finding Contract — レビューワークフロー向けの構造化された指摘ライフサイクル管理 (#816, #826, #839, #840, #842, #845)。レビュー指摘が正式な台帳（`findings-ledger.json`）でライフサイクル状態（`new`・`persists`・`resolved`・`reopened`）、重要度、重複排除とともに追跡されるようになった。専用の `findings-manager` ペルソナが複数レビュアーの生の指摘を台帳と照合し、安定した ID（`F-0001`、`F-0002`、…）を割り当てて競合を検出する。`src/core/workflow/findings/` に reconciler・store・manager-runner・validation を新設し、全レビュータイプ（coding・architecture・security・QA・frontend・testing・terraform・CQRS/ES・pure・AI antipattern）に finding-contract 出力契約を追加した。Finding Contract 対応の新ワークフロー `takt-default-with-fc` と `peer-review-with-fc` を同梱。ワークフロー YAML に `finding_contract` セクションを追加することで有効化できる
+- ペルソナ・タグ・ステップ名による `provider_routing` 設定を追加 (#844, #846)。新しい `provider_routing` 設定セクションで、3 つの次元でプロバイダー/モデル/provider_options を選択できる。`personas`（生のペルソナキー別）、`tags`（ステップタグ別）、`steps`（ステップ名別）。解決優先順位はステップ直接指定 > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > 非推奨の `persona_providers` > ワークフロー > CLI。プロジェクト（`.takt/config.yaml`）またはグローバル（`~/.takt/config.yaml`）で設定可能
+- ビルトインワークフローの全ステップにタグを追加 (#851)。すべてのビルトインワークフローステップに `tags` 配列（例: `plan`・`coding`・`review`・`implementation`・`edit`）を付与した。タグは `provider_routing.tags` の主キーで、個別のステップ名ではなくカテゴリ単位でプロバイダー/モデルをオーバーライドできる。並列サブステップのタグもサポート
+- OTel スパン向けのトレース発見性を追加 (#843, #847)。新しい `traceDiscovery` モジュールが、構造化された `WorkflowTraceDiscovery` オブジェクト（サービス名・runId・ワークフロー名・タスクメタデータ・Git ブランチ/ベース情報）と検索可能なクエリ文字列を構築し、Grafana Tempo などの外部オブザーバビリティツールとのワークフロー実行の相関を可能にする
+- トレースタスクメタデータのエンリッチメントを追加 (#827, #829)。タスクメタデータ（ソース・Issue/PR 番号・ブランチ・スラッグ・要約）が構造化された `WorkflowTraceTaskMetadata` として抽出され、OTel スパンとトレース発見出力に伝播されるようになった
+- provider options とファセット向けの名前付きリソースリゾルバーを追加 (#820, #824)。セキュアな 3 層リゾルバー（`namedResourceResolver.ts`）が `.takt/provider-options/` → `~/.takt/provider-options/` → ビルトイン `provider-options/` ディレクトリをベア名で拡張子フォールバック（`.yaml`/`.yml`）付きで検索し、パストラバーサルを検証しシンボリックリンクが許可ディレクトリ内に留まることを確認する。新しい `extends` キーワードで使用される
+
+### Changed
+
+- **BREAKING:** `provider_options.$ref` を `provider_options.extends` にリネーム (#820, #824)。ステップ/ワークフローの `provider_options` で共有 YAML ファイルを参照していた `$ref` キーが `extends` にリネームされた。値は相対ファイルパス（例: `$ref: provider-options/edit.yaml`）ではなく、3 層の名前付きリソースリゾルバーで解決されるベア名（例: `extends: edit`）になった。`$ref` を使用しているカスタムワークフローは更新が必要。ビルトインの provider options ファイルは `builtins/{lang}/workflows/provider-options/` から `builtins/{lang}/provider-options/` に移動した。ユーザーオーバーライドは `.takt/provider-options/` または `~/.takt/provider-options/` に配置する
+- **BREAKING:** `persona_providers` を非推奨化し `provider_routing` を推奨 (#844, #846)。`persona_providers` 設定キーは引き続き動作するが非推奨となった。表示名でマッチするため脆弱であり、`provider_routing.personas` は代わりに生のペルソナキーでマッチする。移行方法: `persona_providers` のエントリを `provider_routing.personas` に移動する
+- レポートフェーズのツール呼び出し検出を強化。レポートフェーズがプロバイダーのツール呼び出し（このフェーズでは禁止）を積極的に検出・拒否し、壊れた出力を黙って生成する代わりにリトライ可能なエラーを返すようになった。レポートファイル書き込みロジックを共有 `report-writer.ts` モジュールに抽出
+- レビューとコーディングのポリシーを強化。レビューポリシーにコントラクトカバレッジ・コントラクト整合性・仕様完全性・要件アンカリング・解決判断に関する新しい REJECT 条件を追加。これまで欠落していたレビューワークフローにコーディングポリシーを接続した (#848)
+- スーパーバイザーインストラクションを通常モード・メンテナンスモードの両方で全面改訂し、スコーピングと検証基準を明確化
+- 知識ファセットを拡充: アーキテクチャパターン、バックエンドの例外変換スコープ、CQRS/ES ドメインパターン
+
+### Fixed
+
+- Cursor CLI の並列実行時に cli-config.json リネームの ENOENT が発生する問題を修正 (#802, #819)。Cursor CLI が並列レビュアーステップ実行時に内部の `cli-config.json.tmp` → `cli-config.json` リネームが競合し ENOENT で断続的に失敗することがあった。致命的なプロバイダーエラーとして扱う代わりに、指数バックオフ付きリトライ（最大 8 回、1〜30 秒遅延）を行うようにした
+- OpenCode の利用不可ツールループを修正 (#822)。OpenCode プロバイダーがエージェントの利用不可ツール繰り返し呼び出しで無限ループに陥ることがあった。新しい `UnavailableToolLoopDetector` が連続 2 回の利用不可ツールエラーでセッションを中断し、明確な失敗メッセージを表示する
+- レビュー指摘を元の要件にアンカリングするよう修正 (#830)。レビュアーが指摘を評価する際に元のタスク要件から逸脱することがあった。インストラクションと出力契約で、レビュー判断をプランおよび元のタスク記述にアンカリングすることを強制するようにした
+
+### Internal
+
+- AI antipattern レビューポリシーを finding-contract 出力契約を持つ独立ファセットとして再構成
+- テストポリシーファセットを追加し、不在のみテストに対するガイダンスを含む
+- README にステータスバッジを追加 (#835)
+- finding contract・provider routing・trace discovery・trace task metadata・report phase retry・named resource resolver・workflow spans 等をカバーする 20 以上の新テストファイル
+- 設定とワークフローのドキュメントを `provider_routing` と `extends` に対応して更新
+- `WorkflowEngineSetup` を抽出してエンジン初期化をクリーン化
+- `WorkflowRunLoop` に失敗メタデータとコマンドゲートの改善を追加
+- レパートリー pack-summary を名前付きリソース解決と `extends` 参照に対応して書き直し
+
+## [0.46.0] - 2026-06-13
+
+### Added
+
+- OTLP エクスポートにプロバイダーサブプロセスの span ネストと実行中トレースの発見性を追加 (#808, #812, #814)。`observability.enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃った場合のみ、既存のローカル exporter と並走して span と metric を OTLP HTTP で送信する。`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` による個別 endpoint 上書きも標準環境変数として利用できるが、TAKT 独自の OTLP config キーは追加していない。0.42.0 の「標準 `OTEL_*` 環境変数で自前の collector に接続する」という記述は、#753 以降 `spanProcessors` / `metricReaders` を明示指定したことで成立していなかったため、本変更で実際に送信できるようにした。さらに、起動するプロバイダーのサブプロセスへ W3C トレースコンテキストを伝播するようにし、各プロバイダー CLI の span が独立したトレースにならず親ワークフローのトレース配下にネストするようにした (#812)。あわせて、長時間続くルート span が閉じる前でも実行中のワークフローを Grafana Tempo で発見できるよう、短命な `workflow_start.<name>` span を出力する (#814)
+- OpenCode のツール許可リストと共有 `provider_options` ファイルを追加 (#804)。`provider_options.opencode.allowed_tools` で、ステップやワークフローが利用できる OpenCode ツールを小文字のツール名（例: `read`・`glob`・`grep`・`bash`・`websearch`・`webfetch`）で絞り込める。`provider_options` ブロックはワークフローファイルからの相対パスで共有 YAML ファイルを `$ref` 参照できるようになり、インライン値が一致するリーフを上書きする。再利用できるビルトイン `provider-options/{edit,review-files,review-readonly,review-web}.yaml` プリセットも同梱した
+- Kiro のステップ単位カスタムエージェントを追加 (#796)。`provider_options.kiro.agent` で、ステップ・ワークフロー・ペルソナ・プロジェクト・グローバルの各設定に Kiro CLI のカスタムエージェント名（`kiro-cli chat --agent`）を渡せるようになった。`TAKT_PROVIDER_OPTIONS_KIRO_AGENT` 環境変数による上書きも可能。指定がないステップは Kiro CLI の既定エージェントを使う
+
+### Changed
+
+- `team_leader` のパート上限を `max_concurrency` と `max_total_parts` に分割 (#799)。`max_concurrency`（最大 3）は同時に走るワーカーパート数を、`max_total_parts`（最大 20）はリーダーがそのステップで計画できるパートの総数を制限する。従来の `max_parts` キーは `max_concurrency` の互換エイリアスとして引き続き受け付ける。あわせてチームリーダーの予算エラー検出を厳密化し、ワーカーパートが予算上限に達しても実行全体が中断しないようにした
+- ビルトインのレビュー系・開発系ワークフローに純粋レビューパスを追加。汎用の `pure-reviewer` ペルソナ（`review-pure` インストラクションと `pure-review` 出力契約を伴う）が「この変更は今マージできるか」だけを判定し、未対応の要求・既存挙動の破壊・テスト不足・スコープ外の変更を検出する。peer-review・review・review-fix・backend(-cqrs)・frontend・dual(-cqrs)・terraform・maintenance の各ワークフローに組み込んだ。これにより従来の要件レビュアー（`requirements-reviewer` ペルソナと `requirements-review` 出力契約）は削除した
+- ビルトインのレビュー・テスト系ファセットを強化。レビュアーとテスト作成ガイダンスが、置き換えられた仕様が消えたことだけを確認する「不在のみ」テストに対するガードレールを持つようになり、coding・review・testing ポリシー全体で挙動検証・レビュー検証・命名ポリシーのガイダンスを強化した
+
+### Fixed
+
+- レート制限の誤検出を低減 (#809)。レート制限検出のパターンが過度に広く、単独の `429`、通りすがりの `rate limit` という記述、通常のエージェント出力に含まれる `resets H:MM` のような時刻表記までレート制限と誤読してフォールバックを誘発していた。検出により具体的な表現（例: "too many requests" を伴う `429`、"rate limited" / "rate limit exceeded" / "rate limit error"、"exceeded/hit/reached rate limit"）を要求し、緩い単独時刻のストリームマーカーを廃止した
+- OpenCode のパーミッション処理を修正 (#801, #803, #807)。OpenCode の `doom_loop` パーミッション要求が、有効なパーミッションモードによって拒否される代わりに自動応答されるようになり、非対話実行が停止しなくなった (#803)。パーミッション要求と解決済みパーミッションの要約をログ出力するようにした (#801, #807)。さらに OpenCode 連携を再構成し、編集系ツールが OpenCode の編集パーミッションに対応付くようにし、共有 OpenCode サーバープールを設定ごとにキー分けして適切な取得・解放・中断処理を行うようにした (#807)
+
+## [0.45.0] - 2026-06-10
+
+### Added
+
+- フェーズ単位の usage イベントと usage 分析スクリプトを追加 (#785)。`observability.enabled: true` と `observability.usage_events_phase: true` を設定すると、実行ごとにフェーズ単位のトークン usage イベントを `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力する（既存の `logging.usage_events` 出力とは別ストリーム）。イベントはワークフローフェーズ（`phase1_execute`・`phase2_report`・ステータス判定の `phase3_structured` / `phase3_tag` / `phase3_fallback`）ごとに記録され、usage が取得できなかった呼び出しは 0 トークン扱いではなく `usage_missing: true` として記録される。新しい `npm run analyze:usage` スクリプトは、イベントファイルや実行ディレクトリを step × phase × provider × model 単位の Markdown / CSV テーブルに集計し、トークン合計と呼び出しごとの統計を出力する。新設の [Observability ガイド](./observability.ja.md) に記載
+- インタラクティブモードでクリップボード画像ペーストに対応 (#791)。インタラクティブ入力中に Ctrl+V（または新しい `/paste-image` コマンド）で OS のクリップボードから画像を直接添付できるようになった。これまではターミナルがインライン画像（OSC 1337）エスケープシーケンスを送出する場合にのみペーストが機能していた。添付画像はプロバイダー抽象も通るようになり、`claude-sdk` と `codex` はネイティブの画像入力として受け取り、その他のプロバイダーにはプロンプト内に添付ファイルパスの参照が展開されるため、エージェントが自身のツールで画像を開ける
+
+### Changed
+
+- **BREAKING:** 中断された `running` タスクは自動再キューされなくなった (#791)。`takt run` や `takt watch` が中断（プロセスクラッシュ・強制終了）された場合、`running` 状態のまま残ったタスクは次回起動時に `pending` へ復旧されて再実行されていたが、今後は説明付きのエラーとともに `failed` にマークされる。再実行するには明示的に再キューする
+
+### Fixed
+
+- ワークツリー分離クローンが、fetch 済みの base branch コミットから分岐する際に missing object エラーで失敗しなくなった (#791)。`git reset --hard` の前に base branch のコミットをメインリポジトリから分離クローンへ fetch するようにし、reset 対象が常にクローン内に存在するようにした
+- OpenCode の readonly パーミッションモードで読み取りツールが許可されるようになった (#797)。`readonly` モードは `read`・`glob`・`grep` を含むすべてのツールを拒否していたため、レビューなどの読み取り専用ステップがコードベースをまったく参照できなかった。これら 3 つの読み取りツールを許可し、編集・bash・ネットワーク系ツールは引き続き拒否する
+
+### Internal
+
+- Claude Agent SDK と Codex SDK の依存関係を更新 (#789, #795)
+- リポジトリ自身の `.takt/config.yaml` から implement 系ステップの `takt-quality-check` コマンドゲートを削除
+
+## [0.44.0] - 2026-06-03
+
+### Added
+
+- `kiro` プロバイダーを追加 (#773)。Claude・Codex・OpenCode・Cursor・Copilot に加えて、Kiro CLI を AI エージェントプロバイダーとして利用できるようになった。`--provider kiro` または設定で選択する。認証は設定の `kiro_api_key`（または環境変数 `TAKT_KIRO_API_KEY`）を使い、CLI バイナリは `kiro_cli_path` / `TAKT_KIRO_CLI_PATH` で上書きできる
+- OpenTelemetry オブザーバビリティに動作するエクスポーターとスパンの拡充を追加 (#753)。0.42.0 で導入したスパン基盤の上に、実行ごとのワークフローメトリクスをローカルの `monitor.json` に出力する機能（`observability.monitor: true` で有効化）と、OTel スパンから派生するシャドウセッションログ（`observability.sessionLogExporter: true`）を追加し、スパンの対象をフェーズ実行とステータス判定（judge）フェーズにも拡張した。エクスポーターは実行 ID ごとにルーティングされ、シャドウセッションログは正規の NDJSON セッションログとレダクションの整合性を保つため、機微なエージェント出力はサニタイズされたままになる。引き続き `observability.enabled: true` の背後でデフォルト無効
+
+### Changed
+
+- コーディングレビューをすべてのビルトインのレビュー・開発ワークフローに拡張。これまで `default-peer-review` のみに含まれていた coding-review 並列サブステップ（`review-coding` インストラクションと `coding-review` 出力契約を持つ `coding-reviewer` ペルソナ）を、すべてのビルトインの review / review-fix ワークフローと、開発ワークフロー（backend・frontend・dual・terraform とその派生）の並列レビューワーウェーブに追加した。モデル自身のコーディング判断を用いて実装上のバグ・リグレッション・セキュリティリスク・テスト不足を指摘する、ほぼインストラクションを持たない汎用パスである。意図的に最小構成の `*-mini` と `compound-eye` の派生はそのままにしている
+
+### Fixed
+
+- Codex の `Reconnecting...` イベントで実行が中断されなくなった (#775)。Codex SDK の一時的な再接続が致命的なプロバイダーエラーとして表面化し、ワークフロー全体を停止させることがあったが、回復可能な再接続として扱い再試行するようになった
+- ワークツリークローンの分離を強化 (#778)。`git clone --shared` の分離パスとクローン実行に対する修正（gitdir 分離処理の正規化を含む）により、ワークツリー分離タスクがメインリポジトリから正しく分離された状態を保つ
+
+### Internal
+
+- TAKT 自身の `.takt/config.yaml` にリポジトリの品質ゲートを組み込み、ドッグフーディングしているレビュー・開発ステップがコマンドゲート経由で build・lint・ユニット・モック E2E のチェックを実行するようにした
+
 ## [0.43.0] - 2026-05-29
 
 ### Added

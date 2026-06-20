@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 type PackageJson = {
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   engines?: Record<string, string>;
+  overrides?: Record<string, string>;
 };
 
 type PackageLock = {
@@ -122,14 +124,22 @@ describe('dependency versions', () => {
   it('declares OpenTelemetry foundation dependencies', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();
+    const otelDependencies = [
+      '@opentelemetry/api',
+      '@opentelemetry/exporter-metrics-otlp-http',
+      '@opentelemetry/exporter-trace-otlp-http',
+      '@opentelemetry/sdk-metrics',
+      '@opentelemetry/sdk-node',
+      '@opentelemetry/sdk-trace-base',
+    ] as const;
 
-    expect(packageJson.dependencies).toHaveProperty('@opentelemetry/api');
-    expect(packageJson.dependencies).toHaveProperty('@opentelemetry/sdk-node');
-    expect(packageLock.packages).toHaveProperty('node_modules/@opentelemetry/api');
-    expect(packageLock.packages).toHaveProperty('node_modules/@opentelemetry/sdk-node');
+    for (const dependencyName of otelDependencies) {
+      expect(packageJson.dependencies).toHaveProperty(dependencyName);
+      expect(packageLock.packages).toHaveProperty(`node_modules/${dependencyName}`);
+    }
   });
 
-  it('declares Node support compatible with OpenTelemetry dependency engines', () => {
+  it('declares Node support compatible with runtime dependency engines', () => {
     const packageJson = readPackageJson();
     const packageLock = readPackageLock();
     const dependencies = packageJson.dependencies;
@@ -141,14 +151,10 @@ describe('dependency versions', () => {
       throw new Error('package.json engines.node is required');
     }
 
-    expect(rootNodeRange).toBe('>=18.19.0');
+    expect(rootNodeRange).toBe('>=20.6.0');
 
     const rootMinimum = getMinimumNodeVersion(rootNodeRange);
-    const otelDependencies = ['@opentelemetry/api', '@opentelemetry/sdk-node'] as const;
-    const incompatibleDependencies = otelDependencies.flatMap((dependencyName) => {
-      if (!dependencies[dependencyName]) {
-        throw new Error(`${dependencyName} is missing from package.json dependencies`);
-      }
+    const incompatibleDependencies = Object.keys(dependencies).sort().flatMap((dependencyName) => {
       const lockedPackage = getLockedPackage(packageLock, `node_modules/${dependencyName}`);
       const dependencyNodeRange = lockedPackage.engines?.node;
       if (!dependencyNodeRange) {
@@ -166,10 +172,12 @@ describe('dependency versions', () => {
     expect(incompatibleDependencies).toEqual([]);
   });
 
-  it('locks yaml to the patched 2.8.3 release', () => {
+  it('locks yaml to the patched 2.9.0 release', () => {
+    const packageJson = readPackageJson();
     const packageLock = readPackageLock();
 
-    expect(packageLock.packages?.['node_modules/yaml']?.version).toBe('2.8.3');
+    expect(packageJson.dependencies?.yaml).toBe('^2.9.0');
+    expect(packageLock.packages?.['node_modules/yaml']?.version).toBe('2.9.0');
   });
 
   it('locks runtime transitive dependencies to patched security releases', () => {
@@ -178,10 +186,22 @@ describe('dependency versions', () => {
     expect(getLockedPackage(packageLock, 'node_modules/ajv').version).toBe('6.15.0');
     expect(getLockedPackage(packageLock, 'node_modules/express-rate-limit').version).toBe('8.5.2');
     expect(getLockedPackage(packageLock, 'node_modules/fast-uri').version).toBe('3.1.2');
-    expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.23');
+    expect(getLockedPackage(packageLock, 'node_modules/hono').version).toBe('4.12.25');
     expect(getLockedPackage(packageLock, 'node_modules/ip-address').version).toBe('10.2.0');
-    expect(getLockedPackage(packageLock, 'node_modules/protobufjs').version).toBe('7.6.1');
+    expect(getLockedPackage(packageLock, 'node_modules/protobufjs').version).toBe('7.6.4');
     expect(getLockedPackage(packageLock, 'node_modules/qs').version).toBe('6.15.2');
+  });
+
+  it('locks test runner transitive dependencies to patched security releases', () => {
+    const packageJson = readPackageJson();
+    const packageLock = readPackageLock();
+
+    expect(packageJson.devDependencies?.vitest).toBe('^3.2.6');
+    expect(packageJson.overrides?.vite).toBe('6.4.3');
+    expect(packageJson.overrides?.esbuild).toBe('0.28.1');
+    expect(getLockedPackage(packageLock, 'node_modules/vitest').version).toBe('3.2.6');
+    expect(getLockedPackage(packageLock, 'node_modules/vite').version).toBe('6.4.3');
+    expect(getLockedPackage(packageLock, 'node_modules/esbuild').version).toBe('0.28.1');
   });
 
   it('resolves traced-config through its public entrypoint', () => {

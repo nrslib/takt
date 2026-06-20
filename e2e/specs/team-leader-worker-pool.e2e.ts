@@ -24,6 +24,12 @@ function countPartsFromJson(stepContent: string): number {
   return Array.isArray(parsed.parts) ? parsed.parts.length : 0;
 }
 
+function extractAllowedToolsLines(stepContent: string): string[] {
+  return stepContent
+    .split(/\r?\n/)
+    .filter((line) => /^Allowed tools:/i.test(line.trim()));
+}
+
 describe('E2E: Team leader worker-pool dynamic scheduling', () => {
   let isolatedEnv: IsolatedEnv;
   let repo: LocalRepo;
@@ -82,9 +88,51 @@ describe('E2E: Team leader worker-pool dynamic scheduling', () => {
     expect(stepComplete).toBeDefined();
 
     const initialContent = String(initialDecomposition?.content ?? '');
-    expect(countPartsFromJson(initialContent)).toBe(2);
+    expect(countPartsFromJson(initialContent)).toBe(5);
 
     const content = String(stepComplete?.content ?? '');
     expect(countPartSections(content)).toBeGreaterThanOrEqual(5);
   }, 300_000);
+
+  it('inspect_tools を持つ CLI workflow でも child part に継承しない', () => {
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/team-leader-inspect-tools.yaml'),
+    );
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/team-leader-inspect-tools.json');
+    const result = runTakt({
+      args: [
+        '--provider', 'mock',
+        '--task',
+        'Run a team leader decomposition with parent-only inspection tools.',
+        '--workflow',
+        workflowPath,
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    if (result.exitCode !== 0) {
+      console.log('=== STDOUT ===\n', result.stdout);
+      console.log('=== STDERR ===\n', result.stderr);
+    }
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow completed');
+
+    const records = readSessionRecords(repo.path);
+    const stepComplete = records.find((r) => r.type === 'step_complete' && r.step === 'execute');
+    expect(stepComplete).toBeDefined();
+
+    const content = String(stepComplete?.content ?? '');
+    expect(content).toContain('## inspect-1: Inspect child inheritance');
+    expect(content).toContain('Mock response for persona');
+    for (const allowedToolsLine of extractAllowedToolsLines(content)) {
+      expect(allowedToolsLine).not.toMatch(/\b(Read|Glob|Grep)\b/i);
+    }
+  }, 240_000);
 });

@@ -1,5 +1,5 @@
 import type { LoopMonitorJudge, WorkflowConfig, WorkflowStep } from '../models/types.js';
-import type { PersonaProviderEntry } from '../models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry } from '../models/config-types.js';
 import {
   resolveProviderModelCandidates,
   resolveModelFromCandidates,
@@ -8,9 +8,16 @@ import type { ProviderType } from './types.js';
 import type { ProviderResolutionSource } from './provider-options-trace.js';
 
 export interface StepProviderModelInput {
-  step: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName'>;
+  step: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName'> & {
+    name?: string;
+    providerSpecified?: boolean;
+    modelSpecified?: boolean;
+    providerRoutingPersonaKey?: string;
+    tags?: string[];
+  };
   provider?: ProviderType;
   model?: string;
+  providerRouting?: ProviderRoutingConfig;
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Source layer of `provider` argument (engine-level fallback). */
   providerSource?: ProviderResolutionSource;
@@ -38,9 +45,10 @@ export interface WorkflowCallProviderModelOutput {
 
 export interface LoopMonitorJudgeProviderModelInput {
   judge: Pick<LoopMonitorJudge, 'provider' | 'model'>;
-  triggeringStep: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName'>;
+  triggeringStep: StepProviderModelInput['step'];
   provider?: ProviderType;
   model?: string;
+  providerRouting?: ProviderRoutingConfig;
   personaProviders?: Record<string, PersonaProviderEntry>;
 }
 
@@ -82,17 +90,68 @@ export function resolveAgentProviderModel(input: AgentProviderModelInput): Agent
 
   return { provider, model };
 }
+
+function resolveTagProviderRoutingEntry(
+  providerRouting: ProviderRoutingConfig | undefined,
+  tags: readonly string[] | undefined,
+): Pick<ProviderRoutingEntry, 'provider' | 'model'> | undefined {
+  if (!providerRouting?.tags || !tags || tags.length === 0) {
+    return undefined;
+  }
+
+  let resolved: ProviderRoutingEntry | undefined;
+  for (const tag of tags) {
+    const entry = providerRouting.tags[tag];
+    if (!entry) {
+      continue;
+    }
+    resolved = {
+      ...(resolved?.provider !== undefined ? { provider: resolved.provider } : {}),
+      ...(resolved?.model !== undefined ? { model: resolved.model } : {}),
+      ...(entry.provider !== undefined ? { provider: entry.provider } : {}),
+      ...(entry.model !== undefined ? { model: entry.model } : {}),
+    };
+  }
+  return resolved;
+}
+
 export function resolveStepProviderModel(input: StepProviderModelInput): StepProviderModelOutput {
+  if (input.providerRouting?.steps && input.step.name === undefined) {
+    throw new Error('Provider routing step resolution requires step.name');
+  }
+  const routingStepEntry = input.step.name !== undefined
+    ? input.providerRouting?.steps?.[input.step.name]
+    : undefined;
+  const routingTagEntry = resolveTagProviderRoutingEntry(input.providerRouting, input.step.tags);
+  const routingPersonaEntry = input.step.providerRoutingPersonaKey
+    ? input.providerRouting?.personas?.[input.step.providerRoutingPersonaKey]
+    : undefined;
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
+  const stepProviderIsDirect = input.step.provider !== undefined && input.step.providerSpecified !== false;
+  const stepModelIsDirect = input.step.model !== undefined && input.step.modelSpecified !== false;
+  const workflowProvider = input.step.providerSpecified === false ? input.step.provider : undefined;
+  const workflowModel = input.step.modelSpecified === false ? input.step.model : undefined;
 
   let provider: ProviderType | undefined;
   let providerSource: ProviderResolutionSource | undefined;
-  if (input.step.provider !== undefined) {
+  if (stepProviderIsDirect) {
     provider = input.step.provider;
     providerSource = 'step';
+  } else if (routingStepEntry?.provider !== undefined) {
+    provider = routingStepEntry.provider;
+    providerSource = 'provider_routing.steps';
+  } else if (routingTagEntry?.provider !== undefined) {
+    provider = routingTagEntry.provider;
+    providerSource = 'provider_routing.tags';
+  } else if (routingPersonaEntry?.provider !== undefined) {
+    provider = routingPersonaEntry.provider;
+    providerSource = 'provider_routing.personas';
   } else if (personaEntry?.provider !== undefined) {
     provider = personaEntry.provider;
     providerSource = 'persona_providers';
+  } else if (workflowProvider !== undefined) {
+    provider = workflowProvider;
+    providerSource = 'workflow';
   } else if (input.provider !== undefined) {
     provider = input.provider;
     providerSource = input.providerSource;
@@ -100,12 +159,24 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
 
   let model: string | undefined;
   let modelSource: ProviderResolutionSource | undefined;
-  if (input.step.model !== undefined) {
+  if (stepModelIsDirect) {
     model = input.step.model;
     modelSource = 'step';
+  } else if (routingStepEntry?.model !== undefined) {
+    model = routingStepEntry.model;
+    modelSource = 'provider_routing.steps';
+  } else if (routingTagEntry?.model !== undefined) {
+    model = routingTagEntry.model;
+    modelSource = 'provider_routing.tags';
+  } else if (routingPersonaEntry?.model !== undefined) {
+    model = routingPersonaEntry.model;
+    modelSource = 'provider_routing.personas';
   } else if (personaEntry?.model !== undefined) {
     model = personaEntry.model;
     modelSource = 'persona_providers';
+  } else if (workflowModel !== undefined) {
+    model = workflowModel;
+    modelSource = 'workflow';
   } else if (input.model !== undefined) {
     model = input.model;
     modelSource = input.modelSource;
@@ -135,6 +206,7 @@ export function resolveLoopMonitorJudgeProviderModel(
     step: input.triggeringStep,
     provider: input.provider,
     model: input.model,
+    providerRouting: input.providerRouting,
     personaProviders: input.personaProviders,
   });
 

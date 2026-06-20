@@ -56,16 +56,17 @@ describe('initialization', () => {
   });
 
   describe('promptProviderSelection', () => {
-    it('should include claude-terminal in provider choices and return the selected provider', async () => {
-      vi.mocked(selectOptionWithDefault).mockResolvedValueOnce('claude-terminal');
+    it('should include supported CLI provider choices and return the selected provider', async () => {
+      vi.mocked(selectOptionWithDefault).mockResolvedValueOnce('kiro');
 
       const result = await promptProviderSelection();
 
-      expect(result).toBe('claude-terminal');
+      expect(result).toBe('kiro');
       expect(selectOptionWithDefault).toHaveBeenCalledWith(
         'Select provider / プロバイダーを選択してください:',
         expect.arrayContaining([
           { label: 'Claude Code terminal (experimental)', value: 'claude-terminal' },
+          { label: 'Kiro CLI', value: 'kiro' },
         ]),
         'claude',
       );

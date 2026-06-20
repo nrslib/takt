@@ -4,6 +4,7 @@
 
 import { callMock, callMockCustom, type MockCallOptions } from '../mock/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
+import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
 function toMockOptions(options: ProviderCallOptions): MockCallOptions {
@@ -19,6 +20,15 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 /** Mock provider — deterministic responses for testing */
 export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsNativeImageInput = false;
+
+  getRuntimeInstructions(): string | null {
+    return null;
+  }
+
+  keepsAllowedToolWithoutEdit(tool: string): boolean {
+    return keepsClaudeAllowedToolWithoutEdit(tool);
+  }
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

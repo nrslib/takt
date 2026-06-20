@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
+import {
+  DEFAULT_PROVIDER_PERMISSION_PROFILES,
+  resolveStepPermissionMode,
+} from '../core/workflow/permission-profile-resolution.js';
 
 describe('resolveStepPermissionMode', () => {
   it('applies required_permission_mode as minimum floor', () => {
@@ -110,5 +113,15 @@ describe('resolveStepPermissionMode', () => {
     });
 
     expect(mode).toBe('full');
+  });
+
+  it('uses the default kiro permission profile when global profiles are not configured', () => {
+    const mode = resolveStepPermissionMode({
+      stepName: 'implement',
+      provider: 'kiro',
+      globalProviderProfiles: DEFAULT_PROVIDER_PERMISSION_PROFILES,
+    });
+
+    expect(mode).toBe('edit');
   });
 });

@@ -1,5 +1,5 @@
 name: review-fix-default
-description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・要件・コーディングの6観点から並列レビューし、指摘を修正する）
+description: 多角レビュー＋修正ループ（アーキテクチャ・セキュリティ・QA・テスト・pure review・コーディングの6観点から並列レビューし、指摘を修正する）
 workflow_config:
   provider_options:
     codex:
@@ -24,6 +24,8 @@ loop_monitors:
 
 steps:
   - name: gather
+    tags:
+      - plan
     edit: false
     persona: planner
     provider_options:
@@ -51,8 +53,12 @@ steps:
           - {質問2}
 
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -76,6 +82,8 @@ steps:
           - condition: needs_fix
 
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         policy: review
@@ -99,6 +107,8 @@ steps:
           - condition: needs_fix
 
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         policy:
@@ -123,6 +133,8 @@ steps:
           - condition: needs_fix
 
       - name: testing-review
+        tags:
+          - review
         edit: false
         persona: testing-reviewer
         policy:
@@ -149,9 +161,11 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: requirements-review
+      - name: pure-review
+        tags:
+          - review
         edit: false
-        persona: requirements-reviewer
+        persona: pure-reviewer
         policy: review
         provider_options:
           claude:
@@ -162,19 +176,23 @@ steps:
               - Bash
               - WebSearch
               - WebFetch
-        instruction: review-requirements
+        instruction: review-pure
         output_contracts:
           report:
-            - name: requirements-review.md
-              format: requirements-review
+            - name: pure-review.md
+              format: pure-review
         rules:
           - condition: approved
           - condition: needs_fix
 
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
-        policy: review
+        policy:
+          - review
+          - coding
         provider_options:
           claude:
             allowed_tools:
@@ -200,6 +218,8 @@ steps:
         next: fix
 
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -229,6 +249,8 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: supervisor
     policy: review
@@ -256,6 +278,8 @@ steps:
           use_judge: false
 
   - name: fix_supervisor
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:

@@ -1,13 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../models/types.js';
 import { resolveAgentErrorMessage } from '../models/response.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { executeAgent } from '../../agents/agent-usecases.js';
 import { createLogger } from '../../shared/utils/index.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
+import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { getReportFiles } from './evaluation/rule-utils.js';
+import type { PhasePromptParts } from './types.js';
 import type { PhaseRunnerContext } from './phase-runner.js';
+import { runWithPhaseSpan } from './observability/workflowSpans.js';
+import { writeReportFile } from './report-writer.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -16,48 +19,11 @@ const REPORT_PHASE_MAX_TURNS = 3;
 export type ReportPhaseBlockedResult = { blocked: true; response: AgentResponse };
 export type ReportPhaseRateLimitedResult = { rateLimited: true; response: AgentResponse };
 
-function formatHistoryTimestamp(date: Date): string {
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  const hour = String(date.getUTCHours()).padStart(2, '0');
-  const minute = String(date.getUTCMinutes()).padStart(2, '0');
-  const second = String(date.getUTCSeconds()).padStart(2, '0');
-  return `${year}${month}${day}T${hour}${minute}${second}Z`;
-}
-
-function buildVersionedFileName(fileName: string, timestamp: string, sequence: number): string {
-  const duplicateSuffix = sequence === 0 ? '' : `.${sequence}`;
-  return `${fileName}.${timestamp}${duplicateSuffix}`;
-}
-
-function backupExistingReport(reportDir: string, fileName: string, targetPath: string): void {
-  if (!existsSync(targetPath)) {
-    return;
+class ReportPhaseToolCallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReportPhaseToolCallError';
   }
-
-  const currentContent = readFileSync(targetPath, 'utf-8');
-  const timestamp = formatHistoryTimestamp(new Date());
-  let sequence = 0;
-  let versionedPath = resolve(reportDir, buildVersionedFileName(fileName, timestamp, sequence));
-  while (existsSync(versionedPath)) {
-    sequence += 1;
-    versionedPath = resolve(reportDir, buildVersionedFileName(fileName, timestamp, sequence));
-  }
-
-  writeFileSync(versionedPath, currentContent);
-}
-
-function writeReportFile(reportDir: string, fileName: string, content: string): void {
-  const baseDir = resolve(reportDir);
-  const targetPath = resolve(reportDir, fileName);
-  const basePrefix = baseDir.endsWith(sep) ? baseDir : baseDir + sep;
-  if (!targetPath.startsWith(basePrefix)) {
-    throw new Error(`Report file path escapes report directory: ${fileName}`);
-  }
-  mkdirSync(dirname(targetPath), { recursive: true });
-  backupExistingReport(baseDir, fileName, targetPath);
-  writeFileSync(targetPath, content);
 }
 
 /**
@@ -87,6 +53,7 @@ export async function runReportPhase(
     return;
   }
 
+  let phaseSequence = 0;
   for (const fileName of reportFiles) {
     if (!fileName) {
       throw new Error(`Invalid report file name: ${fileName}`);
@@ -105,18 +72,21 @@ export async function runReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
+      findingContract: ctx.buildFindingContractInstructionContext?.(step, false),
     }).build();
     const firstAttemptOptions = currentSessionId
       ? ctx.buildResumeOptions(step, currentSessionId, {
         maxTurns: REPORT_PHASE_MAX_TURNS,
       })
       : buildNewSessionRetryOptions(step, ctx);
+    const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
 
     const firstAttempt = await runSingleReportAttempt(
       step,
       firstAttemptInstruction,
       firstAttemptOptions,
       ctx,
+      firstAttemptPhaseExecutionId,
     );
     if (firstAttempt.kind === 'blocked') {
       return { blocked: true, response: firstAttempt.response };
@@ -151,10 +121,12 @@ export async function runReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
+      findingContract: ctx.buildFindingContractInstructionContext?.(step, false),
     }).build();
     const retryOptions = buildNewSessionRetryOptions(step, ctx);
+    const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
 
-    const retryAttempt = await runSingleReportAttempt(step, retryInstruction, retryOptions, ctx);
+    const retryAttempt = await runSingleReportAttempt(step, retryInstruction, retryOptions, ctx, retryAttemptPhaseExecutionId);
     if (retryAttempt.kind === 'blocked') {
       return { blocked: true, response: retryAttempt.response };
     }
@@ -176,11 +148,43 @@ export async function runReportPhase(
   log.debug('Report phase complete', { step: step.name, filesGenerated: reportFiles.length });
 }
 
+function nextReportPhaseExecutionId(stepName: string, iteration: number | undefined, sequence: number): string | undefined {
+  if (iteration == null) {
+    return undefined;
+  }
+  return buildPhaseExecutionId({
+    step: stepName,
+    iteration,
+    phase: 2,
+    sequence,
+  });
+}
+
 function buildNewSessionRetryOptions(step: WorkflowStep, ctx: PhaseRunnerContext): RunAgentOptions {
   return ctx.buildNewSessionReportOptions(step, {
     allowedTools: [],
     maxTurns: REPORT_PHASE_MAX_TURNS,
   });
+}
+
+function buildReportPhaseToolUseError(tool: string): ReportPhaseToolCallError {
+  return new ReportPhaseToolCallError(`Report phase does not allow tool calls, but provider emitted tool "${tool}".`);
+}
+
+function buildReportPhaseToolResultError(): ReportPhaseToolCallError {
+  return new ReportPhaseToolCallError('Report phase does not allow tool results.');
+}
+
+function detectReportPhaseToolCall(event: StreamEvent): ReportPhaseToolCallError | undefined {
+  if (event.type === 'tool_use') {
+    return buildReportPhaseToolUseError(event.data.tool);
+  }
+
+  if (event.type === 'tool_result') {
+    return buildReportPhaseToolResultError();
+  }
+
+  return undefined;
 }
 
 type ReportAttemptResult =
@@ -194,38 +198,95 @@ async function runSingleReportAttempt(
   instruction: string,
   options: RunAgentOptions,
   ctx: PhaseRunnerContext,
+  phaseExecutionId: string | undefined,
 ): Promise<ReportAttemptResult> {
   let didEmitPhaseStart = false;
+  let resolvedPromptParts: PhasePromptParts | undefined;
+  let reportToolCallError: ReportPhaseToolCallError | undefined;
   const callOptions: RunAgentOptions = {
     ...options,
     onPromptResolved: (promptParts) => {
-      ctx.onPhaseStart?.(step, 2, 'report', instruction, promptParts, undefined, ctx.iteration);
+      resolvedPromptParts = promptParts;
+      ctx.onPhaseStart?.(step, 2, 'report', instruction, promptParts, phaseExecutionId, ctx.iteration);
       didEmitPhaseStart = true;
+    },
+    onStream: (event) => {
+      const detected = detectReportPhaseToolCall(event);
+      if (detected !== undefined) {
+        reportToolCallError ??= detected;
+        throw reportToolCallError;
+      }
+      if (reportToolCallError !== undefined) {
+        throw reportToolCallError;
+      }
+
+      const streamCallback = options.onStream ?? ctx.onStream;
+      streamCallback?.(event);
     },
   };
 
   let response: AgentResponse;
   try {
-    response = await executeAgent(step.persona, instruction, callOptions);
+    response = await runWithPhaseSpan({
+      enabled: ctx.observabilityEnabled === true,
+      runId: ctx.observabilityRunId,
+      workflowName: ctx.workflowName,
+      step,
+      iteration: ctx.iteration,
+      phase: 2,
+      phaseName: 'report',
+      instruction,
+      phaseExecutionId,
+      workflowStack: ctx.getCurrentWorkflowStack?.(),
+      sanitizeText: ctx.sanitizeObservabilityText,
+      providerInfo: ctx.resolveStepProviderModel?.(step),
+      getPromptParts: () => resolvedPromptParts,
+    }, () => executeAgent(step.persona, instruction, callOptions), (result) => {
+      if (reportToolCallError !== undefined) {
+        return {
+          status: 'error',
+          content: '',
+          error: reportToolCallError.message,
+          providerUsage: result.providerUsage,
+        };
+      }
+
+      return {
+        status: result.status,
+        content: result.content,
+        error: result.error,
+        providerUsage: result.providerUsage,
+      };
+    });
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:2`);
     }
   } catch (error) {
+    if (error instanceof ReportPhaseToolCallError) {
+      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', error.message, phaseExecutionId, ctx.iteration);
+      return { kind: 'retryable_failure', errorMessage: error.message };
+    }
+
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (didEmitPhaseStart) {
-      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, undefined, ctx.iteration);
+      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, phaseExecutionId, ctx.iteration);
     }
     throw error;
   }
 
+  if (reportToolCallError !== undefined) {
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', reportToolCallError.message, phaseExecutionId, ctx.iteration);
+    return { kind: 'retryable_failure', errorMessage: reportToolCallError.message };
+  }
+
   if (response.status === 'blocked') {
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, undefined, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration);
     return { kind: 'blocked', response };
   }
 
   if (response.status === 'rate_limited' || response.errorKind === 'rate_limit') {
     const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, undefined, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, phaseExecutionId, ctx.iteration);
     return {
       kind: 'rate_limited',
       response: {
@@ -240,17 +301,17 @@ async function runSingleReportAttempt(
   if (response.status !== 'done') {
     const fallbackMessage = response.error || response.content || 'Unknown error';
     const errorMessage = resolveAgentErrorMessage(response.errorKind, fallbackMessage);
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, undefined, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, phaseExecutionId, ctx.iteration);
     return { kind: 'retryable_failure', errorMessage, errorKind: response.errorKind };
   }
 
   const trimmedContent = response.content.trim();
   if (trimmedContent.length === 0) {
     const errorMessage = 'Report output is empty';
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, 'error', errorMessage, undefined, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, 'error', errorMessage, phaseExecutionId, ctx.iteration);
     return { kind: 'retryable_failure', errorMessage };
   }
 
-  ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, undefined, ctx.iteration);
+  ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration);
   return { kind: 'success', content: trimmedContent, response };
 }

@@ -5,13 +5,14 @@ import type {
   PartDefinition,
   PartResult,
   WorkflowMaxSteps,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runTeamLeaderExecution } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
-import { resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import { createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
   collectUncoveredPartTimeoutIds,
@@ -24,16 +25,24 @@ import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
 import type { RuntimeStepResolution, StepRunResult } from '../types.js';
 import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
+import { isPlanningBudgetError } from './team-leader-budget-errors.js';
+import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 
 const log = createLogger('team-leader-runner');
-const MAX_TOTAL_PARTS = 20;
 
 export interface TeamLeaderRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
+  readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
+  readonly observabilityEnabled: boolean;
+  readonly observabilityRunId?: string;
+  readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -75,11 +84,7 @@ export class TeamLeaderRunner {
     const parentIteration = state.iteration;
 
     const stepIteration = incrementStepIteration(state, step.name);
-    const leaderStep: WorkflowStep = {
-      ...step,
-      persona: teamLeaderConfig.persona ?? step.persona,
-      personaPath: teamLeaderConfig.personaPath ?? step.personaPath,
-    };
+    const leaderStep = createTeamLeaderPlanningStep(step);
     const leaderProviderInfo = runtime
       ? this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime)
       : this.deps.optionsBuilder.resolveStepProviderModel(leaderStep);
@@ -95,29 +100,61 @@ export class TeamLeaderRunner {
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
+    const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
     let didEmitPhaseStart = false;
+    let resolvedPromptParts: PhasePromptParts | undefined;
+    const phaseExecutionId = buildPhaseExecutionId({
+      step: leaderStep.name,
+      iteration: parentIteration,
+      phase: 1,
+      sequence: 1,
+    });
     const structuredCaller = this.deps.engineOptions.structuredCaller;
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
-    const parts = await structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxParts, {
-      cwd: this.deps.getCwd(),
-      persona: leaderStep.persona,
-      personaPath: leaderStep.personaPath,
-      model: leaderModel,
-      provider: leaderProvider,
-      resolvedModel: leaderModel,
-      resolvedProvider: leaderProvider,
-      workflowMeta: leaderWorkflowMeta,
-      onStream: this.deps.engineOptions.onStream,
-      onPromptResolved: (promptParts) => {
-        if (didEmitPhaseStart) return;
-        this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
-        didEmitPhaseStart = true;
+    const parts = await runWithPhaseSpan(
+      {
+        enabled: this.deps.observabilityEnabled,
+        runId: this.deps.observabilityRunId,
+        workflowName: this.deps.getWorkflowName(),
+        step: leaderStep,
+        iteration: parentIteration,
+        phase: 1,
+        phaseName: 'execute',
+        instruction,
+        phaseExecutionId,
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
+        sanitizeText: this.deps.sanitizeObservabilityText,
+        providerInfo: leaderProviderInfo,
+        getPromptParts: () => resolvedPromptParts,
       },
-    });
+      () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxTotalParts, {
+        cwd: this.deps.getCwd(),
+        persona: leaderStep.persona,
+        personaPath: leaderStep.personaPath,
+        model: leaderModel,
+        provider: leaderProvider,
+        resolvedModel: leaderModel,
+        resolvedProvider: leaderProvider,
+        language: this.deps.engineOptions.language,
+        inspectTools,
+        workflowMeta: leaderWorkflowMeta,
+        childProcessEnv: this.deps.engineOptions.childProcessEnv,
+        onStream: this.deps.engineOptions.onStream,
+        onPromptResolved: (promptParts) => {
+          if (didEmitPhaseStart) return;
+          resolvedPromptParts = promptParts;
+          this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, parentIteration);
+          didEmitPhaseStart = true;
+        },
+      }), (result) => ({
+        status: 'done',
+        content: JSON.stringify({ parts: result }, null, 2),
+      }),
+    );
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
     }
@@ -127,7 +164,7 @@ export class TeamLeaderRunner {
       content: JSON.stringify({ parts }, null, 2),
       timestamp: new Date(),
     };
-    this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, undefined, parentIteration);
+    this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, phaseExecutionId, parentIteration);
     log.debug('Team leader decomposed parts', {
       step: step.name,
       partCount: parts.length,
@@ -153,9 +190,9 @@ export class TeamLeaderRunner {
 
     const { plannedParts, partResults } = await runTeamLeaderExecution({
       initialParts: parts,
-      maxConcurrency: teamLeaderConfig.maxParts,
+      maxConcurrency: teamLeaderConfig.maxConcurrency,
       refillThreshold: teamLeaderConfig.refillThreshold,
-      maxTotalParts: MAX_TOTAL_PARTS,
+      maxTotalParts: teamLeaderConfig.maxTotalParts,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
@@ -223,10 +260,15 @@ export class TeamLeaderRunner {
               resolvedModel: leaderModel,
               resolvedProvider: leaderProvider,
               workflowMeta: leaderWorkflowMeta,
+              childProcessEnv: this.deps.engineOptions.childProcessEnv,
               onStream: this.deps.engineOptions.onStream,
             },
           );
         } catch (error) {
+          if (isPlanningBudgetError(error)) {
+            throw error;
+          }
+
           const timeoutFallback = createTimeoutContinuationFeedback({
             partResults: currentResults,
             scheduledIds,
@@ -256,6 +298,7 @@ export class TeamLeaderRunner {
         leaderWorkflowMeta,
         part,
         partIndex,
+        parentIteration,
         teamLeaderConfig.timeoutMs,
         updatePersonaSession,
         parallelLogger,
@@ -348,6 +391,7 @@ export class TeamLeaderRunner {
     leaderWorkflowMeta: RunAgentOptions['workflowMeta'] | undefined,
     part: PartDefinition,
     partIndex: number,
+    parentIteration: number,
     defaultTimeoutMs: number,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
@@ -362,6 +406,14 @@ export class TeamLeaderRunner {
       defaultTimeoutMs,
       updatePersonaSession,
       parallelLogger,
+      {
+        enabled: this.deps.observabilityEnabled,
+        runId: this.deps.observabilityRunId,
+        workflowName: this.deps.getWorkflowName(),
+        iteration: parentIteration,
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
+        sanitizeText: this.deps.sanitizeObservabilityText,
+      },
       runtime,
     );
   }

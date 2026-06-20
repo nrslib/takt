@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   parseFindingsFromReport,
+  buildReviewFindingEventsFromLedger,
   extractDecisionFromReport,
   inferSeverity,
   emitFixActionEvents,
@@ -16,6 +17,7 @@ import {
 import { initAnalyticsWriter } from '../features/analytics/writer.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import type { FixActionEvent } from '../features/analytics/events.js';
+import type { FindingLedger } from '../core/models/types.js';
 
 describe('parseFindingsFromReport', () => {
   it('should extract new findings from a review report', () => {
@@ -216,6 +218,125 @@ describe('inferSeverity', () => {
   });
 });
 
+describe('buildReviewFindingEventsFromLedger', () => {
+  it('should build review_finding events from a Finding Contract ledger', () => {
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'peer-review',
+      nextId: 2,
+      updatedAt: '2026-06-13T01:00:00.000Z',
+      rawFindings: [
+        {
+          rawFindingId: 'raw-security-review-1',
+          familyTag: 'secret-handling',
+          stepName: 'security-review',
+          reviewer: 'security-reviewer',
+          severity: 'high',
+          title: 'api_key=sk-secret123456 is logged',
+          location: 'src/security.ts:12',
+          description: 'The token is written to logs.',
+          suggestion: 'Mask the token before logging.',
+        },
+      ],
+      conflicts: [],
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Token is logged',
+          location: 'src/security.ts:12',
+          description: 'The token is written to logs.',
+          suggestion: 'Mask the token before logging.',
+          reviewers: ['security-reviewer'],
+          rawFindingIds: ['raw-security-review-1'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T01:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T01:00:00.000Z' },
+        },
+      ],
+    };
+
+    const events = buildReviewFindingEventsFromLedger(
+      ledger,
+      3,
+      'run-1',
+      new Date('2026-06-13T01:00:00.000Z'),
+    );
+
+    expect(events).toEqual([
+      {
+        type: 'review_finding',
+        findingId: 'F-0001',
+        status: 'new',
+        ruleId: 'finding-contract',
+        severity: 'error',
+        decision: 'reject',
+        file: 'src/security.ts',
+        line: 12,
+        iteration: 3,
+        runId: 'run-1',
+        timestamp: '2026-06-13T01:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('should not copy ledger title text into analytics rule IDs', () => {
+    const ledger: FindingLedger = {
+      version: 1,
+      workflowName: 'peer-review',
+      nextId: 2,
+      updatedAt: '2026-06-13T01:00:00.000Z',
+      rawFindings: [],
+      conflicts: [],
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'api_key=sk-secret123456 should not be logged',
+          reviewers: ['security-reviewer'],
+          rawFindingIds: ['run:reviewers:security-review:raw-1'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T01:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T01:00:00.000Z' },
+        },
+      ],
+    };
+
+    const events = buildReviewFindingEventsFromLedger(
+      ledger,
+      3,
+      'run-1',
+      new Date('2026-06-13T01:00:00.000Z'),
+    );
+
+    expect(events[0]?.ruleId).toBe('finding-contract');
+    expect(JSON.stringify(events)).not.toContain('sk-secret123456');
+    expect(JSON.stringify(events)).not.toContain('api_key');
+  });
+
+  it('should preserve the Markdown report parser for workflows without Finding Contract', () => {
+    const report = [
+      '## Current Iteration Findings (new)',
+      '| # | finding_id | Category | Location | Issue | Fix |',
+      '|---|------------|---------|------|------|-----|',
+      '| 1 | LEGACY-001 | Bug | `src/legacy.ts:8` | Problem | Fix |',
+      '',
+    ].join('\n');
+
+    expect(parseFindingsFromReport(report)).toEqual([
+      {
+        findingId: 'LEGACY-001',
+        status: 'new',
+        ruleId: 'Bug',
+        file: 'src/legacy.ts',
+        line: 8,
+      },
+    ]);
+  });
+});
+
 describe('emitFixActionEvents', () => {
   let testDir: string;
 
@@ -281,10 +402,11 @@ describe('emitFixActionEvents', () => {
     expect(event.findingId).toBe('QA-001');
   });
 
-  it('should match various finding ID formats', () => {
+  it('should match legacy finding ID formats and ignore engine-owned ids without ledger confirmation', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
     const response = [
       'Resolved AA-001 simple ID',
+      'Fixed F-0001 engine-owned ID',
       'Fixed ARCH-NEW-dry with NEW segment',
       'Addressed SEC-002-xss with suffix',
     ].join('\n');
@@ -297,8 +419,22 @@ describe('emitFixActionEvents', () => {
 
     const ids = lines.map((line) => (JSON.parse(line) as FixActionEvent).findingId);
     expect(ids).toContain('AA-001');
+    expect(ids).not.toContain('F-0001');
     expect(ids).toContain('ARCH-NEW-dry');
     expect(ids).toContain('SEC-002-xss');
+  });
+
+  it('should emit engine-owned finding IDs when they are confirmed by the finding ledger', () => {
+    const timestamp = new Date('2026-02-18T12:00:00.000Z');
+
+    emitFixActionEvents('Fixed F-0001 and F-9999', 1, 'run-ledger', timestamp, new Set(['F-0001']));
+
+    const filePath = join(testDir, '2026-02-18.jsonl');
+    const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+
+    const event = JSON.parse(lines[0]) as FixActionEvent;
+    expect(event.findingId).toBe('F-0001');
   });
 });
 
@@ -320,11 +456,17 @@ describe('emitRebuttalEvents', () => {
   it('should emit fix_action events with rebutted action for finding IDs', () => {
     const timestamp = new Date('2026-02-18T12:00:00.000Z');
 
-    emitRebuttalEvents('Rebutting AA-001 and ARCH-002-barrel', 3, 'run-xyz', timestamp);
+    emitRebuttalEvents(
+      'Rebutting AA-001, F-0001 and ARCH-002-barrel',
+      3,
+      'run-xyz',
+      timestamp,
+      new Set(['F-0001']),
+    );
 
     const filePath = join(testDir, '2026-02-18.jsonl');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
 
     const event1 = JSON.parse(lines[0]) as FixActionEvent;
     expect(event1.type).toBe('fix_action');
@@ -335,8 +477,13 @@ describe('emitRebuttalEvents', () => {
 
     const event2 = JSON.parse(lines[1]) as FixActionEvent;
     expect(event2.type).toBe('fix_action');
-    expect(event2.findingId).toBe('ARCH-002-barrel');
+    expect(event2.findingId).toBe('F-0001');
     expect(event2.action).toBe('rebutted');
+
+    const event3 = JSON.parse(lines[2]) as FixActionEvent;
+    expect(event3.type).toBe('fix_action');
+    expect(event3.findingId).toBe('ARCH-002-barrel');
+    expect(event3.action).toBe('rebutted');
   });
 
   it('should not emit events when response contains no finding IDs', () => {

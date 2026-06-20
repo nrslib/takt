@@ -10,6 +10,7 @@ import {
   emitThinking,
   emitToolUse,
   emitToolResult,
+  emitPermissionAsked,
   emitResult,
   handlePartUpdated,
   type OpenCodeStreamEvent,
@@ -126,6 +127,33 @@ describe('emitToolResult', () => {
     expect(onStream).toHaveBeenCalledWith({
       type: 'tool_result',
       data: { content: 'command not found', isError: true },
+    });
+  });
+});
+
+describe('emitPermissionAsked', () => {
+  it('should emit permission_asked event', () => {
+    const onStream = vi.fn();
+
+    emitPermissionAsked(onStream, {
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      permission: 'bash',
+      patterns: ['**'],
+      always: [],
+      reply: 'reject',
+    });
+
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'permission_asked',
+      data: {
+        requestId: 'perm-1',
+        sessionId: 'session-1',
+        permission: 'bash',
+        patterns: ['**'],
+        always: [],
+        reply: 'reject',
+      },
     });
   });
 });

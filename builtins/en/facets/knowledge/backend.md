@@ -65,7 +65,7 @@ data class Order(
 
 ## API Layer Design (Controller)
 
-Keep Controllers thin. Their only job: receive request → delegate to UseCase → return response.
+Keep Controllers thin. Focus them on receiving requests, DTO conversion, resolving authentication/authorization boundaries, delegating to a UseCase or query boundary, and returning responses.
 
 ```kotlin
 // CORRECT - Thin Controller
@@ -208,6 +208,21 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 | Structural validation (@NotBlank, etc.) in domain | REJECT. Belongs in API layer |
 | UseCase-level validation inside Aggregate | REJECT. Read Model queries belong in UseCase layer |
 
+### Read and Write Entrypoints
+
+Separate read and write entrypoints. Read-side query boundaries have no side effects; writes are handled by commands or UseCases.
+
+| Criteria | Judgment |
+|----------|----------|
+| Query boundary saves, deletes, calls external services, or dispatches commands | REJECT |
+| Read-oriented class or method names hide side effects | REJECT |
+| Simple read API calls a query boundary and converts to response DTO | OK |
+| Simple state-changing API resolves structural validation and authorization boundary, then dispatches one command | OK |
+| Read-side coordinator for Controllers handles authorization boundaries, multiple Read Models, pagination, etc. | Express as ApplicationService or ReadService |
+| Sender or coordinating component named QueryService is placed near QueryHandlers | Warning. Easy to confuse with the query handling side |
+| Controller contains multiple Read Model lookups, external integration, multiple commands, or result waiting | REJECT. Separate into UseCase layer |
+| UseCase only delegates to another service or command dispatch without domain coordination | Consider deleting |
+
 ## Error Handling
 
 ### Exception Hierarchy Design
@@ -244,6 +259,17 @@ class OrderExceptionHandler {
 | Throwing generic Exception or RuntimeException | REJECT. Use specific exception types |
 | Empty try-catch blocks | REJECT |
 | Controller swallowing exceptions and returning 200 | REJECT |
+
+### Exception Translation Scope
+
+Translate exceptions into HTTP status codes at an exception translation layer on the HTTP adapter boundary. Global translation should be limited to truly cross-cutting cases such as authentication, input validation, and common error shapes; API- or resource-specific mappings belong in a boundary scoped to that API.
+
+| Criteria | Judgment |
+|----------|----------|
+| Each endpoint maps exceptions to HTTP representation through the same try-catch or wrapper | REJECT. Move it to an exception translation layer at the HTTP adapter boundary |
+| API-specific exception mapping is added to a global handler | Scope is too broad. Keep it inside the target API boundary |
+| Authentication failures, input validation, and common error shapes shared by all APIs | OK. Handle at a global boundary |
+| HTTP representation mapping lives in the application or domain layer | REJECT. Keep it at the HTTP adapter boundary |
 
 ## Domain Model Design
 

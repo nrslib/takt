@@ -117,7 +117,7 @@ vi.mock('../shared/i18n/index.js', () => ({
 import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { info as logInfo } from '../shared/ui/index.js';
-import { runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
+import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 
 const mockGetProvider = vi.mocked(getProvider);
@@ -190,6 +190,29 @@ describe('initializeSession', () => {
 
     expect(ctx.sessionId).toBeUndefined();
     expect(ctx.personaName).toBe('interactive');
+  });
+});
+
+describe('callAIWithRetry', () => {
+  it('wraps direct OpenCode system prompts with provider runtime instructions', async () => {
+    const { provider, capture } = createScenarioProvider(
+      [{ content: 'ok' }],
+      { runtimeInstructions: 'OpenCode tool names are lowercase.' },
+    );
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'opencode',
+      model: 'opencode/big-pickle',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx);
+
+    expect(capture.systemPrompts[0]).toContain('base system prompt');
+    expect(capture.systemPrompts[0]).toContain('## Provider Runtime Instructions');
+    expect(capture.systemPrompts[0]).toContain('OpenCode tool names are lowercase.');
   });
 });
 
@@ -393,7 +416,9 @@ describe('/go command', () => {
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
     expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toContain('use [Image #1] please');
+    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
+    expect(capture.imageAttachments[0]).toBeUndefined();
+    expect(capture.imageAttachments[1]).toBeUndefined();
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Generated task using [Image #1].');
     expect(result.attachments?.[0]?.fileName).toBe('image-1.png');
@@ -401,6 +426,37 @@ describe('/go command', () => {
     expect(result.attachments?.[0]?.tempPath).toBeDefined();
     trackAttachmentSession(result.attachments![0]!.tempPath);
     expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+  });
+
+  it('should pass image attachment bodies only to native image providers', async () => {
+    setupRawStdin([
+      `use ${createOscImagePaste()} please\r`,
+      '/go\r',
+    ]);
+
+    const { provider, capture } = createScenarioProvider([
+      { content: 'AI response using [Image #1].' },
+      { content: 'Generated task using [Image #1].' },
+    ], { supportsNativeImageInput: true });
+
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
+
+    expect(capture.callCount).toBe(2);
+    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
+    expect(capture.imageAttachments[0]?.[0]?.placeholder).toBe('[Image #1]');
+    expect(capture.imageAttachments[0]?.[0]?.path).toBeDefined();
+    expect(capture.imageAttachments[1]?.[0]?.placeholder).toBe('[Image #1]');
+    expect(result.action).toBe('execute');
+    trackAttachmentSession(result.attachments![0]!.tempPath);
   });
 
   it('should not create formal task assets when image input is cancelled', async () => {

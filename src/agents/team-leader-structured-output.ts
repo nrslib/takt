@@ -11,15 +11,15 @@ function summarizePartContent(content: string): string {
   return `${content.slice(0, maxLength)}\n...[truncated]`;
 }
 
-export function toPartDefinitions(raw: unknown, maxParts: number): PartDefinition[] {
+export function toPartDefinitions(raw: unknown, maxTotalParts: number): PartDefinition[] {
   if (!Array.isArray(raw)) {
     throw new Error('Structured output "parts" must be an array');
   }
   if (raw.length === 0) {
     throw new Error('Structured output "parts" must not be empty');
   }
-  if (raw.length > maxParts) {
-    throw new Error(`Structured output produced too many parts: ${raw.length} > ${maxParts}`);
+  if (raw.length > maxTotalParts) {
+    throw new Error(`Structured output produced too many total parts: ${raw.length} > max_total_parts ${maxTotalParts}`);
   }
 
   const parts = raw.map((entry, index) => parsePartDefinitionEntry(entry, index));
@@ -56,12 +56,61 @@ export function toMorePartsResponse(raw: unknown, maxAdditionalParts: number): M
   };
 }
 
-function buildDecomposeBasePrompt(instruction: string, maxParts: number, language?: Language): string {
+function buildInspectToolGuidance(
+  language: Language | undefined,
+  inspectTools: readonly string[] | undefined,
+  options: { requireAtLeastOnePart: boolean },
+): string[] {
+  const hasInspectTools = inspectTools !== undefined && inspectTools.length > 0;
+
+  if (!hasInspectTools) {
+    return language === 'ja'
+      ? ['- ツールは使用しない']
+      : ['- Do not use any tool'];
+  }
+
+  const guidance = language === 'ja'
+    ? [
+        '- 読み取り専用 inspection tools は、タスク仕様・過去レポート・ファイル構成の確認にのみ使用してよい',
+        '- ファイルを編集しない',
+        '- コマンドを実行しない',
+        '- 実装しない',
+      ]
+    : [
+        '- You may use read-only inspection tools only to inspect the task spec, prior reports, and file layout',
+        '- Do not edit files',
+        '- Do not run commands',
+        '- Do not execute the implementation',
+      ];
+
+  if (!options.requireAtLeastOnePart) {
+    return guidance;
+  }
+
+  return language === 'ja'
+    ? [
+        ...guidance,
+        '- 作業を分割しない場合も、元タスクを引き継ぐ少なくとも1つの part を返す',
+      ]
+    : [
+        ...guidance,
+        '- Return at least one part. If the work should not be split, return one part carrying the original task forward',
+      ];
+}
+
+function buildDecomposeBasePrompt(
+  instruction: string,
+  maxTotalParts: number,
+  language?: Language,
+  inspectTools?: readonly string[],
+): string {
   if (language === 'ja') {
     return [
       '以下はタスク分解専用の指示です。タスクを実行せず、分解だけを行ってください。',
-      '- ツールは使用しない',
-      `- パート数は 1 以上 ${maxParts} 以下`,
+      ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
+      `- 返してよい総 parts 数は 1 以上 ${maxTotalParts} 以下`,
+      '- この上限は同時実行数ではない',
+      '- 上限遵守を、検証分離や責務分解より優先する',
       '- パートは互いに独立させる',
       '- まず並行可能な責務境界を探す',
       '- 「実装と検証」のような巨大な単一 part を避ける',
@@ -78,8 +127,10 @@ function buildDecomposeBasePrompt(instruction: string, maxParts: number, languag
 
   return [
     'This is decomposition-only planning. Do not execute the task.',
-    '- Do not use any tool',
-    `- Produce between 1 and ${maxParts} independent parts`,
+    ...buildInspectToolGuidance(language, inspectTools, { requireAtLeastOnePart: true }),
+    `- Produce a total number of parts between 1 and ${maxTotalParts}`,
+    '- This limit is not a concurrency limit',
+    '- Respecting this limit takes precedence over verification separation or responsibility boundaries',
     '- Keep each part self-contained',
     '- First look for parallelizable responsibility boundaries',
     '- Avoid oversized single parts such as "implementation and verification"',
@@ -109,7 +160,7 @@ function buildMorePartsBasePrompt(
   if (language === 'ja') {
     return [
       '以下の実行結果を見て、追加のサブタスクが必要か判断してください。',
-      '- ツールは使用しない',
+      ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
       '',
       '## 元タスク',
       originalInstruction,
@@ -131,7 +182,7 @@ function buildMorePartsBasePrompt(
 
   return [
     'Review completed part results and decide whether additional parts are needed.',
-    '- Do not use any tool',
+    ...buildInspectToolGuidance(language, undefined, { requireAtLeastOnePart: false }),
     '',
     '## Original Task',
     originalInstruction,
@@ -154,16 +205,18 @@ function buildMorePartsBasePrompt(
 
 export function buildDecomposePrompt(
   instruction: string,
-  maxParts: number,
+  maxTotalParts: number,
   language?: Language,
+  inspectTools?: readonly string[],
 ): string {
-  return buildDecomposeBasePrompt(instruction, maxParts, language);
+  return buildDecomposeBasePrompt(instruction, maxTotalParts, language, inspectTools);
 }
 
 export function buildPromptBasedDecomposePrompt(
   instruction: string,
-  maxParts: number,
+  maxTotalParts: number,
   language?: Language,
+  inspectTools?: readonly string[],
 ): string {
   const outputInstruction = language === 'ja'
     ? [
@@ -181,7 +234,12 @@ export function buildPromptBasedDecomposePrompt(
         '- Each item must include {"id","title","instruction"}',
       ];
 
-  return `${buildDecomposeBasePrompt(instruction, maxParts, language)}\n${outputInstruction.join('\n')}`;
+  return `${buildDecomposeBasePrompt(
+    instruction,
+    maxTotalParts,
+    language,
+    inspectTools,
+  )}\n${outputInstruction.join('\n')}`;
 }
 
 export function buildMorePartsPrompt(

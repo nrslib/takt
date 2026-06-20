@@ -168,6 +168,37 @@ Precedence resolution and external config formats belong in a dedicated boundary
 | Conversion from external form to internal form is centralized in one place | OK |
 | Same normalization logic is copied in multiple places | REJECT |
 
+### Separating Candidate Resolution from Value Composition
+
+Selecting a referenced target from multiple candidates and composing the selected value are separate contracts. Mixing lookup order, override rules, and reference kinds makes display, validation, and execution drift.
+
+| Criteria | Judgment |
+|----------|----------|
+| Candidate lookup is first-match, but multiple candidates are implicitly composed because it is confused with value deep-merge | REJECT |
+| Nearer-scope candidates are searched after farther-scope candidates | REJECT |
+| Reference strings are classified only by the presence of a separator, confusing special references with explicit paths | REJECT |
+| Candidate lookup, reference-kind classification, and value composition are readable as separate responsibilities | OK |
+
+```typescript
+// REJECT - Reference kind and lookup basis are mixed into one condition
+const root = ref.includes('/') ? currentRoot : ownerRoot
+
+// OK - Classify first, then resolve according to that kind's contract
+const kind = classifyReference(ref)
+const root = resolveRootForReference(kind, resolvedPath)
+```
+
+### Normalizing Raw Input
+
+Values read from external files or configuration may be syntactically valid while not matching the expected shape. Treat them as unknown at the boundary, normalize into arrays, records, or scalars, and only then pass them into internal processing.
+
+| Criteria | Judgment |
+|----------|----------|
+| Calling array methods or accessing properties directly on parsed unknown values | REJECT |
+| Treating existence alone as satisfying file type or directory requirements | REJECT |
+| Boundary code normalizes unknown values into internal types and pins contract-invalid shapes to ignore, normalize, or explicit-error behavior | OK |
+| File and directory requirements are verified down to the actual entry kind | OK |
+
 ### Phase Separation
 
 Separate input, interpretation, execution, and output into distinct stages. Iterative processing should, as much as possible, receive already interpreted input in bulk and then repeat only execution.

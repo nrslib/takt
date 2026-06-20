@@ -87,11 +87,12 @@ describe('schema-loader', () => {
     expect(readFileSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it('loadDecompositionSchema は不正な maxParts を拒否する', async () => {
+  it('loadDecompositionSchema は不正な maxTotalParts を拒否する', async () => {
     const { loadDecompositionSchema } = await import('../infra/resources/schema-loader.js');
 
-    expect(() => loadDecompositionSchema(0)).toThrow('maxParts must be a positive integer: 0');
-    expect(() => loadDecompositionSchema(-1)).toThrow('maxParts must be a positive integer: -1');
+    expect(() => loadDecompositionSchema(0)).toThrow('maxTotalParts must be a positive integer: 0');
+    expect(() => loadDecompositionSchema(-1)).toThrow('maxTotalParts must be a positive integer: -1');
+    expect(() => loadDecompositionSchema(21)).toThrow('maxTotalParts must be less than or equal to 20: 21');
   });
 
   it('loadMorePartsSchema は maxItems を注入し、呼び出しごとに独立したオブジェクトを返す', async () => {

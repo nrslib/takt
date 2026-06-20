@@ -115,7 +115,7 @@ export function* iterateWorkflowDir(
       }
       continue;
     }
-    if (!stat.isDirectory()) continue;
+    if (!stat.isDirectory() || entry === 'provider-options') continue;
     for (const subEntry of readdirSync(entryPath)) {
       if (!subEntry.endsWith('.yaml') && !subEntry.endsWith('.yml')) continue;
       const subEntryPath = join(entryPath, subEntry);

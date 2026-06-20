@@ -54,6 +54,18 @@ describe('interactiveInput', () => {
         },
       ]);
     });
+
+    it('should return localized /paste-image descriptions with apply values', () => {
+      const result = getSlashCommandCompletions('/paste-image', 'ja');
+
+      expect(result).toEqual([
+        {
+          value: '/paste-image',
+          applyValue: '/paste-image ',
+          description: 'クリップボード画像を添付',
+        },
+      ]);
+    });
   });
 
   describe('createSlashCommandCompletionProvider', () => {

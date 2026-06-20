@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -76,6 +76,30 @@ describe('stageAndCommit', () => {
     }).trim();
 
     expect(committedFiles).toBe('app.ts');
+  });
+
+  it('should commit .takt/.gitignore while leaving runtime artifacts uncommitted', () => {
+    const dotgitignore = readFileSync(join(__dirname, '..', '..', 'builtins', 'project', 'dotgitignore'), 'utf-8');
+    mkdirSync(join(testDir, '.takt', '.runtime', 'tmp'), { recursive: true });
+    mkdirSync(join(testDir, '.takt', 'runs', 'test-run', 'reports'), { recursive: true });
+    writeFileSync(join(testDir, '.takt', '.gitignore'), dotgitignore, 'utf-8');
+    writeFileSync(join(testDir, '.takt', '.runtime', 'tmp', 'cache.txt'), 'cache', 'utf-8');
+    writeFileSync(join(testDir, '.takt', 'runs', 'test-run', 'reports', 'test-report.md'), '# Report', 'utf-8');
+    writeFileSync(join(testDir, 'src.ts'), 'export const x = 1;', 'utf-8');
+
+    const hash = stageAndCommit(testDir, 'add worktree gitignore');
+    expect(hash).toBeDefined();
+
+    const committedFiles = execFileSync('git', ['diff-tree', '--no-commit-id', '-r', '--name-only', 'HEAD'], {
+      cwd: testDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    }).trim().split('\n').filter(Boolean).sort();
+
+    expect(committedFiles).toContain('.takt/.gitignore');
+    expect(committedFiles).toContain('src.ts');
+    expect(committedFiles).not.toContain('.takt/.runtime/tmp/cache.txt');
+    expect(committedFiles).not.toContain('.takt/runs/test-run/reports/test-report.md');
   });
 
   it('should return undefined when there are no changes', () => {

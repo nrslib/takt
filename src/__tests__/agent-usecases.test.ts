@@ -21,7 +21,7 @@ vi.mock('../agents/runner.js', () => ({
 vi.mock('../infra/resources/schema-loader.js', () => ({
   loadJudgmentSchema: vi.fn(() => ({ type: 'judgment' })),
   loadEvaluationSchema: vi.fn(() => ({ type: 'evaluation' })),
-  loadDecompositionSchema: vi.fn((maxParts: number) => ({ type: 'decomposition', maxParts })),
+  loadDecompositionSchema: vi.fn((maxTotalParts: number) => ({ type: 'decomposition', maxTotalParts })),
   loadMorePartsSchema: vi.fn((maxAdditionalParts: number) => ({ type: 'more-parts', maxAdditionalParts })),
 }));
 
@@ -199,6 +199,27 @@ describe('agent-usecases', () => {
 
     expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
     expect(runAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('judgeStatus passes childProcessEnv to all Phase 3 internal agent calls', async () => {
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no match'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('no tag'));
+    vi.mocked(runAgent).mockResolvedValueOnce(doneResponse('ignored', { matched_index: 2 }));
+
+    const result = await judgeStatus('structured', 'tag', [
+      { condition: 'a', next: 'one' },
+      { condition: 'b', next: 'two' },
+    ], {
+      ...judgeOptions,
+      childProcessEnv,
+    });
+
+    expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
+    expect(runAgent).toHaveBeenCalledTimes(3);
+    for (const call of vi.mocked(runAgent).mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ childProcessEnv }));
+    }
   });
 
   it('judgeStatus は maxTurns 非対応 provider では全内部ステージで maxTurns を渡さない', async () => {
@@ -385,7 +406,27 @@ describe('agent-usecases', () => {
       allowedTools: [],
       permissionMode: 'readonly',
       maxTurns: 5,
-      outputSchema: { type: 'decomposition', maxParts: 3 },
+      outputSchema: { type: 'decomposition', maxTotalParts: 3 },
+    }));
+  });
+
+  it('Given inspectTools, When decomposeTask runs, Then it passes them to the parent decomposition call only', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+
+    await decomposeTask('instruction', 3, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      inspectTools: ['Read', 'Glob', 'Grep'],
+    } as DecomposeTaskOptions & { inspectTools: string[] });
+
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
+      allowedTools: ['Read', 'Glob', 'Grep'],
+      permissionMode: 'readonly',
+      outputSchema: { type: 'decomposition', maxTotalParts: 3 },
     }));
   });
 
@@ -513,6 +554,32 @@ describe('agent-usecases', () => {
       outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
       permissionMode: 'readonly',
       maxTurns: 5,
+    }));
+  });
+
+  it('requestMoreParts は inspect tools を feedback planning call に渡さない', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'Enough',
+      parts: [],
+    }));
+
+    await requestMoreParts(
+      'original instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+        inspectTools: ['Read', 'Glob', 'Grep'],
+      } as Parameters<typeof requestMoreParts>[4] & { inspectTools: string[] },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
+      allowedTools: [],
+      outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
+      permissionMode: 'readonly',
     }));
   });
 

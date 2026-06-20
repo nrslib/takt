@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
+import type { StreamEvent } from '../shared/types/provider.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -68,6 +69,24 @@ function queueRunAgentResponses(responses: AgentResponse[]): void {
         userInstruction: task,
       });
       return response;
+    });
+  }
+}
+
+function queueRunAgentAttempts(
+  attempts: Array<{ response: AgentResponse; streamEvents?: StreamEvent[] }>,
+): void {
+  const runAgentMock = vi.mocked(runAgent);
+  for (const attempt of attempts) {
+    runAgentMock.mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      for (const event of attempt.streamEvents ?? []) {
+        options?.onStream?.(event);
+      }
+      return attempt.response;
     });
   }
 }
@@ -183,6 +202,360 @@ describe('runReportPhase retry with new session', () => {
     const reportPath = join(reportDir, '03-review.md');
     expect(readFileSync(reportPath, 'utf-8')).toBe('Recovered report');
     expect(runAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('should retry with new session when qwen3-coder-next emits a run tool call during report phase', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-opencode.md');
+    const onStream = vi.fn();
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    ctx.onStream = onStream;
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: { command: 'echo report' }, id: 'tool-run-1' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nThis content must not be written',
+          timestamp: new Date('2026-02-11T00:01:10Z'),
+          sessionId: 'session-resume-2',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRecovered without tools',
+          timestamp: new Date('2026-02-11T00:01:11Z'),
+          sessionId: 'session-fresh-1',
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(readFileSync(join(reportDir, '03-opencode.md'), 'utf-8')).toBe('# Report\nRecovered without tools');
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(onStream).not.toHaveBeenCalled();
+
+    const retryOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
+    expect(retryOptions.sessionId).toBeUndefined();
+  });
+
+  it('should fail with a clear error when report phase retry also emits a tool call', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-opencode-loop.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-1' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nFirst loop output',
+          timestamp: new Date('2026-02-11T00:01:20Z'),
+        },
+      },
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-2' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRetry loop output',
+          timestamp: new Date('2026-02-11T00:01:21Z'),
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
+      'Report phase failed for 03-opencode-loop.md: Report phase does not allow tool calls, but provider emitted tool "run".',
+    );
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(existsSync(join(reportDir, '03-opencode-loop.md'))).toBe(false);
+  });
+
+  it('should fail report phase attempt when provider emits an unavailable tool result', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-unavailable-tool.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', undefined);
+    const onStream = vi.fn();
+    ctx.onStream = onStream;
+    const rawToolResult = "Model tried to call unavailable tool 'invalid'. Available tools: glob, grep, read.";
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_result',
+          data: {
+            content: rawToolResult,
+            isError: true,
+          },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nShould not be written',
+          timestamp: new Date('2026-02-11T00:01:30Z'),
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    let thrownError: unknown;
+    try {
+      await runReportPhase(step, 1, ctx);
+    } catch (error) {
+      thrownError = error;
+    }
+
+    // Then
+    expect(thrownError).toBeInstanceOf(Error);
+    const errorMessage = (thrownError as Error).message;
+    expect(errorMessage).toBe('Report phase failed for 03-unavailable-tool.md: Report phase does not allow tool results.');
+    expect(errorMessage).not.toContain(rawToolResult);
+    expect(onStream).not.toHaveBeenCalled();
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    expect(existsSync(join(reportDir, '03-unavailable-tool.md'))).toBe(false);
+  });
+
+  it('should not forward forbidden report phase tool results to run-agent stream callback', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-stream-callback-tool-result.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', undefined);
+    const runAgentStream = vi.fn();
+    const originalBuildNewSessionReportOptions = ctx.buildNewSessionReportOptions;
+    ctx.buildNewSessionReportOptions = (currentStep, overrides) => ({
+      ...originalBuildNewSessionReportOptions(currentStep, overrides),
+      onStream: runAgentStream,
+    });
+    const rawToolResult = 'SECRET_TOKEN=abc123 from forbidden tool result';
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_result',
+          data: {
+            content: rawToolResult,
+            isError: true,
+          },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nShould not be written',
+          timestamp: new Date('2026-02-11T00:01:32Z'),
+        },
+      },
+    ]);
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
+      'Report phase failed for 03-stream-callback-tool-result.md: Report phase does not allow tool results.',
+    );
+    expect(runAgentStream).not.toHaveBeenCalled();
+    expect(existsSync(join(reportDir, '03-stream-callback-tool-result.md'))).toBe(false);
+  });
+
+  it('should keep raw response content out of phase complete when provider catches forbidden stream errors', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-caught-tool-result.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', undefined);
+    const onStream = vi.fn();
+    const onPhaseComplete = vi.fn();
+    const sanitizeObservabilityText = vi.fn((text: string) => text);
+    ctx.onStream = onStream;
+    ctx.onPhaseComplete = onPhaseComplete;
+    ctx.observabilityEnabled = true;
+    ctx.workflowName = 'test-workflow';
+    ctx.iteration = 1;
+    ctx.sanitizeObservabilityText = sanitizeObservabilityText;
+    const rawToolResult = 'SECRET_TOKEN=abc123 from forbidden tool result';
+    const rawResponseContent = '# Report\nSECRET_TOKEN=abc123 from caught provider response';
+    const caughtErrors: string[] = [];
+    vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      for (const event of [
+        {
+          type: 'tool_result',
+          data: {
+            content: rawToolResult,
+            isError: true,
+          },
+        },
+        {
+          type: 'text',
+          data: {
+            text: rawResponseContent,
+          },
+        },
+      ] satisfies StreamEvent[]) {
+        try {
+          options?.onStream?.(event);
+        } catch (error) {
+          caughtErrors.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+      return {
+        persona: 'coder',
+        status: 'done',
+        content: rawResponseContent,
+        timestamp: new Date('2026-02-11T00:01:33Z'),
+      };
+    });
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
+      'Report phase failed for 03-caught-tool-result.md: Report phase does not allow tool results.',
+    );
+    expect(caughtErrors).toEqual([
+      'Report phase does not allow tool results.',
+      'Report phase does not allow tool results.',
+    ]);
+    expect(onStream).not.toHaveBeenCalled();
+    expect(onPhaseComplete).toHaveBeenCalledWith(
+      step,
+      2,
+      'report',
+      '',
+      'error',
+      'Report phase does not allow tool results.',
+      'implement:1:2:1',
+      1,
+    );
+    expect(onPhaseComplete).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('SECRET_TOKEN'),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(sanitizeObservabilityText).not.toHaveBeenCalledWith(rawToolResult);
+    expect(sanitizeObservabilityText).not.toHaveBeenCalledWith(rawResponseContent);
+    expect(existsSync(join(reportDir, '03-caught-tool-result.md'))).toBe(false);
+  });
+
+  it('should retry with new session when resumed report phase emits an invalid tool result', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-invalid-tool-retry.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_result',
+          data: {
+            content: "Model tried to call invalid tool 'run'. Available tools: glob, grep, read.",
+            isError: true,
+          },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nThis content must not be written',
+          timestamp: new Date('2026-02-11T00:01:35Z'),
+          sessionId: 'session-resume-2',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRecovered after invalid tool result',
+          timestamp: new Date('2026-02-11T00:01:36Z'),
+          sessionId: 'session-fresh-1',
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(readFileSync(join(reportDir, '03-invalid-tool-retry.md'), 'utf-8')).toBe(
+      '# Report\nRecovered after invalid tool result',
+    );
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+
+    const firstAttemptOptions = runAgentMock.mock.calls[0]?.[2] as { sessionId?: string };
+    expect(firstAttemptOptions.sessionId).toBe('session-resume-1');
+
+    const retryOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
+    expect(retryOptions.sessionId).toBeUndefined();
+  });
+
+  it('should retry with new session when resumed report phase emits an unavailable tool result', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-unavailable-tool-retry.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_result',
+          data: {
+            content: "Model tried to call unavailable tool 'invalid'. Available tools: glob, grep, read.",
+            isError: true,
+          },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nThis content must not be written',
+          timestamp: new Date('2026-02-11T00:01:40Z'),
+          sessionId: 'session-resume-2',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRecovered after unavailable tool result',
+          timestamp: new Date('2026-02-11T00:01:41Z'),
+          sessionId: 'session-fresh-1',
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(readFileSync(join(reportDir, '03-unavailable-tool-retry.md'), 'utf-8')).toBe(
+      '# Report\nRecovered after unavailable tool result',
+    );
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+
+    const firstAttemptOptions = runAgentMock.mock.calls[0]?.[2] as { sessionId?: string };
+    expect(firstAttemptOptions.sessionId).toBe('session-resume-1');
+
+    const retryOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
+    expect(retryOptions.sessionId).toBeUndefined();
   });
 
   it('should throw when both attempts return empty output', async () => {

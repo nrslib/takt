@@ -763,6 +763,76 @@ steps:
     expect(options?.resolvedModel).toBeUndefined();
   });
 
+  it('workflow_call が provider だけ override した場合は child providerRouting の stale model を引き継がない', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 10,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          overrides: {
+            provider: 'codex',
+          },
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+
+    vi.mocked(runAgent).mockResolvedValueOnce(makeResponse({
+      persona: 'reviewer',
+      content: 'done',
+    }));
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'Override child provider without stale routing model', createWorkflowCallOptions(tmpDir, {
+      provider: 'claude',
+      model: 'parent-model',
+      providerRouting: {
+        steps: {
+          review: {
+            provider: 'opencode',
+            model: 'opencode/stale-review-model',
+            providerOptions: {
+              codex: { reasoningEffort: 'high' },
+            },
+          },
+        },
+      },
+    }));
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+
+    expect(options?.resolvedProvider).toBe('codex');
+    expect(options?.resolvedModel).toBeUndefined();
+    expect(options?.providerOptions).toMatchObject({
+      codex: { reasoningEffort: 'high' },
+    });
+  });
+
   it('workflow_call が provider を override しても child personaProviders の provider_options を保持する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:

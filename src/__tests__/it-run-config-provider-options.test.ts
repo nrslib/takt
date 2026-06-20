@@ -205,6 +205,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
   it('project persona_providers opencode variant should override project provider_options in runAllTasks flow', async () => {
     setProjectConfig(env.projectDir, [
       'provider: opencode',
+      'model: opencode/big-pickle',
       'provider_options:',
       '  opencode:',
       '    network_access: true',

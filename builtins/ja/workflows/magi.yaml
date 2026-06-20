@@ -17,6 +17,8 @@ max_steps: 5
 initial_step: melchior
 steps:
   - name: melchior
+    tags:
+      - review
     persona: melchior
     instruction: |
       # MAGI System 起動
@@ -47,6 +49,8 @@ steps:
       - condition: 判定を完了した
         next: balthasar
   - name: balthasar
+    tags:
+      - review
     persona: balthasar
     instruction: |
       # MAGI System 継続
@@ -81,6 +85,8 @@ steps:
       - condition: 判定を完了した
         next: casper
   - name: casper
+    tags:
+      - review
     persona: casper
     instruction: |
       # MAGI System 最終審議

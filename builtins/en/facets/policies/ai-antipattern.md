@@ -1,5 +1,20 @@
 # AI Antipattern Detection Criteria
 
+Detect assumptions, over-implementation, and superficial fixes that AI-generated changes commonly introduce.
+
+## Principles
+
+| Principle | Criteria |
+|-----------|----------|
+| Requirement fit | Verify that the implementation answers the actual request |
+| Reality check | Do not infer APIs, settings, fields, or wiring paths |
+| Context fit | Match existing naming, structure, error handling, logging, and tests |
+| Minimal diff | Do not mix in unnecessary features, abstractions, settings, or compatibility code |
+| Contract preservation | Do not change UI copy, public APIs, return values, errors, or test expectations out of scope |
+| Direct fixes | Do not replace a fix with tests or documentation explaining the issue |
+| Reachability | Confirm that added or retained code is used by current call paths |
+| Verifiability | Check code paths, usage sites, and execution results instead of explanations |
+
 ## Assumption Verification
 
 AI often makes assumptions. Verify them.
@@ -112,11 +127,13 @@ AI sometimes "addresses" review findings by adding tests or documentation that "
 | Adding tests instead of fixing | "Remove unnecessary comments" → adds tests verifying comment presence | REJECT |
 | Adding docs instead of fixing | "DRY violation" → adds documentation explaining duplication is intentional | REJECT |
 | Changing unrelated files | Security finding → performs unrelated refactoring | REJECT |
+| Absence checks for an old specification instead of implementing a changed specification | "Replace old badge display with filtering from the list" → lower-level component only verifies the old badge is not shown | REJECT |
 
 Verification approach:
 1. Check if the fix diff includes changes to the finding's target file and target lines
 2. If the fix consists only of new file additions, check whether those files "fix" the issue or merely "verify" it
 3. If tests are added as part of the fix, verify they test "correct behavior after the fix" (not "the finding itself")
+4. For mid-PR specification changes, verify the tests cover the new behavior in the layer that owns it, not only the absence of the old specification
 
 ## Context Fitness Assessment
 
@@ -133,6 +150,22 @@ Questions to ask:
 - Would a developer familiar with this codebase write it this way?
 - Does it feel like it belongs here?
 - Are there unexplained deviations from project conventions?
+
+## Integration Pattern Consistency
+
+Check whether the same kind of API connection, such as REST calls, is implemented in inconsistent ways within the project.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Mixed generated and hand-written clients | Screen A uses Orval-generated hooks, screen B calls axiosInstance directly | REJECT |
+| Different implementations for the same data-fetching pattern | Screen A uses useQuery + axios, screen B uses generated hooks | REJECT |
+| Mixed data type definition styles | Screen A uses generated types, screen B uses hand-written types | REJECT |
+
+Verification approach:
+1. Check the API calling style in the diff
+2. Grep existing code for the style used by code with the same purpose
+3. Check whether the project has API generation config, such as orval.config.ts
+4. If inconsistent, flag unification to the project standard pattern
 
 ## Scope Creep Detection
 

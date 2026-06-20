@@ -9,11 +9,13 @@ const {
   mockResolveWorkflowConfigValues,
   mockCreateOutputFns,
   mockInitializeOtelFoundation,
+  mockEnsureWorktreeTaktGitignore,
 } = vi.hoisted(() => ({
   mockWriteFileAtomic: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
   mockCreateOutputFns: vi.fn(),
   mockInitializeOtelFoundation: vi.fn(),
+  mockEnsureWorktreeTaktGitignore: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -88,6 +90,10 @@ vi.mock('../shared/utils/usageEventLogger.js', () => ({
 
 vi.mock('../infra/observability/otelFoundation.js', () => ({
   initializeOtelFoundation: mockInitializeOtelFoundation,
+}));
+
+vi.mock('../infra/task/projectLocalTaktSync.js', () => ({
+  ensureWorktreeTaktGitignore: mockEnsureWorktreeTaktGitignore,
 }));
 
 vi.mock('../features/analytics/index.js', () => ({
@@ -239,5 +245,31 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
     expect(readFileSync(tasksPath, 'utf-8')).toBe(initialTasks);
     expect(hasTasksYamlWrite()).toBe(false);
+  });
+
+  it('Given cwd differs from projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is ensured', async () => {
+    const projectDir = createTempProject();
+    const worktreeDir = createTempProject();
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run in worktree', worktreeDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'worktree-run',
+    });
+
+    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledTimes(1);
+    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledWith(worktreeDir);
+  });
+
+  it('Given cwd equals projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is not ensured', async () => {
+    const projectDir = createTempProject();
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run in project', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'project-run',
+    });
+
+    expect(mockEnsureWorktreeTaktGitignore).not.toHaveBeenCalled();
   });
 });

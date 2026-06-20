@@ -54,6 +54,17 @@ test('validates age at boundaries', () => {
 })
 ```
 
+## Behavior Guarantees
+
+Unit tests should verify that the public contract behaves as expected, not only that configuration values or internal-state snapshots changed. Boundary changes such as rejection, permission, isolation, or release should cover the main success/failure cases deterministically.
+
+| Criteria | Judgment |
+|----------|----------|
+| Expected return values, exceptions, or side effects are directly verified | OK |
+| Both sides of a boundary change, such as success/failure or allow/deny, are verified | OK |
+| Only configuration values or the last internal state are checked | REJECT |
+| Main boundary conditions require an external environment to reproduce | Consider a deterministic test with a fake or stub |
+
 ## Test Fixture Design
 
 Manage test data with factory functions.

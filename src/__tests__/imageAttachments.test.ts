@@ -7,6 +7,7 @@ import {
   createImageAttachmentStore,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
+  resolvePromptImageAttachments,
 } from '../features/interactive/imageAttachments.js';
 
 const tempRoots = new Set<string>();
@@ -105,6 +106,46 @@ describe('createImageAttachmentStore', () => {
     const [attachment] = store.listAttachments();
     expect(attachment?.tempPath).toBe(path.join(tmpRoot, 'takt', 'session-paste', 'attachments', 'image-1.png'));
     expect(fs.readFileSync(attachment!.tempPath)).toEqual(Buffer.from('paste'));
+  });
+});
+
+describe('resolvePromptImageAttachments', () => {
+  it('should return only attachments referenced by placeholders in the prompt', () => {
+    const first = {
+      placeholder: '[Image #1]',
+      tempPath: '/tmp/image-1.png',
+      fileName: 'image-1.png',
+    };
+    const second = {
+      placeholder: '[Image #2]',
+      tempPath: '/tmp/image-2.png',
+      fileName: 'image-2.png',
+    };
+
+    const result = resolvePromptImageAttachments('Please inspect [Image #2].', [first, second]);
+
+    expect(result).toEqual([
+      { placeholder: '[Image #2]', path: '/tmp/image-2.png' },
+    ]);
+  });
+
+  it('should not match a prefix placeholder when only a later image is referenced', () => {
+    const first = {
+      placeholder: '[Image #1]',
+      tempPath: '/tmp/image-1.png',
+      fileName: 'image-1.png',
+    };
+    const tenth = {
+      placeholder: '[Image #10]',
+      tempPath: '/tmp/image-10.png',
+      fileName: 'image-10.png',
+    };
+
+    const result = resolvePromptImageAttachments('Please inspect [Image #10].', [first, tenth]);
+
+    expect(result).toEqual([
+      { placeholder: '[Image #10]', path: '/tmp/image-10.png' },
+    ]);
   });
 });
 

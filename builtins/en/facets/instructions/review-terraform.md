@@ -1,5 +1,5 @@
 Focus on reviewing **Terraform convention compliance**.
-Do not review AI-specific issues (already covered by the ai-antipattern-review-1st step).
+Do not assume another reviewer or step has already covered an issue. Detect any problem that belongs to this review perspective.
 
 Procedure:
 1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content

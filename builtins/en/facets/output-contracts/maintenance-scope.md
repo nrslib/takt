@@ -19,6 +19,11 @@
 |----------|--------|--------------|
 | {Contract type} | {Target} | {What is preserved} |
 
+## Replaced Old Specifications
+| Old Specification | New Specification | Deletion Targets | Test Strategy |
+|-------------------|-------------------|------------------|---------------|
+| {Old specification} | {New specification} | {Implementation/tests to delete} | {Where to verify the new specification} |
+
 ## Unnecessary Change Check
 | Check Target | Result | Notes |
 |--------------|--------|-------|

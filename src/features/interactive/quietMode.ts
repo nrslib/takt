@@ -27,9 +27,12 @@ import {
 import { initializeSession } from './sessionInitialization.js';
 import {
   buildInteractiveResultWithAttachments,
+  createClipboardImagePasteHandler,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
+  resolvePromptImageAttachments,
 } from './imageAttachments.js';
+import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
 
 const log = createLogger('quiet-mode');
 
@@ -65,6 +68,8 @@ export async function quietMode(
 
     const input = await readMultilineInput(chalk.green('> '), {
       onImagePaste: createImagePasteHandler(attachmentStore),
+      onClipboardImagePaste: createClipboardImagePasteHandler(attachmentStore),
+      onClipboardImagePasteError: reportClipboardImagePasteError,
     });
     if (input === null) {
       blankLine();
@@ -94,6 +99,7 @@ export async function quietMode(
   const { result } = await callAIWithRetry(
     summaryPrompt, summaryPrompt, DEFAULT_INTERACTIVE_TOOLS, cwd,
     { ...ctx, sessionId: undefined },
+    { imageAttachments: resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments()) },
   );
 
   if (!result) {

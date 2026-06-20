@@ -72,6 +72,8 @@ describe('logging contracts', () => {
     );
 
     expect(record.usage.cached_input_tokens).toBe(4);
+    expect(record.usage.cache_creation_input_tokens).toBe(2);
+    expect(record.usage.cache_read_input_tokens).toBe(2);
   });
 
   it('should reject usage_missing records with unknown reason values', () => {

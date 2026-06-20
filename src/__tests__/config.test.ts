@@ -150,15 +150,16 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers');
     expect(reviewersStep).toBeDefined();
     expect(reviewersStep!.parallel).toBeDefined();
-    expect(reviewersStep!.parallel).toHaveLength(4);
+    expect(reviewersStep!.parallel).toHaveLength(5);
   });
 
-  it('should have arch-review, coding-review and supervise as parallel sub-steps', () => {
+  it('should have arch-review, pure-review, coding-review and supervise as parallel sub-steps', () => {
     const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
     const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
     const subStepNames = reviewersStep.parallel!.map((s) => s.name);
 
     expect(subStepNames).toContain('arch-review');
+    expect(subStepNames).toContain('pure-review');
     expect(subStepNames).toContain('coding-review');
     expect(subStepNames).toContain('supervise');
   });
@@ -265,6 +266,9 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.persona).toContain('architecture-reviewer');
 
+    const pureReview = reviewersStep.parallel!.find((s) => s.name === 'pure-review')!;
+    expect(pureReview.persona).toContain('pure-reviewer');
+
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.persona).toContain('coding-reviewer');
 
@@ -278,6 +282,9 @@ describe('default-peer-review workflow parallel reviewers step', () => {
 
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.outputContracts).toBeDefined();
+
+    const pureReview = reviewersStep.parallel!.find((s) => s.name === 'pure-review')!;
+    expect(pureReview.outputContracts).toBeDefined();
 
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.outputContracts).toBeDefined();

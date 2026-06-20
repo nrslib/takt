@@ -24,6 +24,8 @@ loop_monitors:
 
 steps:
   - name: gather
+    tags:
+      - plan
     edit: false
     persona: planner
     provider_options:
@@ -47,8 +49,12 @@ steps:
         next: ABORT
 
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -73,6 +79,8 @@ steps:
           - condition: needs_fix
 
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         policy: review
@@ -95,6 +103,8 @@ steps:
           - condition: needs_fix
 
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         policy:
@@ -117,10 +127,37 @@ steps:
           - condition: approved
           - condition: needs_fix
 
+      - name: pure-review
+        tags:
+          - review
+        edit: false
+        persona: pure-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-pure
+        output_contracts:
+          report:
+            - name: pure-review.md
+              format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
-        policy: review
+        policy:
+          - review
+          - coding
         provider_options:
           claude:
             allowed_tools:
@@ -146,6 +183,8 @@ steps:
         next: fix
 
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -176,6 +215,8 @@ steps:
         next: supervise
 
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: dual-supervisor
     policy: review
@@ -203,6 +244,8 @@ steps:
           use_judge: false
 
   - name: fix_supervisor
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:

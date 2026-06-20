@@ -21,6 +21,7 @@ import {
   unexpectedWorkflowOverridesConfigKey,
   unexpectedWorkflowRuntimePrepareConfigKey,
 } from '../../test/helpers/unknown-contract-test-keys.js';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 type ObservabilityConfigForTest = {
   enabled?: boolean;
@@ -35,10 +36,13 @@ type ProjectConfigWithAssistant = ProjectLocalConfig & {
   };
 };
 
+let taktEnvSnapshot: TaktEnvSnapshot;
+
 describe('projectConfig', () => {
   let testDir: string;
 
   beforeEach(() => {
+    taktEnvSnapshot = clearTaktEnv();
     testDir = mkdtempSync(join(tmpdir(), 'takt-test-project-config-'));
     mkdirSync(join(testDir, '.takt'), { recursive: true });
   });
@@ -47,8 +51,7 @@ describe('projectConfig', () => {
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
-    delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
-    delete process.env[unexpectedInteractivePreviewEnvVar];
+    restoreTaktEnv(taktEnvSnapshot);
   });
 
   describe('assistant init files', () => {

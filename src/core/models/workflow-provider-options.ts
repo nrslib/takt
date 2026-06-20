@@ -29,6 +29,7 @@ export interface CodexProviderOptions {
 export interface OpenCodeProviderOptions {
   networkAccess?: boolean;
   variant?: string;
+  allowedTools?: string[];
 }
 
 export const RUNTIME_PREPARE_PRESETS = ['gradle', 'node'] as const;
@@ -73,12 +74,17 @@ export interface CopilotProviderOptions {
   effort?: CopilotEffort;
 }
 
+export interface KiroProviderOptions {
+  agent?: string;
+}
+
 export interface StepProviderOptions {
   codex?: CodexProviderOptions;
   opencode?: OpenCodeProviderOptions;
   claude?: ClaudeProviderOptions;
   claudeTerminal?: ClaudeTerminalProviderOptions;
   copilot?: CopilotProviderOptions;
+  kiro?: KiroProviderOptions;
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';

@@ -6,6 +6,103 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.47.0] - 2026-06-18
+
+### Added
+
+- Finding Contract — structured finding lifecycle for review workflows (#816, #826, #839, #840, #842, #845). Review findings are now tracked in a formal ledger (`findings-ledger.json`) with lifecycle states (`new`, `persists`, `resolved`, `reopened`), severity levels, and deduplication. A dedicated `findings-manager` persona reconciles raw findings from multiple reviewers, allocating stable IDs (`F-0001`, `F-0002`, …) and detecting conflicts. New implementation under `src/core/workflow/findings/` (reconciler, store, manager-runner, validation), with finding-contract output contracts for all review types (coding, architecture, security, QA, frontend, testing, terraform, CQRS/ES, pure, AI antipattern). Two new workflows ship with finding contract support: `takt-default-with-fc` and `peer-review-with-fc`. Enable by adding a `finding_contract` section to a workflow YAML.
+- `provider_routing` config for persona, tag, and step-based provider selection (#844, #846). A new `provider_routing` config section routes provider/model/provider_options by three dimensions: `personas` (by raw persona key), `tags` (by step tag), and `steps` (by step name). Resolution priority is step direct > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > legacy `persona_providers` > workflow > CLI. Configurable in project (`.takt/config.yaml`) or global (`~/.takt/config.yaml`).
+- Step tags on all builtin workflows (#851). Every builtin workflow step now carries a `tags` array (e.g. `plan`, `coding`, `review`, `implementation`, `edit`). Tags are the primary key for `provider_routing.tags`, letting you apply provider/model overrides by category rather than individual step name. Tags are also supported on parallel sub-steps.
+- Trace discovery for OTel spans (#843, #847). New `traceDiscovery` module builds a structured `WorkflowTraceDiscovery` object (service name, runId, workflow name, task metadata, git branch/base info) and searchable query strings, enabling correlation of workflow runs with external observability tools like Grafana Tempo.
+- Trace task metadata enrichment (#827, #829). Task metadata (source, issue/PR numbers, branch, slug, summary) is now extracted into structured `WorkflowTraceTaskMetadata` and propagated into OTel spans and trace discovery output.
+- Named resource resolver for provider options and facets (#820, #824). A secure 3-layer resolver (`namedResourceResolver.ts`) searches `.takt/provider-options/` → `~/.takt/provider-options/` → builtin `provider-options/` directories by bare name with extension fallback (`.yaml`/`.yml`), validating against path traversal and verifying symlinks stay inside allowed directories. Used by the new `extends` keyword.
+
+### Changed
+
+- **BREAKING:** `provider_options.$ref` renamed to `provider_options.extends` (#820, #824). The `$ref` key in step/workflow `provider_options` that referenced shared YAML files has been renamed to `extends`. The value is now a bare name (e.g. `extends: edit`) resolved through the 3-layer named resource resolver, instead of a relative file path (e.g. `$ref: provider-options/edit.yaml`). Custom workflows using `$ref` must be updated. Builtin provider options files moved from `builtins/{lang}/workflows/provider-options/` to `builtins/{lang}/provider-options/`. User overrides go in `.takt/provider-options/` or `~/.takt/provider-options/`.
+- **BREAKING:** `persona_providers` deprecated in favor of `provider_routing` (#844, #846). The `persona_providers` config key still works but is now deprecated. It matches on display name which is fragile; `provider_routing.personas` matches on the raw persona key instead. Migration: move entries from `persona_providers` to `provider_routing.personas`.
+- Report phase tool call detection hardened. The report phase now actively detects and rejects provider tool calls (which are forbidden in this phase), returning a retryable error instead of silently producing broken output. Report file writing logic extracted to a shared `report-writer.ts` module.
+- Review and coding policies strengthened. Review policy expanded with new REJECT conditions for contract coverage, contract consistency, specification completeness, requirement anchoring, and resolution judgment. Coding policy wired into review workflows that were previously missing it (#848).
+- Supervisor instructions overhauled for both regular and maintenance modes, with clearer scoping and validation criteria.
+- Knowledge facets expanded: architecture patterns, backend exception translation scope, CQRS/ES domain patterns.
+
+### Fixed
+
+- Cursor CLI config rename ENOENT on parallel execution (#802, #819). The Cursor CLI intermittently fails with ENOENT when its internal `cli-config.json.tmp` → `cli-config.json` rename races across parallel reviewer steps. TAKT now retries with exponential backoff (up to 8 attempts, 1–30 s delay) instead of treating it as a fatal provider error.
+- OpenCode unavailable-tool loops (#822). The OpenCode provider could loop indefinitely when the agent repeatedly called unavailable tools. A new `UnavailableToolLoopDetector` breaks the session after 2 consecutive unavailable-tool errors, surfacing a clear failure message.
+- Review findings anchored to original requirements (#830). Reviewers could drift from the original task requirements when evaluating findings. Instructions and output contracts now enforce anchoring review judgments against the plan and original task description.
+
+### Internal
+
+- AI antipattern review policy restructured as a standalone facet with finding-contract output contracts.
+- Testing policy facet added with guidance against absence-only tests.
+- README status badges added (#835).
+- 20+ new test files covering finding contract, provider routing, trace discovery, trace task metadata, report phase retry, named resource resolver, workflow spans, and more.
+- Configuration and workflow documentation updated for `provider_routing` and `extends`.
+- `WorkflowEngineSetup` extracted for cleaner engine initialization.
+- `WorkflowRunLoop` enhanced with failure metadata and command gate improvements.
+- Repertoire pack-summary rewritten to support named resource resolution and `extends` references.
+
+## [0.46.0] - 2026-06-13
+
+### Added
+
+- OTLP export with nested provider traces and in-progress trace discovery (#808, #812, #814). When `observability.enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT` are both set, TAKT now sends spans and metrics over OTLP HTTP alongside the existing local exporters. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` are supported as standard endpoint overrides, without adding TAKT-specific OTLP config keys. The 0.42.0 note that standard `OTEL_*` environment variables could connect to a user-managed collector stopped being true after #753 explicitly configured `spanProcessors` and `metricReaders`; this change restores actual OTLP delivery. TAKT now also propagates W3C trace context into spawned provider subprocesses, so each provider CLI's spans nest under the parent workflow trace instead of forming detached traces (#812), and emits a short-lived `workflow_start.<name>` span so an in-progress workflow is discoverable in Grafana Tempo before its long-lived root span closes (#814).
+- OpenCode tool allowlist and shareable `provider_options` files (#804). `provider_options.opencode.allowed_tools` scopes the OpenCode tools a step or workflow may use, with lowercase OpenCode tool names (for example `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch`). A `provider_options` block can now also reference a shared YAML file via `$ref` relative to the workflow file, with inline values overriding matching leaves, and builtin `provider-options/{edit,review-files,review-readonly,review-web}.yaml` presets ship for reuse.
+- Kiro custom step agent (#796). `provider_options.kiro.agent` passes a Kiro CLI custom agent name (`kiro-cli chat --agent`) per step, workflow, persona, project, or global config, with `TAKT_PROVIDER_OPTIONS_KIRO_AGENT` as an env override. Steps without it use the Kiro CLI default agent.
+
+### Changed
+
+- `team_leader` part limits split into `max_concurrency` and `max_total_parts` (#799). `max_concurrency` (up to 3) caps how many worker parts run at the same time, while `max_total_parts` (up to 20) caps the total number of parts the leader may plan for the step. The older `max_parts` key is still accepted as a compatibility alias for `max_concurrency`. Team-leader budget-error detection was also tightened so a worker part hitting its budget no longer aborts the whole run.
+- Pure review pass added to the builtin review and development workflows. A new general-purpose `pure-reviewer` persona (with the `review-pure` instruction and `pure-review` output contract) judges only "can this change be merged now?" — flagging unmet requests, broken existing behavior, missing tests, and out-of-scope changes — and was wired into the peer-review, review, review-fix, backend(-cqrs), frontend, dual(-cqrs), terraform, and maintenance workflows. It replaces the former requirements reviewer (the `requirements-reviewer` persona and `requirements-review` output contract were removed).
+- Builtin review and testing facets hardened. Reviewers and the test-writing guidance now guard against absence-only tests that merely assert a replaced specification is gone, and the behavior-verification, review-verification, and naming-policy guidance were strengthened across the coding, review, and testing policies.
+
+### Fixed
+
+- Rate-limit false positives reduced (#809). The rate-limit detection patterns matched too eagerly — a bare `429`, any passing `rate limit` mention, or a `resets H:MM` time in ordinary agent output could be misread as a provider rate-limit and trigger fallback. Detection now requires more specific phrasing (for example `429` near "too many requests", "rate limited" / "rate limit exceeded" / "rate limit error", or "exceeded/hit/reached rate limit") and drops the loose standalone-time stream marker.
+- OpenCode permission handling corrected (#801, #803, #807). OpenCode `doom_loop` permission prompts are now auto-answered instead of being denied by the active permission mode, so non-interactive runs no longer stall on them (#803); permission requests and a resolved permission summary are now logged (#801, #807); and the OpenCode integration was reworked so edit-class tools map to the OpenCode edit permission and the shared OpenCode server pool is keyed per configuration with proper acquire / release and abort handling (#807).
+
+## [0.45.0] - 2026-06-10
+
+### Added
+
+- Phase-level usage events and a usage analysis script (#785). With `observability.enabled: true` and `observability.usage_events_phase: true`, each run writes per-phase token usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`, as a separate stream from the existing `logging.usage_events` output. Events are grouped by workflow phase (`phase1_execute`, `phase2_report`, and the status-judgment variants `phase3_structured` / `phase3_tag` / `phase3_fallback`), and calls whose usage is unavailable are recorded with `usage_missing: true` instead of being counted as zero tokens. A new `npm run analyze:usage` script aggregates one or more event files or run directories into a Markdown or CSV table keyed by step × phase × provider × model, with token totals and per-call statistics. Documented in the new [Observability guide](./docs/observability.md).
+- Clipboard image paste in interactive mode (#791). Pressing Ctrl+V (or running the new `/paste-image` command) during interactive input now attaches an image directly from the OS clipboard; previously paste only worked for terminals that emit inline-image (OSC 1337) escape sequences. Attached images also flow through the provider abstraction now: `claude-sdk` and `codex` receive them as native image input, while the other providers get the attachment file paths referenced in the prompt so the agent can open them with its own tools.
+
+### Changed
+
+- **BREAKING:** Interrupted `running` tasks are no longer auto-requeued (#791). When `takt run` or `takt watch` was interrupted (process crash, kill), tasks left in `running` status used to be recovered to `pending` and re-executed on the next invocation. They are now marked `failed` with an explanatory error instead; requeue them explicitly to run them again.
+
+### Fixed
+
+- Worktree-isolated clones no longer fail with missing-object errors when branching off a fetched base-branch commit (#791). The isolated clone now fetches the base branch's commits from the main repository before running `git reset --hard`, so the reset target is always present in the clone.
+- OpenCode readonly permission mode now allows read tools (#797). The `readonly` mode denied every tool — including `read`, `glob`, and `grep` — so read-only steps such as reviews could not inspect the codebase at all. Those three read tools are now allowed while edit, bash, and network tools stay denied.
+
+### Internal
+
+- Claude Agent SDK and Codex SDK dependency updates (#789, #795).
+- Removed the `takt-quality-check` command gate from the implement-type steps in the repository's own `.takt/config.yaml`.
+
+## [0.44.0] - 2026-06-03
+
+### Added
+
+- `kiro` provider added (#773). TAKT can now drive the Kiro CLI as an AI agent provider alongside Claude, Codex, OpenCode, Cursor, and Copilot. Select it with `--provider kiro` or in config. Authentication uses `kiro_api_key` in config (or the `TAKT_KIRO_API_KEY` env var), and the CLI binary can be overridden via `kiro_cli_path` / `TAKT_KIRO_CLI_PATH`.
+- OpenTelemetry observability gained working exporters and richer spans (#753). Building on the span foundation shipped in 0.42.0, observability now emits a local `monitor.json` of per-run workflow metrics (enable with `observability.monitor: true`) and a shadow session log derived from OTel spans (`observability.sessionLogExporter: true`), and the span set was extended to cover phase execution and status-judgment (judge) phases. Exporters are routed per run id and the shadow session log keeps redaction parity with the canonical NDJSON session log, so sensitive agent output stays sanitized. Still off by default behind `observability.enabled: true`.
+
+### Changed
+
+- Coding review extended to all builtin review and development workflows. The coding-review parallel sub-step (the `coding-reviewer` persona with the `review-coding` instruction and `coding-review` output contract) — previously only on `default-peer-review` — is now appended to every builtin review / review-fix workflow and to the parallel reviewer waves of the development workflows (backend, frontend, dual, terraform, and their variants). It is a general-purpose, near-instruction-less pass that flags implementation bugs, regressions, security risks, and missing tests using the model's own coding judgment. The intentionally-minimal `*-mini` and `compound-eye` variants are left unchanged.
+
+### Fixed
+
+- Codex `Reconnecting...` events no longer abort the run (#775). A transient reconnect from the Codex SDK could surface as a fatal provider error and tear down the whole workflow; the Codex client now treats it as a recoverable reconnect and retries.
+- Worktree-clone isolation hardened (#778). Fixes to the `git clone --shared` isolation path and clone execution, including normalized gitdir isolation handling, so worktree-isolated tasks stay properly isolated from the main repository.
+
+### Internal
+
+- Repository quality gates wired into TAKT's own `.takt/config.yaml` so the dogfooded review/dev steps run the build, lint, unit, and mock-E2E checks via a command gate.
+
 ## [0.43.0] - 2026-05-29
 
 ### Added

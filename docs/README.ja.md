@@ -1,10 +1,32 @@
 # TAKT
 
-[English](../README.md) | 💬 [Discord コミュニティ](https://discord.gg/R2Xz3uYWxD)
+<p align="center">
+  <a href="https://www.npmjs.com/package/takt"><img src="https://img.shields.io/npm/v/takt?label=npm" alt="npm version"></a>
+  <a href="https://github.com/nrslib/takt/stargazers"><img src="https://img.shields.io/github/stars/nrslib/takt?logo=github&label=stars" alt="GitHub stars"></a>
+  <a href="https://github.com/nrslib/takt/actions/workflows/ci.yml"><img src="https://github.com/nrslib/takt/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="../LICENSE"><img src="https://img.shields.io/github/license/nrslib/takt" alt="license"></a>
+  <a href="https://discord.gg/R2Xz3uYWxD"><img src="https://img.shields.io/badge/dynamic/json?label=discord&query=approximate_member_count&url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FR2Xz3uYWxD%3Fwith_counts%3Dtrue&suffix=%20members&logo=discord&logoColor=white&color=5865F2" alt="Discord members"></a>
+</p>
 
-**T**AKT **A**gent **K**oordination **T**opology — 複数の AI エージェントをオーケストレーションし、レビューループ・プロンプト管理・ガードレールを与えるツールです。
+<p align="center">
+  <a href="../README.md">English</a> |
+  <a href="./README.ja.md">日本語</a>
+</p>
 
-AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の workflow ファイルで定義されており、エージェント任せにはしません。TAKT は Claude Code、Codex、OpenCode、Cursor、GitHub Copilot CLI を、役割・権限・文脈の異なるエージェントとして協調させます。
+**AI コーディングエージェントの見張り番をやめる。**
+
+TAKT は、AI コーディングエージェントを再現可能な開発ワークフローとして動かす OSS CLI です。計画、実装、レビュー、修正ループ、人間への確認、権限、出力契約を YAML で定義し、隔離された worktree と追跡可能なログ付きでタスクを実行します。
+
+1つのエージェントにプロセス全体を覚えさせるのではなく、TAKT は step ごとに役割、文脈、遷移ルールを与えます。AI はコードを書きますが、次に何をするかは workflow が決めます。
+
+- 計画 → 実装 → レビュー → 修正ループを明示的な workflow step として実行
+- step ごとに persona、policy、knowledge、instruction、output contract を分け、コンテキストを肥大化させない
+- 積んだタスクを隔離された worktree で実行し、後からログとレポートを確認できる
+- Claude Code、Claude SDK、Codex SDK、OpenCode SDK、Cursor、GitHub Copilot CLI、Kiro を provider として利用できる
+
+**T**AKT **A**gent **K**oordination **T**opology は、複数の AI エージェントをオーケストレーションし、レビューループ・プロンプト管理・ガードレールを与えるツールです。
+
+AI と会話してやりたいことを決め、タスクとして積み、`takt run` で実行します。計画・実装・レビュー・修正のループは YAML の workflow ファイルで定義されており、エージェント任せにはしません。TAKT は Claude Code、Codex、OpenCode、Cursor、GitHub Copilot CLI、Kiro CLI を、役割・権限・文脈の異なるエージェントとして協調させます。
 
 TAKT は AI コーディングワークフローを主な用途として提供していますが、コーディング以外でも、複数の AI エージェントを協調させたいタスクや、レビュー・判定・フィードバックループによってタスクの精度を高めたい場面で活用できます。
 
@@ -26,6 +48,37 @@ workflow で工程を定義し、persona・policy・knowledge・instruction・ou
 
 目的はシンプルです。人間の継続的な介入に依存せず、開発プロセスを再利用可能で、レビュー可能で、再現可能な仕組みにすることです。
 
+## 5分で試す
+
+少なくとも1回 commit 済みの Git リポジトリで実行します。
+
+```bash
+npm install -g takt
+
+# AI と会話し、タスクを説明し、/go の後に「タスクにつむ」を選びます
+takt
+
+# 積んだタスクを隔離された worktree で実行します
+takt run
+
+# diff の確認、マージ、リトライ、リキュー、タスクブランチ削除を行います
+takt list
+```
+
+初回実行時は `~/.takt/config.yaml` で provider を設定するか、[設定](#設定) にある API キー用の環境変数を使います。`claude-sdk`、`codex`、`opencode` などの SDK 経由 provider は Node.js と API キーで動きます。CLI 経由 provider を使う場合は、対応する外部 CLI が必要です。
+
+## TAKT と通常の AI コーディングエージェントの違い
+
+| 通常の AI コーディングエージェント | TAKT |
+|------------------------------------|------|
+| プロンプトでプロセスを守るよう依頼する | YAML workflow がプロセスを管理する |
+| レビュー手順が忘れられたり飛ばされたりする | レビューと修正ループが明示的な遷移になる |
+| 1つの長いコンテキストが肥大化し続ける | 各 step に必要なコンテキストだけを渡す |
+| 実装とレビューの責務が混ざりやすい | persona、権限、output contract で責務を分ける |
+| 作業がカレントツリーに直接入ることが多い | 積んだタスクはデフォルトで隔離された worktree で実行される |
+| タスクから結果までの経路を追いにくい | ログとレポートでタスクから PR までの経路を追跡できる |
+| 同じプロセスを記憶で再現する必要がある | workflow を再利用・レビュー・バージョン管理できる |
+
 ## 必要なもの
 
 利用するプロバイダーに応じて、外部 CLI のインストール要否が変わります。
@@ -42,6 +95,7 @@ workflow で工程を定義し、persona・policy・knowledge・instruction・ou
 - `claude-terminal` — [Claude Code](https://claude.ai/code) を対話型ターミナルセッションで駆動（[`tmux`](https://github.com/tmux/tmux) も必要）
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
+- `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
 
 任意:
 
@@ -57,6 +111,15 @@ workflow で工程を定義し、persona・policy・knowledge・instruction・ou
 ```bash
 npm install -g takt
 ```
+
+Nix flakes を使う場合:
+
+```bash
+nix run github:nrslib/takt
+nix profile install github:nrslib/takt
+```
+
+Nix パッケージがインストールするのは TAKT CLI 本体のみです。外部 CLI プロバイダー、`git`、`gh`/`glab` は、[必要なもの](#必要なもの) に記載のとおり別途インストールして `PATH` に置くか、設定で指定してください。
 
 ### AI と相談してタスクを積む
 
@@ -187,7 +250,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: codex    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, or copilot
+provider: codex    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: gpt-5.5       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
@@ -200,6 +263,7 @@ export TAKT_OPENAI_API_KEY=sk-...          # OpenAI (Codex)
 export TAKT_OPENCODE_API_KEY=...           # OpenCode
 export TAKT_CURSOR_API_KEY=...             # Cursor Agent（login 済みなら省略可）
 export TAKT_COPILOT_GITHUB_TOKEN=ghp_...   # GitHub Copilot CLI
+export TAKT_KIRO_API_KEY=...               # Kiro CLI
 ```
 
 全設定項目・プロバイダープロファイル・モデル解決の詳細は [Configuration Guide](./configuration.ja.md) を参照してください。
@@ -285,6 +349,7 @@ npx create-takt-sdd
 | [チュートリアル](./tutorial.ja.md) | 3 フェーズで題材を改良しながら、タスクを積み、実行し、結果を確認する流れ |
 | [CLI Reference](./cli-reference.ja.md) | 全コマンド・オプション |
 | [Configuration](./configuration.ja.md) | グローバル設定・プロジェクト設定 |
+| [Observability](./observability.ja.md) | phase 粒度の usage events と集計 workflow |
 | [設計思想](./design-philosophy.ja.md) | TAKT が workflow、facet、フィードバックループ、追跡性を重視する理由 |
 | [Workflow Guide](./workflows.ja.md) | workflow の作成・カスタマイズ |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン workflow・persona の一覧 |

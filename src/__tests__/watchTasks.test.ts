@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
 const {
-  mockRecoverInterruptedRunningTasks,
+  mockFailInterruptedRunningTasks,
   mockGetTasksFilePath,
   mockWatch,
   mockStop,
@@ -16,7 +16,7 @@ const {
   mockWarn,
   mockError,
 } = vi.hoisted(() => ({
-  mockRecoverInterruptedRunningTasks: vi.fn(),
+  mockFailInterruptedRunningTasks: vi.fn(),
   mockGetTasksFilePath: vi.fn(),
   mockWatch: vi.fn(),
   mockStop: vi.fn(),
@@ -33,7 +33,7 @@ const {
 
 vi.mock('../infra/task/index.js', () => ({
   TaskRunner: vi.fn().mockImplementation(() => ({
-    recoverInterruptedRunningTasks: mockRecoverInterruptedRunningTasks,
+    failInterruptedRunningTasks: mockFailInterruptedRunningTasks,
     getTasksFilePath: mockGetTasksFilePath,
   })),
   TaskWatcher: vi.fn().mockImplementation(() => ({
@@ -69,7 +69,7 @@ import { watchTasks } from '../features/tasks/watch/index.js';
 describe('watchTasks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRecoverInterruptedRunningTasks.mockReturnValue(0);
+    mockFailInterruptedRunningTasks.mockReturnValue(0);
     mockGetTasksFilePath.mockReturnValue('/project/.takt/tasks.yaml');
     mockExecuteRunTaskAndComplete.mockResolvedValue(true);
 
@@ -85,13 +85,13 @@ describe('watchTasks', () => {
     });
   });
 
-  it('watch開始時に中断されたrunningタスクをpendingへ復旧する', async () => {
-    mockRecoverInterruptedRunningTasks.mockReturnValue(1);
+  it('watch開始時に中断されたrunningタスクをfailedへ倒す', async () => {
+    mockFailInterruptedRunningTasks.mockReturnValue(1);
 
     await watchTasks('/project');
 
-    expect(mockRecoverInterruptedRunningTasks).toHaveBeenCalledTimes(1);
-    expect(mockInfo).toHaveBeenCalledWith('Recovered 1 interrupted running task(s) to pending.');
+    expect(mockFailInterruptedRunningTasks).toHaveBeenCalledTimes(1);
+    expect(mockInfo).toHaveBeenCalledWith('Marked 1 interrupted running task(s) as failed.');
     expect(mockWatch).toHaveBeenCalledTimes(1);
     expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(1);
   });

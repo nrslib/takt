@@ -23,6 +23,10 @@ import { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
+import type { FindingLedgerStore } from '../findings/store.js';
+import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
+import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('workflow-engine');
 
@@ -45,6 +49,8 @@ interface WorkflowEngineSetupParams {
   runPaths: RunPaths;
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
+  refreshFindingsState: () => void;
+  findingLedgerStore?: FindingLedgerStore;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
   resetCycleDetector: () => void;
@@ -126,6 +132,30 @@ export function applyRuntimeEnvironment(
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
   const phaseRelay = createWorkflowPhaseRelay((event, ...args) => params.emitEvent(event, ...args));
+  const getCurrentWorkflowStack = () => params.sharedRuntime.activeResumePoint?.stack;
+  const buildFindingContractInstructionContext = (
+    _step: WorkflowStep,
+    includeRawFindingsSchema: boolean,
+  ): FindingContractInstructionContext | undefined => {
+    if (!params.config.findingContract) {
+      return undefined;
+    }
+    if (!params.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+
+    const ledger = params.findingLedgerStore.loadLedger();
+    return {
+      ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
+      ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
+      reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+      ...(includeRawFindingsSchema
+        ? {
+            rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
+          }
+        : {}),
+    };
+  };
 
   const optionsBuilder = new OptionsBuilder(
     params.options,
@@ -137,6 +167,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     () => params.config.name,
     () => params.config.description,
+    getCurrentWorkflowStack,
+    buildFindingContractInstructionContext,
   );
 
   const stepExecutor = new StepExecutor({
@@ -152,6 +184,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowName: () => params.config.name,
     getWorkflowDescription: () => params.config.description,
     getRetryNote: () => params.options.retryNote,
+    getObservabilityRunId: () => params.options.observabilityRunId,
+    observabilityEnabled: () => params.options.observability?.enabled === true,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
@@ -164,9 +200,19 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     engineOptions: params.options,
     getCwd: params.getCwd,
     getReportDir: params.getReportDir,
+    getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
+    observabilityEnabled: params.options.observability?.enabled === true,
+    observabilityRunId: params.options.observabilityRunId,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
+    refreshFindingsState: params.refreshFindingsState,
+    emitEvent: params.emitEvent,
+    findingContract: params.config.findingContract,
+    findingLedgerStore: params.findingLedgerStore,
+    getRunId: () => params.runPaths.slug,
     runQualityGates,
     ...phaseRelay,
   });
@@ -175,7 +221,13 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     optionsBuilder,
     stepExecutor,
     getCwd: params.getCwd,
+    getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
+    childProcessEnv: params.options.childProcessEnv,
+    observabilityEnabled: params.options.observability?.enabled === true,
+    observabilityRunId: params.options.observabilityRunId,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
     onPhaseStart: phaseRelay.onPhaseStart,
@@ -187,7 +239,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     engineOptions: params.options,
     getCwd: params.getCwd,
+    getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
+    observabilityEnabled: params.options.observability?.enabled === true,
+    observabilityRunId: params.options.observabilityRunId,
+    sanitizeObservabilityText: params.options.sanitizeObservabilityText,
+    getCurrentWorkflowStack,
     onPhaseStart: phaseRelay.onPhaseStart,
     onPhaseComplete: phaseRelay.onPhaseComplete,
   });
@@ -204,6 +261,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           provider: step.provider ?? params.options.provider,
           resolvedProvider: providerInfo.provider,
           resolvedModel: providerInfo.model,
+          childProcessEnv: params.options.childProcessEnv,
           interactive: params.options.interactive === true,
           detectRuleIndex: params.detectRuleIndex,
           structuredCaller: params.structuredCaller,

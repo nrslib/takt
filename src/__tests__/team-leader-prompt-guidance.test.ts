@@ -12,6 +12,58 @@ function readBuiltinInstruction(relativePath: string): string {
 }
 
 describe('team leader decomposition guidance', () => {
+  it('Given no inspect tools, When building decomposition prompts, Then tool usage remains prohibited', () => {
+    const structuredPrompt = buildDecomposePrompt('implement feature', 3, 'en');
+    const promptBasedPrompt = buildPromptBasedDecomposePrompt('実装タスク', 3, 'ja');
+
+    expect(structuredPrompt).toContain('Do not use any tool');
+    expect(promptBasedPrompt).toContain('ツールは使用しない');
+  });
+
+  it('Given empty inspect tools, When building decomposition prompts, Then tool usage remains prohibited', () => {
+    const structuredPrompt = buildDecomposePrompt('implement feature', 3, 'en', []);
+    const promptBasedPrompt = buildPromptBasedDecomposePrompt('実装タスク', 3, 'ja', []);
+
+    expect(structuredPrompt).toContain('Do not use any tool');
+    expect(promptBasedPrompt).toContain('ツールは使用しない');
+  });
+
+  it('Given inspect tools, When building the English decomposition prompt, Then it allows read-only inspection without implementation actions', () => {
+    const buildWithInspectTools = buildDecomposePrompt as (
+      instruction: string,
+      maxTotalParts: number,
+      language: 'en',
+      inspectTools: string[],
+    ) => string;
+
+    const prompt = buildWithInspectTools('implement feature', 3, 'en', ['Read', 'Glob', 'Grep']);
+
+    expect(prompt).not.toContain('Do not use any tool');
+    expect(prompt).toContain('read-only inspection tools');
+    expect(prompt).toContain('Do not edit files');
+    expect(prompt).toContain('Do not run commands');
+    expect(prompt).toContain('Do not execute the implementation');
+    expect(prompt).toContain('Return at least one part');
+  });
+
+  it('Given inspect tools, When building the Japanese prompt-based decomposition prompt, Then it allows read-only inspection without implementation actions', () => {
+    const buildWithInspectTools = buildPromptBasedDecomposePrompt as (
+      instruction: string,
+      maxTotalParts: number,
+      language: 'ja',
+      inspectTools: string[],
+    ) => string;
+
+    const prompt = buildWithInspectTools('実装タスク', 3, 'ja', ['Read', 'Glob', 'Grep']);
+
+    expect(prompt).not.toContain('ツールは使用しない');
+    expect(prompt).toContain('読み取り専用');
+    expect(prompt).toContain('編集しない');
+    expect(prompt).toContain('コマンドを実行しない');
+    expect(prompt).toContain('実装しない');
+    expect(prompt).toContain('少なくとも1つの part');
+  });
+
   it('Given structured decomposition, When building the Japanese prompt, Then it discourages oversized implementation-and-verification parts', () => {
     const prompt = buildDecomposePrompt('実装タスク', 4, 'ja');
 
@@ -25,6 +77,16 @@ describe('team leader decomposition guidance', () => {
     expect(prompt).toContain('parts.length === 1');
   });
 
+  it('Given structured decomposition, When building the Japanese prompt, Then it describes max parts as a total limit instead of concurrency', () => {
+    const prompt = buildDecomposePrompt('実装タスク', 5, 'ja');
+
+    expect(prompt).toContain('返してよい総 parts 数');
+    expect(prompt).toContain('1 以上 5 以下');
+    expect(prompt).toContain('同時実行数ではない');
+    expect(prompt).toContain('上限遵守');
+    expect(prompt).toContain('検証分離や責務分解より優先');
+  });
+
   it('Given prompt-based decomposition, When building the English prompt, Then it requires responsibility boundaries and staged verification', () => {
     const prompt = buildPromptBasedDecomposePrompt('implement feature', 4, 'en');
 
@@ -36,6 +98,16 @@ describe('team leader decomposition guidance', () => {
     expect(prompt).toContain('npm run test:e2e:mock');
     expect(prompt).toContain('Do not duplicate');
     expect(prompt).toContain('parts.length === 1');
+  });
+
+  it('Given prompt-based decomposition, When building the English prompt, Then it describes max parts as a total limit instead of concurrency', () => {
+    const prompt = buildPromptBasedDecomposePrompt('implement feature', 5, 'en');
+
+    expect(prompt).toContain('total number of parts');
+    expect(prompt).toContain('between 1 and 5');
+    expect(prompt).toContain('not a concurrency limit');
+    expect(prompt).toContain('Respecting this limit takes precedence');
+    expect(prompt).toContain('verification separation or responsibility boundaries');
   });
 
   it('Given feedback planning, When building more-parts prompts, Then it keeps heavy quality gates out of implementation continuations', () => {
@@ -59,6 +131,34 @@ describe('team leader decomposition guidance', () => {
     expect(promptBasedPrompt).toContain('未完了作業');
     expect(promptBasedPrompt).toContain('検証 part');
     expect(promptBasedPrompt).toContain('重複して持たせない');
+  });
+
+  it('Given feedback planning, When building more-parts prompts, Then tool usage remains prohibited', () => {
+    const results = [
+      { id: 'part-1', title: 'Implementation', status: 'done', content: 'done' },
+    ];
+
+    const structuredPrompt = buildMorePartsPrompt(
+      'implement feature',
+      results,
+      ['part-1'],
+      2,
+      'en',
+    );
+    const promptBasedPrompt = buildPromptBasedMorePartsPrompt(
+      '実装タスク',
+      results,
+      ['part-1'],
+      2,
+      'ja',
+    );
+
+    expect(structuredPrompt).toContain('Do not use any tool');
+    expect(structuredPrompt).not.toContain('read-only inspection tools');
+    expect(structuredPrompt).not.toContain('Return at least one part');
+    expect(promptBasedPrompt).toContain('ツールは使用しない');
+    expect(promptBasedPrompt).not.toContain('読み取り専用');
+    expect(promptBasedPrompt).not.toContain('少なくとも1つの part');
   });
 
   it('Given builtin team-leader facets, When reading runtime instructions, Then both languages reject single oversized parts before execution', () => {

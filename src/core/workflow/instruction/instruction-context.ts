@@ -6,6 +6,13 @@
 
 import type { AgentResponse, FallbackContext, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
 
+export interface FindingContractInstructionContext {
+  ledgerCopyPath: string;
+  ledgerSummary: string;
+  reportLedgerSummary: string;
+  rawFindingsJsonSchema?: Record<string, unknown>;
+}
+
 /**
  * Context for building instruction from template.
  */
@@ -66,6 +73,8 @@ export interface InstructionContext {
   knowledgeSourcePath?: string;
   /** Workflow state for context/structured/effect interpolation */
   workflowState?: WorkflowState;
+  /** Finding Contract input for reviewer raw finding output. */
+  findingContract?: FindingContractInstructionContext;
 }
 
 /**

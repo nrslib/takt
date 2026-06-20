@@ -6,6 +6,13 @@
 ## Summary
 {Summarize the review result in 1-2 sentences}
 
+## Contract Entry Check
+Fill this when the diff adds or changes IDs, names, metadata, config, environment variables, or output contracts.
+
+| Entry / Path | Original Requirement | Implementation Evidence | Test Evidence | Judgment | Exception / Unverified Evidence |
+|--------------|----------------------|--------------------------|---------------|----------|---------------------------------|
+| {normal entry / derived condition / validation / evaluation / output / re-injection, etc.} | {Requirement} | `src/file.ts:42` | `src/file.test.ts:10` | ✅/❌/⚠️ | {none / evidence} |
+
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|--------|----------------|
@@ -17,9 +24,9 @@
 | 1 | CODE-PERSIST-src-file-L77 | regression | `src/file.ts:77` | `src/file.ts:77` | {Unresolved issue} | {Fix suggestion} |
 
 ## Resolved Findings (resolved)
-| finding_id | Resolution Evidence |
-|------------|---------------------|
-| CODE-RESOLVED-src-file-L10 | Resolved at `src/file.ts:10` |
+| finding_id | Original Expected Result | Resolution Evidence |
+|------------|--------------------------|---------------------|
+| CODE-RESOLVED-src-file-L10 | {Original finding acceptance criteria} | Resolved at `src/file.ts:10` |
 
 ## Reopened Findings (reopened)
 | # | finding_id | family_tag | Prior Resolution Evidence | Recurrence Evidence | Issue | Fix Suggestion |
@@ -37,5 +44,5 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary only (5 lines or fewer)
+- APPROVE: Summary plus Contract Entry Check when needed (10 lines or fewer total)
 - REJECT: Include only relevant finding rows (30 lines or fewer)

@@ -319,6 +319,42 @@ const storage = createStorage(config)
 return storage.upload(file, options)
 ```
 
+## Naming
+
+A name expresses the code's actual role and effect, not its implementation mechanism. Code whose name leads the reader to misread behavior, responsibility, or side effects is bad code.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Name contradicts the actual effect | Reads as if it causes a side effect every time, but actually returns a cached value | REJECT |
+| Side effects or call frequency are unreadable | Cannot tell from the name whether it initializes, retrieves, or updates | REJECT |
+| Cannot distinguish it from nearby APIs | Same name as the wrapped or delegated API, hiding which layer owns the responsibility | REJECT |
+| Named after role/effect | The provided value, state change, or responsibility is clear from the name | OK |
+
+```typescript
+// REJECT - Name reads as if it causes a side effect every time, but it is a memoized accessor
+let resourcePromise: Promise<Resource> | null = null
+function openResource(): Promise<Resource> {
+  if (!resourcePromise) {
+    resourcePromise = createResource()
+  }
+  return resourcePromise
+}
+
+// OK - Name it after its actual role: getting an available resource
+function getResource(): Promise<Resource> {
+  if (!resourcePromise) {
+    resourcePromise = createResource()
+  }
+  return resourcePromise
+}
+```
+
+Criteria:
+1. Does the name express the actual role/effect?
+2. Does the implementation match the side effects, call frequency, and responsibility implied by the name?
+3. Does it avoid confusion with wrapped, delegated, or nearby APIs?
+4. Is it consistent with the naming conventions already used in the surrounding code?
+
 ## Structure
 
 ### Criteria for Splitting

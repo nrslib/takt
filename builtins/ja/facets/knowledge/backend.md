@@ -65,7 +65,7 @@ data class Order(
 
 ## API層設計（Controller）
 
-Controller は薄く保つ。リクエスト受信 → UseCase委譲 → レスポンス返却のみ。
+Controller は薄く保つ。リクエスト受信、DTO変換、認証・認可境界の解決、UseCaseまたは問い合わせ層への委譲、レスポンス返却に集中する。
 
 ```kotlin
 // CORRECT - Controller は薄い
@@ -208,6 +208,21 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 | 構造バリデーション（@NotBlank等）がドメインにある | REJECT。API層で |
 | UseCase層のバリデーションがAggregate内にある | REJECT。Read Model参照はUseCase層 |
 
+### 読み取りと書き込みの入口
+
+読み取りと書き込みは入口で分離する。読み取り用の問い合わせ層は副作用を持たず、書き込みはコマンドまたはUseCaseで扱う。
+
+| 基準 | 判定 |
+|------|------|
+| 問い合わせ層が保存・削除・外部呼び出し・コマンド送信を行う | REJECT |
+| 読み取り用のクラス名やメソッド名なのに副作用を持つ | REJECT |
+| 単純な参照APIが問い合わせ層を呼び、レスポンスDTOに変換するだけ | OK |
+| 単純な状態変更APIが構造検証と認可境界の解決後にコマンドを1つ送るだけ | OK |
+| Controller向けの読み取り調整役が認可境界、複数Read Model、ページング等を扱う | ApplicationService または ReadService として表現 |
+| QueryHandler と同じ領域に QueryService という名前の送信側・調整側コンポーネントを置く | 警告。クエリ受信側と混同しやすい |
+| 複数のRead Model参照、外部連携、複数コマンド、結果待機をControllerに置く | REJECT。UseCase層に分離 |
+| UseCaseが別サービスへの薄い委譲だけでドメイン上の判断や調整を持たない | 削除を検討 |
+
 ## エラーハンドリング
 
 ### 例外階層設計
@@ -244,6 +259,17 @@ class OrderExceptionHandler {
 | 汎用的な Exception や RuntimeException を throw | REJECT。具体的な例外型を使う |
 | try-catch の空 catch | REJECT |
 | Controller 内で例外を握りつぶして 200 を返す | REJECT |
+
+### 例外変換のスコープ
+
+HTTPステータスへの例外変換は、HTTP adapter 境界の例外変換レイヤに分離する。グローバルな変換は認証・入力検証・共通エラー形状など真に横断的なものに限り、特定 API やリソース固有の変換は、その API スコープに閉じた境界で扱う。
+
+| 基準 | 判定 |
+|------|------|
+| 各 endpoint が同じ try-catch や wrapper で例外を HTTP 表現に変換している | REJECT。HTTP adapter 境界の例外変換レイヤに分離 |
+| 特定 API 固有の例外変換を global handler に追加する | スコープ過大。対象 API の境界へ閉じる |
+| 認証失敗、入力検証、共通エラー形状など全 API 共通の変換 | OK。global な境界で扱う |
+| 例外型から HTTP 表現への変換が application/domain 層にある | REJECT。HTTP adapter 境界で扱う |
 
 ## ドメインモデル設計
 

@@ -10,6 +10,7 @@ import type {
   WorkflowStep,
   WorkflowState,
   AgentResponse,
+  WorkflowResumePointEntry,
 } from '../../models/types.js';
 import type { ArpeggioStepConfig, BatchResult, DataBatch } from '../arpeggio/types.js';
 import { createDataSource } from '../arpeggio/data-source-factory.js';
@@ -22,10 +23,12 @@ import { incrementStepIteration } from './state-manager.js';
 import { createLogger, delay } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
-import type { PhaseName, PhasePromptParts, RuntimeStepResolution, StepRunResult } from '../types.js';
+import type { PhaseName, PhasePromptParts, RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
+import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -33,7 +36,13 @@ export interface ArpeggioRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
   readonly stepExecutor: StepExecutor;
   readonly getCwd: () => string;
+  readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
+  readonly childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  readonly observabilityEnabled: boolean;
+  readonly observabilityRunId?: string;
+  readonly sanitizeObservabilityText?: (text: string) => string;
+  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly onPhaseStart?: (
@@ -87,6 +96,19 @@ class Semaphore {
   }
 }
 
+interface ArpeggioBatchObservability {
+  readonly enabled: boolean;
+  readonly runId?: string;
+  readonly workflowName: string;
+  readonly step: WorkflowStep;
+  readonly iteration: number;
+  readonly phaseExecutionId: string;
+  readonly workflowStack?: WorkflowResumePointEntry[];
+  readonly sanitizeText?: (text: string) => string;
+  readonly providerInfo?: StepProviderInfo;
+  readonly getPromptParts?: () => PhasePromptParts | undefined;
+}
+
 /** Execute a single batch with retry logic */
 async function executeBatchWithRetry(
   batch: DataBatch,
@@ -96,6 +118,7 @@ async function executeBatchWithRetry(
   agentOptions: RunAgentOptions,
   maxRetries: number,
   retryDelayMs: number,
+  observability: ArpeggioBatchObservability,
   runtime?: RuntimeStepResolution,
 ): Promise<BatchResult> {
   const prompt = buildArpeggioPrompt(
@@ -107,12 +130,63 @@ async function executeBatchWithRetry(
   );
   let lastError: string | undefined;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await executeAgent(persona, prompt, agentOptions);
-      if (response.status === 'error') {
-        lastError = response.error ?? response.content ?? 'Agent returned error status';
-        log.info('Batch execution failed, retrying', {
+  return runWithPhaseSpan({
+    enabled: observability.enabled,
+    runId: observability.runId,
+    workflowName: observability.workflowName,
+    step: observability.step,
+    iteration: observability.iteration,
+    phase: 1,
+    phaseName: 'execute',
+    instruction: prompt,
+    phaseExecutionId: observability.phaseExecutionId,
+    workflowStack: observability.workflowStack,
+    sanitizeText: observability.sanitizeText,
+    providerInfo: observability.providerInfo,
+    getPromptParts: observability.getPromptParts,
+  }, async () => {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await executeAgent(persona, prompt, agentOptions);
+        if (response.status === 'error') {
+          lastError = response.error ?? response.content ?? 'Agent returned error status';
+          log.info('Batch execution failed, retrying', {
+            batchIndex: batch.batchIndex,
+            attempt: attempt + 1,
+            maxRetries,
+            error: lastError,
+          });
+          if (attempt < maxRetries) {
+            await delay(retryDelayMs);
+            continue;
+          }
+          return {
+            batchIndex: batch.batchIndex,
+            content: '',
+            success: false,
+            error: lastError,
+            providerUsage: response.providerUsage,
+          };
+        }
+        if (response.status === 'rate_limited') {
+          return {
+            batchIndex: batch.batchIndex,
+            content: response.content,
+            success: false,
+            error: response.error ?? response.content,
+            rateLimitedResponse: response,
+            providerUsage: response.providerUsage,
+          };
+        }
+        return {
+          batchIndex: batch.batchIndex,
+          content: response.content,
+          success: true,
+          providerUsage: response.providerUsage,
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        log.info('Batch execution threw, retrying', {
           batchIndex: batch.batchIndex,
           attempt: attempt + 1,
           maxRetries,
@@ -122,48 +196,29 @@ async function executeBatchWithRetry(
           await delay(retryDelayMs);
           continue;
         }
-        return {
-          batchIndex: batch.batchIndex,
-          content: '',
-          success: false,
-          error: lastError,
-        };
-      }
-      if (response.status === 'rate_limited') {
-        return {
-          batchIndex: batch.batchIndex,
-          content: response.content,
-          success: false,
-          error: response.error ?? response.content,
-          rateLimitedResponse: response,
-        };
-      }
-      return {
-        batchIndex: batch.batchIndex,
-        content: response.content,
-        success: true,
-      };
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-      log.info('Batch execution threw, retrying', {
-        batchIndex: batch.batchIndex,
-        attempt: attempt + 1,
-        maxRetries,
-        error: lastError,
-      });
-      if (attempt < maxRetries) {
-        await delay(retryDelayMs);
-        continue;
       }
     }
-  }
 
-  return {
-    batchIndex: batch.batchIndex,
-    content: '',
-    success: false,
-    error: lastError,
-  };
+    return {
+      batchIndex: batch.batchIndex,
+      content: '',
+      success: false,
+      error: lastError,
+      providerUsage: {
+        usageMissing: true,
+        reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+      },
+    };
+  }, (result) => ({
+    status: getBatchResultStatus(result),
+    content: result.content,
+    error: result.error,
+    providerUsage: result.providerUsage,
+  }));
+}
+
+function getBatchResultStatus(result: BatchResult): string {
+  return result.rateLimitedResponse?.status ?? (result.success ? 'done' : 'error');
 }
 
 function buildArpeggioPrompt(
@@ -240,6 +295,7 @@ export class ArpeggioRunner {
       agentOptions,
       arpeggioConfig,
       semaphore,
+      stepProviderModel,
       runtime,
     );
 
@@ -279,6 +335,7 @@ export class ArpeggioRunner {
       provider: stepProviderModel.provider,
       resolvedProvider: stepProviderModel.provider,
       resolvedModel: stepProviderModel.model,
+      childProcessEnv: this.deps.childProcessEnv,
       interactive: this.deps.getInteractive(),
       detectRuleIndex: this.deps.detectRuleIndex,
       structuredCaller: this.deps.structuredCaller,
@@ -315,18 +372,21 @@ export class ArpeggioRunner {
     agentOptions: RunAgentOptions,
     config: ArpeggioStepConfig,
     semaphore: Semaphore,
+    providerInfo: StepProviderInfo,
     runtime?: RuntimeStepResolution,
   ): Promise<BatchResult[]> {
     const promises = batches.map(async (batch) => {
       await semaphore.acquire();
       try {
         let didEmitPhaseStart = false;
+        let resolvedPromptParts: PhasePromptParts | undefined;
         const phaseExecutionId = `${step.name}:1:${stepIteration}:${batch.batchIndex}`;
         const batchAgentOptions: RunAgentOptions = {
           ...agentOptions,
           onPromptResolved: (promptParts) => {
             if (didEmitPhaseStart) return;
-              this.deps.onPhaseStart?.(step, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, iteration);
+            resolvedPromptParts = promptParts;
+            this.deps.onPhaseStart?.(step, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, iteration);
             didEmitPhaseStart = true;
           },
         };
@@ -338,6 +398,18 @@ export class ArpeggioRunner {
           batchAgentOptions,
           config.maxRetries,
           config.retryDelayMs,
+          {
+            enabled: this.deps.observabilityEnabled,
+            runId: this.deps.observabilityRunId,
+            workflowName: this.deps.getWorkflowName(),
+            step,
+            iteration,
+            phaseExecutionId,
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
+            sanitizeText: this.deps.sanitizeObservabilityText,
+            providerInfo,
+            getPromptParts: () => resolvedPromptParts,
+          },
           runtime,
         );
         if (!didEmitPhaseStart) {
@@ -346,7 +418,7 @@ export class ArpeggioRunner {
         this.deps.onPhaseComplete?.(
           step, 1, 'execute',
           result.content,
-          result.success ? 'done' : 'error',
+          getBatchResultStatus(result),
           result.error,
           phaseExecutionId,
           iteration,

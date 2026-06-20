@@ -9,6 +9,7 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - Build verification is mandatory. After completing implementation, run the build (type check) and verify there are no type errors
 - Running tests is mandatory. After build succeeds, always run tests and verify results
 - When introducing new contract strings (file names, config key names, etc.), define them as constants in one place
+- When the change touches a boundary (permissions, rejection paths, external execution, shared state, state transitions), briefly table the changed boundary, main state axes, expected behavior, and corresponding verification
 
 **Scope output contract (create at the start of implementation):**
 ```markdown
@@ -41,9 +42,7 @@ Small / Medium / Large
 ```
 
 **Pre-completion self-check (required):**
-
 Before running build and tests, audit your work against Policy with the following procedure.
-
 1. Open the Policy Source path with the Read tool and obtain the full content
 2. List every `##` section (do not cherry-pick)
 3. Match the REJECT criteria in each listed section against your implementation
@@ -57,3 +56,5 @@ Before running build and tests, audit your work against Policy with the followin
 - {Build execution results}
 ## Test results
 - {Test command executed and results}
+## Boundary change check
+- {If boundary changes exist: changed boundary, state axes, expected behavior, and corresponding verification. If none, write "Not applicable"}

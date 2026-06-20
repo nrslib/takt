@@ -293,7 +293,7 @@ describe('Pipeline Modes IT: --task + --workflow name (builtin)', () => {
   });
 
   it('should load and execute builtin default workflow by name', async () => {
-    // Flow: plan → write_tests → implement → ai-antipattern-review-1st → reviewers(arch-review + ai-antipattern-review + coding-review + supervise) → COMPLETE
+    // Flow: plan → write_tests → implement → ai-antipattern-review-1st → reviewers(arch-review + ai-antipattern-review + pure-review + coding-review + supervise) → COMPLETE
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
@@ -301,6 +301,7 @@ describe('Pipeline Modes IT: --task + --workflow name (builtin)', () => {
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-1ST:1]\n\nNo AI-specific issues' },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
+      { persona: 'pure-reviewer', status: 'done', content: '[PURE-REVIEW:1]\n\napproved' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
       { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll checks passed' },
     ]);

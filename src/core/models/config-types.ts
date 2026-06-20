@@ -18,6 +18,14 @@ export interface PersonaProviderEntry {
   providerOptions?: StepProviderOptions;
 }
 
+export type ProviderRoutingEntry = PersonaProviderEntry;
+
+export interface ProviderRoutingConfig {
+  personas?: Record<string, ProviderRoutingEntry>;
+  tags?: Record<string, ProviderRoutingEntry>;
+  steps?: Record<string, ProviderRoutingEntry>;
+}
+
 export interface TaktProviderEntry {
   provider: ProviderType;
   model?: string;
@@ -81,9 +89,9 @@ export interface LoggingConfig {
 export interface ObservabilityConfig {
   /** Master switch for observability initialization (default: false when undefined) */
   enabled?: boolean;
-  /** Reserved flag for monitor.json output in a later change */
+  /** Enable local monitor.json metric export for workflow runs */
   monitor?: boolean;
-  /** Reserved flag for shadow session log exporter in a later change */
+  /** Enable shadow session log export from OpenTelemetry spans */
   sessionLogExporter?: boolean;
   /** Reserved flag for phase-aware usage events in a later change */
   usageEventsPhase?: boolean;
@@ -204,6 +212,8 @@ export interface ProjectConfig {
   assistant?: AssistantConfig;
   /** Per-persona provider/model overrides */
   personaProviders?: Record<string, PersonaProviderEntry>;
+  /** Provider/model/provider_options routing by raw persona key, step tag, and step name */
+  providerRouting?: ProviderRoutingConfig;
   /** Branch name generation strategy */
   branchNameStrategy?: 'romaji' | 'ai';
   /** Minimal output mode */
@@ -294,8 +304,14 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** External Copilot CLI path (overridden by TAKT_COPILOT_CLI_PATH env var) */
   copilotCliPath?: string;
   /** @globalOnly */
+  /** External Kiro CLI path (overridden by TAKT_KIRO_CLI_PATH env var) */
+  kiroCliPath?: string;
+  /** @globalOnly */
   /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
   copilotGithubToken?: string;
+  /** @globalOnly */
+  /** Kiro API key (overridden by TAKT_KIRO_API_KEY env var) */
+  kiroApiKey?: string;
   /** @globalOnly */
   /** OpenCode API key for OpenCode SDK (overridden by TAKT_OPENCODE_API_KEY env var) */
   opencodeApiKey?: string;

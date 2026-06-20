@@ -1,5 +1,5 @@
 name: peer-review
-description: takt-default Phase 2. Six parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop.
+description: Six parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop.
 subworkflow:
   callable: true
   visibility: internal
@@ -35,22 +35,19 @@ loop_monitors:
           next: COMPLETE
 steps:
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
         knowledge:
           $param: arch_knowledge
         provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
+          extends: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -60,19 +57,14 @@ steps:
             - name: architect-review.md
               format: architecture-review
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         policy: review
         knowledge: security
         provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
+          extends: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -82,20 +74,15 @@ steps:
             - name: security-review.md
               format: security-review
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         policy:
           - review
           - qa
         provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
+          extends: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -105,6 +92,8 @@ steps:
             - name: qa-review.md
               format: qa-review
       - name: testing-review
+        tags:
+          - review
         edit: false
         persona: testing-reviewer
         policy:
@@ -114,14 +103,7 @@ steps:
           - unit-testing
           - e2e-testing
         provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
+          extends: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
@@ -130,41 +112,33 @@ steps:
           report:
             - name: testing-review.md
               format: testing-review
-      - name: requirements-review
+      - name: pure-review
+        tags:
+          - review
         edit: false
-        persona: requirements-reviewer
+        persona: pure-reviewer
         policy: review
         provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
+          extends: review-readonly
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction: review-requirements
+        instruction: review-pure
         output_contracts:
           report:
-            - name: requirements-review.md
-              format: requirements-review
+            - name: pure-review.md
+              format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
-        policy: review
+        policy:
+          - review
+          - coding
         pass_previous_response: false
         provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
+          extends: review-readonly
         instruction: review-coding
         rules:
           - condition: approved
@@ -174,19 +148,15 @@ steps:
             - name: coding-review.md
               format: coding-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
           - review
           - ai-antipattern
         provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
+          extends: review-web
         instruction: ai-antipattern-review
         rules:
           - condition: approved
@@ -201,6 +171,8 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -210,16 +182,7 @@ steps:
       - takt
       - architecture
     provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
+      extends: edit
     required_permission_mode: edit
     pass_previous_response: false
     rules:

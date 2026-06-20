@@ -114,4 +114,34 @@ describe('SdkOptionsBuilder.build() — settingSources', () => {
     const options = buildSdkOptions({ cwd: '/test', effort: 'high' });
     expect(options).toHaveProperty('effort', 'high');
   });
+
+  it('passes only run-local observability snapshot to SDK env', () => {
+    const originalTaktObservability = process.env.TAKT_OBSERVABILITY;
+    const originalOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+
+    try {
+      const options = buildSdkOptions({
+        cwd: '/test',
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+        },
+      });
+      expect(options.env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+      expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
+    } finally {
+      if (originalTaktObservability === undefined) {
+        delete process.env.TAKT_OBSERVABILITY;
+      } else {
+        process.env.TAKT_OBSERVABILITY = originalTaktObservability;
+      }
+      if (originalOtlpEndpoint === undefined) {
+        delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      } else {
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = originalOtlpEndpoint;
+      }
+    }
+  });
 });

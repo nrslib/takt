@@ -33,6 +33,7 @@ import {
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { resolveInspectToolsForProvider } from '../core/workflow/engine/engine-provider-options.js';
 
 describe('WorkflowEngine provider_options resolution', () => {
   let tmpDir: string;
@@ -236,6 +237,120 @@ describe('WorkflowEngine provider_options resolution', () => {
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.allowedTools).toBeUndefined();
+  });
+
+  it('should propagate opencode allowedTools when the resolved provider is opencode', async () => {
+    const step = makeStep('implement', {
+      provider: 'opencode',
+      model: 'opencode/zai-coding-plan/glm-5.1',
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'Edit'] },
+        opencode: { allowedTools: ['read', 'grep', 'bash'] },
+      } as never,
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-opencode-tools',
+      steps: [step],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.allowedTools).toEqual(['read', 'grep', 'bash']);
+  });
+
+  it('Given inspect tools and OpenCode provider, When resolving tools, Then it returns OpenCode casing', () => {
+    const result = resolveInspectToolsForProvider(['read', 'glob', 'grep'], 'opencode');
+
+    expect(result).toEqual(['read', 'glob', 'grep']);
+  });
+
+  it('Given an unsafe inspect tool and OpenCode provider, When resolving tools, Then it fails before provider-specific mapping', () => {
+    expect(() => resolveInspectToolsForProvider(['bash'], 'opencode'))
+      .toThrow('Unsupported team_leader.inspect_tools value "bash"');
+  });
+
+  it('Given inspect tools and Claude-compatible provider, When resolving tools, Then it returns Claude tool names', () => {
+    const result = resolveInspectToolsForProvider(['read', 'glob', 'grep'], 'claude');
+
+    expect(result).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  it('Given inspect tools and mock provider, When resolving tools, Then it keeps Claude-compatible names for tests', () => {
+    const result = resolveInspectToolsForProvider(['read', 'glob', 'grep'], 'mock');
+
+    expect(result).toEqual(['Read', 'Glob', 'Grep']);
+  });
+
+  it('Given inspect tools and provider without allowedTools support, When resolving tools, Then it fails clearly', () => {
+    expect(() => resolveInspectToolsForProvider(['read', 'glob', 'grep'], 'codex'))
+      .toThrow('Provider "codex" does not support team_leader.inspect_tools');
+  });
+
+  it('Given empty inspect tools and provider without allowedTools support, When resolving tools, Then it treats them as unset', () => {
+    const result = resolveInspectToolsForProvider([], 'codex');
+
+    expect(result).toBeUndefined();
+  });
+
+  it('should remove opencode edit permission aliases from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
+    const step = makeStep('review', {
+      provider: 'opencode',
+      model: 'opencode/zai-coding-plan/glm-5.1',
+      providerOptions: {
+        opencode: {
+          allowedTools: [
+            'read',
+            'Edit',
+            'edit',
+            'Write',
+            ' write ',
+            'apply_patch',
+            'patch',
+            'bash',
+          ],
+        },
+      } as never,
+      outputContracts: [{ name: 'review.md', format: 'markdown' }],
+      edit: false,
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+
+    const config: WorkflowConfig = {
+      name: 'provider-options-opencode-output-contract-tools',
+      steps: [step],
+      initialStep: 'review',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.allowedTools).toEqual(['read', 'bash']);
   });
 
   it('should keep claude allowedTools when the provider is mock', async () => {

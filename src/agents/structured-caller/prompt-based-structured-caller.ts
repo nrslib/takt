@@ -7,12 +7,13 @@ import {
 import { buildJudgePrompt, detectJudgeIndex, isValidRuleIndex, buildJudgeConditions } from '../judge-utils.js';
 import { runAgent } from '../runner.js';
 import {
+  createJudgeStageRecorder,
   runTagJudgeStage,
   type EvaluateConditionOptions,
   type JudgeStatusOptions,
   type JudgeStatusResult,
 } from '../judge-status-usecase.js';
-import type { DecomposeTaskOptions, MorePartsResponse } from '../decompose-task-usecase.js';
+import type { DecomposeTaskOptions, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
 import { TEAM_LEADER_MAX_TURNS } from '../decompose-task-usecase.js';
 import type { StructuredCaller } from './contracts.js';
 import {
@@ -55,6 +56,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       permissionMode: 'readonly',
       language: options.language,
       onStream: options.onStream,
+      childProcessEnv: options.childProcessEnv,
       onPromptResolved: options.onStructuredPromptResolved,
     });
 
@@ -64,6 +66,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       status: structuredResponse.status === 'done' ? 'done' : 'error',
       instruction: structuredInstruction,
       response: structuredResponse.content,
+      providerUsage: structuredResponse.providerUsage,
     });
 
     let structuredParseError: string | undefined;
@@ -89,6 +92,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         resolvedModel: options.resolvedModel,
         language: options.language,
         onStream: options.onStream,
+        childProcessEnv: options.childProcessEnv,
         stepName: options.stepName,
       },
       options.onJudgeStage,
@@ -100,28 +104,20 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     const conditions = buildJudgeConditions(rules, interactiveEnabled);
 
     if (conditions.length > 0) {
-      let stage3Status: 'done' | 'error' | 'skipped' = 'skipped';
-      let stage3Instruction = '';
-      let stage3Response = '';
+      const stage3 = createJudgeStageRecorder();
       const fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
         cwd: options.cwd,
         provider: options.provider,
         resolvedProvider: options.resolvedProvider,
         resolvedModel: options.resolvedModel,
-        onJudgeResponse: (entry) => {
-          stage3Status = entry.status;
-          stage3Instruction = entry.instruction;
-          stage3Response = entry.response;
-        },
+        childProcessEnv: options.childProcessEnv,
+        onJudgeResponse: stage3.capture,
       });
 
-      options.onJudgeStage?.({
+      options.onJudgeStage?.(stage3.stage({
         stage: 3,
         method: 'ai_judge',
-        status: stage3Status,
-        instruction: stage3Instruction,
-        response: stage3Response,
-      });
+      }));
 
       if (isValidRuleIndex(fallbackIndex, rules, interactiveEnabled)) {
         return { ruleIndex: fallbackIndex, method: 'ai_judge' };
@@ -147,12 +143,14 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
       resolvedModel: options.resolvedModel,
       ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
       permissionMode: 'readonly',
+      childProcessEnv: options.childProcessEnv,
     });
 
     options.onJudgeResponse?.({
       instruction: prompt,
       status: response.status === 'done' ? 'done' : 'error',
       response: response.content,
+      providerUsage: response.providerUsage,
     });
 
     if (response.status !== 'done') {
@@ -164,10 +162,15 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxParts: number,
+    maxTotalParts: number,
     options: DecomposeTaskOptions,
   ): Promise<PartDefinition[]> {
-    const prompt = buildPromptBasedDecomposePrompt(instruction, maxParts, options.language);
+    const prompt = buildPromptBasedDecomposePrompt(
+      instruction,
+      maxTotalParts,
+      options.language,
+      options.inspectTools,
+    );
 
     return withRetry(async () => {
       const response = await runAgent(options.persona, prompt, {
@@ -178,11 +181,12 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         provider: options.provider,
         resolvedModel: options.resolvedModel,
         resolvedProvider: options.resolvedProvider,
-        allowedTools: [],
+        allowedTools: options.inspectTools ?? [],
         permissionMode: 'readonly',
         ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
+        childProcessEnv: options.childProcessEnv,
         onPromptResolved: options.onPromptResolved,
       });
 
@@ -191,7 +195,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         throw new Error(`Team leader failed: ${detail}`);
       }
 
-      return parseParts(response.content, maxParts);
+      return parseParts(response.content, maxTotalParts);
     });
   }
 
@@ -200,7 +204,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
     maxAdditionalParts: number,
-    options: DecomposeTaskOptions,
+    options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     const prompt = buildPromptBasedMorePartsPrompt(
       originalInstruction,
@@ -224,6 +228,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
+        childProcessEnv: options.childProcessEnv,
       });
 
       if (response.status !== 'done') {

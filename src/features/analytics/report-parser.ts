@@ -6,7 +6,8 @@
  * contains a finding_id column.
  */
 
-import type { FindingStatus, FindingSeverity, FindingDecision, FixActionEvent, FixActionType } from './events.js';
+import type { FindingLedger, FindingLedgerEntry } from '../../core/models/finding-types.js';
+import type { FindingStatus, FindingSeverity, FindingDecision, FixActionEvent, FixActionType, ReviewFindingEvent } from './events.js';
 import { writeAnalyticsEvent } from './writer.js';
 
 export interface ParsedFinding {
@@ -146,15 +147,56 @@ export function inferSeverity(findingId: string): FindingSeverity {
   return 'warning';
 }
 
-const FINDING_ID_PATTERN = /\b[A-Z]{2,}-(?:NEW-)?[\w-]+\b/g;
+function inferLedgerSeverity(finding: FindingLedgerEntry): FindingSeverity {
+  return finding.severity === 'critical' || finding.severity === 'high' ? 'error' : 'warning';
+}
+
+function toFindingStatus(finding: FindingLedgerEntry): FindingStatus {
+  return finding.lifecycle;
+}
+
+const FINDING_CONTRACT_RULE_ID = 'finding-contract';
+
+export function buildReviewFindingEventsFromLedger(
+  ledger: FindingLedger,
+  iteration: number,
+  runId: string,
+  timestamp: Date,
+): ReviewFindingEvent[] {
+  const decision: FindingDecision = ledger.findings.some((finding) => finding.status === 'open')
+    || ledger.conflicts.some((conflict) => conflict.status === 'active')
+    ? 'reject'
+    : 'approve';
+
+  return ledger.findings.map((finding) => {
+    const { file, line } = parseLocation(finding.location ?? '');
+    return {
+      type: 'review_finding',
+      findingId: finding.id,
+      status: toFindingStatus(finding),
+      ruleId: FINDING_CONTRACT_RULE_ID,
+      severity: inferLedgerSeverity(finding),
+      decision,
+      file,
+      line,
+      iteration,
+      runId,
+      timestamp: timestamp.toISOString(),
+    };
+  });
+}
+
+const FINDING_ID_PATTERN = /\b(?:F-\d{4}|[A-Z]{2,}-(?:NEW-)?[\w-]+)\b/g;
+const ENGINE_FINDING_ID_PATTERN = /^F-\d{4}$/;
 
 export function emitFixActionEvents(
   responseContent: string,
   iteration: number,
   runId: string,
   timestamp: Date,
+  findingContractFindingIds?: ReadonlySet<string>,
 ): void {
-  emitActionEvents(responseContent, 'fixed', iteration, runId, timestamp);
+  emitActionEvents(responseContent, 'fixed', iteration, runId, timestamp, findingContractFindingIds);
 }
 
 export function emitRebuttalEvents(
@@ -162,8 +204,9 @@ export function emitRebuttalEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  findingContractFindingIds?: ReadonlySet<string>,
 ): void {
-  emitActionEvents(responseContent, 'rebutted', iteration, runId, timestamp);
+  emitActionEvents(responseContent, 'rebutted', iteration, runId, timestamp, findingContractFindingIds);
 }
 
 function emitActionEvents(
@@ -172,11 +215,17 @@ function emitActionEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  findingContractFindingIds?: ReadonlySet<string>,
 ): void {
   const matches = responseContent.match(FINDING_ID_PATTERN);
   if (!matches) return;
 
-  const uniqueIds = [...new Set(matches)];
+  const uniqueIds = [...new Set(matches)].filter((findingId) => {
+    if (!ENGINE_FINDING_ID_PATTERN.test(findingId)) {
+      return true;
+    }
+    return findingContractFindingIds?.has(findingId) === true;
+  });
   for (const findingId of uniqueIds) {
     const event: FixActionEvent = {
       type: 'fix_action',

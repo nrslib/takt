@@ -238,7 +238,7 @@ export class StreamDisplay {
     } else {
       console.log(chalk.red('✗ Failed'));
       if (error) {
-        console.log(chalk.red(`  ${error}`));
+        console.log(chalk.red(`  ${stripAnsi(error)}`));
       }
     }
   }
@@ -279,6 +279,7 @@ export class StreamDisplay {
         case 'result':
           this.showResult(event.data.success, event.data.error);
           break;
+        case 'permission_asked':
         case 'assistant_error':
         case 'rate_limit':
         case 'error':

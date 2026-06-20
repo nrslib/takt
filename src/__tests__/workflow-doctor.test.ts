@@ -148,6 +148,46 @@ steps:
     expect(messages).toContain('step "step1" team_leader part_persona references missing resource "missing-worker"');
   });
 
+  it('accepts team_leader inspect_tools through workflow doctor inspection', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/team-leader-inspect-tools.yaml', `name: team-leader-inspect-tools
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    team_leader:
+      inspect_tools: [read, glob, grep]
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    expect(inspectWorkflowFile(filePath, projectDir).diagnostics).toEqual([]);
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('team-leader-inspect-tools.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('reports invalid team_leader inspect_tools from workflow doctor output', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/invalid-team-leader-inspect-tools.yaml', `name: invalid-team-leader-inspect-tools
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    team_leader:
+      inspect_tools: [read, bash]
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('invalid-team-leader-inspect-tools.yaml'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('team_leader.inspect_tools'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bash'));
+  });
+
   it('reports missing loop monitor judge references', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-loop-monitor-refs.yaml', `name: missing-loop-monitor-refs
 max_steps: 10

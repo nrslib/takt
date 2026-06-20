@@ -65,6 +65,9 @@ export type {
   WorkflowResumePointEntry,
   WorkflowResumePoint,
   StepProviderOptions,
+  FindingContractConfig,
+  FindingLedger,
+  FindingsRuleContext,
   AgentWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
@@ -93,6 +96,8 @@ export type {
 // Configuration types (global and project)
 export type {
   PersonaProviderEntry,
+  ProviderRoutingConfig,
+  ProviderRoutingEntry,
   CustomAgentConfig,
   LoggingConfig,
   ObservabilityConfig,

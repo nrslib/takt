@@ -31,6 +31,9 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
   const partPersona = step.teamLeader.partPersona ?? step.persona;
   const partPersonaPath = step.teamLeader.partPersonaPath ?? step.personaPath;
   const partPersonaDisplayName = partPersona ?? step.personaDisplayName ?? `${step.name}:${part.id}`;
+  const providerRoutingPersonaKey = step.teamLeader.partPersona
+    ? step.teamLeader.partPersona
+    : step.providerRoutingPersonaKey;
 
   return {
     name: `${step.name}.${part.id}`,
@@ -38,15 +41,37 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
     persona: partPersona,
     personaPath: partPersonaPath,
     personaDisplayName: partPersonaDisplayName,
+    providerRoutingPersonaKey,
+    tags: step.teamLeader.partTags ?? step.tags,
     session: 'refresh',
     providerOptions: step.providerOptions,
+    ...('directProviderOptions' in step || 'workflowProviderOptions' in step
+      ? { directProviderOptions: step.directProviderOptions }
+      : {}),
+    ...('workflowProviderOptions' in step ? { workflowProviderOptions: step.workflowProviderOptions } : {}),
     mcpServers: step.mcpServers,
     provider: step.provider,
+    providerSpecified: step.providerSpecified,
     model: step.model,
+    modelSpecified: step.modelSpecified,
     requiredPermissionMode: step.teamLeader.partPermissionMode ?? step.requiredPermissionMode,
     edit: step.teamLeader.partEdit ?? step.edit,
     allowGitCommit: step.allowGitCommit,
     instruction: part.instruction,
     passPreviousResponse: false,
+  };
+}
+
+export function createTeamLeaderPlanningStep(step: WorkflowStep): WorkflowStep {
+  if (!step.teamLeader) {
+    throw new Error(`Step "${step.name}" has no teamLeader configuration`);
+  }
+
+  return {
+    ...step,
+    persona: step.teamLeader.persona ?? step.persona,
+    personaPath: step.teamLeader.personaPath ?? step.personaPath,
+    personaDisplayName: step.teamLeader.personaDisplayName ?? step.personaDisplayName,
+    providerRoutingPersonaKey: step.teamLeader.providerRoutingPersonaKey ?? step.providerRoutingPersonaKey,
   };
 }

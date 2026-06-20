@@ -406,6 +406,165 @@ describe('command quality gates', () => {
     }
   });
 
+  it('Given run-local child process env and unrelated secrets, When command gate runs, Then excludes credential-bearing OTEL env', async () => {
+    const projectRoot = createTempDir();
+    const envKeys = [
+      'TAKT_OBSERVABILITY',
+      'TAKT_OBSERVABILITY_ENABLED',
+      'TAKT_OBSERVABILITY_MONITOR',
+      'TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER',
+      'TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE',
+      'OTEL_EXPORTER_OTLP_ENDPOINT',
+      'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+      'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+      'OTEL_EXPORTER_OTLP_HEADERS',
+      'OTEL_EXPORTER_OTLP_TRACES_TIMEOUT',
+      'OTEL_EXPORTER_OTLP_METRICS_COMPRESSION',
+      'OTEL_EXPORTER_OTLP_CERTIFICATE',
+      'OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE',
+      'OTEL_EXPORTER_OTLP_CLIENT_KEY',
+      'TAKT_COMMAND_GATE_SECRET_TOKEN',
+    ] as const;
+    const originalEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.TAKT_OBSERVABILITY_ENABLED = 'true';
+    process.env.TAKT_OBSERVABILITY_MONITOR = 'true';
+    process.env.TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER = 'true';
+    process.env.TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE = 'true';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://otel.example:4318';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://otel.example:4318/v1/traces';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'http://otel.example:4318/v1/metrics';
+    process.env.OTEL_EXPORTER_OTLP_HEADERS = 'authorization=Bearer%20ambient';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = '3000';
+    process.env.OTEL_EXPORTER_OTLP_METRICS_COMPRESSION = 'none';
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = '/ambient/root.pem';
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE = '/ambient/client.pem';
+    process.env.OTEL_EXPORTER_OTLP_CLIENT_KEY = '/ambient/client.key';
+    process.env.TAKT_COMMAND_GATE_SECRET_TOKEN = 'secret-from-env';
+    writeFileSync(
+      join(projectRoot, 'env-check.cjs'),
+      [
+        'const keys = [',
+        '  "TAKT_OBSERVABILITY",',
+        '  "TAKT_OBSERVABILITY_ENABLED",',
+        '  "TAKT_OBSERVABILITY_MONITOR",',
+        '  "TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER",',
+        '  "TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE",',
+        '  "OTEL_EXPORTER_OTLP_ENDPOINT",',
+        '  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",',
+        '  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",',
+        '  "OTEL_EXPORTER_OTLP_HEADERS",',
+        '  "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",',
+        '  "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION",',
+        '  "OTEL_EXPORTER_OTLP_CERTIFICATE",',
+        '  "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",',
+        '  "OTEL_EXPORTER_OTLP_CLIENT_KEY",',
+        '  "TAKT_COMMAND_GATE_SECRET_TOKEN",',
+        '];',
+        'process.stdout.write(JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]))));',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    try {
+      const result = await runCommandQualityGate({
+        gate: {
+          type: 'command',
+          name: 'env-check',
+          command: 'node ./env-check.cjs',
+        },
+        projectRoot,
+        childProcessEnv: {
+          TAKT_OBSERVABILITY: '{"enabled":true,"monitor":true,"session_log_exporter":true,"usage_events_phase":true}',
+          OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-otel.example:4318',
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://snapshot-otel.example:4318/v1/traces',
+          OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://snapshot-otel.example:4318/v1/metrics',
+          OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer%20snapshot',
+          OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+          OTEL_EXPORTER_OTLP_METRICS_COMPRESSION: 'gzip',
+          OTEL_EXPORTER_OTLP_CERTIFICATE: '/snapshot/root.pem',
+          OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: '/snapshot/client.pem',
+          OTEL_EXPORTER_OTLP_CLIENT_KEY: '/snapshot/client.key',
+          TAKT_COMMAND_GATE_SECRET_TOKEN: 'secret-from-overlay',
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error('Command gate unexpectedly failed');
+      }
+      expect(JSON.parse(result.stdout)).toEqual({
+        TAKT_OBSERVABILITY: '{"enabled":true,"monitor":true,"session_log_exporter":true,"usage_events_phase":true}',
+        TAKT_OBSERVABILITY_ENABLED: null,
+        TAKT_OBSERVABILITY_MONITOR: null,
+        TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER: null,
+        TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE: null,
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-otel.example:4318',
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://snapshot-otel.example:4318/v1/traces',
+        OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://snapshot-otel.example:4318/v1/metrics',
+        OTEL_EXPORTER_OTLP_HEADERS: null,
+        OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+        OTEL_EXPORTER_OTLP_METRICS_COMPRESSION: 'gzip',
+        OTEL_EXPORTER_OTLP_CERTIFICATE: '/snapshot/root.pem',
+        OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE: null,
+        OTEL_EXPORTER_OTLP_CLIENT_KEY: null,
+        TAKT_COMMAND_GATE_SECRET_TOKEN: null,
+      });
+    } finally {
+      for (const [key, value] of originalEnv) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
+  it('Given unsafe OTLP endpoints in child process env, When command gate runs, Then does not expose them', async () => {
+    const projectRoot = createTempDir();
+    writeFileSync(
+      join(projectRoot, 'endpoint-check.cjs'),
+      [
+        'const keys = [',
+        '  "OTEL_EXPORTER_OTLP_ENDPOINT",',
+        '  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",',
+        '  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",',
+        '  "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",',
+        '];',
+        'process.stdout.write(JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null]))));',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = await runCommandQualityGate({
+      gate: {
+        type: 'command',
+        name: 'endpoint-check',
+        command: 'node ./endpoint-check.cjs',
+      },
+      projectRoot,
+      childProcessEnv: {
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.test/v1?token=top-secret',
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'https://user:pass@collector.example.test/v1/traces',
+        OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'https://collector.example.test/v1/metrics#top-secret',
+        OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error('Command gate unexpectedly failed');
+    }
+    expect(JSON.parse(result.stdout)).toEqual({
+      OTEL_EXPORTER_OTLP_ENDPOINT: null,
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: null,
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: null,
+      OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: '12000',
+    });
+  });
+
   it('should run command gates in definition order and stop after the first failure', async () => {
     const projectRoot = createTempDir();
     const logPath = join(projectRoot, 'gate.log');

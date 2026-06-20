@@ -56,7 +56,8 @@ report_formats:
 steps:
   - name: step-name
     persona: coder                   # Persona key (references personas map)
-    persona_name: coder              # Display name (optional)
+    persona_name: coder              # Display name (optional, does not affect provider_routing.personas)
+    tags: [implementation, edit]     # Provider routing tags (optional)
     policy: coding                   # Policy key (single or array)
     knowledge: architecture          # Knowledge key (single or array)
     instruction: implement           # Instruction key (references instructions map)
@@ -92,6 +93,8 @@ steps:
 ```
 
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
+
+`persona_name` is only a display name. `provider_routing.personas` in config matches the raw `persona` key, while `provider_routing.tags` matches the optional `tags` array in the order written on the step. Later tags override earlier tags for the same provider/model/provider_options leaf.
 
 String `quality_gates` remain AI completion directives and are injected into agent step prompts. `type: command` gates run inside the worktree after an agent step completes and pass only when the command exits with code `0`. Workflow YAML command gates require `workflow_command_gates.custom_scripts: true` in config. On failure, TAKT feeds command metadata, cwd, exit code or timeout/output-limit details, the output log path, and bounded sanitized stdout/stderr back into the same agent step. Raw stdout and stderr are also written to the local output log. `system` and `workflow_call` steps do not accept `quality_gates`.
 
@@ -186,6 +189,18 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
 - Parallel sub-steps do not support `promotion`
 
+### Finding Contract parallel retry failure routing
+
+When a workflow defines `finding_contract`, each parallel parent must declare a deterministic rule for a Finding Manager output that stays semantically invalid after retry. This rule prevents invalid manager output from aborting the workflow or updating the ledger.
+
+Accepted rules, in selection order:
+
+1. `return: need_replan` (recommended)
+2. `return: needs_fix`
+3. Non-AI `next: fix`
+
+`ai("...")` rules that point to `fix` are not selected for this failure path. If none of the accepted rules exists, workflow validation fails before execution.
+
 ### Arpeggio Step (data-driven batch)
 
 Iterate over a data source (CSV, JSON, etc.) and apply the same step template to each row with bounded concurrency:
@@ -219,8 +234,11 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
 ```yaml
   - name: implement
     team_leader:
-      max_parts: 3
+      max_concurrency: 2
+      max_total_parts: 8
       timeout_ms: 600000
+      inspect_tools: [read, glob, grep]
+      part_tags: [coding]
       part_persona: coder
       part_edit: true
       part_permission_mode: edit
@@ -233,6 +251,10 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
 ```
 
 Useful for breaking one large task into independent units that can run in parallel without you having to know the unit boundaries up-front.
+
+`max_concurrency` controls how many parts run at the same time. `max_total_parts` controls the total number of parts the leader may plan across the workflow step, up to 20. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`. `part_tags` sets provider routing tags on generated part steps. When omitted, parts inherit the parent step's `tags`. Empty and whitespace-only tags are invalid. `part_tags` is resolved through normal `provider_routing.tags`, so tag routing takes priority over persona routing from `part_persona`.
+
+`inspect_tools` allows only read-only inspection tools (`read`, `glob`, `grep`) during the parent Team Leader task decomposition phase. Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. Inspection tools are supported by providers that expose `allowedTools`, including Claude-family providers and OpenCode. Providers that do not support Team Leader inspection tools fail at runtime with a clear error.
 
 ### Workflow Call Step (subworkflow)
 
@@ -309,6 +331,8 @@ Promotion is not supported on parallel sub-steps.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `persona` | - | Persona key (references section map) or file path |
+| `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
+| `tags` | - | Ordered provider routing tags matched against `provider_routing.tags` in config |
 | `policy` | - | Policy key or array of keys |
 | `knowledge` | - | Knowledge key or array of keys |
 | `instruction` | - | Instruction key (references section map) |
@@ -316,10 +340,12 @@ Promotion is not supported on parallel sub-steps.
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` requires Opus 4.7) |
+| `provider_options.opencode.allowed_tools` | - | OpenCode tool allowlist. Tool names are lowercase, for example `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` |
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
-| `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `codex`, `opencode`, `cursor`, or `copilot`) |
+| `provider_options.kiro.agent` | - | Kiro CLI custom agent name passed as `kiro-cli chat --agent`. Steps without it use the Kiro CLI default agent |
+| `provider` | - | Override provider for this step (`claude`, `claude-sdk`, `claude-terminal`, `codex`, `opencode`, `cursor`, `copilot`, `kiro`, or `mock`) |
 | `model` | - | Override model for this step |
 | `promotion` | - | Per-execution provider/model/options escalation (see [Step-level Provider Promotion](#step-level-provider-promotion)) |
 | `mcp_servers` | - | Per-step MCP server configuration (stdio / HTTP / SSE) |
@@ -342,7 +368,7 @@ interactive_mode: assistant
 
 ### `workflow_config.provider_options`
 
-Workflow-wide provider options. Merged with step / persona / project / global options. Step-level options take priority for the same leaf.
+Workflow-wide provider options. For each provider option leaf, env- or CLI-resolved config values win first; otherwise priority is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
 
 ```yaml
 workflow_config:
@@ -352,6 +378,34 @@ workflow_config:
     claude:
       sandbox:
         allow_unsandboxed_commands: true
+```
+
+`provider_options` can reference a shared YAML preset by name. Names are resolved first-match from `.takt/provider-options`, `~/.takt/provider-options`, then `builtins/{lang}/provider-options`. For repertoire packages, package-local `provider-options` is checked first, and `@owner/repo/name` resolves a preset from that package. The referenced file is the base, and inline values override matching leaves.
+
+`provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
+
+```yaml
+workflow_config:
+  provider_options:
+    extends: review-readonly
+
+steps:
+  - name: implement
+    provider_options:
+      extends: edit
+      opencode:
+        allowed_tools: [read, grep, bash]
+```
+
+Relative file paths from the workflow file are still supported for workflow-local shared files.
+
+Example shared file:
+
+```yaml
+claude:
+  allowed_tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch]
+opencode:
+  allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
 
 ### `workflow_config.runtime`

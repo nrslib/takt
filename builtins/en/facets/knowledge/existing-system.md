@@ -40,9 +40,9 @@ In maintenance work, general design improvements and framework style are not alw
 
 | Situation | Judgment |
 |-----------|----------|
-| Component extraction would look cleaner but is unnecessary for this fix | Do not change |
+| Component extraction would look cleaner but is not causally related to the request | Do not change |
 | Renaming or relocating Props types only to match common style | Do not change |
-| The existing structure cannot satisfy the request | Change the minimum necessary scope |
+| The existing structure cannot satisfy the request | Change within the causally related scope |
 | The existing structure is the cause of the bug | Change it with reason and impact scope documented |
 
 ## Meaning of Comments and Tests

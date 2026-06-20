@@ -1,5 +1,5 @@
 name: default-peer-review
-description: default 系の Phase 2。並列レビュアー（arch + ai-antipattern-2nd + coding-review + supervise） ⇄ 修正 ループ。
+description: default 系の Phase 2。並列レビュアー（arch + ai-antipattern-2nd + pure-review + coding-review + supervise） ⇄ 修正 ループ。
 subworkflow:
   callable: true
   visibility: internal
@@ -28,8 +28,12 @@ loop_monitors:
           next: ABORT
 steps:
   - name: reviewers
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -51,6 +55,8 @@ steps:
             - name: architect-review.md
               format: architecture-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -72,10 +78,37 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
+      - name: pure-review
+        tags:
+          - review
+        edit: false
+        persona: pure-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-pure
+        output_contracts:
+          report:
+            - name: pure-review.md
+              format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
-        policy: review
+        policy:
+          - review
+          - coding
         pass_previous_response: false
         provider_options:
           claude:
@@ -95,6 +128,8 @@ steps:
             - name: coding-review.md
               format: coding-review
       - name: supervise
+        tags:
+          - review
         edit: false
         persona: supervisor
         policy: review
@@ -119,11 +154,13 @@ steps:
               format: summary
               use_judge: false
     rules:
-      - condition: all("approved", "AI特有の問題なし", "approved", "すべて問題なし")
+      - condition: all("approved", "AI特有の問題なし", "approved", "approved", "すべて問題なし")
         next: COMPLETE
-      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "要求未達成、テスト失敗、ビルドエラー")
+      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix", "要求未達成、テスト失敗、ビルドエラー")
         next: fix
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:

@@ -1,4 +1,4 @@
-Use reports in the Report Directory and fix reviewer findings with the minimum diff that preserves existing contracts.
+Use reports in the Report Directory and fix reviewer findings within the causally related scope while preserving existing contracts.
 
 **Fix principles:**
 - When a finding includes a "suggested fix", follow it rather than inventing your own workaround

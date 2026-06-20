@@ -96,7 +96,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -144,7 +144,7 @@ describe('StepExecutor', () => {
         systemPrompt: 'system prompt',
         userInstruction: expect.stringContaining('Return exactly one fenced JSON block'),
       },
-      undefined,
+      'implement:3:1:1',
       3,
     );
     expect(onPhaseStart).not.toHaveBeenCalledWith(
@@ -177,7 +177,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: undefined, model: undefined }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -243,7 +243,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -316,7 +316,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -396,7 +396,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -471,7 +471,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'sonnet' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -545,7 +545,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'sonnet' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -622,7 +622,7 @@ describe('StepExecutor', () => {
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
-        buildPhaseRunnerContext: vi.fn(),
+        buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'claude', model: 'sonnet' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,

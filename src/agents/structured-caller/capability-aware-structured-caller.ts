@@ -10,6 +10,7 @@ import type {
 } from '../judge-status-usecase.js';
 import type {
   DecomposeTaskOptions,
+  MorePartsOptions,
   MorePartsResponse,
 } from '../decompose-task-usecase.js';
 import { providerSupportsStructuredOutput } from '../../infra/providers/provider-capabilities.js';
@@ -59,15 +60,15 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
 
   async decomposeTask(
     instruction: string,
-    maxParts: number,
+    maxTotalParts: number,
     options: DecomposeTaskOptions,
   ): Promise<PartDefinition[]> {
     const provider = resolveProvider(options.provider, options.resolvedProvider);
     if (shouldUsePromptBased(provider)) {
-      return this.promptBased.decomposeTask(instruction, maxParts, options);
+      return this.promptBased.decomposeTask(instruction, maxTotalParts, options);
     }
 
-    return super.decomposeTask(instruction, maxParts, options);
+    return super.decomposeTask(instruction, maxTotalParts, options);
   }
 
   async requestMoreParts(
@@ -75,7 +76,7 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
     allResults: Array<{ id: string; title: string; status: string; content: string }>,
     existingIds: string[],
     maxAdditionalParts: number,
-    options: DecomposeTaskOptions,
+    options: MorePartsOptions,
   ): Promise<MorePartsResponse> {
     const provider = resolveProvider(options.provider, options.resolvedProvider);
     if (shouldUsePromptBased(provider)) {

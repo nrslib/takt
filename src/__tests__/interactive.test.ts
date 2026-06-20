@@ -479,7 +479,11 @@ describe('interactiveMode', () => {
       timestamp: new Date(),
     }));
     mockSetup.mockReturnValue({ call: mockCall });
-    mockGetProvider.mockReturnValue({ setup: mockSetup, _call: mockCall } as unknown as ReturnType<typeof getProvider>);
+    mockGetProvider.mockReturnValue({
+      getRuntimeInstructions: vi.fn(() => null),
+      setup: mockSetup,
+      _call: mockCall,
+    } as unknown as ReturnType<typeof getProvider>);
 
     const runSessionContext = {
       task: 'Previous run task',
@@ -514,7 +518,11 @@ describe('interactiveMode', () => {
       timestamp: new Date(),
     }));
     mockSetup.mockReturnValue({ call: mockCall });
-    mockGetProvider.mockReturnValue({ setup: mockSetup, _call: mockCall } as unknown as ReturnType<typeof getProvider>);
+    mockGetProvider.mockReturnValue({
+      getRuntimeInstructions: vi.fn(() => null),
+      setup: mockSetup,
+      _call: mockCall,
+    } as unknown as ReturnType<typeof getProvider>);
 
     // When
     await interactiveMode('/project');
@@ -528,6 +536,7 @@ describe('interactiveMode', () => {
   it('should not start provider call from initial input alone', async () => {
     const mockCall = vi.fn();
     mockGetProvider.mockReturnValue({
+      getRuntimeInstructions: vi.fn(() => null),
       setup: () => ({
         call: mockCall,
       }),

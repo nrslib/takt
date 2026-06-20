@@ -1,0 +1,25 @@
+[
+  {
+    "status": "done",
+    "content": "decompose with inspection",
+    "structured_output": {
+      "parts": [
+        {
+          "id": "inspect-1",
+          "title": "Inspect child inheritance",
+          "instruction": "Complete the child task without explicit part allowed tools"
+        }
+      ]
+    }
+  },
+  {
+    "persona": "test-team-leader-inspect",
+    "status": "done",
+    "content": "no more parts",
+    "structured_output": {
+      "done": true,
+      "reasoning": "The single child part is enough",
+      "parts": []
+    }
+  }
+]

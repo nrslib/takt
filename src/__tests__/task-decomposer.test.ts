@@ -39,7 +39,7 @@ describe('parseParts', () => {
     const content = '```json\n[{"id":"a","title":"A","instruction":"Do A"},{"id":"b","title":"B","instruction":"Do B"}]\n```';
 
     expect(() => parseParts(content, 1)).toThrow(
-      'Team leader produced too many parts: 2 > 1',
+      'Team leader produced too many total parts: 2 > max_total_parts 1',
     );
   });
 

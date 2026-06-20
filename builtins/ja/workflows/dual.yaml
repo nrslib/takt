@@ -35,6 +35,8 @@ loop_monitors:
           next: supervise
 steps:
   - name: plan
+    tags:
+      - plan
     edit: false
     persona: planner
     policy:
@@ -68,6 +70,8 @@ steps:
         - name: plan.md
           format: plan-frontend
   - name: write_tests
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -109,6 +113,8 @@ steps:
         - name: test-report.md
           format: test-report
   - name: implement
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -172,6 +178,8 @@ steps:
       - デザイン参照がある場合、主要画面のレイアウト・文言・色・間隔を要素単位で照合したこと
       - デザイン参照がある場合、プラットフォーム制約による差分は決定ログに明記したこと
   - name: ai-antipattern-review-1st
+    tags:
+      - review
     edit: false
     persona: ai-antipattern-reviewer
     policy:
@@ -196,6 +204,8 @@ steps:
         - name: ai-antipattern-review.md
           format: ai-antipattern-review
   - name: ai-antipattern-fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -232,6 +242,8 @@ steps:
       - condition: 修正を進行できない
         next: ai-antipattern-no-fix
   - name: ai-antipattern-no-fix
+    tags:
+      - review
     edit: false
     persona: architecture-reviewer
     policy: review
@@ -248,8 +260,12 @@ steps:
         next: reviewers_1
     instruction: arbitrate
   - name: reviewers_1
+    tags:
+      - review
     parallel:
       - name: arch-review
+        tags:
+          - review
         edit: false
         persona: architecture-reviewer
         policy: review
@@ -275,6 +291,8 @@ steps:
             - name: architect-review.md
               format: architecture-review
       - name: frontend-review
+        tags:
+          - review
         edit: false
         persona: frontend-reviewer
         policy:
@@ -301,6 +319,8 @@ steps:
             - name: frontend-review.md
               format: frontend-review
       - name: testing-review
+        tags:
+          - review
         edit: false
         persona: testing-reviewer
         policy:
@@ -327,6 +347,8 @@ steps:
             - name: testing-review.md
               format: testing-review
       - name: ai-antipattern-review-2nd
+        tags:
+          - review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
@@ -354,8 +376,12 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: reviewers_2
+    tags:
+      - review
     parallel:
       - name: security-review
+        tags:
+          - review
         edit: false
         persona: security-reviewer
         policy: review
@@ -378,6 +404,8 @@ steps:
             - name: security-review.md
               format: security-review
       - name: qa-review
+        tags:
+          - review
         edit: false
         persona: qa-reviewer
         policy:
@@ -400,9 +428,11 @@ steps:
           report:
             - name: qa-review.md
               format: qa-review
-      - name: requirements-review
+      - name: pure-review
+        tags:
+          - review
         edit: false
-        persona: requirements-reviewer
+        persona: pure-reviewer
         policy: review
         provider_options:
           claude:
@@ -416,15 +446,19 @@ steps:
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction: review-requirements
+        instruction: review-pure
         output_contracts:
           report:
-            - name: requirements-review.md
-              format: requirements-review
+            - name: pure-review.md
+              format: pure-review
       - name: coding-review
+        tags:
+          - review
         edit: false
         persona: coding-reviewer
-        policy: review
+        policy:
+          - review
+          - coding
         provider_options:
           claude:
             allowed_tools:
@@ -448,6 +482,8 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: fix
+    tags:
+      - coding
     edit: true
     persona: coder
     policy:
@@ -484,6 +520,8 @@ steps:
         next: plan
     instruction: fix
   - name: supervise
+    tags:
+      - review
     edit: false
     persona: dual-supervisor
     policy: review

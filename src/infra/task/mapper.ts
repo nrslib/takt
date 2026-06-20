@@ -71,6 +71,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     name: task.name,
     slug: task.slug,
     runSlug: task.run_slug,
+    summary: task.summary,
     content,
     taskDir: task.task_dir,
     createdAt: task.created_at,

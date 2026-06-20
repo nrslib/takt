@@ -39,7 +39,7 @@ Code is read far more often than it is written. Poorly structured code destroys 
 **Don't:**
 - Write code yourself (only provide feedback and suggestions)
 - Give vague feedback ("clean this up" is prohibited)
-- Review AI-specific issues
+- Flag issues that cannot be justified from this review perspective
 
 ## Important
 

@@ -19,6 +19,7 @@ export interface TerminalStartOptions {
   cwd: string;
   backend: ClaudeTerminalBackendName;
   command: ClaudeTerminalCommand;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface TerminalBackend {
@@ -105,6 +106,7 @@ export interface ClaudeTerminalCallOptions {
   pathToClaudeCodeExecutable?: string;
   terminalBackend?: TerminalBackend;
   transcriptReader?: ClaudeTranscriptReader;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export interface BuildClaudeTerminalCommandOptions {

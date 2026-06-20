@@ -197,6 +197,52 @@ describe('RunMetaManager', () => {
     expect(finalizedMeta.resume_point).toEqual(refreshedResumePoint);
   });
 
+  it('should persist trace discovery metadata from initial write through finalize', () => {
+    const traceDiscovery = {
+      serviceName: 'takt',
+      runId: '20260409-force-fail-test',
+      workflowName: 'default',
+      task: {
+        source: 'pr_review',
+        issueNumber: 792,
+        prNumber: 826,
+        summary: 'Improve trace discovery',
+      },
+      git: {
+        branch: 'takt/843/add-trace-discovery',
+        baseBranch: 'main',
+      },
+      queries: [
+        '{ resource.service.name = "takt" && span."takt.run.id" = "20260409-force-fail-test" }',
+        '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
+      ],
+    };
+    const manager = new RunMetaManager(
+      createRunPaths(),
+      'Force fail task',
+      'default',
+      undefined,
+      { traceDiscovery },
+    );
+
+    manager.updateStep('review', 3);
+    manager.finalize('completed', 3);
+
+    const initialMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[0]![1])) as {
+      observability?: { traceDiscovery?: typeof traceDiscovery };
+    };
+    const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
+      observability?: { traceDiscovery?: typeof traceDiscovery };
+    };
+    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
+      observability?: { traceDiscovery?: typeof traceDiscovery };
+    };
+
+    expect(initialMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
+    expect(updatedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
+    expect(finalizedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
+  });
+
   it('should persist direct resume source metadata for resumed runs', () => {
     const manager = new RunMetaManager(
       createRunPaths(),

@@ -7,14 +7,14 @@ import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
-  StepProviderOptionsSchema,
+  StepProviderOptionsObjectSchema,
   OutputContractsFieldSchema,
   PermissionModeSchema,
-  WorkflowProviderOptionsSchema,
   ProviderReferenceSchema,
   RateLimitFallbackSchema,
   QualityGatesSchema,
   hasProviderOptionsLeaf,
+  RuntimeConfigSchema,
 } from './schema-base.js';
 import {
   StructuredOutputRawSchema,
@@ -26,6 +26,8 @@ import {
   isAggregateConditionExpression,
   isAiConditionExpression,
 } from './workflow-condition-expression.js';
+import { FindingContractConfigRawSchema } from './finding-schemas.js';
+import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 
@@ -40,6 +42,24 @@ const WorkflowFacetRefOrParamSchema = z.union([WorkflowFacetRefScalarSchema, Wor
 const WorkflowFacetRefListOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema, WorkflowParamReferenceRawSchema]);
 
 const WorkflowCallArgsRawSchema = z.record(z.string().min(1), WorkflowFacetRefValueSchema);
+
+const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
+  extends: z.string().min(1).optional(),
+}).strict().optional();
+
+function hasProviderOptionsTarget(
+  providerOptions: NonNullable<z.output<typeof WorkflowStepProviderOptionsSchema>>,
+): boolean {
+  const { extends: providerOptionsExtends, ...providerOptionsWithoutExtends } = providerOptions;
+  return providerOptionsExtends !== undefined || hasProviderOptionsLeaf(providerOptionsWithoutExtends);
+}
+
+const WorkflowProviderOptionsWithExtendsSchema = z.object({
+  provider: ProviderReferenceSchema.optional(),
+  model: z.string().optional(),
+  provider_options: WorkflowStepProviderOptionsSchema,
+  runtime: RuntimeConfigSchema,
+}).optional();
 
 const WorkflowParamDeclarationRawSchema = z.object({
   type: z.enum(['facet_ref', 'facet_ref[]']),
@@ -85,7 +105,7 @@ const WorkflowPromotionRawSchema = z.object({
   condition: z.string().min(1).optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
-  provider_options: StepProviderOptionsSchema,
+  provider_options: WorkflowStepProviderOptionsSchema,
 }).strict().superRefine((data, ctx) => {
   if (data.at === undefined && data.condition === undefined) {
     ctx.addIssue({
@@ -102,17 +122,17 @@ const WorkflowPromotionRawSchema = z.object({
     });
   }
 
-  const hasProviderOptionsTarget = data.provider_options !== undefined
-    && hasProviderOptionsLeaf(data.provider_options);
+  const hasProviderOptionsTargetValue = data.provider_options !== undefined
+    && hasProviderOptionsTarget(data.provider_options);
 
-  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTarget) {
+  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'promotion entry requires at least one of "provider", "model", or "provider_options"',
     });
   }
 
-  if (data.provider_options !== undefined && !hasProviderOptionsTarget) {
+  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['provider_options'],
@@ -151,26 +171,43 @@ export const ArpeggioConfigRawSchema = z.object({
 /** Team leader configuration schema for dynamic part decomposition */
 export const TeamLeaderConfigRawSchema = z.object({
   persona: z.string().optional(),
-  max_parts: z.number().int().positive().max(3).optional().default(3),
-  refill_threshold: z.number().int().min(0).optional().default(0),
-  timeout_ms: z.number().int().positive().optional().default(900000),
+  max_parts: z.number().int().positive().max(3).optional(),
+  max_concurrency: z.number().int().positive().max(3).optional(),
+  max_total_parts: z.number().int().positive().max(MAX_TEAM_LEADER_MAX_TOTAL_PARTS).optional(),
+  refill_threshold: z.number().int().min(0).optional(),
+  timeout_ms: z.number().int().positive().optional(),
+  inspect_tools: z.array(z.string()).optional(),
   part_persona: z.string().optional(),
+  part_tags: z.array(z.string().min(1)).optional(),
   part_allowed_tools: z.array(z.string()).optional(),
   part_edit: z.boolean().optional(),
   part_permission_mode: PermissionModeSchema.optional(),
-}).refine(
-  (data) => data.refill_threshold <= data.max_parts,
-  {
-    message: "'refill_threshold' must be less than or equal to 'max_parts'",
-    path: ['refill_threshold'],
-  },
-);
+}).superRefine((data, ctx) => {
+  if (data.max_parts !== undefined && data.max_concurrency !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['max_concurrency'],
+      message: "'max_parts' and 'max_concurrency' cannot be specified together",
+    });
+  }
+
+  const maxConcurrency = data.max_concurrency ?? data.max_parts ?? 3;
+  const refillThreshold = data.refill_threshold ?? 0;
+  if (refillThreshold > maxConcurrency) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['refill_threshold'],
+      message: "'refill_threshold' must be less than or equal to team leader concurrency",
+    });
+  }
+});
 
 /** Sub-step schema for parallel execution */
 export const ParallelSubStepRawSchema = z.object({
   name: z.string().min(1),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
+  tags: z.array(z.string().min(1)).optional(),
   policy: WorkflowFacetRefListOrParamSchema.optional(),
   knowledge: WorkflowFacetRefListOrParamSchema.optional(),
   allow_git_commit: z.boolean().optional(),
@@ -181,7 +218,7 @@ export const ParallelSubStepRawSchema = z.object({
   promotion: z.never().optional(),
   permission_mode: z.never().optional(),
   required_permission_mode: PermissionModeSchema.optional(),
-  provider_options: StepProviderOptionsSchema,
+  provider_options: WorkflowStepProviderOptionsSchema,
   edit: z.boolean().optional(),
   instruction: WorkflowFacetRefOrParamSchema.optional(),
   instruction_template: z.never().optional(),
@@ -207,13 +244,26 @@ const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 const WorkflowCallOverridesRawSchema = z.object({
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
-  provider_options: StepProviderOptionsSchema,
-}).strict().refine(
-  (data) => data.provider !== undefined || data.model !== undefined || data.provider_options !== undefined,
-  {
-    message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
-  },
-);
+  provider_options: WorkflowStepProviderOptionsSchema,
+}).strict().superRefine((data, ctx) => {
+  const hasProviderOptionsTargetValue = data.provider_options !== undefined
+    && hasProviderOptionsTarget(data.provider_options);
+
+  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
+    });
+  }
+
+  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['provider_options'],
+      message: 'workflow_call overrides provider_options must include at least one provider-specific option',
+    });
+  }
+});
 
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
@@ -257,6 +307,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     session: z.enum(['continue', 'refresh']).optional(),
     persona: z.string().optional(),
     persona_name: z.string().optional(),
+    tags: z.array(z.string().min(1)).optional(),
     policy: WorkflowFacetRefListOrParamSchema.optional(),
     knowledge: WorkflowFacetRefListOrParamSchema.optional(),
     allow_git_commit: z.boolean().optional(),
@@ -267,7 +318,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     promotion: z.array(WorkflowPromotionRawSchema).optional(),
     permission_mode: z.never().optional(),
     required_permission_mode: PermissionModeSchema.optional(),
-    provider_options: StepProviderOptionsSchema,
+    provider_options: WorkflowStepProviderOptionsSchema,
     edit: z.boolean().optional(),
     instruction: WorkflowFacetRefOrParamSchema.optional(),
     instruction_template: z.never().optional(),
@@ -355,6 +406,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       for (const field of [
         'persona',
         'persona_name',
+        'tags',
         'policy',
         'knowledge',
         'allow_git_commit',
@@ -470,7 +522,8 @@ export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
-  workflow_config: WorkflowProviderOptionsSchema,
+  finding_contract: FindingContractConfigRawSchema.optional(),
+  workflow_config: WorkflowProviderOptionsWithExtendsSchema,
   rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),

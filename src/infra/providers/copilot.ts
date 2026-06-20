@@ -31,12 +31,22 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     onStream: options.onStream,
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),
     copilotCliPath: resolveCopilotCliPath(),
+    childProcessEnv: options.childProcessEnv,
   };
 }
 
 /** Copilot provider — delegates to GitHub Copilot CLI */
 export class CopilotProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsNativeImageInput = false;
+
+  getRuntimeInstructions(): string | null {
+    return null;
+  }
+
+  keepsAllowedToolWithoutEdit(_tool: string): boolean {
+    return true;
+  }
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

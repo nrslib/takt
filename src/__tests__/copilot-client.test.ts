@@ -3,6 +3,9 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSpawn, mockMkdtemp, mockReadFile, mockRm } = vi.hoisted(() => ({
@@ -75,6 +78,8 @@ describe('callCopilot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.COPILOT_GITHUB_TOKEN;
+    delete process.env.TAKT_OBSERVABILITY;
+    delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     mockMkdtemp.mockResolvedValue('/tmp/takt-copilot-XXXXXX');
     mockReadFile.mockResolvedValue(
       '# 🤖 Copilot CLI Session\n\n> **Session ID:** `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`\n',
@@ -165,7 +170,29 @@ describe('callCopilot', () => {
     expect(result.status).toBe('done');
 
     const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
-    expect(options.env).toBe(process.env);
+    expect(options.env).not.toBe(process.env);
+    expect(options.env?.COPILOT_GITHUB_TOKEN).toBeUndefined();
+  });
+
+  it('passes only run-local observability snapshot to copilot child env', async () => {
+    process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'https://ambient-user:pass@collector.example.test';
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callCopilot('coder', 'implement feature', {
+      cwd: '/repo',
+      childProcessEnv: {
+        TAKT_OBSERVABILITY: '{"enabled":true}',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot-collector.example.test',
+      },
+    });
+
+    const [, , options] = mockSpawn.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(options.env?.TAKT_OBSERVABILITY).toBe('{"enabled":true}');
+    expect(options.env?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://snapshot-collector.example.test');
   });
 
   it('should use custom CLI path when copilotCliPath is specified', async () => {
@@ -472,6 +499,65 @@ describe('callCopilot', () => {
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('existing-session-id');
+  });
+
+  it('should create a missing TMPDIR before preparing the share file', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), 'takt-copilot-missing-tmp-parent-'));
+    const missingTmpDir = join(parentDir, 'missing', 'tmp');
+    process.env.TMPDIR = missingTmpDir;
+    mockMkdtemp.mockImplementationOnce(async (prefix: string) => {
+      expect(prefix).toBe(join(missingTmpDir, 'takt-copilot-'));
+      expect(existsSync(missingTmpDir)).toBe(true);
+      return join(missingTmpDir, 'takt-copilot-share');
+    });
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+      expect(result.status).toBe('done');
+      expect(mockMkdtemp).toHaveBeenCalledWith(join(missingTmpDir, 'takt-copilot-'));
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+      rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should continue without --share when TMPDIR cannot be created', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), 'takt-copilot-invalid-tmp-parent-'));
+    const fileTmpDir = join(parentDir, 'tmp-file');
+    writeFileSync(fileTmpDir, 'not a directory\n', 'utf-8');
+    process.env.TMPDIR = fileTmpDir;
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+      const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+
+      expect(result.status).toBe('done');
+      expect(mockMkdtemp).not.toHaveBeenCalled();
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(args).not.toContain('--share');
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+      rmSync(parentDir, { recursive: true, force: true });
+    }
   });
 
   it('should redact credentials from error stderr', async () => {

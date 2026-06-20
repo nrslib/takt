@@ -44,6 +44,20 @@ describe('Schemas accept opencode provider', () => {
     });
   });
 
+  it('should accept opencode allowed_tools in provider_options', () => {
+    const result = GlobalConfigSchema.parse({
+      provider_options: {
+        opencode: {
+          allowed_tools: ['read', 'glob', 'grep', 'bash'],
+        },
+      },
+    });
+
+    expect(result.provider_options?.opencode).toEqual({
+      allowed_tools: ['read', 'glob', 'grep', 'bash'],
+    });
+  });
+
   it('should reject empty opencode variant in provider_options', () => {
     expect(() =>
       GlobalConfigSchema.parse({

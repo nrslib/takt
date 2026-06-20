@@ -13,11 +13,14 @@ import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMet
 const {
   MockWorkflowEngine,
   disabledObservability,
+  mockEnsureCurrentTmpDirExists,
   mockGetProvider,
   mockRunAgent,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { tmpdir: getTmpdir } = require('node:os') as typeof import('node:os');
 
   class MockWorkflowEngine extends EE {
     static lastInstance: MockWorkflowEngine;
@@ -69,6 +72,7 @@ const {
       sessionLogExporter: false,
       usageEventsPhase: false,
     },
+    mockEnsureCurrentTmpDirExists: vi.fn(() => getTmpdir()),
     mockGetProvider: vi.fn(),
     mockRunAgent: vi.fn(),
   };
@@ -163,6 +167,7 @@ vi.mock('../shared/utils/index.js', () => ({
   writePromptLog: vi.fn(),
   getDebugPromptsLogFile: vi.fn().mockReturnValue(null),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+  ensureCurrentTmpDirExists: mockEnsureCurrentTmpDirExists,
   isValidReportDirName: vi.fn().mockReturnValue(true),
   playWarningSound: vi.fn(),
 }));

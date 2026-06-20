@@ -167,6 +167,35 @@ Validation inside an Aggregate should be limited to facts reproducible by event 
 
 Example: for an upload-completed command, the Aggregate decides whether the session owner matches the requester and whether the current state can be completed. The storage object key format and whether the key belongs to the current user/tenant are validated in the UseCase layer before sending the command.
 
+## UseCase Layer (Orchestration)
+
+UseCases sit between Controllers and command dispatch when orchestration is needed. They validate preconditions from Read Models across aggregates and perform required preparation before sending commands.
+
+```
+Controller → UseCase → CommandGateway → Aggregate
+                ↓
+          QueryGateway / Repository (Read Model lookup)
+```
+
+Cases where UseCase is needed:
+- Read Model checks from multiple aggregates before command dispatch
+- Multiple validations executed in sequence
+- Result consistency waiting after command dispatch
+- External integration or multiple command dispatches
+
+Cases where UseCase is unnecessary:
+- Simple operation completed by sending one command from Controller
+- Simple read that only queries the query side and converts to response
+- Operation that checks resource existence/scope and then sends one command
+
+| Criteria | Judgment |
+|----------|----------|
+| Controller directly references Repository for validation | Separate into UseCase layer |
+| UseCase depends on HTTP requests/responses | REJECT. UseCase must be protocol-independent |
+| UseCase directly modifies Aggregate internal state | REJECT. Use CommandGateway |
+| UseCase waits for results via Subscription Query | REJECT. Does not work in distributed environments. Use reactive polling |
+| UseCase only delegates to a query boundary or command dispatch | Consider deleting |
+
 ## Projection Design
 
 | Criteria | Judgment |
@@ -180,6 +209,19 @@ Good Projection:
 - Optimized for specific read use case
 - Idempotently reconstructible from events
 - Completely independent from Write model
+
+### External Work Triggers
+
+External workers and asynchronous work should start from domain events confirmed by the Aggregate. Application Services and Coordinators must not bundle command dispatch and external side effects in the same control flow.
+
+| Criteria | Judgment |
+|----------|----------|
+| Application Service or Coordinator dispatches a command, then starts external work for the same state transition | REJECT. Separate into an EventHandler for the confirmed event |
+| Aggregate emits an event that represents generation or processing start, and an EventHandler starts external work | OK |
+| EventHandler converts external start failure into a failure command back to the Aggregate | OK |
+| Inputs needed by external work are represented in the event or reloadable through stable identifiers | OK |
+| Inputs needed by external work exist only as local variables during command handling | REJECT. Move them to events or reloadable references |
+| Saga is used only to start simple external work without contention or compensation | REJECT. EventHandler is sufficient |
 
 ## Query Side Design
 
@@ -197,6 +239,21 @@ Event distribution uses PubSub (via message broker) to deliver events to all ins
 | Controller directly referencing Repository | REJECT. Must go through UseCase layer |
 | Query side referencing Command Model | REJECT |
 | QueryHandler issuing commands | REJECT |
+| Query-side service or handler saves, deletes, or calls external APIs | REJECT |
+| Command and Query responsibilities mixed in the same service | REJECT. Separate responsibility and naming |
+| Query side checks existence or scope and caller dispatches command | OK |
+
+### QueryHandler and ApplicationService Naming
+
+In CQRS, the component that receives a query is the QueryHandler, and the entrypoint for dispatching queries is the QueryGateway / QueryBus. A facade called by Controllers for read use cases should be named ApplicationService or ReadService so it is not confused with a QueryHandler.
+
+| Criteria | Judgment |
+|----------|----------|
+| Receives a Query, reads the Read Model, and returns a query result type | QueryHandler |
+| Coordinates multiple Queries, authorization boundaries, pagination, or DTO assembly for Controllers | ApplicationService or ReadService |
+| Class that only dispatches queries or coordinates reads is named QueryService | Warning. Easy to confuse with QueryHandler |
+| QueryHandler knows HTTP requests/responses or Controller-specific error translation | REJECT |
+| Simple read wrapper with no additional decision-making | Consider deleting. Controller may call QueryGateway directly |
 
 Types between layers:
 - `application/query/` - Query result types (e.g., `OrderDetail`)
@@ -248,6 +305,18 @@ Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
                                                           ↑
                                           QueryHandler reads from here
 ```
+
+### Async Callbacks and Concurrency Control
+
+Completion notifications for asynchronous work must assume duplicates, delays, and reordering. Protect the workflow with Aggregate state transitions and command idempotency, not Controller-level or single-process locks.
+
+| Criteria | Judgment |
+|----------|----------|
+| Controller or application-process lock prevents duplicate callbacks | REJECT. It does not work across multiple instances |
+| Aggregate state decides whether work is processing | OK |
+| Aggregate verifies callback attempt/generation identifiers | OK |
+| Stale or duplicate callbacks are idempotently ignored by state transition | OK |
+| Concurrency control is duplicated across Controller, UseCase, and Aggregate | REJECT |
 
 ## Eventual Consistency
 

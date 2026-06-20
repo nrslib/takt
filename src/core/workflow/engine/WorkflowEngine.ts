@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
-import { createLogger, generateReportDir, isValidReportDirName } from '../../../shared/utils/index.js';
+import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -13,6 +13,7 @@ import type {
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 import type {
   WorkflowCallChildEngine,
+  WorkflowAbortKind,
   WorkflowEngineOptions,
   WorkflowRunResult,
   WorkflowSharedRuntimeState,
@@ -24,7 +25,7 @@ import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowR
 import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
-import { runWithWorkflowSpan, type WorkflowSpanParams } from '../observability/workflowSpans.js';
+import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
 import {
   applyRuntimeEnvironment,
@@ -39,6 +40,9 @@ import {
   type StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
+import { buildFindingsRuleContext } from '../findings/context.js';
+import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
+import { ERROR_MESSAGES } from '../constants.js';
 const log = createLogger('workflow-engine');
 export type {
   WorkflowEvents,
@@ -76,6 +80,7 @@ export class WorkflowEngine extends EventEmitter {
   private abortRequested = false;
   private readonly sharedRuntime: WorkflowSharedRuntimeState;
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
+  private readonly findingLedgerStore?: FindingLedgerStore;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -94,34 +99,51 @@ export class WorkflowEngine extends EventEmitter {
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.config = config;
     this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
+    if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
+      throw new Error(`Invalid reportDirName: ${options.reportDirName}`);
+    }
+
+    const reportDirName = options.reportDirName ?? generateReportDir(task);
+    const runPaths = buildRunPaths(cwd, reportDirName, options.runPathNamespace);
+    const traceTaskMetadata = {
+      ...options.traceTaskMetadata,
+      runDir: runPaths.runRootAbs,
+    };
     this.options = {
       ...options,
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
+      traceTaskMetadata,
     };
     this.projectCwd = this.options.projectCwd;
     this.cwd = cwd;
     this.task = task;
     this.loopDetector = new LoopDetector(config.loopDetection);
     this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
-    if (this.options.reportDirName !== undefined && !isValidReportDirName(this.options.reportDirName)) {
-      throw new Error(`Invalid reportDirName: ${this.options.reportDirName}`);
-    }
-
-    const reportDirName = this.options.reportDirName ?? generateReportDir(task);
     const initialMaxSteps = this.options.maxStepsOverride ?? config.maxSteps;
     this.sharedRuntime = this.options.sharedRuntime ?? createSharedRuntime(this.options.resumePoint, initialMaxSteps);
     this.sharedRuntime.maxSteps ??= initialMaxSteps;
     this.maxSteps = this.sharedRuntime.maxSteps;
     this.resumeStackPrefix = this.options.resumeStackPrefix ?? [];
-    this.runPaths = buildRunPaths(this.cwd, reportDirName, this.options.runPathNamespace);
+    this.runPaths = runPaths;
     this.reportDir = this.runPaths.reportsRel;
     ensureRunDirsExist(this.runPaths);
     applyRuntimeEnvironment(this.cwd, this.config, 'init');
     validateWorkflowConfig(this.config, options);
 
     this.state = createInitialState(config, this.options);
+    if (this.config.findingContract) {
+      this.findingLedgerStore = createFindingLedgerStore({
+        projectCwd: this.projectCwd,
+        reportDir: this.runPaths.reportsAbs,
+        workflowName: this.config.name,
+        ledgerPath: this.config.findingContract.ledgerPath,
+        rawFindingsPath: this.config.findingContract.rawFindingsPath,
+      });
+      this.refreshFindingsState();
+      this.findingLedgerStore.createRunCopy();
+    }
     this.detectRuleIndex = this.options.detectRuleIndex ?? (() => {
       throw new Error('detectRuleIndex is required for rule evaluation');
     });
@@ -145,6 +167,8 @@ export class WorkflowEngine extends EventEmitter {
         this.sharedRuntime.maxSteps = maxSteps;
       },
       setActiveResumePoint: this.setActiveResumePoint.bind(this),
+      refreshFindingsState: this.refreshFindingsState.bind(this),
+      findingLedgerStore: this.findingLedgerStore,
       updatePersonaSession: this.updatePersonaSession.bind(this),
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),
       resetCycleDetector: () => this.cycleDetector.reset(),
@@ -188,6 +212,7 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,
           getReportDir: () => this.runPaths.reportsAbs,
@@ -224,7 +249,11 @@ export class WorkflowEngine extends EventEmitter {
         (result) => ({
           status: result.state.status,
           abortKind: result.abort?.kind,
+          abortReason: result.abort?.reason,
+          failure: result.abort?.failure,
+          iterations: result.state.iteration,
         }),
+        (error) => this.buildWorkflowErrorSpanOutcome(error),
       ),
       () => true,
     ));
@@ -240,6 +269,13 @@ export class WorkflowEngine extends EventEmitter {
 
   getState(): WorkflowState {
     return { ...this.state };
+  }
+
+  private refreshFindingsState(): void {
+    if (!this.findingLedgerStore) {
+      return;
+    }
+    this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger());
   }
 
   private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {
@@ -300,12 +336,33 @@ export class WorkflowEngine extends EventEmitter {
   private buildWorkflowSpanParams(runMode: WorkflowSpanParams['runMode']): WorkflowSpanParams {
     return {
       enabled: this.options.observability?.enabled === true,
+      runId: this.options.observabilityRunId,
       workflowName: this.config.name,
       initialStep: this.config.initialStep,
       stepCount: this.config.steps.length,
       maxSteps: this.maxSteps,
       runMode,
       resumeDepth: this.resumeStackPrefix.length,
+      sanitizeText: this.options.sanitizeObservabilityText,
+      traceTaskMetadata: this.options.traceTaskMetadata,
+    };
+  }
+
+  private buildWorkflowErrorSpanOutcome(error: unknown): WorkflowSpanOutcome {
+    const kind: WorkflowAbortKind = this.abortRequested ? 'interrupt' : 'runtime_error';
+    const reason = this.abortRequested
+      ? 'Workflow interrupted by user (SIGINT)'
+      : ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error));
+    return {
+      status: 'error',
+      abortKind: kind,
+      abortReason: reason,
+      failure: {
+        kind,
+        step: this.state.currentStep,
+        reason,
+      },
+      iterations: this.state.iteration,
     };
   }
 
@@ -329,15 +386,19 @@ export class WorkflowEngine extends EventEmitter {
     }
   }
 
-  async run(): Promise<WorkflowState> {
+  async run(): Promise<WorkflowState & { returnValue?: string }> {
     const result = await getWorkflowRunExecutor(this)();
-    return result.state;
+    return {
+      ...result.state,
+      ...(result.returnValue !== undefined ? { returnValue: result.returnValue } : {}),
+    };
   }
 
   async runSingleIteration(): Promise<{
     response: AgentResponse;
     nextStep: string;
     isComplete: boolean;
+    returnValue?: string;
     loopDetected?: boolean;
   }> {
     return this.runWithSystemCleanup(
@@ -347,6 +408,7 @@ export class WorkflowEngine extends EventEmitter {
           state: this.state,
           options: this.options,
           getWorkflowName: () => this.config.name,
+          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
           getCwd: () => this.cwd,
           getMaxSteps: () => this.maxSteps,
           getReportDir: () => this.runPaths.reportsAbs,
@@ -379,8 +441,13 @@ export class WorkflowEngine extends EventEmitter {
         }),
         (result) => ({
           status: result.isComplete ? this.state.status : 'running',
+          abortKind: result.abort?.kind,
+          abortReason: result.abort?.reason,
+          failure: result.abort?.failure,
           nextStep: result.nextStep,
+          iterations: this.state.iteration,
         }),
+        (error) => this.buildWorkflowErrorSpanOutcome(error),
       ),
       (result, error) => error !== undefined || result?.isComplete === true || this.state.status !== 'running',
     );

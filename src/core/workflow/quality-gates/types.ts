@@ -29,6 +29,7 @@ export type CommandQualityGateResult = {
 export interface RunCommandQualityGateOptions {
   gate: CommandQualityGate;
   projectRoot: string;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }
 
 export type QualityGateRunResult = {
@@ -42,4 +43,5 @@ export interface RunQualityGatesOptions {
   qualityGates: readonly QualityGate[] | undefined;
   projectRoot: string;
   step: WorkflowStep;
+  childProcessEnv?: Readonly<Record<string, string>>;
 }

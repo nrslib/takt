@@ -11,6 +11,7 @@ import {
   unexpectedInteractivePreviewConfigKey,
   unexpectedInteractivePreviewEnvVar,
 } from '../../test/helpers/unknown-contract-test-keys.js';
+import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 // Mock the home directory to use a temp directory
 const testHomeDir = join(tmpdir(), `takt-gc-test-${Date.now()}`);
@@ -38,8 +39,11 @@ type ObservabilityConfigForTest = {
   usageEventsPhase?: boolean;
 };
 
+let taktEnvSnapshot: TaktEnvSnapshot;
+
 describe('loadGlobalConfig', () => {
   beforeEach(() => {
+    taktEnvSnapshot = clearTaktEnv();
     invalidateGlobalConfigCache();
     mkdirSync(testHomeDir, { recursive: true });
   });
@@ -48,8 +52,7 @@ describe('loadGlobalConfig', () => {
     if (existsSync(testHomeDir)) {
       rmSync(testHomeDir, { recursive: true });
     }
-    delete process.env.TAKT_INTERACTIVE_PREVIEW_STEPS;
-    delete process.env[unexpectedInteractivePreviewEnvVar];
+    restoreTaktEnv(taktEnvSnapshot);
   });
 
   it('should return default values when config.yaml does not exist', () => {

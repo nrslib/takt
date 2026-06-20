@@ -1,23 +1,19 @@
 /**
  * Cross-platform spawn wrapper.
  *
- * On Windows, npm-installed CLIs are `.cmd` shim files that cannot be
- * executed by Node.js `spawn()` with `shell: false`.  This wrapper
- * transparently adds `shell: true` when the platform is Windows and the
- * command is not an `.exe` binary, so callers don't need platform checks.
+ * On Windows, npm-installed CLIs may be `.cmd` shim files.  This wrapper
+ * delegates to `cross-spawn` there so callers keep argv-based execution
+ * without shell-specific platform checks.
  */
 
 import { spawn, type SpawnOptions, type ChildProcess } from 'node:child_process';
+import crossSpawnPackage from 'cross-spawn';
 
 export function crossSpawn(
   command: string,
   args: readonly string[],
   options: SpawnOptions,
 ): ChildProcess {
-  const needsShell =
-    process.platform === 'win32' && !command.toLowerCase().endsWith('.exe');
-  return spawn(command, args as string[], {
-    ...options,
-    ...(needsShell ? { shell: true } : {}),
-  });
+  const spawnImpl = process.platform === 'win32' ? crossSpawnPackage : spawn;
+  return spawnImpl(command, args as string[], options);
 }

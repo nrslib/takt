@@ -2,6 +2,7 @@ import type { GlobalConfig } from '../../../core/models/config-types.js';
 import {
   denormalizeProviderProfiles,
   denormalizePersonaProviders,
+  denormalizeProviderRouting,
   denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
   denormalizeRateLimitFallback,
@@ -98,8 +99,14 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.copilotCliPath) {
     raw.copilot_cli_path = config.copilotCliPath;
   }
+  if (config.kiroCliPath) {
+    raw.kiro_cli_path = config.kiroCliPath;
+  }
   if (config.copilotGithubToken) {
     raw.copilot_github_token = config.copilotGithubToken;
+  }
+  if (config.kiroApiKey) {
+    raw.kiro_api_key = config.kiroApiKey;
   }
   if (config.opencodeApiKey) {
     raw.opencode_api_key = config.opencodeApiKey;
@@ -209,6 +216,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   const rawPersonaProviders = denormalizePersonaProviders(config.personaProviders);
   if (rawPersonaProviders && Object.keys(rawPersonaProviders).length > 0) {
     raw.persona_providers = rawPersonaProviders;
+  }
+  const rawProviderRouting = denormalizeProviderRouting(config.providerRouting);
+  if (rawProviderRouting) {
+    raw.provider_routing = rawProviderRouting;
   }
   if (config.branchNameStrategy !== undefined) {
     raw.branch_name_strategy = config.branchNameStrategy;

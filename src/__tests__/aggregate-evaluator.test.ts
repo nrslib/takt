@@ -6,9 +6,13 @@
 
 import { describe, it, expect } from 'vitest';
 import { AggregateEvaluator } from '../core/workflow/evaluation/AggregateEvaluator.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { WorkflowStep, WorkflowState, AgentResponse } from '../core/models/types.js';
 
-function makeState(outputs: Record<string, { matchedRuleIndex?: number }>): WorkflowState {
+function makeState(
+  outputs: Record<string, { matchedRuleIndex?: number }>,
+  findings?: WorkflowState['findings'],
+): WorkflowState {
   const stepOutputs = new Map<string, AgentResponse>();
   for (const [name, data] of Object.entries(outputs)) {
     stepOutputs.set(name, {
@@ -28,6 +32,7 @@ function makeState(outputs: Record<string, { matchedRuleIndex?: number }>): Work
     personaSessions: new Map(),
     stepIterations: new Map(),
     status: 'running',
+    ...(findings !== undefined ? { findings } : {}),
   };
 }
 
@@ -76,6 +81,32 @@ describe('AggregateEvaluator', () => {
         'review-a': { matchedRuleIndex: 0 },
         'review-b': { matchedRuleIndex: 0 },
       });
+
+      const evaluator = new AggregateEvaluator(step, state);
+      expect(evaluator.evaluate()).toBe(0);
+    });
+
+    it('should match an unquoted condition expression containing an escaped quote', () => {
+      const targetCondition = String.raw`condition == "test\"inner"`;
+      const sub1 = makeSubStep('review-a', [targetCondition]);
+      const sub2 = makeSubStep('review-b', [targetCondition]);
+      const step = makeParentStep([sub1, sub2], [
+        normalizeRule({
+          condition: String.raw`all(condition == "test\"inner") && findings.open.count == 0`,
+          next: 'COMPLETE',
+        }),
+      ]);
+      const state = makeState(
+        {
+          'review-a': { matchedRuleIndex: 0 },
+          'review-b': { matchedRuleIndex: 0 },
+        },
+        {
+          open: { count: 0, bySeverity: {}, items: [] },
+          resolved: { count: 0 },
+          conflicts: { count: 0, items: [] },
+        },
+      );
 
       const evaluator = new AggregateEvaluator(step, state);
       expect(evaluator.evaluate()).toBe(0);
@@ -342,6 +373,77 @@ describe('AggregateEvaluator', () => {
 
       const evaluator = new AggregateEvaluator(step, state);
       expect(evaluator.evaluate()).toBe(-1);
+    });
+  });
+
+  describe('deterministic guards', () => {
+    it('should match aggregate rules only when the guard condition is true', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'needs_fix']);
+      const sub2 = makeSubStep('review-b', ['approved', 'needs_fix']);
+      const step = makeParentStep([sub1, sub2], [
+        {
+          condition: 'any("needs_fix") && findings.conflicts.count == 0',
+          isAggregateCondition: true,
+          aggregateType: 'any',
+          aggregateConditionText: 'needs_fix',
+          aggregateGuardCondition: 'findings.conflicts.count == 0',
+          next: 'fix',
+        },
+      ]);
+
+      const state = makeState(
+        {
+          'review-a': { matchedRuleIndex: 1 },
+          'review-b': { matchedRuleIndex: 0 },
+        },
+        {
+          open: { count: 1, bySeverity: { high: 1 }, items: [] },
+          resolved: { count: 0 },
+          conflicts: { count: 0, items: [] },
+        },
+      );
+
+      expect(new AggregateEvaluator(step, state).evaluate()).toBe(0);
+    });
+
+    it('should skip aggregate rules when the guard condition is false', () => {
+      const sub1 = makeSubStep('review-a', ['approved', 'needs_fix']);
+      const sub2 = makeSubStep('review-b', ['approved', 'needs_fix']);
+      const step = makeParentStep([sub1, sub2], [
+        {
+          condition: 'any("needs_fix") && findings.conflicts.count == 0',
+          isAggregateCondition: true,
+          aggregateType: 'any',
+          aggregateConditionText: 'needs_fix',
+          aggregateGuardCondition: 'findings.conflicts.count == 0',
+          next: 'fix',
+        },
+      ]);
+
+      const state = makeState(
+        {
+          'review-a': { matchedRuleIndex: 1 },
+          'review-b': { matchedRuleIndex: 0 },
+        },
+        {
+          open: { count: 1, bySeverity: { high: 1 }, items: [] },
+          resolved: { count: 0 },
+          conflicts: {
+            count: 1,
+            items: [
+              {
+                id: 'C-1',
+                status: 'active',
+                findingIds: ['F-0001'],
+                rawFindingIds: ['raw-1'],
+                description: 'Reviewer disagreement.',
+              },
+            ],
+          },
+        },
+      );
+
+      expect(new AggregateEvaluator(step, state).evaluate()).toBe(-1);
     });
   });
 });

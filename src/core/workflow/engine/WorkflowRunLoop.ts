@@ -15,15 +15,25 @@ import { decrementStepIteration, incrementStepIteration } from './state-manager.
 import { handleBlocked } from './blocked-handler.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
-import { runWithStepSpan } from '../observability/workflowSpans.js';
+import { runWithStepSpan, type StepSpanParams } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 
 const log = createLogger('workflow-run-loop');
+
+interface SingleWorkflowIterationResult {
+  response: AgentResponse;
+  nextStep: string;
+  isComplete: boolean;
+  returnValue?: string;
+  loopDetected?: boolean;
+  abort?: WorkflowAbortResult;
+}
 
 interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
   getWorkflowName: () => string;
+  getCurrentWorkflowStack: () => StepSpanParams['workflowStack'];
   getCwd: () => string;
   getMaxSteps: () => WorkflowMaxSteps;
   getReportDir: () => string;
@@ -48,6 +58,7 @@ interface WorkflowRunLoopDeps {
     qualityGates: WorkflowStep['qualityGates'];
     projectRoot: string;
     step: WorkflowStep;
+    childProcessEnv?: Readonly<Record<string, string>>;
   }) => Promise<QualityGateRunResult>;
   persistPreviousResponseSnapshot: (
     state: WorkflowState,
@@ -75,6 +86,7 @@ async function resolveStepPromotionRuntime(
     cwd: deps.getCwd(),
     previousResponseContent: deps.state.lastOutput?.content ?? '',
     structuredCaller: deps.options.structuredCaller,
+    childProcessEnv: deps.options.childProcessEnv,
     resolveStepProviderModel: deps.resolveStepProviderModel,
   }, step, stepIteration, runtime);
 }
@@ -176,6 +188,18 @@ function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteratio
   deps.setActiveStep(resolvedStep, iteration);
 }
 
+function buildWorkflowAbortResult(kind: WorkflowAbortKind, stepName: string, reason: string): WorkflowAbortResult {
+  return {
+    kind,
+    reason,
+    failure: {
+      kind,
+      step: stepName,
+      reason,
+    },
+  };
+}
+
 function abortWorkflow(
   deps: WorkflowRunLoopDeps,
   kind: WorkflowAbortKind,
@@ -187,7 +211,21 @@ function abortWorkflow(
     deps.state.lastOutput = undefined;
   }
   deps.emit('workflow:abort', deps.state, reason);
-  return { kind, reason };
+  return buildWorkflowAbortResult(kind, deps.state.currentStep, reason);
+}
+
+function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): WorkflowAbortResult {
+  if (deps.abortRequested()) {
+    return abortWorkflow(deps, 'interrupt', 'Workflow interrupted by user (SIGINT)', {
+      clearLastOutput: true,
+    });
+  }
+  return abortWorkflow(
+    deps,
+    'runtime_error',
+    ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error)),
+    { clearLastOutput: true },
+  );
 }
 
 function prepareRateLimitFallback(
@@ -307,16 +345,14 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     const isDelegated = isDelegatedWorkflowStep(step);
     const activeIteration = deps.state.iteration;
     const baseStepRuntime = deps.resolveRuntimeForStep(step);
-    let stepIteration: number | undefined;
-    if (!isDelegated) {
-      stepIteration = incrementStepIteration(deps.state, step.name);
-    }
+    const stepIteration = isDelegated
+      ? undefined
+      : incrementStepIteration(deps.state, step.name);
     const promotedRuntime = await resolveStepPromotionRuntime(deps, step, stepIteration, baseStepRuntime);
     const stepRuntime = withFallbackRuntime(deps.state, promotedRuntime);
-    let prebuiltInstruction: string | undefined;
-    if (!isDelegated && stepIteration !== undefined) {
-      prebuiltInstruction = deps.buildInstruction(step, stepIteration);
-    }
+    const prebuiltInstruction = stepIteration !== undefined
+      ? deps.buildInstruction(step, stepIteration)
+      : undefined;
     const stepInstruction = prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '';
@@ -327,12 +363,17 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     try {
       const result = await runWithStepSpan({
         enabled: deps.options.observability?.enabled === true,
+        runId: deps.options.observabilityRunId,
         workflowName: deps.getWorkflowName(),
         step,
         iteration: activeIteration,
         stepIteration,
+        instruction: stepInstruction,
+        workflowStack: deps.getCurrentWorkflowStack(),
+        sanitizeText: deps.options.sanitizeObservabilityText,
         providerInfo,
         getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+        traceTaskMetadata: deps.options.traceTaskMetadata,
       }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
       const { response, instruction, providerInfo: resultProviderInfo } = result;
       if (stepRuntime?.fallback) {
@@ -397,6 +438,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         qualityGates: step.qualityGates,
         projectRoot: deps.getCwd(),
         step,
+        childProcessEnv: deps.options.childProcessEnv,
       });
       if (!qualityGateResult.ok) {
         applyQualityGateFailure(
@@ -462,18 +504,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
       advanceActiveStep(deps, nextStep, deps.state.iteration);
     } catch (error) {
-      if (deps.abortRequested()) {
-        abort = abortWorkflow(deps, 'interrupt', 'Workflow interrupted by user (SIGINT)', {
-          clearLastOutput: true,
-        });
-      } else {
-        abort = abortWorkflow(
-          deps,
-          'runtime_error',
-          ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error)),
-          { clearLastOutput: true },
-        );
-      }
+      abort = abortWorkflowRuntimeError(deps, error);
       break;
     }
   }
@@ -483,28 +514,28 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     : { state: deps.state, ...(returnValue !== undefined ? { returnValue } : {}) };
 }
 
-export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Promise<{
-  response: AgentResponse;
-  nextStep: string;
-  isComplete: boolean;
-  loopDetected?: boolean;
-}> {
+export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
+  return runSingleWorkflowIterationCore(deps);
+}
+
+async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
   const step = deps.getStep(deps.state.currentStep);
   deps.applyRuntimeEnvironment('step');
   const loopCheck = deps.loopDetectorCheck(step.name);
 
   if (loopCheck.shouldAbort) {
-    deps.state.status = 'aborted';
+    const abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
     return {
       response: {
         persona: step.persona ?? step.name,
         status: 'blocked',
-        content: ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count),
+        content: abort.reason,
         timestamp: new Date(),
       },
       nextStep: ABORT_STEP,
       isComplete: true,
       loopDetected: true,
+      abort,
     };
   }
 
@@ -526,12 +557,19 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
   const result = await runWithStepSpan({
     enabled: deps.options.observability?.enabled === true,
+    runId: deps.options.observabilityRunId,
     workflowName: deps.getWorkflowName(),
     step,
     iteration: activeIteration,
     stepIteration,
+    instruction: deps.options.observability?.enabled === true && prebuiltInstruction
+      ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
+      : '',
+    workflowStack: deps.getCurrentWorkflowStack(),
+    sanitizeText: deps.options.sanitizeObservabilityText,
     providerInfo,
     getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+    traceTaskMetadata: deps.options.traceTaskMetadata,
   }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
   const { response, providerInfo: resultProviderInfo } = result;
   if (stepRuntime?.fallback) {
@@ -539,9 +577,8 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   }
 
   if (response.status === 'blocked') {
-    deps.state.status = 'aborted';
-    deps.emit('workflow:abort', deps.state, 'Workflow blocked and no user input provided');
-    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+    const abort = abortWorkflow(deps, 'blocked', 'Workflow blocked and no user input provided');
+    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
   if (response.status === 'rate_limited') {
     const currentProvider = resultProviderInfo ?? providerInfo;
@@ -557,12 +594,21 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     if (fallbackResult.queued) {
       return { response, nextStep: step.name, isComplete: false, loopDetected: loopCheck.isLoop };
     }
-    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+    return {
+      response,
+      nextStep: ABORT_STEP,
+      isComplete: true,
+      loopDetected: loopCheck.isLoop,
+      abort: fallbackResult.abort,
+    };
   }
   if (response.status === 'error') {
-    deps.state.status = 'aborted';
-    deps.emit('workflow:abort', deps.state, `Step "${step.name}" failed: ${response.error ?? response.content}`);
-    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+    const abort = abortWorkflow(
+      deps,
+      'step_error',
+      `Step "${step.name}" failed: ${response.error ?? response.content}`,
+    );
+    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
   if (stepRuntime?.fallback) {
@@ -588,6 +634,7 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     qualityGates: step.qualityGates,
     projectRoot: deps.getCwd(),
     step,
+    childProcessEnv: deps.options.childProcessEnv,
   });
   if (!qualityGateResult.ok) {
     applyQualityGateFailure(
@@ -607,13 +654,13 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   const transition = deps.resolveDoneTransition(step, response);
   if (transition.requiresUserInput) {
     if (!deps.options.onUserInput) {
-      deps.state.status = 'aborted';
-      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+      const abort = abortWorkflow(deps, 'user_input_required', 'User input required but no handler is configured');
+      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
     }
     const userInput = await deps.options.onUserInput({ step, response, prompt: response.content });
     if (userInput === null) {
-      deps.state.status = 'aborted';
-      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+      const abort = abortWorkflow(deps, 'user_input_cancelled', 'User input cancelled');
+      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
     }
     deps.addUserInput(userInput);
     deps.emit('step:user_input', step, userInput);
@@ -623,7 +670,13 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
 
   if (transition.returnValue !== undefined) {
     deps.state.status = 'completed';
-    return { response, nextStep: COMPLETE_STEP, isComplete: true, loopDetected: loopCheck.isLoop };
+    return {
+      response,
+      nextStep: COMPLETE_STEP,
+      isComplete: true,
+      returnValue: transition.returnValue,
+      loopDetected: loopCheck.isLoop,
+    };
   }
 
   const nextStep = requireNextStep(step, transition);
@@ -631,8 +684,13 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
 
   if (!isComplete) {
     advanceActiveStep(deps, nextStep, deps.state.iteration);
-  } else {
-    deps.state.status = nextStep === COMPLETE_STEP ? 'completed' : 'aborted';
+  } else if (nextStep === COMPLETE_STEP) {
+    deps.state.status = 'completed';
+  }
+
+  if (nextStep === ABORT_STEP) {
+    const abort = abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition');
+    return { response, nextStep, isComplete, loopDetected: loopCheck.isLoop, abort };
   }
 
   return { response, nextStep, isComplete, loopDetected: loopCheck.isLoop };

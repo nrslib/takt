@@ -13,6 +13,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Type safety | Code must pass the build (type check) |
 | Reproducibility | Do not depend on time or randomness. Same result every run |
 | Do not freeze non-executable assets | Do not make prose or section structure that does not define runtime behavior a CI failure condition |
+| Verify negative contracts at observable units | Do not pass prohibition, rejection, non-inheritance, or unsupported cases by exact-string absence alone |
 
 ## Coverage Criteria
 
@@ -21,6 +22,9 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | New behavior | Test required. REJECT if missing |
 | Bug fix | Regression test required. REJECT if missing |
 | Behavior change | Test update required. REJECT if missing |
+| Side-effect or state-transition change | Successful path and representative failure paths must be verified. REJECT if failure paths are untested |
+| Contract changes through consolidation or abstraction | Must verify that the contract holds on existing equivalent branches, not only on the new shared path |
+| Parser or configuration boundary changes | Must verify syntactically valid inputs with unexpected shapes, missing values, and isolation from personal configuration |
 | Build (type check) | Build must succeed. REJECT if it fails |
 | Edge cases / boundary values | Test recommended (Warning) |
 
@@ -51,6 +55,18 @@ These assets change often during wording improvements and reorganization, so mak
 
 Verify non-executable asset changes with review, Markdown lint, link checks, or sample command execution when needed.
 
+## Tests for Replaced Old Specifications
+
+When a specification change replaces elements of an old design (UI, API, events, state, labels, etc.) with a new design, tests must positively verify the new behavior. Do not freeze only the absence of the old specification.
+
+| Criteria | Verdict |
+|----------|---------|
+| Adding a test that only verifies elements of the old specification are not present or not called | REJECT |
+| Keeping an absence-only test from the old specification in an implementation unit that no longer owns the responsibility | REJECT |
+| Changing only tests in a file whose production code has no final diff, solely to negate the old specification | REJECT |
+| Positively verifying the new specification in the layer that owns the new responsibility (upper module, service, integration flow, etc.) | OK |
+| Deleting obsolete tests for removed old behavior and replacing them with regression tests for the new specification | OK |
+
 ## Test Structure: Given-When-Then
 
 ```typescript
@@ -74,6 +90,67 @@ test('should return NotFound error when user does not exist', async () => {
 | Reproducibility | Same result every time | Depends on time or randomness |
 | Clarity | Failure cause is obvious | Failure cause is unclear |
 | Focus | One test, one concept | Multiple concerns mixed |
+
+## Testing Side Effects and State Transitions
+
+Changes involving side effects or state transitions are not sufficiently verified by successful-path coverage alone.
+
+| Criteria | Verdict |
+|----------|---------|
+| Only the successful path is tested, with no verification of state after failure, interruption, or early exit | REJECT |
+| Cleanup or duplicate execution for acquired, started, registered, or applied state is not verified | REJECT |
+| A change affects shared state or downstream execution but does not verify rerun behavior after partial failure | Warning. REJECT when it affects a primary path |
+| Mock-verified behavior is not distinguished from unverified real-integration scope | Warning. REJECT when it is a primary requirement |
+| Successful path, representative failure paths, and boundary state transitions are each verified | OK |
+
+## Testing Contract Changes and Existing Branches
+
+When a change standardizes a contract through a shared helper, normalizer, builder, or adapter, testing only the newly added path is not sufficient. Verify that existing equivalent branches satisfy the same contract.
+
+| Criteria | Verdict |
+|----------|---------|
+| Only the new shared path is tested, while existing equivalent branches are not verified for the same return value, side effect, or error contract | REJECT |
+| An existing branch is treated as "preserved behavior" without verifying that it does not conflict with the contract introduced by the diff | REJECT |
+| Return / throw / catch / early return paths in the changed function are not enumerated, causing representative failure paths to be missed | REJECT |
+| Existing branches with the same responsibility have tests for return values, side effects, events, and error classification contracts | OK |
+
+## Contract Test Sufficiency
+
+When adding or changing a config value, runtime-selected capability, backend, option, permission, or output contract, tests must prove the branch conditions that change the contract, not merely that a value exists.
+
+| Criteria | Verdict |
+|----------|---------|
+| Only the happy path for a new option is verified | Warning |
+| Requirement-relevant branches among unset, set, invalid value, inherited, non-inherited, override, and unsupported target are not verified | REJECT |
+| A user-facing display or validation entry is not verified to follow the same contract as the primary execution path | REJECT |
+| A test only checks displayed values without verifying they match the resolution input used during execution | REJECT |
+| Absence is verified only by exact string matching, missing order, case, whitespace, or partial-leak differences | REJECT |
+| Boundary values that may be normalized at configuration boundaries, such as empty strings, whitespace-only strings, empty arrays, or case variants, are not tested | Warning. REJECT when this is a primary contract branch |
+| The path from entry point to final call verifies happy, rejection, and non-inheritance cases | OK |
+
+## Testing Negative, Non-Inheritance, and Rejection Contracts
+
+Tests for prohibition, rejection, non-inheritance, unsupported targets, and isolation must not rely only on a specific string being absent from the whole output.
+Extract observable units such as output lines, records, fields, or call arguments, then verify each forbidden value cannot leak through order, case, whitespace, delimiter, or partial-match differences.
+
+| Criteria | Verdict |
+|----------|---------|
+| Exact-string absence alone is used to conclude that a forbidden or non-inherited value was not used | REJECT |
+| Only allowed-value presence is checked, without proving rejected, forbidden, or non-inherited values do not reach final processing | REJECT |
+| Observable units such as output lines, events, records, fields, or call arguments are extracted and checked per forbidden value | OK |
+| Allowed vs rejected and inherited vs non-inherited cases are tested as pairs | OK |
+| A new E2E test does not follow existing same-kind conventions for timeout, cleanup, and forced termination | Warning. REJECT when it can cause process leaks or flakes |
+
+## Parser and Configuration Boundary Tests
+
+At boundaries that read external files, configuration, YAML/JSON, or CLI input, testing only the ideal typed input is not sufficient.
+
+| Criteria | Verdict |
+|----------|---------|
+| Array-like fields are not tested with object/null/missing values | REJECT |
+| File/directory checks are not tested with an existing regular file, broken link, or permission error | REJECT |
+| Tests that can inherit existing user or machine configuration do not isolate with an empty config directory or temporary HOME | REJECT |
+| Syntactically valid but contract-invalid shapes are pinned to ignore, normalize, or explicit-error behavior | OK |
 
 ## Test Data and Fixtures
 

@@ -16,6 +16,10 @@ import {
   type ConfigValueSource,
 } from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
+import {
+  buildTraceDiscovery,
+  type WorkflowTraceDiscovery,
+} from '../../../core/workflow/observability/traceDiscovery.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
 import { createSessionLog, generateSessionId, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
 import { isQuietMode } from '../../../shared/context.js';
@@ -26,7 +30,9 @@ import { createProviderEventLogger, isProviderEventsEnabled } from '../../../sha
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/utils/usageEventLogger.js';
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
+import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
+import { ensureWorktreeTaktGitignore } from '../../../infra/task/projectLocalTaktSync.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
 import { RunMetaManager } from './runMeta.js';
@@ -52,9 +58,11 @@ export interface WorkflowExecutionBootstrap {
   runSlug: string;
   runPaths: ReturnType<typeof buildRunPaths>;
   runMetaManager: RunMetaManager;
+  traceDiscovery?: WorkflowTraceDiscovery;
   sessionLog: SessionLog;
   ndjsonLogPath: string;
   sessionLogger: SessionLogger;
+  sanitizeObservabilityText: (text: string) => string;
   shouldNotifyIterationLimit: boolean;
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
@@ -118,9 +126,11 @@ export async function createWorkflowExecutionBootstrap(
   if (!isValidReportDirName(runSlug)) {
     throw new Error(`Invalid reportDirName: ${runSlug}`);
   }
+  if (isWorktree) {
+    ensureWorktreeTaktGitignore(cwd);
+  }
 
   const runPaths = buildRunPaths(cwd, runSlug);
-  const runMetaManager = new RunMetaManager(runPaths, task, workflowConfig.name, options.directResume);
   const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
@@ -136,6 +146,25 @@ export async function createWorkflowExecutionBootstrap(
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
+  const sanitizeObservabilityText = (text: string): string => sanitizeTextForStorage(text, allowSensitiveData);
+  const traceDiscovery = globalConfig.observability.enabled === true
+    ? buildTraceDiscovery({
+        runId: runSlug,
+        workflowName: workflowConfig.name,
+        traceTaskMetadata: {
+          ...options.traceTaskMetadata,
+          runDir: runPaths.runRootAbs,
+        },
+        sanitizeText: sanitizeObservabilityText,
+      })
+    : undefined;
+  const runMetaManager = new RunMetaManager(
+    runPaths,
+    task,
+    workflowConfig.name,
+    options.directResume,
+    traceDiscovery ? { traceDiscovery } : undefined,
+  );
   const workflowSessionId = generateSessionId();
   const ndjsonLogPath = initNdjsonLog(
     workflowSessionId,
@@ -226,7 +255,41 @@ export async function createWorkflowExecutionBootstrap(
     mode: traceReportMode,
     logger: log,
   });
-  const observabilityHandle = await initializeOtelFoundation(globalConfig.observability);
+  const observabilityOptions = globalConfig.observability.enabled
+    && (
+      globalConfig.observability.sessionLogExporter
+      || globalConfig.observability.monitor
+      || globalConfig.observability.usageEventsPhase
+    )
+    ? {
+        ...(globalConfig.observability.sessionLogExporter
+          ? {
+              sessionLogExporter: {
+                runId: runSlug,
+                shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
+                sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
+                workflowName: workflowConfig.name,
+              },
+            }
+          : {}),
+        ...(globalConfig.observability.usageEventsPhase
+          ? {
+              usageEventsExporter: {
+                runId: runSlug,
+                sessionId: workflowSessionId,
+                phaseUsageLogPath: join(runPaths.logsAbs, `${workflowSessionId}${PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX}`),
+              },
+            }
+          : {}),
+        ...(globalConfig.observability.monitor
+          ? { monitorJsonExporter: { runId: runSlug, monitorPath: join(runPaths.runRootAbs, 'monitor.json') } }
+          : {}),
+      }
+    : undefined;
+  const observabilityHandle = await initializeOtelFoundation(
+    globalConfig.observability,
+    observabilityOptions,
+  );
 
   return {
     interactiveUserInput,
@@ -240,9 +303,11 @@ export async function createWorkflowExecutionBootstrap(
     runSlug,
     runPaths,
     runMetaManager,
+    traceDiscovery,
     sessionLog,
     ndjsonLogPath,
     sessionLogger,
+    sanitizeObservabilityText,
     shouldNotifyIterationLimit,
     shouldNotifyWorkflowComplete,
     shouldNotifyWorkflowAbort,

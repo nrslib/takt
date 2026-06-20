@@ -10,6 +10,7 @@ export const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'pipeline.commit_message_template', type: 'string' },
   { path: 'pipeline.pr_body_template', type: 'string' },
   { path: 'persona_providers', type: 'json' },
+  { path: 'provider_routing', type: 'json' },
   { path: 'branch_name_strategy', type: 'string' },
   { path: 'minimal_output', type: 'boolean' },
   { path: 'task_poll_interval_ms', type: 'number' },
