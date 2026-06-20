@@ -3,6 +3,9 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSpawn, mockMkdtemp, mockReadFile, mockRm } = vi.hoisted(() => ({
@@ -496,6 +499,65 @@ describe('callCopilot', () => {
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('existing-session-id');
+  });
+
+  it('should create a missing TMPDIR before preparing the share file', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), 'takt-copilot-missing-tmp-parent-'));
+    const missingTmpDir = join(parentDir, 'missing', 'tmp');
+    process.env.TMPDIR = missingTmpDir;
+    mockMkdtemp.mockImplementationOnce(async (prefix: string) => {
+      expect(prefix).toBe(join(missingTmpDir, 'takt-copilot-'));
+      expect(existsSync(missingTmpDir)).toBe(true);
+      return join(missingTmpDir, 'takt-copilot-share');
+    });
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+      expect(result.status).toBe('done');
+      expect(mockMkdtemp).toHaveBeenCalledWith(join(missingTmpDir, 'takt-copilot-'));
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+      rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should continue without --share when TMPDIR cannot be created', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const parentDir = mkdtempSync(join(tmpdir(), 'takt-copilot-invalid-tmp-parent-'));
+    const fileTmpDir = join(parentDir, 'tmp-file');
+    writeFileSync(fileTmpDir, 'not a directory\n', 'utf-8');
+    process.env.TMPDIR = fileTmpDir;
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    try {
+      const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+      const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+
+      expect(result.status).toBe('done');
+      expect(mockMkdtemp).not.toHaveBeenCalled();
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(args).not.toContain('--share');
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+      rmSync(parentDir, { recursive: true, force: true });
+    }
   });
 
   it('should redact credentials from error stderr', async () => {

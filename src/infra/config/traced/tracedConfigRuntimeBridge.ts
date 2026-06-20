@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
 import type { SchemaShape, TracedValue } from 'traced-config';
+import { ensureCurrentTmpDirExists } from '../../../shared/utils/index.js';
 
 type SerializedSchemaFormat = 'string' | 'number' | 'boolean' | 'json' | undefined;
 
@@ -154,7 +154,7 @@ export function loadTraceEntriesViaRuntime(
   fileOrigin: 'global' | 'local',
   parsedConfig: Record<string, unknown>,
 ): Map<string, TracedValue<unknown>> {
-  const tempDir = mkdtempSync(join(tmpdir(), 'takt-traced-config-'));
+  const tempDir = mkdtempSync(join(ensureCurrentTmpDirExists(), 'takt-traced-config-'));
 
   try {
     const tempConfigPath = Object.keys(parsedConfig).length > 0

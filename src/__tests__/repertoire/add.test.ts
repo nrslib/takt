@@ -160,6 +160,25 @@ describe('repertoireAddCommand temporary directory handling', () => {
     expect(mockResolveRepertoireConfigPath).toHaveBeenCalledWith(join(secureTempDir, 'extract'));
   });
 
+  it('should create a missing TMPDIR before creating import artifacts', async () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const missingTmpDir = join(tmpdir(), 'takt-repertoire-missing-tmp');
+    process.env.TMPDIR = missingTmpDir;
+
+    try {
+      await repertoireAddCommand('github:owner/repo@main');
+
+      expect(mockMkdirSync).toHaveBeenCalledWith(missingTmpDir, { recursive: true });
+      expect(mockMkdtempSync).toHaveBeenCalledWith(join(missingTmpDir, 'takt-import-'));
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+    }
+  });
+
   it('should clean up the mkdtemp-created directory once', async () => {
     await repertoireAddCommand('github:owner/repo@main');
 

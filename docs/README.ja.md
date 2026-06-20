@@ -112,6 +112,15 @@ takt list
 npm install -g takt
 ```
 
+Nix flakes を使う場合:
+
+```bash
+nix run github:nrslib/takt
+nix profile install github:nrslib/takt
+```
+
+Nix パッケージがインストールするのは TAKT CLI 本体のみです。外部 CLI プロバイダー、`git`、`gh`/`glab` は、[必要なもの](#必要なもの) に記載のとおり別途インストールして `PATH` に置くか、設定で指定してください。
+
 ### AI と相談してタスクを積む
 
 ```

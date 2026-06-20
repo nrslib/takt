@@ -1,8 +1,8 @@
 import * as childProcess from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { ensureCurrentTmpDirExists } from '../../shared/utils/index.js';
 import { MAX_INLINE_IMAGE_BYTES, type PastedImage } from './inlineImagePaste.js';
 
 const CLIPBOARD_COMMAND_TIMEOUT_MS = 10_000;
@@ -61,7 +61,7 @@ async function execClipboardCommand(file: string, args: string[]): Promise<{ std
 }
 
 async function readMacOSClipboardImage(): Promise<PastedImage> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'takt-clipboard-image-'));
+  const tempDir = await mkdtemp(path.join(ensureCurrentTmpDirExists(), 'takt-clipboard-image-'));
   const pngPath = path.join(tempDir, 'clipboard.png');
   const tiffPath = path.join(tempDir, 'clipboard.tiff');
 
