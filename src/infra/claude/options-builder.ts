@@ -30,6 +30,9 @@ function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
   if (options.anthropicApiKey) {
     env.ANTHROPIC_API_KEY = options.anthropicApiKey;
   }
+  if (options.baseUrl !== undefined) {
+    env.ANTHROPIC_BASE_URL = options.baseUrl;
+  }
 
   const existingPathEntries = (env.PATH ?? '')
     .split(delimiter)

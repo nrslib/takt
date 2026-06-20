@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROVIDER_OPTIONS_ENV_SPECS,
+  PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
   PROVIDER_OPTIONS_TRACE_PATHS,
   PROVIDER_OPTIONS_TRACKED_KEYS,
   getPresentProviderOptionPaths,
@@ -13,11 +14,13 @@ describe('providerOptionsContract', () => {
 
     expect(envPaths).toEqual(new Set([
       'provider_options',
+      'provider_options.codex.base_url',
       'provider_options.codex.network_access',
       'provider_options.codex.reasoning_effort',
       'provider_options.opencode.network_access',
       'provider_options.opencode.variant',
       'provider_options.opencode.allowed_tools',
+      'provider_options.claude.base_url',
       'provider_options.claude.effort',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
@@ -28,6 +31,8 @@ describe('providerOptionsContract', () => {
       'provider_options.copilot.effort',
       'provider_options.kiro.agent',
     ]));
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.base_url');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
@@ -36,6 +41,10 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
+    expect(PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS).toEqual([
+      'provider_options.codex.base_url',
+      'provider_options.claude.base_url',
+    ]);
   });
 
   it('tracked keys do not contain duplicate paths', () => {
@@ -43,6 +52,10 @@ describe('providerOptionsContract', () => {
   });
 
   it('maps internal provider option paths to traced-config paths', () => {
+    expect(toProviderOptionsTracePath('codex.baseUrl'))
+      .toBe('provider_options.codex.base_url');
+    expect(toProviderOptionsTracePath('claude.baseUrl'))
+      .toBe('provider_options.claude.base_url');
     expect(toProviderOptionsTracePath('claude.sandbox.allowUnsandboxedCommands'))
       .toBe('provider_options.claude.sandbox.allow_unsandboxed_commands');
     expect(toProviderOptionsTracePath('claude.allowedTools'))
@@ -61,16 +74,26 @@ describe('providerOptionsContract', () => {
 
   it('enumerates only present provider option leaves', () => {
     expect(getPresentProviderOptionPaths({
-      codex: { networkAccess: true, reasoningEffort: 'high' },
+      codex: {
+        baseUrl: 'http://127.0.0.1:8787/v1',
+        networkAccess: true,
+        reasoningEffort: 'high',
+      },
       opencode: { variant: 'high', allowedTools: ['read', 'grep'] },
-      claude: { effort: 'medium', sandbox: { excludedCommands: ['rm -rf'] } },
+      claude: {
+        baseUrl: 'http://127.0.0.1:8787',
+        effort: 'medium',
+        sandbox: { excludedCommands: ['rm -rf'] },
+      },
       claudeTerminal: { backend: 'tmux', keepSession: false },
       copilot: { effort: 'high' },
-    })).toEqual([
+    } as Parameters<typeof getPresentProviderOptionPaths>[0])).toEqual([
+      'codex.baseUrl',
       'codex.networkAccess',
       'codex.reasoningEffort',
       'opencode.variant',
       'opencode.allowedTools',
+      'claude.baseUrl',
       'claude.effort',
       'claude.sandbox.excludedCommands',
       'claudeTerminal.backend',

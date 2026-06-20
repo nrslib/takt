@@ -36,6 +36,8 @@ export interface CodexCallOptions {
   onStream?: StreamCallback;
   /** OpenAI API key (bypasses CLI auth) */
   openaiApiKey?: string;
+  /** OpenAI-compatible API base URL */
+  baseUrl?: string;
   /** Override path to external Codex CLI binary (bypasses SDK vendored binary) */
   codexPathOverride?: string;
   /** JSON Schema for structured output */

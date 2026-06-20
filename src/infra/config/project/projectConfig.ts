@@ -54,6 +54,7 @@ import {
   normalizeObservabilityConfig,
 } from '../observabilityConfig.js';
 import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
+import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
 
@@ -64,7 +65,10 @@ type RawProviderReference = ConfigProviderReference<ProviderType>;
 
 export function loadProjectConfig(projectDir: string): ProjectConfig {
   const configPath = getProjectConfigPath(projectDir);
-  const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(configPath);
+  const { parsedConfig, rawConfig, trace } = loadProjectConfigTrace(
+    configPath,
+    PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
+  );
   setCachedProjectConfigTrace(projectDir, trace);
   assertValidProjectConfig(parsedConfig, configPath, true);
   assertValidProjectConfig(rawConfig, configPath);
@@ -99,10 +103,18 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     sync_conflict_resolver,
     observability,
   } = parsedConfigResult;
+  const projectBaseUrlOptions = {
+    baseUrlTrust: 'local-loopback-only' as const,
+    getOrigin: trace.getOrigin,
+  };
   const normalizedProvider = normalizeConfigProviderReference(
     provider as RawProviderReference,
     model as string | undefined,
     provider_options as Record<string, unknown> | undefined,
+    {
+      ...projectBaseUrlOptions,
+      pathPrefix: 'provider_options',
+    },
   );
   const normalizedSubmodules = normalizeSubmodules(submodules);
   const normalizedWithSubmodules = normalizeWithSubmodules(with_submodules);
@@ -117,6 +129,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       model?: string;
       provider_options?: Record<string, unknown>;
     }> | undefined,
+    projectBaseUrlOptions,
   );
   const normalizedProviderRouting = normalizeProviderRouting(
     provider_routing as {
@@ -124,6 +137,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       tags?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
       steps?: Record<string, string | { type?: string; provider?: string; model?: string; provider_options?: Record<string, unknown> }>;
     } | undefined,
+    projectBaseUrlOptions,
   );
   const analyticsConfig = normalizeAnalytics(analytics as Record<string, unknown> | undefined);
   const normalizedTaktProviders = normalizeTaktProviders(

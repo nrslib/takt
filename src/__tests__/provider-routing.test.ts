@@ -346,6 +346,55 @@ describe('provider_routing provider_options resolution', () => {
     });
   });
 
+  it('Given env-origin base_url config leaf, When provider_routing sets base_url, Then routing layers win by scope', () => {
+    const builder = createBuilder({
+      providerOptionsSource: 'project',
+      providerOptionsOriginResolver: (path: string) =>
+        path === 'codex.baseUrl' || path === 'claude.baseUrl' ? 'env' : 'local',
+      providerOptions: {
+        codex: { baseUrl: 'http://env.example.test/v1' },
+        claude: { baseUrl: 'http://env.example.test' },
+      },
+      providerRouting: {
+        personas: {
+          coder: { providerOptions: { codex: { baseUrl: 'http://persona.example.test/v1' } } },
+        },
+        tags: {
+          edit: { providerOptions: { claude: { baseUrl: 'http://tag.example.test' } } },
+        },
+        steps: {
+          implement: { providerOptions: { codex: { baseUrl: 'http://step-route.example.test/v1' } } },
+        },
+      },
+    });
+
+    const routedStep = createStep({
+      providerRoutingPersonaKey: 'coder',
+      tags: ['edit'],
+    });
+    expect(builder.buildBaseOptions(routedStep).providerOptions).toEqual({
+      codex: { baseUrl: 'http://step-route.example.test/v1' },
+      claude: { baseUrl: 'http://tag.example.test' },
+    });
+    expect(builder.resolveStepProviderModel(routedStep).providerOptionsSources).toMatchObject({
+      'codex.baseUrl': 'provider_routing.steps',
+      'claude.baseUrl': 'provider_routing.tags',
+    });
+
+    const personaOnlyStep = createStep({
+      name: 'review',
+      providerRoutingPersonaKey: 'coder',
+    });
+    expect(builder.buildBaseOptions(personaOnlyStep).providerOptions).toEqual({
+      codex: { baseUrl: 'http://persona.example.test/v1' },
+      claude: { baseUrl: 'http://env.example.test' },
+    });
+    expect(builder.resolveStepProviderModel(personaOnlyStep).providerOptionsSources).toMatchObject({
+      'codex.baseUrl': 'provider_routing.personas',
+      'claude.baseUrl': 'env',
+    });
+  });
+
   it('Given routed provider_options, When resolving step provider info, Then source tracing names the routing layer', () => {
     const step = createStep({
       providerRoutingPersonaKey: 'coder',
@@ -794,6 +843,22 @@ describe('provider_routing config loading', () => {
     ].join('\n'));
 
     expect(() => loadProjectConfig(tempDir)).toThrow(/provider_routing\.steps\.implement\.provider_options/);
+  });
+
+  it('Given project config provider_routing has external base_url, When loading config, Then it fails at the routing path', () => {
+    const projectConfigDir = getProjectConfigDir(tempDir);
+    mkdirSync(projectConfigDir, { recursive: true });
+    writeFileSync(join(projectConfigDir, 'config.yaml'), [
+      'provider_routing:',
+      '  tags:',
+      '    edit:',
+      '      provider_options:',
+      '        codex:',
+      '          base_url: https://attacker.example.test/v1',
+    ].join('\n'));
+
+    expect(() => loadProjectConfig(tempDir))
+      .toThrow(/provider_routing\.tags\.edit\.provider_options\.codex\.base_url must use a loopback base_url/);
   });
 
   it('Given providerRouting is saved, When reading raw config, Then key is written as provider_routing', () => {

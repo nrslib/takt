@@ -1,5 +1,9 @@
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
-import { mergeProviderOptions, normalizeProviderOptions } from './providerOptions.js';
+import {
+  mergeProviderOptions,
+  normalizeProviderOptions,
+  type NormalizeProviderOptionsOptions,
+} from './providerOptions.js';
 import { normalizeProviderBlockOptions } from './providerBlockOptions.js';
 
 export type ConfigProviderBlock<ProviderType extends string> = {
@@ -28,12 +32,13 @@ export function normalizeConfigProviderReferenceDetailed<ProviderType extends st
   provider: ConfigProviderReference<ProviderType>,
   model: string | undefined,
   providerOptions: Record<string, unknown> | undefined,
+  options: NormalizeProviderOptionsOptions = {},
 ): NormalizedConfigProviderReference<ProviderType> {
   if (typeof provider === 'string' || provider === undefined) {
     return {
       provider,
       model,
-      providerOptions: normalizeProviderOptions(providerOptions),
+      providerOptions: normalizeProviderOptions(providerOptions, options),
       providerSpecified: provider !== undefined,
     };
   }
@@ -43,7 +48,7 @@ export function normalizeConfigProviderReferenceDetailed<ProviderType extends st
     model: provider.model ?? model,
     providerOptions: mergeProviderOptions(
       normalizeProviderBlockOptions(provider),
-      normalizeProviderOptions(providerOptions),
+      normalizeProviderOptions(providerOptions, options),
     ),
     providerSpecified: true,
   };
@@ -53,12 +58,13 @@ export function normalizeConfigProviderReference<ProviderType extends string>(
   provider: ConfigProviderReference<ProviderType>,
   model: string | undefined,
   providerOptions: Record<string, unknown> | undefined,
+  options: NormalizeProviderOptionsOptions = {},
 ): {
   provider: ProviderType | undefined;
   model: string | undefined;
   providerOptions: StepProviderOptions | undefined;
 } {
-  const normalized = normalizeConfigProviderReferenceDetailed(provider, model, providerOptions);
+  const normalized = normalizeConfigProviderReferenceDetailed(provider, model, providerOptions, options);
   return {
     provider: normalized.provider,
     model: normalized.model,

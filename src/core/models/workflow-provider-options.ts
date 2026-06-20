@@ -22,6 +22,7 @@ export interface McpHttpServerConfig {
 export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHttpServerConfig;
 
 export interface CodexProviderOptions {
+  baseUrl?: string;
   networkAccess?: boolean;
   reasoningEffort?: CodexReasoningEffort;
 }
@@ -58,6 +59,7 @@ export interface ClaudeSandboxSettings {
 }
 
 export interface ClaudeProviderOptions {
+  baseUrl?: string;
   allowedTools?: string[];
   effort?: ClaudeEffort;
   sandbox?: ClaudeSandboxSettings;

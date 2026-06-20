@@ -82,6 +82,30 @@ describe('denormalizeProviderOptions', () => {
     });
   });
 
+  it('should round-trip provider base_url leaves through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      codex: {
+        base_url: 'http://127.0.0.1:8787/v1',
+      },
+      claude: {
+        base_url: 'http://127.0.0.1:8787',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      codex: {
+        baseUrl: 'http://127.0.0.1:8787/v1',
+      },
+      claude: {
+        baseUrl: 'http://127.0.0.1:8787',
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
   it('should round-trip copilot effort through normalize and denormalize', () => {
     const rawProviderOptions = {
       copilot: {

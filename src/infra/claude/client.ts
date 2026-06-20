@@ -51,6 +51,7 @@ export class ClaudeClient {
       onAskUserQuestion: options.onAskUserQuestion,
       bypassPermissions: options.bypassPermissions,
       anthropicApiKey: options.anthropicApiKey,
+      baseUrl: options.baseUrl,
       outputSchema: options.outputSchema,
       sandbox: options.sandbox,
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,

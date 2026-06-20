@@ -267,6 +267,101 @@ type TracedConfigState = {
   getOrigin(path: string): ProviderOptionsTraceOrigin;
 };
 
+type ConfigBaseUrlPath = 'codex.baseUrl' | 'claude.baseUrl';
+
+const CONFIG_BASE_URL_PATHS = [
+  'codex.baseUrl',
+  'claude.baseUrl',
+] as const satisfies readonly ConfigBaseUrlPath[];
+
+function getConfigBaseUrl(
+  providerOptions: StepProviderOptions | undefined,
+  path: ConfigBaseUrlPath,
+): string | undefined {
+  if (path === 'codex.baseUrl') {
+    return providerOptions?.codex?.baseUrl;
+  }
+  return providerOptions?.claude?.baseUrl;
+}
+
+function setConfigBaseUrl(
+  providerOptions: StepProviderOptions | undefined,
+  path: ConfigBaseUrlPath,
+  value: string,
+): StepProviderOptions {
+  if (path === 'codex.baseUrl') {
+    return {
+      ...providerOptions,
+      codex: {
+        ...providerOptions?.codex,
+        baseUrl: value,
+      },
+    };
+  }
+  return {
+    ...providerOptions,
+    claude: {
+      ...providerOptions?.claude,
+      baseUrl: value,
+    },
+  };
+}
+
+function selectConfigBaseUrl(
+  path: ConfigBaseUrlPath,
+  project: StepProviderOptions | undefined,
+  projectTrace: TracedConfigState,
+  global: StepProviderOptions | undefined,
+  globalTrace: TracedConfigState,
+): { value: string; origin: ProviderOptionsTraceOrigin } | undefined {
+  const projectValue = getConfigBaseUrl(project, path);
+  const globalValue = getConfigBaseUrl(global, path);
+  if (projectValue === undefined && globalValue === undefined) {
+    return undefined;
+  }
+
+  const tracePath = toProviderOptionsTracePath(path);
+  const projectOrigin = projectValue !== undefined ? projectTrace.getOrigin(tracePath) : 'default';
+  const globalOrigin = globalValue !== undefined ? globalTrace.getOrigin(tracePath) : 'default';
+
+  if (projectValue !== undefined && projectOrigin === 'local') {
+    return { value: projectValue, origin: projectOrigin };
+  }
+  if (globalValue !== undefined && globalOrigin === 'global') {
+    return { value: globalValue, origin: globalOrigin };
+  }
+  if (projectValue !== undefined) {
+    return { value: projectValue, origin: projectOrigin };
+  }
+  if (globalValue !== undefined) {
+    return { value: globalValue, origin: globalOrigin };
+  }
+  return undefined;
+}
+
+function mergeConfigProviderOptionsWithTrace(
+  globalOptions: StepProviderOptions | undefined,
+  globalTrace: TracedConfigState,
+  projectOptions: StepProviderOptions | undefined,
+  projectTrace: TracedConfigState,
+): {
+  value: StepProviderOptions | undefined;
+  baseUrlOrigins: Partial<Record<ConfigBaseUrlPath, ProviderOptionsTraceOrigin>>;
+} {
+  let value = mergeProviderOptions(globalOptions, projectOptions);
+  const baseUrlOrigins: Partial<Record<ConfigBaseUrlPath, ProviderOptionsTraceOrigin>> = {};
+
+  for (const path of CONFIG_BASE_URL_PATHS) {
+    const selected = selectConfigBaseUrl(path, projectOptions, projectTrace, globalOptions, globalTrace);
+    if (selected !== undefined) {
+      value = setConfigBaseUrl(value, path, selected.value);
+      baseUrlOrigins[path] = selected.origin;
+    }
+  }
+
+  return { value, baseUrlOrigins };
+}
+
 function resolveProviderOptionsSourceFromValues(
   providerOptions: StepProviderOptions | undefined,
   originResolver: ProviderOptionsOriginResolver,
@@ -333,36 +428,51 @@ export function resolveProviderOptionsWithTrace(
 } {
   const project = loadProjectConfigCached(projectDir);
   const global = globalConfigModule.loadGlobalConfig();
-  const mergedProviderOptions = mergeProviderOptions(global.providerOptions, project.providerOptions);
-
-  if (mergedProviderOptions !== undefined) {
-    const projectTrace = loadProjectConfigTraceState(projectDir);
-    const globalTrace = loadGlobalConfigTraceState();
-    const originResolver: ProviderOptionsOriginResolver = (path: string) => {
-      if (hasProviderOptionsPath(project.providerOptions, path)) {
-        return projectTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      if (hasProviderOptionsPath(global.providerOptions, path)) {
-        return globalTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      if (project.providerOptions !== undefined) {
-        return projectTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      if (global.providerOptions !== undefined) {
-        return globalTrace.getOrigin(toProviderOptionsTracePath(path));
-      }
-      return 'default';
-    };
+  const preliminaryProviderOptions = mergeProviderOptions(global.providerOptions, project.providerOptions);
+  if (preliminaryProviderOptions === undefined) {
     return {
-      value: mergedProviderOptions,
-      source: resolveProviderOptionsSourceFromValues(mergedProviderOptions, originResolver),
-      originResolver,
+      value: undefined,
+      source: 'default',
+      originResolver: () => 'default',
     };
   }
 
+  const projectTrace = loadProjectConfigTraceState(projectDir);
+  const globalTrace = loadGlobalConfigTraceState();
+  const {
+    value: mergedProviderOptions,
+    baseUrlOrigins,
+  } = mergeConfigProviderOptionsWithTrace(
+    global.providerOptions,
+    globalTrace,
+    project.providerOptions,
+    projectTrace,
+  );
+
+  const originResolver: ProviderOptionsOriginResolver = (path: string) => {
+    if (path === 'codex.baseUrl' || path === 'claude.baseUrl') {
+      const origin = baseUrlOrigins[path];
+      if (origin !== undefined) {
+        return origin;
+      }
+    }
+    if (hasProviderOptionsPath(project.providerOptions, path)) {
+      return projectTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    if (hasProviderOptionsPath(global.providerOptions, path)) {
+      return globalTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    if (project.providerOptions !== undefined) {
+      return projectTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    if (global.providerOptions !== undefined) {
+      return globalTrace.getOrigin(toProviderOptionsTracePath(path));
+    }
+    return 'default';
+  };
   return {
-    value: undefined,
-    source: 'default',
-    originResolver: () => 'default',
+    value: mergedProviderOptions,
+    source: resolveProviderOptionsSourceFromValues(mergedProviderOptions, originResolver),
+    originResolver,
   };
 }

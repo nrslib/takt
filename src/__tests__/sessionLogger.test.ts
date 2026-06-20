@@ -198,7 +198,7 @@ describe('SessionLogger', () => {
     expect(buildWorkflowStepScopeKey('review', firstStack)).not.toBe(buildWorkflowStepScopeKey('review', secondStack));
   });
 
-  it('step_start record includes providerOptions and providerOptionsSources when providerInfo carries them', () => {
+  it('step_start record includes redacted providerOptions and providerOptionsSources when providerInfo carries them', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-opts', 'task', 'wf', { logsDir });
     const logger = new SessionLogger(ndjsonPath, true);
@@ -216,8 +216,13 @@ describe('SessionLogger', () => {
       providerSource: 'global',
       model: 'claude-opus-4-7',
       modelSource: 'global',
-      providerOptions: { claude: { effort: 'xhigh' } },
-      providerOptionsSources: { 'claude.effort': 'step' },
+      providerOptions: {
+        claude: {
+          baseUrl: 'http://user:token@127.0.0.1:8787?api_key=secret',
+          effort: 'xhigh',
+        },
+      },
+      providerOptionsSources: { 'claude.baseUrl': 'project', 'claude.effort': 'step' },
     });
 
     const records = readFileSync(ndjsonPath, 'utf-8')
@@ -225,8 +230,13 @@ describe('SessionLogger', () => {
       .split('\n')
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     const stepStart = records.find((record) => record.type === 'step_start');
-    expect(stepStart?.providerOptions).toEqual({ claude: { effort: 'xhigh' } });
-    expect(stepStart?.providerOptionsSources).toEqual({ 'claude.effort': 'step' });
+    expect(stepStart?.providerOptions).toEqual({
+      claude: {
+        baseUrl: '[configured]',
+        effort: 'xhigh',
+      },
+    });
+    expect(stepStart?.providerOptionsSources).toEqual({ 'claude.baseUrl': 'project', 'claude.effort': 'step' });
   });
 
   it('step_start record includes provider/model/source when providerInfo is given (#370)', () => {

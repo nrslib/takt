@@ -22,6 +22,7 @@ import {
   normalizeConfigProviderReferenceDetailed,
   type ConfigProviderReference,
 } from './providerReference.js';
+import type { NormalizeProviderOptionsOptions } from './providerOptions.js';
 
 type RawCommandQualityGate = Omit<CommandQualityGate, 'timeoutMs'> & {
   timeout_ms?: number;
@@ -243,8 +244,9 @@ export function denormalizeWorkflowOverrides(
 
 export function normalizePersonaProviders(
   raw: Record<string, RawProviderRoutingEntry> | undefined,
+  options: NormalizeProviderOptionsOptions = {},
 ): Record<string, PersonaProviderEntry> | undefined {
-  return normalizeProviderRoutingEntries(raw, 'persona_providers');
+  return normalizeProviderRoutingEntries(raw, 'persona_providers', options);
 }
 
 export function denormalizePersonaProviders(
@@ -256,6 +258,7 @@ export function denormalizePersonaProviders(
 function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
   raw: Record<string, RawProviderRoutingEntry> | undefined,
   pathPrefix: string,
+  options: NormalizeProviderOptionsOptions,
 ): Record<string, TEntry> | undefined {
   if (!raw) return undefined;
   const entries = Object.entries(raw);
@@ -268,6 +271,10 @@ function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
       (typeof entry === 'string' ? entry : (entry.provider ?? entry.type)) as ConfigProviderReference<NonNullable<TEntry['provider']>>,
       typeof entry === 'string' ? undefined : entry.model,
       rawProviderOptions,
+      {
+        ...options,
+        pathPrefix: `${path}.provider_options`,
+      },
     );
     if (rawProviderOptions !== undefined) {
       assertNormalizedProviderOptions(path, normalizedReference.providerOptions);
@@ -347,12 +354,13 @@ export function normalizeProviderRouting(
     tags?: Record<string, RawProviderRoutingEntry>;
     steps?: Record<string, RawProviderRoutingEntry>;
   } | undefined,
+  options: NormalizeProviderOptionsOptions = {},
 ): ProviderRoutingConfig | undefined {
   if (!raw) return undefined;
   const result: ProviderRoutingConfig = {
-    personas: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.personas, 'provider_routing.personas'),
-    tags: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.tags, 'provider_routing.tags'),
-    steps: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.steps, 'provider_routing.steps'),
+    personas: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.personas, 'provider_routing.personas', options),
+    tags: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.tags, 'provider_routing.tags', options),
+    steps: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.steps, 'provider_routing.steps', options),
   };
   return result.personas || result.tags || result.steps ? result : undefined;
 }
@@ -483,10 +491,14 @@ export function denormalizeProviderOptions(
 
   const raw: Record<string, unknown> = {};
   if (
-    providerOptions.codex?.networkAccess !== undefined
+    providerOptions.codex?.baseUrl !== undefined
+    || providerOptions.codex?.networkAccess !== undefined
     || providerOptions.codex?.reasoningEffort !== undefined
   ) {
     raw.codex = {
+      ...(providerOptions.codex.baseUrl !== undefined
+        ? { base_url: providerOptions.codex.baseUrl }
+        : {}),
       ...(providerOptions.codex.networkAccess !== undefined
         ? { network_access: providerOptions.codex.networkAccess }
         : {}),
@@ -514,6 +526,9 @@ export function denormalizeProviderOptions(
   }
   if (providerOptions.claude) {
     const claude: Record<string, unknown> = {};
+    if (providerOptions.claude.baseUrl !== undefined) {
+      claude.base_url = providerOptions.claude.baseUrl;
+    }
     if (providerOptions.claude.allowedTools !== undefined) {
       claude.allowed_tools = providerOptions.claude.allowedTools;
     }

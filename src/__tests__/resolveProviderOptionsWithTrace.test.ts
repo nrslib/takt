@@ -261,4 +261,43 @@ describe('resolveProviderOptionsWithTrace', () => {
     expect(result.originResolver('claude.allowedTools')).toBe('env');
     expect(result.originResolver('codex.networkAccess')).toBe('env');
   });
+
+  it('global config の base_url 明示値を project env fallback より優先する', () => {
+    writeFileSync(
+      globalConfigPath,
+      [
+        'language: en',
+        'provider_options:',
+        '  codex:',
+        '    base_url: http://global.example.test/v1',
+        '  claude:',
+        '    base_url: http://global.example.test',
+      ].join('\n'),
+      'utf-8',
+    );
+    invalidateGlobalConfigCache();
+
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+
+    const result = resolveProviderOptionsWithTrace(projectDir);
+
+    expect(result.value).toEqual({
+      codex: {
+        baseUrl: 'http://global.example.test/v1',
+        networkAccess: false,
+      },
+      claude: { baseUrl: 'http://global.example.test' },
+    });
+    expect(result.originResolver('codex.baseUrl')).toBe('global');
+    expect(result.originResolver('claude.baseUrl')).toBe('global');
+    expect(result.originResolver('codex.networkAccess')).toBe('local');
+  });
 });

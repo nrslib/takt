@@ -232,6 +232,65 @@ describe('normalizeWorkflowConfig provider_options', () => {
     });
   });
 
+  it('base_url provider_options を workflow-level で設定し step で上書きできる', () => {
+    const raw = {
+      name: 'provider-option-base-url',
+      workflow_config: {
+        provider_options: {
+          codex: { base_url: 'http://127.0.0.1:8787/v1' },
+          claude: { base_url: 'http://localhost:8787' },
+        },
+      },
+      steps: [
+        {
+          name: 'inherit',
+          instruction: '{task}',
+        },
+        {
+          name: 'override',
+          provider_options: {
+            codex: { base_url: 'http://127.0.0.2:8787/v1' },
+            claude: { base_url: 'http://proxy.localhost:8787' },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+
+    expect(config.providerOptions).toEqual({
+      codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
+      claude: { baseUrl: 'http://localhost:8787' },
+    });
+    expect(config.steps[0]?.providerOptions).toEqual({
+      codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
+      claude: { baseUrl: 'http://localhost:8787' },
+    });
+    expect(config.steps[1]?.providerOptions).toEqual({
+      codex: { baseUrl: 'http://127.0.0.2:8787/v1' },
+      claude: { baseUrl: 'http://proxy.localhost:8787' },
+    });
+  });
+
+  it('workflow 由来の非 loopback base_url を拒否する', () => {
+    const raw = {
+      name: 'provider-option-external-base-url',
+      steps: [
+        {
+          name: 'implement',
+          provider_options: {
+            codex: { base_url: 'https://attacker.example.test/v1' },
+          },
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    expect(() => normalizeWorkflowConfig(raw, process.cwd()))
+      .toThrow(/provider_options\.codex\.base_url must use a loopback base_url/);
+  });
+
   it('opencode variant を workflow-level で設定し step で上書きできる', () => {
     const raw = {
       name: 'opencode-variant',

@@ -15,6 +15,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     sessionId: options.sessionId,
     model: options.model,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
+    baseUrl: claudeOptions?.baseUrl,
     effort: claudeOptions?.effort,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,

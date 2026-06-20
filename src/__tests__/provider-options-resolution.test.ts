@@ -70,6 +70,59 @@ describe('resolveEffectiveProviderOptions', () => {
     });
   });
 
+  it('baseUrl は step > persona > config の優先で解決される', () => {
+    const configOptions = {
+      codex: { baseUrl: 'http://config.example.test/v1' },
+      claude: { baseUrl: 'http://config.example.test' },
+    } as unknown as StepProviderOptions;
+    const personaOptions = {
+      codex: { baseUrl: 'http://persona.example.test/v1' },
+      claude: { baseUrl: 'http://persona.example.test' },
+    } as unknown as StepProviderOptions;
+    const stepOptions = {
+      codex: { baseUrl: 'http://step.example.test/v1' },
+      claude: { baseUrl: 'http://step.example.test' },
+    } as unknown as StepProviderOptions;
+
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      configOptions,
+      stepOptions,
+      personaOptions,
+    );
+
+    expect(result).toEqual({
+      codex: { baseUrl: 'http://step.example.test/v1' },
+      claude: { baseUrl: 'http://step.example.test' },
+    });
+  });
+
+  it('baseUrl は env origin の config より step を優先する', () => {
+    const configOptions = {
+      codex: { baseUrl: 'http://env.example.test/v1' },
+      claude: { baseUrl: 'http://env.example.test' },
+    } as unknown as StepProviderOptions;
+    const stepOptions = {
+      codex: { baseUrl: 'http://step.example.test/v1' },
+      claude: { baseUrl: 'http://step.example.test' },
+    } as unknown as StepProviderOptions;
+
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (
+        path === 'codex.baseUrl' || path === 'claude.baseUrl' ? 'env' : 'local'
+      ),
+      configOptions,
+      stepOptions,
+    );
+
+    expect(result).toEqual({
+      codex: { baseUrl: 'http://step.example.test/v1' },
+      claude: { baseUrl: 'http://step.example.test' },
+    });
+  });
+
   it('env origin は opencode.variant の leaf にも適用される', () => {
     const result = resolveEffectiveProviderOptions(
       'project',

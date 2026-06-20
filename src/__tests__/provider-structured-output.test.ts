@@ -82,6 +82,7 @@ import { ClaudeProvider } from '../infra/providers/claude.js';
 import { CodexProvider } from '../infra/providers/codex.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { MockProvider } from '../infra/providers/mock.js';
+import type { StepProviderOptions } from '../core/models/workflow-types.js';
 
 const SCHEMA = {
   type: 'object',
@@ -133,6 +134,22 @@ describe('ClaudeProvider — structured output', () => {
 
     const opts = mockCallClaude.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('effort', 'medium');
+  });
+
+  it('provider_options.claude.baseUrl を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      claude: { baseUrl: 'http://127.0.0.1:8787' },
+    } as unknown as StepProviderOptions;
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('baseUrl', 'http://127.0.0.1:8787');
   });
 
   it('systemPrompt 指定時も outputSchema が callClaudeCustom に渡される', async () => {
@@ -234,6 +251,22 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('reasoningEffort', 'high');
+  });
+
+  it('provider_options.codex.baseUrl を callCodex に渡す', async () => {
+    mockCallCodex.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
+    } as unknown as StepProviderOptions;
+
+    const agent = new CodexProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions,
+    });
+
+    const opts = mockCallCodex.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('baseUrl', 'http://127.0.0.1:8787/v1');
   });
 
   it('childProcessEnv を callCodex に渡す', async () => {

@@ -57,6 +57,7 @@ export const ClaudeSandboxSchema = z.object({
 /** Provider-specific step options schema */
 export const StepProviderOptionsObjectSchema = z.object({
   codex: z.object({
+    base_url: z.string().min(1).optional(),
     network_access: z.boolean().optional(),
     reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
   }).optional(),
@@ -66,6 +67,7 @@ export const StepProviderOptionsObjectSchema = z.object({
     allowed_tools: z.array(z.string()).optional(),
   }).optional(),
   claude: z.object({
+    base_url: z.string().min(1).optional(),
     allowed_tools: z.array(z.string()).optional(),
     effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
     sandbox: ClaudeSandboxSchema,

@@ -4,6 +4,7 @@ import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import { CONFIGURED_PROVIDER_OPTION_VALUE } from '../../../core/workflow/providerOptionsRedaction.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
@@ -88,11 +89,19 @@ function emitProviderOptionLines(
   const sources = providerInfo.providerOptionsSources;
 
   if (stepProvider === 'claude' || stepProvider === 'claude-sdk') {
+    const baseUrl = options.claude?.baseUrl;
+    if (baseUrl !== undefined) {
+      out.info(`Base URL: ${CONFIGURED_PROVIDER_OPTION_VALUE}${sourceSuffix('claude.baseUrl', sources, showSource)}`);
+    }
     const effort = options.claude?.effort;
     if (effort !== undefined) {
       out.info(`Effort: ${effort}${sourceSuffix('claude.effort', sources, showSource)}`);
     }
   } else if (stepProvider === 'codex') {
+    const baseUrl = options.codex?.baseUrl;
+    if (baseUrl !== undefined) {
+      out.info(`Base URL: ${CONFIGURED_PROVIDER_OPTION_VALUE}${sourceSuffix('codex.baseUrl', sources, showSource)}`);
+    }
     const effort = options.codex?.reasoningEffort;
     if (effort !== undefined) {
       out.info(`Reasoning effort: ${effort}${sourceSuffix('codex.reasoningEffort', sources, showSource)}`);

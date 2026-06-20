@@ -4,7 +4,11 @@ import type { AgentWorkflowStep, WorkflowStep } from '../../models/types.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { evaluatePromotion } from './PromotionEvaluator.js';
-import { mergeProviderOptions, PROVIDER_OPTION_PATHS } from '../../../infra/config/providerOptions.js';
+import {
+  isFilePreferredProviderOptionPath,
+  mergeProviderOptions,
+  PROVIDER_OPTION_PATHS,
+} from '../../../infra/config/providerOptions.js';
 
 export interface PromotionRuntimeContext {
   cwd: string;
@@ -60,7 +64,10 @@ function filterPromotionProviderOptions(
       continue;
     }
     const baseSource = baseSources?.[path];
-    if (baseSource === 'env' || baseSource === 'cli') {
+    if (
+      !isFilePreferredProviderOptionPath(path)
+      && (baseSource === 'env' || baseSource === 'cli')
+    ) {
       continue;
     }
     setProviderOptionValue(result, path, value);

@@ -25,6 +25,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     onAskUserQuestion: options.onAskUserQuestion,
     bypassPermissions: options.bypassPermissions,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
+    baseUrl: options.providerOptions?.claude?.baseUrl,
     outputSchema: options.outputSchema,
     imageAttachments: options.imageAttachments,
     sandbox: claudeSandbox ? {

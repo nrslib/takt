@@ -230,7 +230,10 @@ function resolveWorkflowProviderOptionsFromDir(
   const parsedRaw = ProviderOptionsWithExtendsSchema.parse(raw) as RawWorkflowProviderOptions;
   const ref = parsedRaw.extends;
   if (ref === undefined) {
-    return normalizeProviderOptions(parsedRaw);
+    return normalizeProviderOptions(parsedRaw, {
+      baseUrlTrust: 'loopback-only',
+      pathPrefix: 'provider_options',
+    });
   }
 
   const refPath = resolveProviderOptionsExtendsPath(ref, currentDir, rootDir, scope, fileAccess);
@@ -258,6 +261,9 @@ function resolveWorkflowProviderOptionsFromDir(
     fileAccess,
     nextSeenRefs,
   );
-  const inlineOptions = normalizeProviderOptions(removeProviderOptionsExtends(parsedRaw));
+  const inlineOptions = normalizeProviderOptions(removeProviderOptionsExtends(parsedRaw), {
+    baseUrlTrust: 'loopback-only',
+    pathPrefix: 'provider_options',
+  });
   return mergeProviderOptions(referencedOptions, inlineOptions);
 }

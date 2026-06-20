@@ -299,6 +299,53 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(out.info).toHaveBeenCalledWith('Reasoning effort: high');
   });
 
+  it('Codex base URL を step start の provider option 表示では伏せる', () => {
+    const { engine, out } = createBridgeHarness({
+      currentProvider: 'codex',
+      configuredModel: 'gpt-5.2',
+    });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', {
+      provider: 'codex',
+      model: 'gpt-5.2',
+      providerOptions: { codex: { baseUrl: 'http://127.0.0.1:8787/v1' } },
+    });
+
+    expect(out.info).toHaveBeenCalledWith('Base URL: [configured]');
+  });
+
+  it('verbose 時に Claude SDK base URL を伏せて解決ソースを表示する', () => {
+    resetDebugLogger();
+    setVerboseConsole(true);
+    try {
+      const { engine, out } = createBridgeHarness({
+        currentProvider: 'claude-sdk',
+        configuredModel: 'claude-sonnet-4-5',
+      });
+      const step = {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        instruction: '',
+      } as WorkflowStep;
+
+      engine.emit('step:start', step, 1, 'instruction', {
+        provider: 'claude-sdk',
+        model: 'claude-sonnet-4-5',
+        providerOptions: { claude: { baseUrl: 'http://127.0.0.1:8787' } },
+        providerOptionsSources: { 'claude.baseUrl': 'project' },
+      });
+
+      expect(out.info).toHaveBeenCalledWith('Base URL: [configured] (source: project)');
+    } finally {
+      resetDebugLogger();
+    }
+  });
+
   it('Kiro agent を step start の provider option 表示に含める', () => {
     const { engine, out } = createBridgeHarness({
       currentProvider: 'kiro',

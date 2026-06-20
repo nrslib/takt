@@ -18,6 +18,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     networkAccess: options.providerOptions?.codex?.networkAccess,
     onStream: options.onStream,
     openaiApiKey: options.openaiApiKey ?? resolveOpenaiApiKey(),
+    baseUrl: options.providerOptions?.codex?.baseUrl,
     codexPathOverride: resolveCodexCliPath(),
     outputSchema: options.outputSchema,
     imageAttachments: options.imageAttachments,

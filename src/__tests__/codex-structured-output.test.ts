@@ -10,6 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CodexCallOptions } from '../infra/codex/client.js';
 
 // ===== Codex SDK mock =====
 
@@ -319,6 +320,24 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
     expect(lastCodexConstructorOptions).toMatchObject({
       codexPathOverride: '/opt/codex/bin/codex',
+    });
+  });
+
+  it('baseUrl が Codex constructor options に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+    const callOptions = {
+      cwd: '/tmp',
+      baseUrl: 'http://127.0.0.1:8787/v1',
+    } as unknown as CodexCallOptions;
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', callOptions);
+
+    expect(lastCodexConstructorOptions).toMatchObject({
+      baseUrl: 'http://127.0.0.1:8787/v1',
     });
   });
 

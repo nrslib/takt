@@ -335,9 +335,11 @@ promotion は並列サブ step ではサポートされません。
 | `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
 | `provider_options.claude.allowed_tools` | - | step または workflow に対する Claude ツール許可リスト |
+| `provider_options.claude.base_url` | - | `claude` / `claude-sdk` 用の Anthropic 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`（`xhigh` は Opus 4.7 が必要） |
 | `provider_options.opencode.allowed_tools` | - | OpenCode のツール許可リスト。ツール名は `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` のように lowercase |
 | `provider_options.opencode.variant` | - | OpenCode の model variant。プロバイダー / model 固有の文字列としてパススルー |
+| `provider_options.codex.base_url` | - | Codex SDK constructor option 用の OpenAI 互換 base URL（[configuration ガイド](./configuration.ja.md#provider-base-url-base_url) 参照） |
 | `provider_options.codex.network_access` | - | Codex サンドボックスからのネットワークアクセスを許可（[configuration ガイド](./configuration.ja.md#ネットワークアクセス-network_access) 参照） |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Claude の Bash を macOS Seatbelt サンドボックス外で実行（[configuration ガイド](./configuration.ja.md#claude-code-の-sandbox-制御-allow_unsandboxed_commands) 参照） |
 | `provider_options.kiro.agent` | - | Kiro CLI の custom agent 名。`kiro-cli chat --agent` として渡される。未指定の step は Kiro CLI 側の default agent を使用 |
@@ -364,7 +366,7 @@ interactive_mode: assistant
 
 ### `workflow_config.provider_options`
 
-workflow 全体のプロバイダーオプション。provider option の leaf ごとに、env または CLI 起源の config 値が最優先されます。それ以外は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` の順です。
+workflow 全体のプロバイダーオプション。多くの provider option leaf では、env または CLI 起源の config 値が最優先されます。それ以外は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` の順です。`base_url` は例外で、step と workflow routing の leaf が TAKT env override より優先され、同じ step-to-global 順序の後に `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` または `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL` が使われます。workflow YAML の `base_url` は loopback host のみ指定できます。非 loopback endpoint は global config または TAKT env を使ってください。
 
 ```yaml
 workflow_config:

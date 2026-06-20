@@ -8,6 +8,7 @@ export interface ClaudeHeadlessCallOptions {
   sessionId?: string;
   model?: string;
   anthropicApiKey?: string;
+  baseUrl?: string;
   effort?: ClaudeEffort;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;

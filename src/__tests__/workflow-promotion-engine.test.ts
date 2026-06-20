@@ -667,4 +667,76 @@ describe('WorkflowEngine promotion', () => {
       },
     });
   });
+
+  it('lets promotion baseUrl override env-origin provider option leaves', async () => {
+    const implement = withPromotion(makeStep('implement', {
+      provider: 'codex',
+      model: 'gpt-5.4',
+      rules: [makeRule('done', 'COMPLETE')],
+    }), [
+      {
+        at: 1,
+        providerOptions: {
+          codex: {
+            baseUrl: 'http://promotion.example.test/v1',
+          },
+          claude: {
+            baseUrl: 'http://promotion.example.test',
+          },
+        },
+      },
+    ]);
+    const config: WorkflowConfig = {
+      name: 'promotion-provider-options-base-url-engine',
+      steps: [implement],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'implement', content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'codex',
+      model: 'engine-model',
+      providerOptionsSource: 'env',
+      providerOptionsOriginResolver: (path: string) => {
+        if (path === 'codex.baseUrl' || path === 'claude.baseUrl') return 'env';
+        return 'local';
+      },
+      providerOptions: {
+        codex: {
+          baseUrl: 'http://env.example.test/v1',
+        },
+        claude: {
+          baseUrl: 'http://env.example.test',
+        },
+      },
+    });
+    const startFn = vi.fn();
+    engine.on('step:start', startFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.providerOptions).toEqual({
+      codex: {
+        baseUrl: 'http://promotion.example.test/v1',
+      },
+      claude: {
+        baseUrl: 'http://promotion.example.test',
+      },
+    });
+    expect(startFn.mock.calls[0]?.[3]).toMatchObject({
+      providerOptionsSources: {
+        'codex.baseUrl': 'promotion',
+        'claude.baseUrl': 'promotion',
+      },
+    });
+  });
 });

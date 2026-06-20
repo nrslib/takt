@@ -76,6 +76,19 @@ describe('resolveProviderOptionSource', () => {
     expect(source).toBe('cli');
   });
 
+  it('Given baseUrl has env origin and step value, When resolve, Then source is step', () => {
+    const source = resolveProviderOptionSource(
+      'codex.baseUrl',
+      { codex: { baseUrl: 'http://step.example.test/v1' } },
+      [],
+      { codex: { baseUrl: 'http://env.example.test/v1' } },
+      (path) => (path === 'codex.baseUrl' ? 'env' : 'local'),
+      'project',
+    );
+
+    expect(source).toBe('step');
+  });
+
   it('Given nothing set, When resolve, Then undefined', () => {
     expect(
       resolveProviderOptionSource(

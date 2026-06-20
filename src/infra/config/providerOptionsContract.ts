@@ -3,11 +3,13 @@ import type { EnvSpec } from './env/config-env-overrides.js';
 
 const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options', type: 'json' },
+  { path: 'provider_options.codex.base_url', type: 'string' },
   { path: 'provider_options.codex.network_access', type: 'boolean' },
   { path: 'provider_options.codex.reasoning_effort', type: 'string' },
   { path: 'provider_options.opencode.network_access', type: 'boolean' },
   { path: 'provider_options.opencode.variant', type: 'string' },
   { path: 'provider_options.opencode.allowed_tools', type: 'json' },
+  { path: 'provider_options.claude.base_url', type: 'string' },
   { path: 'provider_options.claude.effort', type: 'string' },
   { path: 'provider_options.claude.sandbox.allow_unsandboxed_commands', type: 'boolean' },
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
@@ -22,6 +24,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
 const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options',
   'provider_options.codex',
+  'provider_options.codex.base_url',
   'provider_options.codex.network_access',
   'provider_options.codex.reasoning_effort',
   'provider_options.opencode',
@@ -29,6 +32,7 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.opencode.variant',
   'provider_options.opencode.allowed_tools',
   'provider_options.claude',
+  'provider_options.claude.base_url',
   'provider_options.claude.allowed_tools',
   'provider_options.claude.effort',
   'provider_options.claude.sandbox',
@@ -45,12 +49,19 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.kiro.agent',
 ] as const;
 
+const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES = [
+  'provider_options.codex.base_url',
+  'provider_options.claude.base_url',
+] as const;
+
 const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
+  'codex.baseUrl',
   'codex.networkAccess',
   'codex.reasoningEffort',
   'opencode.networkAccess',
   'opencode.variant',
   'opencode.allowedTools',
+  'claude.baseUrl',
   'claude.allowedTools',
   'claude.effort',
   'claude.sandbox.allowUnsandboxedCommands',
@@ -68,6 +79,8 @@ export type ProviderOptionsInternalPath = (typeof PROVIDER_OPTIONS_INTERNAL_PATH
 
 export const PROVIDER_OPTIONS_ENV_SPECS: readonly EnvSpec[] = PROVIDER_OPTIONS_ENV_SPEC_ENTRIES;
 export const PROVIDER_OPTIONS_TRACE_PATHS: readonly ProviderOptionsTracePath[] = PROVIDER_OPTIONS_TRACE_PATH_ENTRIES;
+export const PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS: readonly ProviderOptionsTracePath[] =
+  PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATH_ENTRIES;
 export const PROVIDER_OPTIONS_TRACKED_KEYS = [
   'provider_options',
   'provider_options.codex',

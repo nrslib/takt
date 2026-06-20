@@ -29,6 +29,7 @@ import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 import { loadGlobalConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
+import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 export { validateCliPath } from './cliPathValidator.js';
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -111,6 +112,7 @@ export class GlobalConfigManager {
         }
         return sanitized;
       },
+      PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS,
     );
     assertValidGlobalConfig(parsedConfig, configPath, true);
     assertNoUnknownGlobalConfigKeys(rawConfig);

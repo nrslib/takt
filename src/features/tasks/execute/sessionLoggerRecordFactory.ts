@@ -17,6 +17,7 @@ import type {
   WorkflowStep,
 } from '../../../core/models/index.js';
 import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
+import { redactProviderOptionsForLogging } from '../../../core/workflow/providerOptionsRedaction.js';
 import type { InteractiveMetadata } from './types.js';
 
 type SanitizeText = (text: string) => string;
@@ -202,7 +203,7 @@ export function buildStepStartRecord(
     ...(providerInfo?.providerSource !== undefined ? { providerSource: providerInfo.providerSource } : {}),
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
     ...(providerInfo?.modelSource !== undefined ? { modelSource: providerInfo.modelSource } : {}),
-    ...(providerInfo?.providerOptions !== undefined ? { providerOptions: providerInfo.providerOptions } : {}),
+    ...(providerInfo?.providerOptions !== undefined ? { providerOptions: redactProviderOptionsForLogging(providerInfo.providerOptions) } : {}),
     ...(providerInfo?.providerOptionsSources !== undefined ? { providerOptionsSources: providerInfo.providerOptionsSources } : {}),
   };
 }

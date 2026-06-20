@@ -19,6 +19,7 @@ import { providerSupportsClaudeAllowedTools } from '../providers/provider-capabi
 type RawProviderOptions = {
   extends?: string;
   codex?: {
+    base_url?: string;
     network_access?: boolean;
     reasoning_effort?: CodexReasoningEffort;
   };
@@ -28,6 +29,7 @@ type RawProviderOptions = {
     allowed_tools?: string[];
   };
   claude?: {
+    base_url?: string;
     allowed_tools?: string[];
     effort?: ClaudeEffort;
     sandbox?: {
@@ -49,6 +51,14 @@ type RawProviderOptions = {
   };
 };
 
+type ProviderBaseUrlTrust = 'trusted' | 'loopback-only' | 'local-loopback-only';
+
+export interface NormalizeProviderOptionsOptions {
+  baseUrlTrust?: ProviderBaseUrlTrust;
+  pathPrefix?: string;
+  getOrigin?: (path: string) => ProviderOptionsTraceOrigin;
+}
+
 export interface ProviderOptionsLayer {
   source: ProviderResolutionSource;
   options: StepProviderOptions | undefined;
@@ -59,9 +69,74 @@ interface StepProviderOptionsLayerContext {
   personaProviders: Record<string, PersonaProviderEntry> | undefined;
 }
 
+function isLoopbackBaseUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  return hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname === '::1'
+    || hostname === '[::1]'
+    || isIpv4LoopbackHost(hostname);
+}
+
+function isIpv4LoopbackHost(hostname: string): boolean {
+  const octets = hostname.split('.');
+  if (octets.length !== 4 || octets[0] !== '127') {
+    return false;
+  }
+  return octets.every((octet) => {
+    if (!/^\d+$/.test(octet)) {
+      return false;
+    }
+    const value = Number(octet);
+    return value >= 0 && value <= 255;
+  });
+}
+
+function shouldRequireLoopbackBaseUrl(
+  path: string,
+  options: NormalizeProviderOptionsOptions,
+): boolean {
+  const trust = options.baseUrlTrust ?? 'trusted';
+  if (trust === 'trusted') {
+    return false;
+  }
+  if (trust === 'loopback-only') {
+    return true;
+  }
+
+  const origin = options.getOrigin?.(path) ?? 'default';
+  return origin === 'local' || origin === 'default';
+}
+
+function assertAllowedProviderBaseUrl(
+  path: string,
+  value: string | undefined,
+  options: NormalizeProviderOptionsOptions,
+): void {
+  if (value === undefined || !shouldRequireLoopbackBaseUrl(path, options)) {
+    return;
+  }
+  if (isLoopbackBaseUrl(value)) {
+    return;
+  }
+
+  throw new Error(
+    `Configuration error: ${path} must use a loopback base_url when defined by workflow or project config. `
+    + 'Move non-loopback provider base URLs to global config or TAKT_PROVIDER_OPTIONS_*_BASE_URL.',
+  );
+}
+
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
   raw: RawProviderOptions | Record<string, unknown> | undefined,
+  normalizationOptions: NormalizeProviderOptionsOptions = {},
 ): StepProviderOptions | undefined {
   if (!raw || typeof raw !== 'object') {
     return undefined;
@@ -73,8 +148,17 @@ export function normalizeProviderOptions(
   }
 
   const result: StepProviderOptions = {};
-  if (options.codex?.network_access !== undefined || options.codex?.reasoning_effort !== undefined) {
+  if (
+    options.codex?.base_url !== undefined
+    || options.codex?.network_access !== undefined
+    || options.codex?.reasoning_effort !== undefined
+  ) {
+    const codexBaseUrlPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.codex.base_url`;
+    assertAllowedProviderBaseUrl(codexBaseUrlPath, options.codex.base_url, normalizationOptions);
     result.codex = {
+      ...(options.codex.base_url !== undefined
+        ? { baseUrl: options.codex.base_url }
+        : {}),
       ...(options.codex.network_access !== undefined
         ? { networkAccess: options.codex.network_access }
         : {}),
@@ -101,11 +185,17 @@ export function normalizeProviderOptions(
     };
   }
   if (
-    options.claude?.allowed_tools !== undefined
+    options.claude?.base_url !== undefined
+    || options.claude?.allowed_tools !== undefined
     || options.claude?.effort !== undefined
     || options.claude?.sandbox
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
+    if (options.claude.base_url !== undefined) {
+      const claudeBaseUrlPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.claude.base_url`;
+      assertAllowedProviderBaseUrl(claudeBaseUrlPath, options.claude.base_url, normalizationOptions);
+      claude.baseUrl = options.claude.base_url;
+    }
     if (options.claude.allowed_tools !== undefined) {
       claude.allowedTools = options.claude.allowed_tools;
     }
@@ -176,6 +266,9 @@ export function mergeProviderOptions(
     if (layer.claude) {
       result.claude = {
         ...result.claude,
+        ...(layer.claude.baseUrl !== undefined
+          ? { baseUrl: layer.claude.baseUrl }
+          : {}),
         ...(layer.claude.allowedTools !== undefined
           ? { allowedTools: layer.claude.allowedTools }
           : {}),
@@ -254,6 +347,14 @@ function selectProviderValue<T>(
   if ((origin === 'env' || origin === 'cli') && configValue !== undefined) {
     return configValue;
   }
+  return stepValue ?? personaValue ?? configValue;
+}
+
+function selectProviderValueByScope<T>(
+  configValue: T | undefined,
+  personaValue: T | undefined,
+  stepValue: T | undefined,
+): T | undefined {
   return stepValue ?? personaValue ?? configValue;
 }
 
@@ -364,6 +465,11 @@ export function resolveEffectiveProviderOptions(
       stepOptions?.claude?.allowedTools,
       resolveProviderOptionOrigin(originResolver, 'claude.allowedTools', source),
     ),
+    baseUrl: selectProviderValueByScope(
+      resolvedConfigOptions.claude?.baseUrl,
+      personaOptions?.claude?.baseUrl,
+      stepOptions?.claude?.baseUrl,
+    ),
     effort: selectProviderValue(
       resolvedConfigOptions.claude?.effort,
       personaOptions?.claude?.effort,
@@ -383,6 +489,11 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.codex?.reasoningEffort,
     stepOptions?.codex?.reasoningEffort,
     resolveProviderOptionOrigin(originResolver, 'codex.reasoningEffort', source),
+  );
+  const codexBaseUrl = selectProviderValueByScope(
+    resolvedConfigOptions.codex?.baseUrl,
+    personaOptions?.codex?.baseUrl,
+    stepOptions?.codex?.baseUrl,
   );
   const opencodeNetworkAccess = selectProviderValue(
     resolvedConfigOptions.opencode?.networkAccess,
@@ -441,8 +552,9 @@ export function resolveEffectiveProviderOptions(
 
   const result: StepProviderOptions = {
     codex:
-      codexNetworkAccess !== undefined || codexReasoningEffort !== undefined
+      codexBaseUrl !== undefined || codexNetworkAccess !== undefined || codexReasoningEffort !== undefined
         ? {
+            ...(codexBaseUrl !== undefined ? { baseUrl: codexBaseUrl } : {}),
             ...(codexNetworkAccess !== undefined ? { networkAccess: codexNetworkAccess } : {}),
             ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
           }
@@ -456,7 +568,10 @@ export function resolveEffectiveProviderOptions(
           }
         : undefined,
     claude:
-      claude.sandbox !== undefined || claude.allowedTools !== undefined || claude.effort !== undefined
+      claude.sandbox !== undefined
+      || claude.allowedTools !== undefined
+      || claude.baseUrl !== undefined
+      || claude.effort !== undefined
         ? claude
         : undefined,
     copilot: copilotEffort !== undefined ? { effort: copilotEffort } : undefined,
@@ -491,6 +606,9 @@ function stripClaudeAllowedTools(
 
   const sanitizedClaude = providerOptions.claude
     ? {
+        ...(providerOptions.claude.baseUrl !== undefined
+          ? { baseUrl: providerOptions.claude.baseUrl }
+          : {}),
         ...(providerOptions.claude.effort !== undefined
           ? { effort: providerOptions.claude.effort }
           : {}),
@@ -556,10 +674,12 @@ export function resolveEffectiveTeamLeaderPartProviderOptions(
 
 /** All paths we expose for per-option source attribution. */
 export const PROVIDER_OPTION_PATHS = [
+  'claude.baseUrl',
   'claude.effort',
   'claude.allowedTools',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'codex.baseUrl',
   'codex.networkAccess',
   'codex.reasoningEffort',
   'opencode.networkAccess',
@@ -574,6 +694,15 @@ export const PROVIDER_OPTION_PATHS = [
 ] as const;
 
 export type ProviderOptionPath = (typeof PROVIDER_OPTION_PATHS)[number];
+
+const FILE_PREFERRED_PROVIDER_OPTION_PATHS: ReadonlySet<string> = new Set([
+  'claude.baseUrl',
+  'codex.baseUrl',
+]);
+
+export function isFilePreferredProviderOptionPath(path: string): boolean {
+  return FILE_PREFERRED_PROVIDER_OPTION_PATHS.has(path);
+}
 
 function getValueAtPath(
   options: StepProviderOptions | undefined,
@@ -599,9 +728,7 @@ function originToResolutionSource(origin: ProviderOptionsTraceOrigin): ProviderR
 }
 
 /**
- * Resolve the source layer of a single provider_options path, mirroring
- * `selectProviderValue` precedence (env/cli config beats step/layers,
- * otherwise step > routing/persona/workflow layers > config).
+ * Resolve the source layer of a single provider_options path.
  */
 export function resolveProviderOptionSource(
   path: string,
@@ -615,7 +742,12 @@ export function resolveProviderOptionSource(
   const stepValue = getValueAtPath(stepOptions, path);
   const origin = resolveProviderOptionOrigin(originResolver, path, configSource);
 
-  if ((origin === 'env' || origin === 'cli') && configValue !== undefined) {
+  if (
+    path !== 'claude.baseUrl'
+    && path !== 'codex.baseUrl'
+    && (origin === 'env' || origin === 'cli')
+    && configValue !== undefined
+  ) {
     return originToResolutionSource(origin);
   }
   if (stepValue !== undefined) return 'step';

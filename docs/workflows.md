@@ -336,9 +336,11 @@ Promotion is not supported on parallel sub-steps.
 | `edit` | - | Whether the step can edit project files (`true`/`false`) |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |
+| `provider_options.claude.base_url` | - | Anthropic-compatible base URL for `claude` / `claude-sdk` (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
 | `provider_options.claude.effort` | - | Claude reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` requires Opus 4.7) |
 | `provider_options.opencode.allowed_tools` | - | OpenCode tool allowlist. Tool names are lowercase, for example `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` |
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
+| `provider_options.codex.base_url` | - | OpenAI-compatible base URL for Codex SDK constructor options (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
 | `provider_options.claude.sandbox.allow_unsandboxed_commands` | - | Run Claude Bash outside the macOS Seatbelt sandbox (see [configuration guide](./configuration.md#claude-code-sandbox-control-allow_unsandboxed_commands)) |
 | `provider_options.kiro.agent` | - | Kiro CLI custom agent name passed as `kiro-cli chat --agent`. Steps without it use the Kiro CLI default agent |
@@ -365,7 +367,7 @@ interactive_mode: assistant
 
 ### `workflow_config.provider_options`
 
-Workflow-wide provider options. For each provider option leaf, env- or CLI-resolved config values win first; otherwise priority is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
+Workflow-wide provider options. For most provider option leaves, env- or CLI-resolved config values win first; otherwise priority is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`. For `base_url`, step and workflow routing leaves stay above TAKT env overrides, and the same step-to-global order is followed before `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL`. Workflow YAML may only set `base_url` to loopback hosts; use global config or TAKT env for non-loopback endpoints.
 
 ```yaml
 workflow_config:

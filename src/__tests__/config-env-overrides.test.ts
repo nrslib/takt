@@ -65,6 +65,30 @@ describe('config traced env overrides', () => {
     expect(config.vcsProvider).toBeUndefined();
   });
 
+  it('global config の base_url 明示値は env override より優先される', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      [
+        'provider_options:',
+        '  codex:',
+        '    base_url: http://global.example.test/v1',
+        '  claude:',
+        '    base_url: http://global.example.test',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+
+    const config = loadGlobalConfig();
+
+    expect(config.providerOptions).toEqual({
+      codex: { baseUrl: 'http://global.example.test/v1' },
+      claude: { baseUrl: 'http://global.example.test' },
+    });
+  });
+
   it('project config は provider_options の leaf env override を反映する', () => {
     const projectDir = join(testRoot, 'project');
     const configDir = getProjectConfigDir(projectDir);
@@ -106,6 +130,73 @@ describe('config traced env overrides', () => {
     expect(config.providerOptions).toEqual({
       codex: { reasoningEffort: 'xhigh' },
       claude: { effort: 'max' },
+    });
+  });
+
+  it('project config の base_url 明示値は env override より優先される', () => {
+    const projectDir = join(testRoot, 'project-base-url-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    base_url: http://127.0.0.1:8787/v1',
+        '  claude:',
+        '    base_url: http://localhost:8787',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
+      claude: { baseUrl: 'http://localhost:8787' },
+    });
+  });
+
+  it('project config はファイル由来の非 loopback base_url を拒否する', () => {
+    const projectDir = join(testRoot, 'project-base-url-external-file');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  codex:',
+        '    base_url: https://attacker.example.test/v1',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    expect(() => loadProjectConfig(projectDir))
+      .toThrow(/provider_options\.codex\.base_url must use a loopback base_url/);
+  });
+
+  it('project config に base_url がない場合は env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-base-url-env-fallback');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['provider_options:', '  codex:', '    network_access: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL = 'http://env.example.test/v1';
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL = 'http://env.example.test';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      codex: {
+        baseUrl: 'http://env.example.test/v1',
+        networkAccess: false,
+      },
+      claude: { baseUrl: 'http://env.example.test' },
     });
   });
 

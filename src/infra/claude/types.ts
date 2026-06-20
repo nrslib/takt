@@ -124,6 +124,8 @@ export interface ClaudeCallOptions {
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
   anthropicApiKey?: string;
+  /** Anthropic-compatible API base URL */
+  baseUrl?: string;
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
   /** Sandbox settings for Claude SDK */
@@ -160,6 +162,8 @@ export interface ClaudeSpawnOptions {
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
   anthropicApiKey?: string;
+  /** Anthropic-compatible API base URL */
+  baseUrl?: string;
   /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
   /** Callback for stderr output from the Claude Code process */

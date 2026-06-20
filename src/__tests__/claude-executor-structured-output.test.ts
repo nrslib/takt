@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { delimiter, dirname } from 'node:path';
+import type { ClaudeSpawnOptions } from '../infra/claude/types.js';
 
 // ===== SdkOptionsBuilder tests (no mock needed) =====
 
@@ -61,6 +62,27 @@ describe('SdkOptionsBuilder — outputFormat 変換', () => {
     });
 
     expect(sdkOptions.env?.ANTHROPIC_API_KEY).toBe('test-key');
+  });
+
+  it('baseUrl を ANTHROPIC_BASE_URL として SDK env に注入し ambient env より優先する', () => {
+    const originalBaseUrl = process.env.ANTHROPIC_BASE_URL;
+    try {
+      process.env.ANTHROPIC_BASE_URL = 'http://ambient.example.test';
+      const spawnOptions = {
+        cwd: '/tmp',
+        baseUrl: 'http://127.0.0.1:8787',
+      } as unknown as ClaudeSpawnOptions;
+
+      const sdkOptions = buildSdkOptions(spawnOptions);
+
+      expect(sdkOptions.env?.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:8787');
+    } finally {
+      if (originalBaseUrl === undefined) {
+        delete process.env.ANTHROPIC_BASE_URL;
+      } else {
+        process.env.ANTHROPIC_BASE_URL = originalBaseUrl;
+      }
+    }
   });
 });
 

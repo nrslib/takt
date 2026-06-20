@@ -494,7 +494,9 @@ step YAML provider/model
 
 The resolved input is determined before workflow execution from CLI flags, then project `.takt/config.yaml`, then global `~/.takt/config.yaml`, then the provider default. Promotion entries, when active, are higher priority than the step YAML value.
 
-`provider_options` priority is resolved per leaf. An env- or CLI-resolved config leaf overrides all other sources. Otherwise the order is: step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml`.
+`provider_options` priority is resolved per leaf. For most leaves, an env- or CLI-resolved config leaf overrides all other sources. `base_url` is the exception: step and workflow routing configuration stays above TAKT env overrides so a workflow can explicitly route only selected providers through a proxy. For `base_url`, the order is step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` > TAKT env override. For other leaves, after env/CLI config overrides, the same step-to-global order applies.
+
+For safety, workflow YAML and project `.takt/config.yaml` may only set `base_url` to loopback hosts such as `127.0.0.1`, `127.x.x.x`, `localhost`, `*.localhost`, or `::1`. Put non-loopback provider base URLs in global config or `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL` / `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL`, where the setting is user-controlled.
 
 `persona_providers` is still supported for existing configs, but it is deprecated for new settings. It uses the step's persona display name, which may come from `persona_name`, not necessarily the raw `persona` key:
 
@@ -512,11 +514,29 @@ Workflow `provider_options.extends` can load shared YAML presets by name. Names 
 
 `provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`.
 
 This allows mixing providers and models within a single workflow while keeping display names independent from provider selection.
 
 ### Provider-specific options in practice
+
+#### Provider base URL (`base_url`)
+
+Use `base_url` to route supported providers through an OpenAI-compatible or Anthropic-compatible proxy:
+
+```yaml
+provider_options:
+  claude:
+    base_url: http://127.0.0.1:8787
+  codex:
+    base_url: http://127.0.0.1:8787/v1
+```
+
+TAKT passes `provider_options.claude.base_url` to `claude` and `claude-sdk` as `ANTHROPIC_BASE_URL`. TAKT passes `provider_options.codex.base_url` to the Codex SDK constructor as `baseUrl`. `claude-terminal`, `opencode`, `cursor`, `copilot`, and `kiro` are not included in this base URL support unless documented separately.
+
+Provider-native environment variables such as `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` are provider fallback settings. A TAKT `provider_options.*.base_url` value is explicit TAKT configuration and takes priority over those provider-native settings for the providers above.
+
+Workflow and project config can use `base_url` for local proxies only. Non-loopback proxy endpoints must be configured from global config or TAKT env so untrusted workflow files cannot redirect API keys and prompts to an arbitrary host.
 
 #### Network access (`network_access`)
 

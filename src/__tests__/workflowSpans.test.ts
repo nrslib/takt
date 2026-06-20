@@ -832,7 +832,7 @@ describe('workflow OpenTelemetry spans', () => {
     });
   });
 
-  it('serializes provider options onto step spans for session-log parity', async () => {
+  it('serializes redacted provider options onto step spans for session-log parity', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
 
     await module.runWithStepSpan({
@@ -845,14 +845,19 @@ describe('workflow OpenTelemetry spans', () => {
         model: 'gpt-5',
         providerSource: 'project',
         modelSource: 'global',
-        providerOptions: { codex: { reasoningEffort: 'high' } },
-        providerOptionsSources: { 'codex.reasoningEffort': 'project' },
+        providerOptions: {
+          codex: {
+            baseUrl: 'http://user:token@127.0.0.1:8787/v1?api_key=secret',
+            reasoningEffort: 'high',
+          },
+        },
+        providerOptionsSources: { 'codex.baseUrl': 'workflow', 'codex.reasoningEffort': 'project' },
       },
     }, async () => makeDoneResult());
 
     expect(spans[0]?.attributes).toMatchObject({
-      'takt.provider.options': JSON.stringify({ codex: { reasoningEffort: 'high' } }),
-      'takt.provider.options_sources': JSON.stringify({ 'codex.reasoningEffort': 'project' }),
+      'takt.provider.options': JSON.stringify({ codex: { baseUrl: '[configured]', reasoningEffort: 'high' } }),
+      'takt.provider.options_sources': JSON.stringify({ 'codex.baseUrl': 'workflow', 'codex.reasoningEffort': 'project' }),
     });
   });
 

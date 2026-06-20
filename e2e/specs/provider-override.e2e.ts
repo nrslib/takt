@@ -149,4 +149,71 @@ describe('E2E: --provider option override (mock)', () => {
     // → judgeStatus extracts step from structuredOutput → matchMethod = structured_output
     expect(stepComplete?.matchMethod).toBe('structured_output');
   }, 60_000);
+
+  it('should expose configured workflow and step base_url leaves in the session log without raw URLs', () => {
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'provider-base-url.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
+
+    const result = runTakt({
+      args: [
+        '--task', 'Verify provider base URL options',
+        '--workflow', workflowPath,
+        '--provider', 'mock',
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow completed');
+
+    const records = readSessionRecords(repo.path);
+    const stepStart = records.find((record) => record.type === 'step_start');
+
+    expect(stepStart).toEqual(expect.objectContaining({
+      providerOptions: expect.objectContaining({
+        codex: expect.objectContaining({
+          baseUrl: '[configured]',
+          networkAccess: true,
+        }),
+        claude: expect.objectContaining({
+          baseUrl: '[configured]',
+          allowedTools: ['Read', 'Write', 'Edit'],
+        }),
+      }),
+      providerOptionsSources: expect.objectContaining({
+        'codex.baseUrl': 'workflow',
+        'claude.baseUrl': 'step',
+      }),
+    }));
+    expect(JSON.stringify(stepStart)).not.toContain('127.0.0.1:8787');
+    expect(JSON.stringify(stepStart)).not.toContain('localhost:8787');
+    expect(JSON.stringify(stepStart)).not.toContain('127.0.0.1:8788');
+  }, 240_000);
+
+  it('should reject an empty provider base_url before mock execution', () => {
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'provider-base-url-invalid.yaml');
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
+
+    const result = runTakt({
+      args: [
+        '--task', 'Reject empty provider base URL',
+        '--workflow', workflowPath,
+        '--provider', 'mock',
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('base_url');
+  }, 240_000);
 });

@@ -306,6 +306,7 @@ export class CodexClient {
           options.childProcessEnv,
         ) as Record<string, string>,
         ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
+        ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
       };
       const codex = new Codex(codexClientOptions);

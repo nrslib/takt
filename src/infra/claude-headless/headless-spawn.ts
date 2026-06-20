@@ -15,6 +15,9 @@ function buildHeadlessEnv(options: ClaudeHeadlessCallOptions): NodeJS.ProcessEnv
   if (options.anthropicApiKey) {
     env.ANTHROPIC_API_KEY = options.anthropicApiKey;
   }
+  if (options.baseUrl !== undefined) {
+    env.ANTHROPIC_BASE_URL = options.baseUrl;
+  }
   return env;
 }
 

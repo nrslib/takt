@@ -100,7 +100,7 @@ describe('traced config boundaries', () => {
     });
 
     try {
-      const { rawConfig, trace } = loadProjectConfigTrace(configPath);
+      const { rawConfig, trace } = loadProjectConfigTrace(configPath, []);
 
       expect(rawConfig).toEqual({
         provider_options: {
@@ -145,7 +145,7 @@ describe('traced config boundaries', () => {
     });
 
     try {
-      const { rawConfig, trace } = loadProjectConfigTrace(configPath);
+      const { rawConfig, trace } = loadProjectConfigTrace(configPath, []);
 
       expect(rawConfig).toEqual({
         persona_providers: {
@@ -179,8 +179,8 @@ describe('traced config boundaries', () => {
     process.env.TAKT_SYNC_PROJECT_LOCAL_TAKT_ON_RETRY = 'true';
 
     try {
-      const projectTraceResult = loadProjectConfigTrace(projectConfigPath);
-      const globalTraceResult = loadGlobalConfigTrace(globalConfigPath, (value) => value);
+      const projectTraceResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalTraceResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
 
       expect(projectTraceResult.rawConfig.sync_project_local_takt_on_retry).toBe(true);
       expect(projectTraceResult.trace.getOrigin('sync_project_local_takt_on_retry')).toBe('env');
