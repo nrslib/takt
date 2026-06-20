@@ -14,3 +14,6 @@ Procedure:
 5. For changes to config values, options, providers, models, tools, or permissions, verify that tests cover the original requirement's branch conditions such as unset, set, override, inherited, and non-inherited, not merely value presence
 6. For changes where a non-execution entry displays, validates, or explains the same value, verify that tests check displayed values against the resolution input used during execution
 7. Do not treat mock-substituted verification as proof that the real integration was verified
+8. For prohibition, rejection, non-inheritance, unsupported targets, and isolation, verify that tests extract observable units and check each forbidden value instead of relying on exact-string absence alone
+9. For new configuration boundaries, check normalization inputs such as empty strings, whitespace-only strings, empty arrays, and case variants when relevant
+10. Verify that E2E timeout, cleanup, and forced-termination handling follows existing same-kind test conventions

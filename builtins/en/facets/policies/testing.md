@@ -13,6 +13,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Type safety | Code must pass the build (type check) |
 | Reproducibility | Do not depend on time or randomness. Same result every run |
 | Do not freeze non-executable assets | Do not make prose or section structure that does not define runtime behavior a CI failure condition |
+| Verify negative contracts at observable units | Do not pass prohibition, rejection, non-inheritance, or unsupported cases by exact-string absence alone |
 
 ## Coverage Criteria
 
@@ -123,8 +124,22 @@ When adding or changing a config value, option, provider, model, tool, permissio
 | Requirement-relevant branches among unset, set, invalid value, inherited, non-inherited, override, and unsupported target are not verified | REJECT |
 | A user-facing display or validation entry is not verified to follow the same contract as the primary execution path | REJECT |
 | A test only checks displayed values without verifying they match the resolution input used during execution | REJECT |
-| Absence is verified only by exact string matching, missing order, case, whitespace, or partial-leak differences | Warning |
+| Absence is verified only by exact string matching, missing order, case, whitespace, or partial-leak differences | REJECT |
+| Boundary values that may be normalized at configuration boundaries, such as empty strings, whitespace-only strings, empty arrays, or case variants, are not tested | Warning. REJECT when this is a primary contract branch |
 | The path from entry point to final call verifies happy, rejection, and non-inheritance cases | OK |
+
+## Testing Negative, Non-Inheritance, and Rejection Contracts
+
+Tests for prohibition, rejection, non-inheritance, unsupported targets, and isolation must not rely only on a specific string being absent from the whole output.
+Extract observable units such as output lines, records, fields, or call arguments, then verify each forbidden value cannot leak through order, case, whitespace, delimiter, or partial-match differences.
+
+| Criteria | Verdict |
+|----------|---------|
+| Exact-string absence alone is used to conclude that a forbidden or non-inherited value was not used | REJECT |
+| Only allowed-value presence is checked, without proving rejected, forbidden, or non-inherited values do not reach the endpoint | REJECT |
+| Observable units such as output lines, events, records, fields, or call arguments are extracted and checked per forbidden value | OK |
+| Allowed vs rejected and inherited vs non-inherited cases are tested as pairs | OK |
+| A new E2E test does not follow existing same-kind conventions for timeout, cleanup, and forced termination | Warning. REJECT when it can cause process leaks or flakes |
 
 ## Parser and Configuration Boundary Tests
 
