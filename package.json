@@ -93,7 +93,7 @@
     "traced-config": "^0.3.0",
     "update-notifier": "^7.3.1",
     "wanakana": "^5.3.1",
-    "yaml": "^2.8.3",
+    "yaml": "^2.9.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
