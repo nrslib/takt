@@ -163,4 +163,25 @@ describe('createTeamLeaderPlanningStep', () => {
       providerRoutingPersonaKey: 'lead',
     }));
   });
+
+  it('falls back to parent provider routing persona key when team leader key is unset', () => {
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      providerRoutingPersonaKey: 'coder',
+      instruction: 'do work',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 3,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 900000,
+      },
+    };
+
+    const planningStep = createTeamLeaderPlanningStep(step);
+
+    expect(planningStep.providerRoutingPersonaKey).toBe('coder');
+  });
 });

@@ -315,6 +315,28 @@ describe('normalizeWorkflowConfig team_leader', () => {
     }
   });
 
+  it('Given blank team_leader.persona, When normalizing workflow config, Then provider routing key is unset', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const raw = {
+      name: 'workflow',
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          team_leader: {
+            persona: '   ',
+          },
+          instruction: 'decompose',
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, workflowDir);
+    const step = config.steps[0];
+
+    expect(step?.teamLeader?.providerRoutingPersonaKey).toBeUndefined();
+  });
+
   it('旧名 max_parts を maxConcurrency として正規化する', () => {
     const workflowDir = join(process.cwd(), 'src', '__tests__');
     const raw = {

@@ -117,7 +117,7 @@ export function normalizeTeamLeader(
   const { personaSpec: partPersona, personaPath: partPersonaPath } = resolvePersona(raw.part_persona, sections, workflowDir, context);
   const rawPersona = raw.persona?.trim();
   const personaDisplayName = personaSpec ? extractPersonaDisplayName(personaSpec) : undefined;
-  const providerRoutingPersonaKey = rawPersona;
+  const providerRoutingPersonaKey = rawPersona && rawPersona.length > 0 ? rawPersona : undefined;
   const partTags = raw.part_tags?.map((tag) => {
     const normalizedTag = tag.trim();
     if (normalizedTag.length === 0) {

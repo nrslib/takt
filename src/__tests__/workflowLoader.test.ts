@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import {
   isWorkflowPath,
   loadAllWorkflowDiscovery,
@@ -22,6 +23,20 @@ import {
   loadAllWorkflowsWithSources,
 } from '../infra/config/loaders/workflowLoader.js';
 import { getWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
+
+function setBuiltinWorkflowsEnabledForTest(enabled: boolean): void {
+  const configDir = process.env.TAKT_CONFIG_DIR;
+  if (!configDir) {
+    throw new Error('TAKT_CONFIG_DIR is required for workflow loader tests');
+  }
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.yaml'), `enable_builtin_workflows: ${enabled ? 'true' : 'false'}\n`, 'utf-8');
+  invalidateGlobalConfigCache();
+}
+
+afterEach(() => {
+  invalidateGlobalConfigCache();
+});
 
 const SAMPLE_WORKFLOW = `name: test-workflow
 description: Test workflow
@@ -746,6 +761,7 @@ describe('public workflow loaders validate workflow_call contracts', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -812,6 +828,7 @@ describe('listWorkflows with project-local', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -838,6 +855,7 @@ describe('listWorkflows with project-local', () => {
   });
 
   it('should include builtin workflows regardless of cwd', () => {
+    setBuiltinWorkflowsEnabledForTest(true);
     const workflows = listWorkflows(tempDir);
     expect(workflows).toContain('default');
   });
@@ -887,6 +905,7 @@ describe('internal callable workflow visibility', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -1164,6 +1183,7 @@ describe('loadAllWorkflows with project-local', () => {
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -1181,6 +1201,7 @@ describe('loadAllWorkflows with project-local', () => {
   });
 
   it('should have project-local override builtin when same name', () => {
+    setBuiltinWorkflowsEnabledForTest(true);
     const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
     mkdirSync(projectWorkflowsDir, { recursive: true });
 
@@ -1272,6 +1293,7 @@ describe('loadWorkflowByIdentifier with @scope ref (repertoire)', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
     configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
     process.env.TAKT_CONFIG_DIR = configDir;
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
@@ -1314,6 +1336,7 @@ describe('loadAllWorkflowsWithSources with repertoire workflows', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'takt-test-'));
     configDir = mkdtempSync(join(tmpdir(), 'takt-config-'));
     process.env.TAKT_CONFIG_DIR = configDir;
+    setBuiltinWorkflowsEnabledForTest(false);
   });
 
   afterEach(() => {
