@@ -28,18 +28,6 @@ E2E tests observe behavior visible to the user. Checking configuration values, l
 | Only configuration or internal state is checked, with no user-visible result | REJECT |
 | Only real external-environment verification exists, with no deterministic test for the main boundary | Warning or REJECT |
 
-## Observing Negative Contracts
-
-When E2E tests verify permissions, tools, providers, models, configuration, rejection, or isolation, a string-level negation across the whole output is weak evidence.
-Extract the relevant line, event, record, field, or call argument, then check each forbidden value so order, case, whitespace, delimiters, or partial leaks cannot be missed.
-
-| Criteria | Judgment |
-|----------|----------|
-| Treating rejection, non-inheritance, or isolation as verified only because one exact sentence is absent | REJECT |
-| Checking only the displayed allowed value without proving forbidden values do not reach endpoint processing | REJECT |
-| Extracting observable units and checking forbidden, rejected, or non-inherited values per value | OK |
-| Comparing allowed vs rejected and inherited vs non-inherited cases in the same scenario family | OK |
-
 ## UX Route Identification
 
 E2E test completeness depends on thorough UX route identification. Identify entry points from code, not documentation.
@@ -89,7 +77,6 @@ E2E tests are prone to non-deterministic failures.
 | Process leaks | Set timeouts and force-kill |
 | Environment dependency | Explicitly set up prerequisites for test execution |
 | Execution order dependency | Initialize state so each test runs independently |
-| Timeout/cleanup diverges from existing convention | Follow existing same-kind E2E conventions |
 
 ```typescript
 // NG - fixed sleep for timing
