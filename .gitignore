@@ -5,6 +5,8 @@ node_modules/
 # Build output
 dist/
 *.tgz
+/result
+/result-*
 
 # IDE
 .idea/

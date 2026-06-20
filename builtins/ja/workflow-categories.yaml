@@ -24,6 +24,7 @@ workflow_categories:
     workflows:
       - backend
       - backend-mini
+      - backend-maintenance
       - backend-cqrs
       - backend-cqrs-mini
   🔧 デュアル:

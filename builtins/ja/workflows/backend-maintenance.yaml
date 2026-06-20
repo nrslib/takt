@@ -1,5 +1,5 @@
-name: frontend-maintenance
-description: Strict frontend maintenance workflow for existing production systems
+name: backend-maintenance
+description: 既存プロダクト向けの厳格なバックエンド保守ワークフロー
 workflow_config:
   provider_options:
     codex:
@@ -17,9 +17,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-ai-antipattern-fix
       rules:
-        - condition: Healthy (making progress)
+        - condition: 健全（進捗あり）
           next: ai-antipattern-review-1st
-        - condition: Unproductive (no improvement)
+        - condition: 非生産的（改善なし）
           next: reviewers_1
   - cycle:
       - reviewers_1
@@ -29,9 +29,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: converging (findings decreasing, fixes applied)
+        - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers_1
-        - condition: unproductive (same findings repeating)
+        - condition: 非生産的（同じ指摘が繰り返される）
           next: supervise
 steps:
   - name: plan
@@ -40,11 +40,9 @@ steps:
     edit: false
     persona: planner
     policy:
-      - design-planning
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - architecture
       - existing-system
     provider_options:
@@ -58,14 +56,14 @@ steps:
           - WebFetch
     instruction: plan-maintenance
     rules:
-      - condition: Task analysis and planning is complete
+      - condition: タスク分析と計画が完了した
         next: write_tests
-      - condition: Requirements are unclear and planning cannot proceed
+      - condition: 要件が不明確で計画を立てられない
         next: ABORT
     output_contracts:
       report:
         - name: plan.md
-          format: plan-frontend
+          format: plan
   - name: write_tests
     tags:
       - coding
@@ -76,8 +74,7 @@ steps:
       - testing
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - architecture
       - unit-testing
       - e2e-testing
@@ -96,13 +93,13 @@ steps:
     required_permission_mode: edit
     instruction: write-tests-maintenance
     rules:
-      - condition: Test creation is complete
+      - condition: テスト作成が完了した
         next: implement
-      - condition: Skipping test creation as target is not yet implemented
+      - condition: 実装対象が未実装のためテスト作成をスキップ
         next: implement
-      - condition: Cannot proceed with test creation
+      - condition: テスト作成を進行できない
         next: plan
-      - condition: User input required for clarification
+      - condition: ユーザー入力が必要
         next: write_tests
         requires_user_input: true
         interactive_only: true
@@ -118,12 +115,10 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     session: refresh
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system
@@ -140,13 +135,13 @@ steps:
           - WebFetch
     instruction: implement-maintenance
     rules:
-      - condition: Implementation is complete
+      - condition: 実装が完了した
         next: ai-antipattern-review-1st
-      - condition: No implementation (report only)
+      - condition: 実装未着手（レポートのみ）
         next: ai-antipattern-review-1st
-      - condition: Cannot proceed with implementation
+      - condition: 実装を進行できない
         next: ai-antipattern-review-1st
-      - condition: User input required
+      - condition: ユーザー入力が必要
         next: implement
         requires_user_input: true
         interactive_only: true
@@ -165,6 +160,8 @@ steps:
       - review
       - ai-antipattern
       - existing-system-respect
+    knowledge:
+      - existing-system
     provider_options:
       claude:
         allowed_tools:
@@ -175,16 +172,14 @@ steps:
           - WebFetch
     instruction: ai-antipattern-review
     rules:
-      - condition: No AI-specific issues found
+      - condition: AI特有の問題が見つからない
         next: reviewers_1
-      - condition: AI-specific issues detected
+      - condition: AI特有の問題が検出された
         next: ai-antipattern-fix
     output_contracts:
       report:
         - name: ai-antipattern-review.md
           format: ai-antipattern-review
-    knowledge:
-      - existing-system
   - name: ai-antipattern-fix
     tags:
       - coding
@@ -193,12 +188,10 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     session: refresh
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system
@@ -216,11 +209,11 @@ steps:
     instruction: ai-antipattern-fix
     pass_previous_response: false
     rules:
-      - condition: AI Reviewer's issues have been fixed
+      - condition: AI Reviewerの指摘に対する修正が完了した
         next: ai-antipattern-review-1st
-      - condition: No fix needed (verified target files/spec)
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
         next: ai-antipattern-no-fix
-      - condition: Unable to proceed with fixes
+      - condition: 修正を進行できない
         next: ai-antipattern-no-fix
   - name: ai-antipattern-no-fix
     tags:
@@ -230,6 +223,8 @@ steps:
     policy:
       - review
       - existing-system-respect
+    knowledge:
+      - existing-system
     provider_options:
       claude:
         allowed_tools:
@@ -237,13 +232,11 @@ steps:
           - Glob
           - Grep
     rules:
-      - condition: ai-antipattern-review-1st's findings are valid (fix required)
+      - condition: ai-antipattern-review-1stの指摘が妥当（修正すべき）
         next: ai-antipattern-fix
-      - condition: ai-antipattern-fix's judgment is valid (no fix needed)
+      - condition: ai-antipattern-fixの判断が妥当（修正不要）
         next: reviewers_1
     instruction: arbitrate
-    knowledge:
-      - existing-system
   - name: reviewers_1
     tags:
       - review
@@ -258,8 +251,7 @@ steps:
           - existing-system-respect
         knowledge:
           - architecture
-          - frontend
-          - react
+          - backend
           - existing-system
         provider_options:
           claude:
@@ -277,35 +269,6 @@ steps:
           report:
             - name: architect-review.md
               format: architecture-review
-      - name: frontend-review
-        tags:
-          - review
-        edit: false
-        persona: frontend-reviewer
-        policy:
-          - review
-          - design-fidelity
-          - existing-system-respect
-        knowledge:
-          - frontend
-          - react
-          - existing-system
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-frontend
-        output_contracts:
-          report:
-            - name: frontend-review.md
-              format: frontend-review
       - name: testing-review
         tags:
           - review
@@ -344,6 +307,8 @@ steps:
           - review
           - ai-antipattern
           - existing-system-respect
+        knowledge:
+          - existing-system
         provider_options:
           claude:
             allowed_tools:
@@ -360,8 +325,6 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
-        knowledge:
-          - existing-system
     rules:
       - condition: all("approved")
         next: reviewers_2
@@ -407,6 +370,8 @@ steps:
           - review
           - qa
           - existing-system-respect
+        knowledge:
+          - existing-system
         provider_options:
           claude:
             allowed_tools:
@@ -423,8 +388,6 @@ steps:
           report:
             - name: qa-review.md
               format: qa-review
-        knowledge:
-          - existing-system
       - name: pure-review
         tags:
           - review
@@ -486,11 +449,9 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system
@@ -508,9 +469,9 @@ steps:
     required_permission_mode: edit
     pass_previous_response: false
     rules:
-      - condition: Fix complete
+      - condition: 修正が完了した
         next: reviewers_1
-      - condition: Cannot proceed, insufficient info
+      - condition: 修正を進行できない
         next: plan
     instruction: fix-maintenance
   - name: supervise
@@ -521,6 +482,8 @@ steps:
     policy:
       - review
       - existing-system-respect
+    knowledge:
+      - existing-system
     provider_options:
       claude:
         allowed_tools:
@@ -532,9 +495,9 @@ steps:
     instruction: supervise-maintenance
     pass_previous_response: false
     rules:
-      - condition: All validations pass and ready to merge
+      - condition: すべての検証が完了し、マージ可能な状態である
         next: COMPLETE
-      - condition: Issues detected during final review
+      - condition: 問題が検出された
         next: fix_supervisor
     output_contracts:
       report:
@@ -543,8 +506,6 @@ steps:
         - name: summary.md
           format: summary
           use_judge: false
-    knowledge:
-      - existing-system
   - name: fix_supervisor
     tags:
       - coding
@@ -553,11 +514,9 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system
@@ -575,7 +534,7 @@ steps:
     instruction: fix-maintenance
     pass_previous_response: false
     rules:
-      - condition: Supervisor's issues have been fixed
+      - condition: 監督者の指摘に対する修正が完了した
         next: supervise
-      - condition: Unable to proceed with fixes
+      - condition: 修正を進行できない
         next: plan

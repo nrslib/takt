@@ -68,7 +68,7 @@
   "homepage": "https://github.com/nrslib/takt#readme",
   "type": "module",
   "engines": {
-    "node": ">=18.19.0"
+    "node": ">=20.6.0"
   },
   "files": [
     "dist/",
@@ -89,11 +89,11 @@
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
-    "faceted-prompting": "^0.1.0",
+    "faceted-prompting": "^0.5.0",
     "traced-config": "^0.3.0",
     "update-notifier": "^7.3.1",
     "wanakana": "^5.3.1",
-    "yaml": "^2.8.3",
+    "yaml": "^2.9.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -105,7 +105,11 @@
     "eslint": "^9.0.0",
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.53.1",
-    "vite": "^6.4.3",
     "vitest": "^3.2.6"
+  },
+  "overrides": {
+    "hono": "^4.12.25",
+    "vite": "6.4.3",
+    "esbuild": "0.28.1"
   }
 }

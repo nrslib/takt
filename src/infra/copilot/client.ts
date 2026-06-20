@@ -6,11 +6,10 @@
  */
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
-import { createLogger, crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, crossSpawn, ensureCurrentTmpDirExists, getErrorMessage } from '../../shared/utils/index.js';
 import type { CopilotCallOptions } from './types.js';
 
 const log = createLogger('copilot-client');
@@ -397,7 +396,8 @@ export class CopilotClient {
     let shareTmpDir: string | undefined;
     let shareFilePath: string | undefined;
     try {
-      shareTmpDir = await mkdtemp(join(tmpdir(), 'takt-copilot-'));
+      const shareTmpParentDir = ensureCurrentTmpDirExists();
+      shareTmpDir = await mkdtemp(join(shareTmpParentDir, 'takt-copilot-'));
       shareFilePath = join(shareTmpDir, 'session.md');
     } catch (err) {
       log.debug('mkdtemp failed, skipping session extraction', { err });

@@ -1,21 +1,17 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 
 const {
-  mockWriteFileAtomic,
   mockResolveWorkflowConfigValues,
   mockCreateOutputFns,
   mockInitializeOtelFoundation,
-  mockEnsureWorktreeTaktGitignore,
 } = vi.hoisted(() => ({
-  mockWriteFileAtomic: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
   mockCreateOutputFns: vi.fn(),
   mockInitializeOtelFoundation: vi.fn(),
-  mockEnsureWorktreeTaktGitignore: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -25,7 +21,7 @@ vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
   updatePersonaSession: vi.fn(),
   updateWorktreeSession: vi.fn(),
-  writeFileAtomic: mockWriteFileAtomic,
+  writeFileAtomic: vi.fn(),
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', () => ({
@@ -44,7 +40,7 @@ vi.mock('../infra/config/paths.js', () => ({
 vi.mock('../infra/fs/index.js', () => ({
   createSessionLog: vi.fn(() => ({ history: [] })),
   generateSessionId: vi.fn(() => 'session-1'),
-  initNdjsonLog: vi.fn(() => '/project/.takt/runs/direct-resume/logs/session.ndjson'),
+  initNdjsonLog: vi.fn(() => '/project/.takt/runs/worktree-run/logs/session.ndjson'),
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -64,18 +60,6 @@ vi.mock('../shared/ui/TaskPrefixWriter.js', () => ({
   })),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
-  createLogger: vi.fn(() => ({
-    debug: vi.fn(),
-    info: vi.fn(),
-    error: vi.fn(),
-  })),
-  generateReportDir: vi.fn(() => 'generated-run'),
-  getDebugPromptsLogFile: vi.fn(() => undefined),
-  isValidReportDirName: vi.fn(() => true),
-  preventSleep: vi.fn(),
-}));
-
 vi.mock('../shared/utils/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
     wrapCallback: (handler: unknown) => handler,
@@ -90,10 +74,6 @@ vi.mock('../shared/utils/usageEventLogger.js', () => ({
 
 vi.mock('../infra/observability/otelFoundation.js', () => ({
   initializeOtelFoundation: mockInitializeOtelFoundation,
-}));
-
-vi.mock('../infra/task/projectLocalTaktSync.js', () => ({
-  ensureWorktreeTaktGitignore: mockEnsureWorktreeTaktGitignore,
 }));
 
 vi.mock('../features/analytics/index.js', () => ({
@@ -140,17 +120,17 @@ const workflowConfig: WorkflowConfig = {
 
 const temporaryDirs: string[] = [];
 
-function createTempProject(): string {
-  const projectDir = mkdtempSync(join(tmpdir(), 'takt-direct-resume-'));
-  temporaryDirs.push(projectDir);
-  return projectDir;
+function createTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  temporaryDirs.push(dir);
+  return dir;
 }
 
-function hasTasksYamlWrite(): boolean {
-  return mockWriteFileAtomic.mock.calls.some((call) => String(call[0]).endsWith('/.takt/tasks.yaml'));
+function readBuiltinProjectDotgitignore(): string {
+  return readFileSync(join(__dirname, '..', '..', 'builtins', 'project', 'dotgitignore'), 'utf-8');
 }
 
-describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
+describe('createWorkflowExecutionBootstrap worktree gitignore integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreateOutputFns.mockReturnValue({
@@ -185,71 +165,9 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     }
   });
 
-  it('Given directResume is passed, When bootstrap creates run meta, Then source metadata is persisted in meta.json', async () => {
-    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', '/project', {
-      projectCwd: '/project',
-      provider: 'mock',
-      reportDirName: 'direct-resume',
-      directResume: {
-        sourceRunSlug: '20260524-source-run',
-        resumeMode: 'retry',
-      },
-    });
-
-    const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
-      call[0] === '/project/.takt/runs/direct-resume/meta.json'
-    );
-    expect(metaWrite).toBeDefined();
-    const meta = JSON.parse(String(metaWrite![1])) as {
-      source_run_slug?: string;
-      resume_mode?: string;
-    };
-    expect(meta.source_run_slug).toBe('20260524-source-run');
-    expect(meta.resume_mode).toBe('retry');
-  });
-
-  it('Given no tasks.yaml exists, When direct resume bootstrap runs, Then tasks.yaml is not created', async () => {
-    const projectDir = createTempProject();
-
-    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
-      projectCwd: projectDir,
-      provider: 'mock',
-      reportDirName: 'direct-resume',
-      directResume: {
-        sourceRunSlug: '20260524-source-run',
-        resumeMode: 'requeue',
-      },
-    });
-
-    expect(existsSync(join(projectDir, '.takt', 'tasks.yaml'))).toBe(false);
-    expect(hasTasksYamlWrite()).toBe(false);
-  });
-
-  it('Given tasks.yaml already exists, When direct resume bootstrap runs, Then tasks.yaml remains unchanged', async () => {
-    const projectDir = createTempProject();
-    const tasksDir = join(projectDir, '.takt');
-    const tasksPath = join(tasksDir, 'tasks.yaml');
-    const initialTasks = 'tasks:\n  - name: keep-existing\n    status: pending\n';
-    mkdirSync(tasksDir, { recursive: true });
-    writeFileSync(tasksPath, initialTasks, 'utf-8');
-
-    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
-      projectCwd: projectDir,
-      provider: 'mock',
-      reportDirName: 'direct-resume',
-      directResume: {
-        sourceRunSlug: '20260524-source-run',
-        resumeMode: 'instruct',
-      },
-    });
-
-    expect(readFileSync(tasksPath, 'utf-8')).toBe(initialTasks);
-    expect(hasTasksYamlWrite()).toBe(false);
-  });
-
-  it('Given cwd differs from projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is ensured', async () => {
-    const projectDir = createTempProject();
-    const worktreeDir = createTempProject();
+  it('Given cwd differs from projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is created from built-in template', async () => {
+    const projectDir = createTempDir('takt-bootstrap-project-');
+    const worktreeDir = createTempDir('takt-bootstrap-worktree-');
 
     await createWorkflowExecutionBootstrap(workflowConfig, 'Run in worktree', worktreeDir, {
       projectCwd: projectDir,
@@ -257,19 +175,19 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       reportDirName: 'worktree-run',
     });
 
-    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledTimes(1);
-    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledWith(worktreeDir);
+    expect(readFileSync(join(worktreeDir, '.takt', '.gitignore'), 'utf-8')).toBe(readBuiltinProjectDotgitignore());
   });
 
-  it('Given cwd equals projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is not ensured', async () => {
-    const projectDir = createTempProject();
+  it('Given worktree cwd and invalid reportDirName, When bootstrap rejects, Then worktree .takt is not created', async () => {
+    const projectDir = createTempDir('takt-bootstrap-project-');
+    const worktreeDir = createTempDir('takt-bootstrap-worktree-');
 
-    await createWorkflowExecutionBootstrap(workflowConfig, 'Run in project', projectDir, {
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Run in worktree', worktreeDir, {
       projectCwd: projectDir,
       provider: 'mock',
-      reportDirName: 'project-run',
-    });
+      reportDirName: '../invalid',
+    })).rejects.toThrow('Invalid reportDirName: ../invalid');
 
-    expect(mockEnsureWorktreeTaktGitignore).not.toHaveBeenCalled();
+    expect(existsSync(join(worktreeDir, '.takt'))).toBe(false);
   });
 });

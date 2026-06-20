@@ -1,5 +1,5 @@
-name: frontend-maintenance
-description: Strict frontend maintenance workflow for existing production systems
+name: backend-maintenance
+description: Strict backend maintenance workflow for existing production systems
 workflow_config:
   provider_options:
     codex:
@@ -40,11 +40,9 @@ steps:
     edit: false
     persona: planner
     policy:
-      - design-planning
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - architecture
       - existing-system
     provider_options:
@@ -65,7 +63,7 @@ steps:
     output_contracts:
       report:
         - name: plan.md
-          format: plan-frontend
+          format: plan
   - name: write_tests
     tags:
       - coding
@@ -76,8 +74,7 @@ steps:
       - testing
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - architecture
       - unit-testing
       - e2e-testing
@@ -118,12 +115,10 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     session: refresh
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system
@@ -165,6 +160,8 @@ steps:
       - review
       - ai-antipattern
       - existing-system-respect
+    knowledge:
+      - existing-system
     provider_options:
       claude:
         allowed_tools:
@@ -183,8 +180,6 @@ steps:
       report:
         - name: ai-antipattern-review.md
           format: ai-antipattern-review
-    knowledge:
-      - existing-system
   - name: ai-antipattern-fix
     tags:
       - coding
@@ -193,12 +188,10 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     session: refresh
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system
@@ -230,6 +223,8 @@ steps:
     policy:
       - review
       - existing-system-respect
+    knowledge:
+      - existing-system
     provider_options:
       claude:
         allowed_tools:
@@ -242,8 +237,6 @@ steps:
       - condition: ai-antipattern-fix's judgment is valid (no fix needed)
         next: reviewers_1
     instruction: arbitrate
-    knowledge:
-      - existing-system
   - name: reviewers_1
     tags:
       - review
@@ -258,8 +251,7 @@ steps:
           - existing-system-respect
         knowledge:
           - architecture
-          - frontend
-          - react
+          - backend
           - existing-system
         provider_options:
           claude:
@@ -277,35 +269,6 @@ steps:
           report:
             - name: architect-review.md
               format: architecture-review
-      - name: frontend-review
-        tags:
-          - review
-        edit: false
-        persona: frontend-reviewer
-        policy:
-          - review
-          - design-fidelity
-          - existing-system-respect
-        knowledge:
-          - frontend
-          - react
-          - existing-system
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-frontend
-        output_contracts:
-          report:
-            - name: frontend-review.md
-              format: frontend-review
       - name: testing-review
         tags:
           - review
@@ -344,6 +307,8 @@ steps:
           - review
           - ai-antipattern
           - existing-system-respect
+        knowledge:
+          - existing-system
         provider_options:
           claude:
             allowed_tools:
@@ -360,8 +325,6 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
-        knowledge:
-          - existing-system
     rules:
       - condition: all("approved")
         next: reviewers_2
@@ -407,6 +370,8 @@ steps:
           - review
           - qa
           - existing-system-respect
+        knowledge:
+          - existing-system
         provider_options:
           claude:
             allowed_tools:
@@ -423,8 +388,6 @@ steps:
           report:
             - name: qa-review.md
               format: qa-review
-        knowledge:
-          - existing-system
       - name: pure-review
         tags:
           - review
@@ -486,11 +449,9 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system
@@ -521,6 +482,8 @@ steps:
     policy:
       - review
       - existing-system-respect
+    knowledge:
+      - existing-system
     provider_options:
       claude:
         allowed_tools:
@@ -543,8 +506,6 @@ steps:
         - name: summary.md
           format: summary
           use_judge: false
-    knowledge:
-      - existing-system
   - name: fix_supervisor
     tags:
       - coding
@@ -553,11 +514,9 @@ steps:
     policy:
       - coding
       - testing
-      - design-fidelity
       - existing-system-respect
     knowledge:
-      - frontend
-      - react
+      - backend
       - security
       - architecture
       - existing-system

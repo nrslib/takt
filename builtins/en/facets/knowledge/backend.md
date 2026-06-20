@@ -218,6 +218,8 @@ Separate read and write entrypoints. Read-side query boundaries have no side eff
 | Read-oriented class or method names hide side effects | REJECT |
 | Simple read API calls a query boundary and converts to response DTO | OK |
 | Simple state-changing API resolves structural validation and authorization boundary, then dispatches one command | OK |
+| Read-side coordinator for Controllers handles authorization boundaries, multiple Read Models, pagination, etc. | Express as ApplicationService or ReadService |
+| Sender or coordinating component named QueryService is placed near QueryHandlers | Warning. Easy to confuse with the query handling side |
 | Controller contains multiple Read Model lookups, external integration, multiple commands, or result waiting | REJECT. Separate into UseCase layer |
 | UseCase only delegates to another service or command dispatch without domain coordination | Consider deleting |
 

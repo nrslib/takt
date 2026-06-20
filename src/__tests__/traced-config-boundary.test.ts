@@ -223,4 +223,33 @@ describe('traced config boundaries', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('Given TMPDIR points to a missing directory, When runtime bridge loads trace entries, Then mkdtemp succeeds', () => {
+    const originalTmpDir = process.env.TMPDIR;
+    const tempDir = join(tmpdir(), `takt-traced-missing-tmpdir-${randomUUID()}`);
+    const missingTmpDir = join(tempDir, 'missing-tmp');
+    mkdirSync(tempDir, { recursive: true });
+    process.env.TMPDIR = missingTmpDir;
+
+    try {
+      const traceEntries = loadTraceEntriesViaRuntime({
+        provider: {
+          doc: 'provider',
+          format: String,
+          env: 'TAKT_PROVIDER',
+          sources: { global: false, local: true, env: true, cli: false },
+        },
+      }, 'local', { provider: 'codex' });
+
+      expect(traceEntries.get('provider')?.origin).toBe('local');
+      expect(traceEntries.get('provider')?.value).toBe('codex');
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

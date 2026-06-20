@@ -1,4 +1,4 @@
-Implement according to the plan with the minimum diff while preserving existing contracts.
+Implement according to the plan within the causally related scope while preserving existing contracts.
 Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
@@ -14,7 +14,7 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - Before implementation, classify planned changes as required, related, or unnecessary
 - Implement only required and related changes
 - Do not use a touched file as a reason to make style improvements, renames, file moves, hook return shape changes, comment deletions, or test expectation changes
-- If the existing structure can satisfy the request, do not restructure only to match common style
+- Do not make structural changes that are not causally related to the request
 - When a specification change removes an old design, do not leave code or tests that only verify the absence of the old specification
 - After implementation, inspect the full diff and revert unnecessary changes
 

@@ -1,4 +1,4 @@
-Analyze the task as maintenance work for an existing frontend feature and produce a minimum-diff implementation plan that includes necessary design decisions.
+Analyze the task as maintenance work for an existing feature and produce a causal-diff implementation plan that includes necessary design decisions.
 
 **Note:** If Previous Response exists, treat it as a rework request and compare it with the current files before revising the plan.
 
@@ -29,7 +29,7 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
    - Same file, nearby responsibility, or common style is not enough to make a change related
    - Do not assign unnecessary changes to the Coder
 6. Decide file structure and design patterns when needed
-   - If the existing structure can satisfy the request, keep it even if it is not ideal
+   - Where the request is not causally related, keep the existing structure even if it is not ideal
 7. Decide the implementation approach
    - Check that the approach does not violate Knowledge or Policy constraints
    - For user-facing additions or changes, fix the reachability condition, entry point, and activation path
@@ -48,4 +48,4 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 ## Existing Contracts
 - {Existing contracts to preserve}
 ## Implementation Plan
-- {Minimum-diff plan}
+- {Causal-diff plan}

@@ -218,6 +218,8 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 | 読み取り用のクラス名やメソッド名なのに副作用を持つ | REJECT |
 | 単純な参照APIが問い合わせ層を呼び、レスポンスDTOに変換するだけ | OK |
 | 単純な状態変更APIが構造検証と認可境界の解決後にコマンドを1つ送るだけ | OK |
+| Controller向けの読み取り調整役が認可境界、複数Read Model、ページング等を扱う | ApplicationService または ReadService として表現 |
+| QueryHandler と同じ領域に QueryService という名前の送信側・調整側コンポーネントを置く | 警告。クエリ受信側と混同しやすい |
 | 複数のRead Model参照、外部連携、複数コマンド、結果待機をControllerに置く | REJECT。UseCase層に分離 |
 | UseCaseが別サービスへの薄い委譲だけでドメイン上の判断や調整を持たない | 削除を検討 |
 

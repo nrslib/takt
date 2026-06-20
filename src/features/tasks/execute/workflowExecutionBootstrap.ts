@@ -32,6 +32,7 @@ import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/ut
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
 import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
+import { ensureWorktreeTaktGitignore } from '../../../infra/task/projectLocalTaktSync.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
 import { RunMetaManager } from './runMeta.js';
@@ -124,6 +125,9 @@ export async function createWorkflowExecutionBootstrap(
   const runSlug = options.reportDirName ?? generateReportDir(task);
   if (!isValidReportDirName(runSlug)) {
     throw new Error(`Invalid reportDirName: ${runSlug}`);
+  }
+  if (isWorktree) {
+    ensureWorktreeTaktGitignore(cwd);
   }
 
   const runPaths = buildRunPaths(cwd, runSlug);

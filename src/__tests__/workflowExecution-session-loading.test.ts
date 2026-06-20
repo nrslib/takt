@@ -5,6 +5,9 @@
  * retry runs (startStep / retryNote) load persisted sessions.
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -200,7 +203,8 @@ vi.mock('../infra/fs/index.js', () => ({
   appendNdjsonLine: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn().mockReturnValue({
     debug: vi.fn(),
     info: vi.fn(),
@@ -290,6 +294,7 @@ function makeConfigWithStep(overrides: Record<string, unknown>): WorkflowConfig 
 }
 
 describe('executeWorkflow session loading', () => {
+  const temporaryDirs: string[] = [];
   const restoredEnvKeys = [
     'TAKT_OBSERVABILITY',
     'OTEL_EXPORTER_OTLP_ENDPOINT',
@@ -333,6 +338,12 @@ describe('executeWorkflow session loading', () => {
     }
   }
 
+  function createTempDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    temporaryDirs.push(dir);
+    return dir;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     restoreEnv();
@@ -356,6 +367,9 @@ describe('executeWorkflow session loading', () => {
 
   afterEach(() => {
     restoreEnv();
+    for (const dir of temporaryDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('should pass empty initialSessions on normal run', async () => {
@@ -429,20 +443,26 @@ describe('executeWorkflow session loading', () => {
 
   it('should load worktree sessions on retry when cwd differs from projectCwd', async () => {
     // Given: retry execution in a worktree (cwd !== projectCwd)
-    await executeWorkflow(makeConfig(), 'task', '/tmp/worktree', {
-      projectCwd: '/tmp/project',
+    const projectDir = createTempDir('takt-session-project-');
+    const worktreeDir = createTempDir('takt-session-worktree-');
+
+    await executeWorkflow(makeConfig(), 'task', worktreeDir, {
+      projectCwd: projectDir,
       startStep: 'implement',
     });
 
     // Then: loadWorktreeSessions is called instead of loadPersonaSessions
-    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith('/tmp/project', '/tmp/worktree', 'claude');
+    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(projectDir, worktreeDir, 'claude');
     expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
   });
 
   it('should not load sessions for worktree normal run', async () => {
     // Given: normal execution in a worktree (no retry)
-    await executeWorkflow(makeConfig(), 'task', '/tmp/worktree', {
-      projectCwd: '/tmp/project',
+    const projectDir = createTempDir('takt-session-project-');
+    const worktreeDir = createTempDir('takt-session-worktree-');
+
+    await executeWorkflow(makeConfig(), 'task', worktreeDir, {
+      projectCwd: projectDir,
     });
 
     // Then: neither session loader is called

@@ -243,6 +243,18 @@ Event distribution uses PubSub (via message broker) to deliver events to all ins
 | Command and Query responsibilities mixed in the same service | REJECT. Separate responsibility and naming |
 | Query side checks existence or scope and caller dispatches command | OK |
 
+### QueryHandler and ApplicationService Naming
+
+In CQRS, the component that receives a query is the QueryHandler, and the entrypoint for dispatching queries is the QueryGateway / QueryBus. A facade called by Controllers for read use cases should be named ApplicationService or ReadService so it is not confused with a QueryHandler.
+
+| Criteria | Judgment |
+|----------|----------|
+| Receives a Query, reads the Read Model, and returns a query result type | QueryHandler |
+| Coordinates multiple Queries, authorization boundaries, pagination, or DTO assembly for Controllers | ApplicationService or ReadService |
+| Class that only dispatches queries or coordinates reads is named QueryService | Warning. Easy to confuse with QueryHandler |
+| QueryHandler knows HTTP requests/responses or Controller-specific error translation | REJECT |
+| Simple read wrapper with no additional decision-making | Consider deleting. Controller may call QueryGateway directly |
+
 Types between layers:
 - `application/query/` - Query result types (e.g., `OrderDetail`)
 - `adapter/protocol/` - REST response types (e.g., `OrderDetailResponse`)

@@ -471,6 +471,18 @@ Query側はイベント駆動のPubSubモデルで動作する。Projection が 
 | Command と Query を同じサービスに混在させる | REJECT。責務と命名を分離 |
 | Query側で存在確認やスコープ確認を行い、呼び出し元がコマンドを送る | OK |
 
+### QueryHandler と ApplicationService の命名
+
+CQRSではクエリを受けるコンポーネントを QueryHandler と呼び、クエリを送る入口は QueryGateway / QueryBus として扱う。Controller から読み取りユースケースを呼ぶ facade は、QueryHandler と混同しないよう ApplicationService または ReadService と名付ける。
+
+| 基準 | 判定 |
+|------|------|
+| Query を受けて Read Model を参照し、Query結果の型を返す | QueryHandler |
+| Controller から複数Query、認可境界、ページング、DTO組み立てを調整する | ApplicationService または ReadService |
+| Query送信や読み取り調整だけのクラスを QueryService と呼ぶ | 警告。QueryHandler と混同しやすい |
+| QueryHandler がHTTPリクエスト/レスポンスやController都合のエラー変換を知る | REJECT |
+| 追加判断のない単純な読み取り wrapper を作る | 削除を検討。Controller から QueryGateway 直でもよい |
+
 レイヤー間の型:
 - `application/query/` - Query結果の型（例: `OrderDetail`）
 - `adapter/protocol/` - RESTレスポンスの型（例: `OrderDetailResponse`）
