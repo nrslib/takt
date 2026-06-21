@@ -190,9 +190,10 @@ describe('E2E: --provider option override (mock)', () => {
         'claude.baseUrl': 'step',
       }),
     }));
-    expect(JSON.stringify(stepStart)).not.toContain('127.0.0.1:8787');
-    expect(JSON.stringify(stepStart)).not.toContain('localhost:8787');
-    expect(JSON.stringify(stepStart)).not.toContain('127.0.0.1:8788');
+    const serializedRecords = JSON.stringify(records);
+    expect(serializedRecords).not.toContain('127.0.0.1:8787');
+    expect(serializedRecords).not.toContain('localhost:8787');
+    expect(serializedRecords).not.toContain('127.0.0.1:8788');
   }, 240_000);
 
   it('should reject an empty provider base_url before mock execution', () => {

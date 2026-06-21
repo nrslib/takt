@@ -258,7 +258,18 @@ export function mergeProviderOptions(
   for (const layer of layers) {
     if (!layer) continue;
     if (layer.codex) {
-      result.codex = { ...result.codex, ...layer.codex };
+      result.codex = {
+        ...result.codex,
+        ...(layer.codex.baseUrl !== undefined
+          ? { baseUrl: layer.codex.baseUrl }
+          : {}),
+        ...(layer.codex.networkAccess !== undefined
+          ? { networkAccess: layer.codex.networkAccess }
+          : {}),
+        ...(layer.codex.reasoningEffort !== undefined
+          ? { reasoningEffort: layer.codex.reasoningEffort }
+          : {}),
+      };
     }
     if (layer.opencode) {
       result.opencode = { ...result.opencode, ...layer.opencode };
@@ -350,6 +361,10 @@ function selectProviderValue<T>(
   return stepValue ?? personaValue ?? configValue;
 }
 
+/**
+ * Select by scope only for leaves whose explicit file or workflow value must
+ * remain above TAKT env/CLI config origins.
+ */
 function selectProviderValueByScope<T>(
   configValue: T | undefined,
   personaValue: T | undefined,

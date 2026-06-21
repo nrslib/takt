@@ -10,7 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CodexCallOptions } from '../infra/codex/client.js';
+import type { CodexCallOptions } from '../infra/codex/types.js';
 
 // ===== Codex SDK mock =====
 

@@ -41,4 +41,3 @@ npm run analyze:usage -- .takt/runs/<run>
 ## 外部圧縮 proxy を評価する
 
 外部圧縮 proxy は baseline usage を把握した後に評価します。導入前後の TAKT usage events を比較し、利用できる場合は provider 側または proxy 側の統計も比較してください。raw token が減っても retry、review reject、総コストが増えるなら、その proxy は効果がありません。
-

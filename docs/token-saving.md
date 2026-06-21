@@ -41,4 +41,3 @@ Compare by `step`, `phase`, `provider`, and `model`. Focus on repeated review lo
 ## Evaluate External Compression Proxies
 
 External compression proxies should be evaluated only after baseline usage is known. Compare TAKT usage events before and after the proxy, and compare provider-side or proxy-side stats when available. A proxy is a loss if it lowers raw tokens but increases retries, review rejections, or total cost.
-

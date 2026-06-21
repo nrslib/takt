@@ -8,6 +8,7 @@ export interface ClaudeHeadlessCallOptions {
   sessionId?: string;
   model?: string;
   anthropicApiKey?: string;
+  /** Anthropic-compatible API base URL */
   baseUrl?: string;
   effort?: ClaudeEffort;
   allowedTools?: string[];
