@@ -258,8 +258,7 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       stdio: 'pipe',
     }).trim();
     expect(restoredBranch).toContain(taskMeta.branch!);
-    const stagedList = stagedFiles.trim().split('\n');
-    expect(stagedList).toContain('README.md');
+    expect(stagedFiles.trim()).toBe('README.md');
   }, 240_000);
 
   it('should create a completed worktree task via mock run and merge from root', () => {
