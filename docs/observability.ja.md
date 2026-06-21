@@ -33,6 +33,23 @@ takt run
 
 Grafana は `http://127.0.0.1:3000` で開き、`takt` service を確認します。trace は既存の workflow span tree（`workflow.<name>` の下に `step.<name>`、さらに phase / judge span）として表示され、metric はローカルの `monitor.json` 出力と並走して送信されます。
 
+## 送信される Metrics
+
+TAKT は `observability.enabled: true` の場合だけ、次の counter を送信します。
+
+| Metric | 主な属性 | 送信条件 |
+|--------|----------|----------|
+| `takt.token.input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span が provider の input / output usage を持って終了した場合。 |
+| `takt.token.output_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span が provider の input / output usage を持って終了した場合。 |
+| `takt.token.cached_input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | phase または `judge_stage.*` span に cached input token が含まれる場合。 |
+| `takt.token.estimated_cost_usd` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | provider、model、usage、既知の価格定義が揃う場合。未知 model や model 名欠落時は送信しません。 |
+| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | step が分類済み provider failure を返す、step span 内で例外が発生する、または retry 後に成功した場合。 |
+| `takt.quality_gate.results` | `takt.run.id`, `takt.workflow.name`, `takt.step.name`, `takt.quality_gate.name`, `takt.quality_gate.result` | command quality gate が pass / fail した場合。manual / text quality gate は対象外です。`takt.quality_gate.name` は sanitize 済みの `gate.name` があればそれを使い、なければ `(unnamed)` を使います。 |
+| `takt.workflow.loops_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | loop detector が current step について警告した場合。 |
+| `takt.workflow.cycles_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | 設定済み loop monitor の cycle threshold に到達した場合。 |
+
+token counter は input / output token usage を必要とします。OpenAI の long-context cost tier は input token 数が 270,000 以上の場合に選択します。token counter と provider error counter は provider default model が使われ、model 名が解決されていない場合に `takt.model.name = "(default)"` を使います。cost 推定は best-effort counter であり、未知 model、model 名欠落、cache token の不整合がある場合は 0 として送らず、送信しません。
+
 workflow がまだ実行中の場合、OpenTelemetry exporter は長時間生存する root `workflow.<name>` span が終了する前に、完了済みの child span を送信することがあります。Tempo でその active trace を見つけやすくするため、TAKT は root workflow span の下に短命の `workflow_start.<workflowName>` span も送信します。この補助 span は `takt.workflow.status = running` を含む workflow / run 属性を持ちますが、root、step、phase、judge span を置き換えたり改名したりしません。trace discovery 専用であり、shadow session log の canonical record には変換されません。
 
 active workflow を探す Tempo TraceQL filter 例:

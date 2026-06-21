@@ -81,14 +81,14 @@ export function stageAndCommit(cwd: string, message: string, options: StageAndCo
 
   execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe', env });
 
-  const statusOutput = execFileSync('git', ['status', '--porcelain'], {
+  const stagedChanges = execFileSync('git', ['diff', '--cached', '--name-only'], {
     cwd,
     stdio: 'pipe',
     encoding: 'utf-8',
     env,
   });
 
-  if (!statusOutput.trim()) {
+  if (!stagedChanges.trim()) {
     return undefined;
   }
 

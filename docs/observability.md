@@ -33,6 +33,23 @@ When `observability.enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set, TAK
 
 Open Grafana at `http://127.0.0.1:3000` and inspect the `takt` service. Traces use the existing workflow span tree (`workflow.<name>` with `step.<name>` and phase or judge spans below it), and metrics are exported alongside the local `monitor.json` stream.
 
+## Exported Metrics
+
+TAKT emits these counters only when `observability.enabled: true`.
+
+| Metric | Main attributes | Emitted when |
+|--------|-----------------|--------------|
+| `takt.token.input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | A phase or `judge_stage.*` span ends with provider input and output usage. |
+| `takt.token.output_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | A phase or `judge_stage.*` span ends with provider input and output usage. |
+| `takt.token.cached_input_tokens` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | A phase or `judge_stage.*` span includes cached input tokens. |
+| `takt.token.estimated_cost_usd` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.step.name` | Provider, model, usage, and a known pricing entry are available. Unknown models and missing model names do not emit this metric. |
+| `takt.provider.errors` | `takt.run.id`, `takt.provider.name`, `takt.model.name`, `takt.provider.error_type` | A step returns a classified provider failure, throws through the step span, or succeeds after retry attempts. |
+| `takt.quality_gate.results` | `takt.run.id`, `takt.workflow.name`, `takt.step.name`, `takt.quality_gate.name`, `takt.quality_gate.result` | A command quality gate passes or fails. Manual/text quality gates are not counted. `takt.quality_gate.name` uses the sanitized `gate.name` when set, otherwise `(unnamed)`. |
+| `takt.workflow.loops_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | The loop detector warns for the current step. |
+| `takt.workflow.cycles_detected` | `takt.run.id`, `takt.workflow.name`, `takt.step.name` | A configured loop monitor cycle threshold is reached. |
+
+Token counters require input and output token usage. OpenAI long-context cost tiers are selected when input usage is greater than or equal to 270,000 tokens. Token and provider error counters use `takt.model.name = "(default)"` when the provider default model is used and no model name has been resolved. Cost estimates are best-effort counters and are skipped rather than reported as zero when the model is unknown, the model name is missing, or cache token data is inconsistent.
+
 While a workflow is still running, OpenTelemetry exporters can deliver completed child spans before the long-lived root `workflow.<name>` span has ended. To make those active traces discoverable in Tempo, TAKT also emits a short-lived `workflow_start.<workflowName>` span under the root workflow span. This helper span carries the workflow and run attributes, including `takt.workflow.status = running`, but it does not replace or rename the root, step, phase, or judge spans. It is used only for trace discovery and is not converted into a canonical shadow session log record.
 
 Useful Tempo TraceQL filters for active workflows include:

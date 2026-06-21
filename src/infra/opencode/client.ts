@@ -9,6 +9,7 @@ import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
+import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
@@ -479,12 +480,14 @@ export class OpenCodeClient {
     agentType: string,
     sessionId: string | undefined,
     message: string,
+    retryCount: number,
   ): AgentResponse {
     return {
       persona: agentType,
       timestamp: new Date(),
       sessionId,
       ...buildRateLimitedResponseFields('opencode', 'sdk_error', message),
+      ...(retryCount > 0 ? { retryCount } : {}),
     };
   }
 
@@ -964,7 +967,8 @@ export class OpenCodeClient {
         if (!success) {
           const message = failureMessage || 'OpenCode execution failed';
           if (containsRateLimitError(message)) {
-            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, activeSessionId, message);
+            const retryCount = attempt - 1;
+            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, activeSessionId, message, retryCount);
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
             return rateLimitedResponse;
           }
@@ -982,6 +986,7 @@ export class OpenCodeClient {
             content: message,
             timestamp: new Date(),
             sessionId: activeSessionId,
+            ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
           };
         }
 
@@ -994,6 +999,7 @@ export class OpenCodeClient {
           content: trimmed,
           timestamp: new Date(),
           sessionId: activeSessionId,
+          ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
         };
       } catch (error) {
         const message = getErrorMessage(error);
@@ -1006,7 +1012,8 @@ export class OpenCodeClient {
           : message;
 
         if (containsRateLimitError(errorMessage)) {
-          const rateLimitedResponse = this.buildRateLimitedResponse(agentType, sessionId, errorMessage);
+          const retryCount = attempt - 1;
+          const rateLimitedResponse = this.buildRateLimitedResponse(agentType, sessionId, errorMessage, retryCount);
           if (sessionId) {
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
           }
@@ -1035,6 +1042,8 @@ export class OpenCodeClient {
           content: errorMessage,
           timestamp: new Date(),
           sessionId,
+          ...(abortCause === 'timeout' ? { failureCategory: AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT } : {}),
+          ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
         };
       } finally {
         if (idleTimeoutId !== undefined) {

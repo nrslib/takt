@@ -154,6 +154,7 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
+    expect(result.retryCount).toBeUndefined();
   });
 
   it('imageAttachments がある場合は Codex SDK に local_image 入力として渡す', async () => {
@@ -222,6 +223,7 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('retry succeeded');
+    expect(result.retryCount).toBe(1);
   });
 
   it('例外経路の at capacity を 1 秒、2 秒の指数バックオフで retry する', async () => {
@@ -259,6 +261,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(2);
     expect(result.status).toBe('done');
     expect(result.content).toBe('third attempt succeeded');
+    expect(result.retryCount).toBe(2);
   });
 
   it('at capacity が続く場合は 初回実行後に 8 回 retry して最後の失敗を返す', async () => {
@@ -280,6 +283,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(8);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
+    expect(result.retryCount).toBe(8);
   });
 
   it('at capacity が続く場合は 30 秒 cap で最後の retry を行う', async () => {
@@ -315,6 +319,7 @@ describe('CodexClient retry', () => {
     expect(elapsedMs).toBe(121000);
     expect(result.status).toBe('error');
     expect(result.content).toBe('Selected model is at capacity. Please try a different model.');
+    expect(result.retryCount).toBe(8);
   });
 
   it.each(CODEX_RECONNECT_RETRYABLE_MESSAGES)(
@@ -753,6 +758,7 @@ describe('CodexClient retry', () => {
     ]);
     expect(result.status).toBe('done');
     expect(result.content).toBe('timeout retry succeeded');
+    expect(result.retryCount).toBe(1);
   });
 
   it('ストリームの idle timeout は最大 2 回まで retry して停止する', async () => {
@@ -778,6 +784,7 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('error');
     expect(result.failureCategory).toBe('stream_idle_timeout');
     expect(result.content).toBe('Codex stream timed out after 10 minutes of inactivity');
+    expect(result.retryCount).toBe(2);
     expect(onStream).toHaveBeenCalledWith({
       type: 'result',
       data: expect.objectContaining({
@@ -863,6 +870,7 @@ describe('CodexClient retry', () => {
     expect(resumeThreadCalls).toHaveLength(9);
     expect(result.status).toBe('done');
     expect(result.content).toBe('mixed retry succeeded');
+    expect(result.retryCount).toBe(9);
   });
 
   it('external abort は retry せずに停止する', async () => {

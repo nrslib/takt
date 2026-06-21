@@ -41,7 +41,7 @@ import { autoCommitAndPush } from '../infra/task/autoCommit.js';
 function setupSuccessfulCommit(): void {
   mockExecFileSync.mockImplementation((_cmd, args) => {
     const argsArr = args as string[];
-    if (argsArr.includes('status')) return 'M src/index.ts\n';
+    if (argsArr.includes('diff')) return 'M src/index.ts\n';
     if (argsArr.includes('rev-parse')) return 'abc1234\n';
     if (argsArr.includes('config')) return '';
     return Buffer.from('');
@@ -143,7 +143,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     // Given: no staged changes
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
-      if (argsArr.includes('status')) return '';
+      if (argsArr.includes('diff')) return '';
       if (argsArr.includes('config')) return '';
       return Buffer.from('');
     });
