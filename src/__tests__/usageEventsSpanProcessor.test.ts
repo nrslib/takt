@@ -95,6 +95,28 @@ describe('UsageEventsSpanProcessor', () => {
     expect(existsSync(secondLogPath)).toBe(false);
   });
 
+  it('writes persona and tags from span attributes into phase usage records', () => {
+    const logPath = createTempLogPath('persona-usage-events.phase.jsonl');
+    const processor = new UsageEventsSpanProcessor({
+      runId: 'run-1',
+      sessionId: 'session-1',
+      phaseUsageLogPath: logPath,
+    });
+
+    const span = makePhaseSpan('run-1');
+    (span.attributes as Record<string, unknown>)['takt.step.persona'] = 'coder';
+    (span.attributes as Record<string, unknown>)['takt.step.tags'] = ['coding', 'review'];
+    processor.onEnd(span as unknown as ReadableSpan);
+
+    expect(readRecords(logPath)).toEqual([
+      expect.objectContaining({
+        run_id: 'run-1',
+        persona: 'coder',
+        tags: ['coding', 'review'],
+      }),
+    ]);
+  });
+
   it('does not throw when appends fail', () => {
     const phaseUsageLogPath = join(createTempLogPath(), 'missing', 'usage-events.phase.jsonl');
     const processor = new UsageEventsSpanProcessor({

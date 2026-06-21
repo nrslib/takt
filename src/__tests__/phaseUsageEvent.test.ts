@@ -142,6 +142,126 @@ describe('phase usage event mapper', () => {
     }, context)).toBeUndefined();
   });
 
+  it('includes persona and tags from phase span attributes', () => {
+    const span: SpanSnapshot = {
+      name: 'phase.implement.execute',
+      endTime: [1_778_777_205, 0],
+      attributes: {
+        'takt.provider.name': 'codex',
+        'takt.model.name': 'gpt-5',
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.step.persona': 'coder',
+        'takt.step.tags': ['coding', 'review'],
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'done',
+        'takt.usage.missing': false,
+        'gen_ai.usage.input_tokens': 11,
+        'gen_ai.usage.output_tokens': 7,
+        'gen_ai.usage.total_tokens': 18,
+      },
+    };
+
+    expect(mapSpanEndToPhaseUsageEvent(span, context)).toMatchObject({
+      step: 'implement',
+      persona: 'coder',
+      tags: ['coding', 'review'],
+    });
+  });
+
+  it('includes persona and tags from judge stage span attributes', () => {
+    const span: SpanSnapshot = {
+      name: 'judge_stage.implement.3.ai_judge',
+      endTime: [1_778_777_215, 0],
+      attributes: {
+        'takt.provider.name': 'claude-sdk',
+        'takt.model.name': 'claude-sonnet-4',
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.step.persona': 'conductor',
+        'takt.step.tags': ['review'],
+        'takt.judge.stage': 3,
+        'takt.judge.method': 'ai_judge',
+        'takt.judge.status': 'done',
+        'gen_ai.usage.input_tokens': 5,
+        'gen_ai.usage.output_tokens': 4,
+      },
+    };
+
+    expect(mapSpanEndToPhaseUsageEvent(span, context)).toMatchObject({
+      phase: 'phase3_fallback',
+      persona: 'conductor',
+      tags: ['review'],
+    });
+  });
+
+  it('omits persona when the span attribute is absent or empty', () => {
+    const record = mapSpanEndToPhaseUsageEvent({
+      name: 'phase.implement.execute',
+      attributes: {
+        'takt.provider.name': 'codex',
+        'takt.model.name': 'gpt-5',
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.step.persona': '',
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'done',
+        'gen_ai.usage.input_tokens': 1,
+        'gen_ai.usage.output_tokens': 1,
+        'gen_ai.usage.total_tokens': 2,
+      },
+    }, context);
+
+    expect(record).toBeDefined();
+    expect(record).not.toHaveProperty('persona');
+  });
+
+  it('omits tags when the span attribute is absent or an empty array', () => {
+    const record = mapSpanEndToPhaseUsageEvent({
+      name: 'phase.implement.execute',
+      attributes: {
+        'takt.provider.name': 'codex',
+        'takt.model.name': 'gpt-5',
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.step.tags': [],
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'done',
+        'gen_ai.usage.input_tokens': 1,
+        'gen_ai.usage.output_tokens': 1,
+        'gen_ai.usage.total_tokens': 2,
+      },
+    }, context);
+
+    expect(record).toBeDefined();
+    expect(record).not.toHaveProperty('tags');
+  });
+
+  it('ignores tags that are not arrays of strings', () => {
+    const record = mapSpanEndToPhaseUsageEvent({
+      name: 'phase.implement.execute',
+      attributes: {
+        'takt.provider.name': 'codex',
+        'takt.model.name': 'gpt-5',
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.step.tags': 'coding',
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'done',
+        'gen_ai.usage.input_tokens': 1,
+        'gen_ai.usage.output_tokens': 1,
+        'gen_ai.usage.total_tokens': 2,
+      },
+    }, context);
+
+    expect(record).toBeDefined();
+    expect(record).not.toHaveProperty('tags');
+  });
+
   it('turns partial token attributes into usage_tokens_missing', () => {
     const record = mapSpanEndToPhaseUsageEvent({
       name: 'phase.implement.execute',

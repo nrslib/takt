@@ -996,6 +996,84 @@ describe('workflow OpenTelemetry spans', () => {
     }));
   });
 
+  it('records step tags on phase and judge spans', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({ personaDisplayName: 'coder', tags: ['coding', 'review'] });
+
+    await module.runWithPhaseSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+      phase: 1,
+      phaseName: 'execute',
+      phaseExecutionId: 'implement:1:1:1',
+    }, async () => ({ status: 'done', content: 'ok' }), (result: { status: string; content: string }) => ({
+      status: result.status,
+      content: result.content,
+    }));
+
+    module.recordJudgeStageSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+      phaseExecutionId: 'implement:3:1:1',
+      entry: {
+        stage: 1,
+        method: 'structured_output',
+        status: 'done',
+        instruction: 'judge instruction',
+        response: 'judge response',
+      },
+    });
+
+    const phaseSpan = findSpan(spans, 'phase.implement.execute');
+    const judgeSpan = spans.find((span) => span.name.startsWith('judge_stage.'));
+    expect(phaseSpan.attributes).toMatchObject({
+      'takt.step.persona': 'coder',
+      'takt.step.tags': ['coding', 'review'],
+    });
+    expect(judgeSpan?.attributes).toMatchObject({
+      'takt.step.persona': 'coder',
+      'takt.step.tags': ['coding', 'review'],
+    });
+  });
+
+  it('omits the step tags attribute when the step has no tags', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({ personaDisplayName: 'coder' });
+
+    await module.runWithPhaseSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+      phase: 1,
+      phaseName: 'execute',
+      phaseExecutionId: 'implement:1:1:1',
+    }, async () => ({ status: 'done', content: 'ok' }), (result: { status: string; content: string }) => ({
+      status: result.status,
+      content: result.content,
+    }));
+
+    expect(findSpan(spans, 'phase.implement.execute').attributes).not.toHaveProperty('takt.step.tags');
+  });
+
+  it('does not attach step tags to the step span', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({ personaDisplayName: 'coder', tags: ['coding', 'review'] });
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+    }, async () => makeDoneResult());
+
+    expect(findSpan(spans, 'step.implement').attributes).not.toHaveProperty('takt.step.tags');
+  });
+
   it('attaches the workflow stack to phase and judge spans for parity', async () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep({ personaDisplayName: 'coder' });
