@@ -26,6 +26,8 @@ export interface PhaseUsageEventLogRecord {
   provider_model: string;
   step: string;
   step_type: PhaseUsageStepType;
+  tags?: string[];
+  persona?: string;
   phase: PhaseUsageType;
   phase_name: PhaseName;
   phase_execution_id?: string;
@@ -150,6 +152,8 @@ function buildRecord(
   meta: PhaseUsageMeta,
 ): PhaseUsageEventLogRecord {
   const usage = extractUsage(span.attributes);
+  const tags = getStringArray(span.attributes, 'takt.step.tags');
+  const persona = getString(span.attributes, 'takt.step.persona');
   return {
     run_id: context.runId,
     session_id: context.sessionId,
@@ -157,6 +161,8 @@ function buildRecord(
     provider_model: meta.providerModel,
     step: meta.step,
     step_type: meta.stepType,
+    ...(tags ? { tags } : {}),
+    ...(persona ? { persona } : {}),
     phase: meta.phase,
     phase_name: meta.phaseName,
     ...(meta.phaseExecutionId ? { phase_execution_id: meta.phaseExecutionId } : {}),
@@ -247,6 +253,17 @@ function phaseLabelForJudgeStage(stage: JudgeStage | undefined): PhaseUsageType 
 function getString(attributes: Record<string, unknown>, key: string): string | undefined {
   const value = attributes[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function getStringArray(attributes: Record<string, unknown>, key: string): string[] | undefined {
+  const value = attributes[key];
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  if (!value.every((item) => typeof item === 'string' && item.length > 0)) {
+    return undefined;
+  }
+  return value;
 }
 
 function getNumber(attributes: Record<string, unknown>, key: string): number | undefined {

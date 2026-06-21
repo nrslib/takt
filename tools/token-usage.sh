@@ -129,7 +129,7 @@ for (const r of records) {
 
   const stepKey = r.step || "unknown";
   if (!run.steps.has(stepKey)) {
-    run.steps.set(stepKey, { input: 0, output: 0, total: 0, cached: 0, count: 0 });
+    run.steps.set(stepKey, { input: 0, output: 0, total: 0, cached: 0, count: 0, persona: "", tags: [] });
   }
   const s = run.steps.get(stepKey);
   s.input += u.input_tokens || 0;
@@ -137,6 +137,8 @@ for (const r of records) {
   s.total += u.total_tokens || 0;
   s.cached += u.cached_input_tokens || 0;
   s.count++;
+  if (!s.persona && r.persona) s.persona = r.persona;
+  if (s.tags.length === 0 && Array.isArray(r.tags) && r.tags.length > 0) s.tags = r.tags;
 }
 
 let runs = [...byRun.values()].sort((a, b) => {
@@ -155,10 +157,10 @@ const grandInput = runs.reduce((s, r) => s + r.total.input, 0);
 const grandOutput = runs.reduce((s, r) => s + r.total.output, 0);
 
 if (csv) {
-  console.log("task,run_id,provider,model,step,input_tokens,output_tokens,total_tokens,cached_tokens,calls");
+  console.log("task,run_id,provider,model,step,persona,tags,input_tokens,output_tokens,total_tokens,cached_tokens,calls");
   for (const run of runs.slice(0, top)) {
     for (const [step, s] of [...run.steps.entries()].sort((a, b) => b[1].total - a[1].total)) {
-      console.log([run.task || "-", run.run_id, run.provider, run.model, step, s.input, s.output, s.total, s.cached, s.count].join(","));
+      console.log([run.task || "-", run.run_id, run.provider, run.model, step, s.persona || "", s.tags.join("|"), s.input, s.output, s.total, s.cached, s.count].join(","));
     }
   }
   process.exit(0);
