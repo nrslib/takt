@@ -178,7 +178,7 @@ export class AgentRunner {
       ...options,
       allowedTools: options.allowedTools ?? agentConfig.allowedTools,
     };
-    const providerRuntimeInstructions = provider.getRuntimeInstructions();
+    const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools);
     const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
       ...customOptions,
       providerRuntimeInstructions,
@@ -253,7 +253,7 @@ export class AgentRunner {
       );
       const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
         ...options,
-        providerRuntimeInstructions: provider.getRuntimeInstructions(),
+        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools),
       });
       options.onPromptResolved?.({
         systemPrompt,
@@ -272,7 +272,7 @@ export class AgentRunner {
 
       const systemPrompt = buildWrappedSystemPrompt(personaSpec, {
         ...options,
-        providerRuntimeInstructions: provider.getRuntimeInstructions(),
+        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools),
       });
 
       options.onPromptResolved?.({
@@ -285,7 +285,7 @@ export class AgentRunner {
 
     const systemPrompt = buildWrappedSystemPrompt('', {
       ...options,
-      providerRuntimeInstructions: provider.getRuntimeInstructions(),
+      providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools),
     });
     options.onPromptResolved?.({
       systemPrompt,

@@ -39,7 +39,7 @@ export class CursorProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
 

@@ -40,7 +40,7 @@ export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = true;
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
 

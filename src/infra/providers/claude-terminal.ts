@@ -73,7 +73,7 @@ export class ClaudeTerminalProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;
   }
 

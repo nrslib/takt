@@ -42,7 +42,10 @@ export class OpenCodeProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
 
-  getRuntimeInstructions(): string | null {
+  getRuntimeInstructions(allowedTools?: string[]): string | null {
+    if (allowedTools !== undefined && allowedTools.length === 0) {
+      return null;
+    }
     return OPENCODE_TOOL_NAMING_ADDENDUM;
   }
 
