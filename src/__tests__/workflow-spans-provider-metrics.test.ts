@@ -156,7 +156,42 @@ describe('workflow span provider error metrics', () => {
     })?.value).toBe(2);
   });
 
-  it('Given a provider callback throws, When the step span closes, Then records a provider error counter', async () => {
+  it('Given an error step response without a failure category, When the step span completes, Then records a provider error counter', async () => {
+    const points = await collectMetricPoints(async () => {
+      const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');
+
+      await runWithStepSpan({
+        enabled: true,
+        runId: 'run-1',
+        workflowName: 'default',
+        step: makeStep('implement'),
+        iteration: 1,
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+        },
+      }, async () => ({
+        response: makeResponse({
+          status: 'error',
+          error: 'provider returned an error',
+        }),
+        instruction: 'Implement',
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+        },
+      }));
+    });
+
+    expect(metricPoint(points, 'takt.provider.errors', {
+      'takt.run.id': 'run-1',
+      'takt.provider.name': 'codex',
+      'takt.model.name': 'gpt-5',
+      'takt.provider.error_type': AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+    })?.value).toBe(1);
+  });
+
+  it('Given a provider callback throws a non-provider error, When the step span closes, Then records no provider error counter', async () => {
     const points = await collectMetricPoints(async () => {
       const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');
 
@@ -171,16 +206,11 @@ describe('workflow span provider error metrics', () => {
           model: 'gpt-5',
         },
       }, async () => {
-        throw new Error('provider crashed');
-      })).rejects.toThrow('provider crashed');
+        throw new Error('quality gate failed');
+      })).rejects.toThrow('quality gate failed');
     });
 
-    expect(metricPoint(points, 'takt.provider.errors', {
-      'takt.run.id': 'run-1',
-      'takt.provider.name': 'codex',
-      'takt.model.name': 'gpt-5',
-      'takt.provider.error_type': AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
-    })?.value).toBe(1);
+    expect(points.filter((point) => point.name === 'takt.provider.errors')).toEqual([]);
   });
 });
 

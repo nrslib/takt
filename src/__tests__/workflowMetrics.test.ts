@@ -177,6 +177,36 @@ describe('workflow metrics helpers', () => {
     }));
   });
 
+  it('Given cost estimation returns a non-finite or negative value, When recording token metrics, Then emits token counters but no cost counter', async () => {
+    for (const invalidCost of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1]) {
+      const estimateTokenCostUsd = vi.fn(() => invalidCost);
+
+      const points = await collectMetricPoints(async () => {
+        const { recordTokenUsageMetricsFromSpan } = await import('../core/workflow/observability/workflowMetrics.js');
+
+        recordTokenUsageMetricsFromSpan({
+          name: 'phase.implement.execute',
+          attributes: {
+            'takt.run.id': 'run-1',
+            'takt.provider.name': 'codex',
+            'takt.model.name': 'gpt-5',
+            'takt.step.name': 'implement',
+            'gen_ai.usage.input_tokens': 11,
+            'gen_ai.usage.output_tokens': 7,
+          },
+        }, estimateTokenCostUsd);
+      });
+
+      expect(metricPoint(points, 'takt.token.input_tokens', {
+        'takt.run.id': 'run-1',
+        'takt.provider.name': 'codex',
+        'takt.model.name': 'gpt-5',
+        'takt.step.name': 'implement',
+      })?.value).toBe(11);
+      expect(points.filter((point) => point.name === 'takt.token.estimated_cost_usd')).toEqual([]);
+    }
+  });
+
   it('Given provider failures and retries, When recording provider error metrics, Then classifies each error type separately', async () => {
     const points = await collectMetricPoints(async () => {
       const { recordProviderErrorMetric } = await import('../core/workflow/observability/workflowMetrics.js');

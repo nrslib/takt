@@ -176,7 +176,7 @@ function estimateSeparateCacheCost(
   }
 
   const splitCachedInputTokens = cacheCreationInputTokens + cacheReadInputTokens;
-  if (cachedInputTokens > 0 && splitCachedInputTokens !== cachedInputTokens) {
+  if (usage.cachedInputTokens !== undefined && splitCachedInputTokens !== cachedInputTokens) {
     return undefined;
   }
 

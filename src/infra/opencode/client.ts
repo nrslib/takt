@@ -986,6 +986,7 @@ export class OpenCodeClient {
             content: message,
             timestamp: new Date(),
             sessionId: activeSessionId,
+            ...(abortCause === 'timeout' ? { failureCategory: AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT } : {}),
             ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
           };
         }

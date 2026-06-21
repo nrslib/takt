@@ -5,8 +5,8 @@ import { createLogger } from '../../shared/utils/debug.js';
 import {
   mapSpanEndToNdjson,
   mapSpanStartToNdjson,
-  type SpanSnapshot,
 } from '../../core/logging/span-to-ndjson-mapper.js';
+import { readableSpanSnapshot } from './readableSpanSnapshot.js';
 
 const log = createLogger('session-log-span-processor');
 
@@ -68,7 +68,7 @@ export class SessionLogSpanProcessor implements SpanProcessor {
       }
       return;
     }
-    const record = mapSpanStartToNdjson(toSpanSnapshot(span));
+    const record = mapSpanStartToNdjson(readableSpanSnapshot(span));
     this.safeAppend(options, record);
   }
 
@@ -77,7 +77,7 @@ export class SessionLogSpanProcessor implements SpanProcessor {
     if (!options) {
       return;
     }
-    const snapshot = toSpanSnapshot(span);
+    const snapshot = readableSpanSnapshot(span);
     if (span.name.startsWith('phase.')) {
       // Emit phase_start (deferred so prompt-part attributes are populated),
       // then flush buffered judge-stage records, then phase_complete.
@@ -138,13 +138,4 @@ export class SessionLogSpanProcessor implements SpanProcessor {
     this.registrations.clear();
     this.pendingJudgeStages.clear();
   }
-}
-
-function toSpanSnapshot(span: ReadableSpan): SpanSnapshot {
-  return {
-    name: span.name,
-    attributes: span.attributes,
-    startTime: span.startTime,
-    endTime: span.endTime,
-  };
 }

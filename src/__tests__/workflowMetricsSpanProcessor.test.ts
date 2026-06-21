@@ -66,7 +66,51 @@ describe('WorkflowMetricsSpanProcessor', () => {
     expect(metricPoint(points, 'takt.token.output_tokens', attributes)?.value).toBe(50);
     expect(metricPoint(points, 'takt.token.estimated_cost_usd', attributes)?.value).toBe(0.0003);
   });
+
+  const VALID_USAGE_ATTRIBUTES = {
+    'takt.run.id': 'run-1',
+    'takt.provider.name': 'codex',
+    'takt.model.name': 'gpt-5',
+    'takt.step.name': 'implement',
+    'gen_ai.usage.input_tokens': 11,
+    'gen_ai.usage.output_tokens': 7,
+    'gen_ai.usage.total_tokens': 18,
+  };
+
+  it.each([
+    { reason: 'the span is a workflow span', name: 'workflow.test-workflow', attributes: VALID_USAGE_ATTRIBUTES },
+    { reason: 'the span is a step span', name: 'step.implement', attributes: VALID_USAGE_ATTRIBUTES },
+    { reason: 'the run id is missing', name: 'phase.implement.execute', attributes: omitAttribute(VALID_USAGE_ATTRIBUTES, 'takt.run.id') },
+    { reason: 'the provider is missing', name: 'phase.implement.execute', attributes: omitAttribute(VALID_USAGE_ATTRIBUTES, 'takt.provider.name') },
+    { reason: 'the step name is missing', name: 'phase.implement.execute', attributes: omitAttribute(VALID_USAGE_ATTRIBUTES, 'takt.step.name') },
+    { reason: 'only input tokens are present', name: 'phase.implement.execute', attributes: omitAttribute(VALID_USAGE_ATTRIBUTES, 'gen_ai.usage.output_tokens') },
+    { reason: 'only output tokens are present', name: 'phase.implement.execute', attributes: omitAttribute(VALID_USAGE_ATTRIBUTES, 'gen_ai.usage.input_tokens') },
+    {
+      reason: 'no usage attributes are present',
+      name: 'phase.implement.execute',
+      attributes: {
+        'takt.run.id': 'run-1',
+        'takt.provider.name': 'codex',
+        'takt.model.name': 'gpt-5',
+        'takt.step.name': 'implement',
+      },
+    },
+  ])('Given $reason, When the processor receives the span, Then records no token counters', async ({ name, attributes }) => {
+    const points = await collectMetricPoints(async () => {
+      const { WorkflowMetricsSpanProcessor } = await import('../infra/observability/workflowMetricsSpanProcessor.js');
+      const processor = new WorkflowMetricsSpanProcessor();
+
+      processor.onEnd(makeReadableSpan(name, attributes));
+    });
+
+    expect(points.filter((point) => point.name.startsWith('takt.token.'))).toEqual([]);
+  });
 });
+
+function omitAttribute(attributes: Record<string, unknown>, key: string): Record<string, unknown> {
+  const { [key]: _omitted, ...rest } = attributes;
+  return rest;
+}
 
 function makeReadableSpan(name: string, attributes: Record<string, unknown>): ReadableSpan {
   return {

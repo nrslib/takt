@@ -143,6 +143,31 @@ describe('token cost estimator', () => {
     expect(cost).toBeUndefined();
   });
 
+  it('Given Claude usage with explicit zero cached input tokens but non-zero cache splits, When estimating cost, Then returns undefined', () => {
+    const cost = estimateProviderTokenCostUsd('claude', 'claude-opus-4-5-20251101', {
+      usageMissing: false,
+      inputTokens: 1_000,
+      outputTokens: 500,
+      cachedInputTokens: 0,
+      cacheCreationInputTokens: 100,
+      cacheReadInputTokens: 50,
+    });
+
+    expect(cost).toBeUndefined();
+  });
+
+  it('Given Claude usage with omitted cached input tokens and matching cache splits, When estimating cost, Then prices the split tokens', () => {
+    const cost = estimateProviderTokenCostUsd('claude', 'claude-opus-4-5-20251101', {
+      usageMissing: false,
+      inputTokens: 1_000,
+      outputTokens: 500,
+      cacheCreationInputTokens: 2_000,
+      cacheReadInputTokens: 10_000,
+    });
+
+    expect(cost).toBe(0.035);
+  });
+
   it('Given an unconfirmed Claude model alias, When estimating cost, Then returns undefined instead of inferred pricing', () => {
     const cost = estimateProviderTokenCostUsd('claude', 'claude-opus-4-5', {
       usageMissing: false,

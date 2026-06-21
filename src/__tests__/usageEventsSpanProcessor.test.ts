@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { UsageEventsSpanProcessor } from '../infra/observability/usageEventsSpanProcessor.js';
-import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
+import { collectMetricPoints } from './observability-metrics-test-helpers.js';
 
 const tempDirs = new Set<string>();
 
@@ -40,12 +40,11 @@ describe('UsageEventsSpanProcessor', () => {
       processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
     });
 
-    expect(metricPoint(points, 'takt.token.input_tokens', {
-      'takt.run.id': 'run-1',
-      'takt.provider.name': 'mock',
-      'takt.model.name': 'mock-model',
-      'takt.step.name': 'implement',
-    })).toBeUndefined();
+    // Label-independent: the processor must emit no token metric points at all,
+    // regardless of attributes. Asserting on a single labelled point would pass
+    // even if the metric were emitted under a different label set.
+    expect(points.filter((point) => point.name === 'takt.token.input_tokens')).toEqual([]);
+    expect(points.filter((point) => point.name.startsWith('takt.token.'))).toEqual([]);
   });
 
   it('routes phase usage records to the matching registered run', () => {

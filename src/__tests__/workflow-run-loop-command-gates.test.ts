@@ -470,6 +470,50 @@ describe('WorkflowRunLoop command quality gates', () => {
     }
   });
 
+  it('records a command quality gate fail result from a single workflow iteration when observability is enabled', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-single-quality-gate-fail-metrics-'));
+    try {
+      const step = makeStep('implement', {
+        qualityGates: [
+          {
+            type: 'command',
+            name: 'failing-gate',
+            command: 'node -e "process.exit(1)"',
+          },
+        ],
+        rules: [makeRule('Implementation complete', 'COMPLETE')],
+      });
+      const state = createInitialState(makeConfig(step), { projectCwd: tmpDir });
+      const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+      const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+        state.stepOutputs.set(step.name, response);
+        state.lastOutput = response;
+        return { response, instruction };
+      });
+      const deps = makeDeps(state, step, runStep, runRealQualityGates);
+      deps.getCwd = () => tmpDir;
+      deps.options = {
+        observability: { enabled: true },
+        observabilityRunId: 'run-1',
+        projectCwd: tmpDir,
+      };
+
+      const points = await collectMetricPoints(async () => {
+        await runSingleWorkflowIteration(deps);
+      });
+
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'command-gate-workflow',
+        'takt.step.name': 'implement',
+        'takt.quality_gate.name': 'failing-gate',
+        'takt.quality_gate.result': 'fail',
+      })?.value).toBe(1);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not record cycle metrics when observability is disabled', async () => {
     const step = makeStep('implement', {
       rules: [makeRule('Implementation complete', 'implement')],

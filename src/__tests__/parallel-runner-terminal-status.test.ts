@@ -268,6 +268,63 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     }
   });
 
+  it('records command quality gate pass and fail results from parallel sub-steps when observability is enabled', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-parallel-quality-gate-fail-metrics-'));
+    try {
+      const { runner } = makeRunner({
+        projectDir,
+        observabilityEnabled: true,
+        observabilityRunId: 'run-1',
+        runQualityGates: runRealQualityGates,
+      });
+      const step = makeParallelStep();
+      if (!step.parallel) {
+        throw new Error('parallel sub-steps are required for this test');
+      }
+      for (const subStep of step.parallel) {
+        subStep.qualityGates = [
+          {
+            type: 'command',
+            name: `${subStep.name}-gate`,
+            command: subStep.name === 'ai-antipattern-review-2nd'
+              ? 'node -e "process.exit(1)"'
+              : 'node -e "process.exit(0)"',
+          },
+        ];
+      }
+      const state = makeState();
+      queueAgentResponse(makeAgentResponse({
+        persona: 'ai-antipattern-review-2nd',
+        content: '[STEP:1] approved',
+      }));
+      queueAgentResponse(makeAgentResponse({
+        persona: 'security-review',
+        content: '[STEP:1] approved',
+      }));
+
+      const points = await collectMetricPoints(async () => {
+        await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+      });
+
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.step.name': 'ai-antipattern-review-2nd',
+        'takt.quality_gate.name': 'ai-antipattern-review-2nd-gate',
+        'takt.quality_gate.result': 'fail',
+      })?.value).toBe(1);
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'test-workflow',
+        'takt.step.name': 'security-review',
+        'takt.quality_gate.name': 'security-review-gate',
+        'takt.quality_gate.result': 'pass',
+      })?.value).toBe(1);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('returns parent error with rejected promise detail', async () => {
     const { runner } = makeRunner();
     const step = makeParallelStep();

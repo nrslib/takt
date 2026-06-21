@@ -108,7 +108,7 @@ export function recordTokenUsageMetricsFromSpan(
     ).add(cachedInputTokens, attributes);
   }
 
-  const estimatedCost = model ? estimateTokenCostUsd(provider, model, usage) : undefined;
+  const estimatedCost = model ? finiteMetricNumber(estimateTokenCostUsd(provider, model, usage)) : undefined;
   if (estimatedCost !== undefined) {
     meter.createCounter('takt.token.estimated_cost_usd', ESTIMATED_COST_COUNTER_OPTIONS).add(estimatedCost, attributes);
   }
@@ -131,7 +131,6 @@ export function recordStepProviderErrorMetrics(
   runId: string | undefined,
   result: StepRunResult | undefined,
   providerInfo: StepProviderInfo | undefined,
-  errorMessage?: string,
 ): void {
   const response = result?.response;
   const resolvedProviderInfo = result?.providerInfo ?? providerInfo;
@@ -149,12 +148,12 @@ export function recordStepProviderErrorMetrics(
   }
 
   const errorType = providerErrorType(response);
-  if (errorType || errorMessage) {
+  if (errorType) {
     recordProviderErrorMetric({
       runId,
       provider,
       model,
-      errorType: errorType ?? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      errorType,
     });
   }
 }

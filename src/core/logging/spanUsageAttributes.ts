@@ -49,7 +49,7 @@ function getUsageMissingReason(value: unknown): UsageMissingReason {
     : USAGE_MISSING_REASONS.NOT_AVAILABLE;
 }
 
-function getNumber(attributes: Record<string, unknown>, key: string): number | undefined {
+export function getNumber(attributes: Record<string, unknown>, key: string): number | undefined {
   const value = attributes[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

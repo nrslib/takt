@@ -1,5 +1,5 @@
 import type { SpanSnapshot } from './span-to-ndjson-mapper.js';
-import { usageSnapshotFromSpanAttributes } from './spanUsageAttributes.js';
+import { getNumber, usageSnapshotFromSpanAttributes } from './spanUsageAttributes.js';
 import { buildUsageEventPayload } from './providerEvent.js';
 import type { UsageMissingReason } from './contracts.js';
 import { isProviderType, type ProviderType } from '../../shared/types/provider.js';
@@ -207,11 +207,6 @@ function phaseLabelForJudgeStage(stage: JudgeStage | undefined): PhaseUsageType 
 function getString(attributes: Record<string, unknown>, key: string): string | undefined {
   const value = attributes[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function getNumber(attributes: Record<string, unknown>, key: string): number | undefined {
-  const value = attributes[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function getProvider(attributes: Record<string, unknown>, key: string): ProviderType | undefined {

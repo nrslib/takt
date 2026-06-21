@@ -66,31 +66,6 @@ function readTaskMeta(repoPath: string, name: string): CompletedTaskMeta {
   return parsed.tasks?.find(task => task.name === name) ?? {};
 }
 
-function expectTryMergeStagedFiles(stagedFiles: string[]): void {
-  const runRoots = new Set(
-    stagedFiles
-      .filter(file => file.startsWith('.takt/runs/'))
-      .map(file => file.split('/').slice(0, 3).join('/')),
-  );
-  expect(runRoots.size).toBe(1);
-
-  const [runRoot] = [...runRoots];
-  const executeResponseFiles = stagedFiles.filter(file =>
-    file.startsWith(`${runRoot}/context/previous_responses/execute.1.`)
-    && file.endsWith('Z.md'),
-  );
-  expect(executeResponseFiles).toHaveLength(1);
-
-  expect([...stagedFiles].sort()).toEqual([
-    `${runRoot}/context/previous_responses/latest.md`,
-    `${runRoot}/meta.json`,
-    `${runRoot}/monitor.json`,
-    `${runRoot}/trace.md`,
-    executeResponseFiles[0],
-    'README.md',
-  ].sort());
-}
-
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: List tasks non-interactive (takt list)', () => {
   let isolatedEnv: IsolatedEnv;
@@ -285,7 +260,7 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       stdio: 'pipe',
     }).trim();
     expect(restoredBranch).toContain(taskMeta.branch!);
-    expectTryMergeStagedFiles(stagedFiles);
+    expect(stagedFiles).toEqual(['README.md']);
   }, 240_000);
 
   it('should create a completed worktree task via mock run and merge from root', () => {
