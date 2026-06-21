@@ -127,6 +127,7 @@ export function createIsolatedEnv(): IsolatedEnv {
     ...process.env,
     TAKT_CONFIG_DIR: taktDir,
     GIT_CONFIG_GLOBAL: gitConfigPath,
+    GIT_TERMINAL_PROMPT: '0',
     TAKT_NO_TTY: '1',
     TAKT_NOTIFY_WEBHOOK: undefined,
     CLAUDECODE: undefined,

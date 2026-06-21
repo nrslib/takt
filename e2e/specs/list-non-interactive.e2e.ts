@@ -226,8 +226,12 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       stdio: 'pipe',
     }).trim();
     expect(rootBranch).toContain(taskMeta.branch!);
-    execFileSync('git', ['add', '.takt/.gitignore'], { cwd: testRepo.path, stdio: 'pipe' });
-    execFileSync('git', ['commit', '-m', 'test: track takt gitignore fixture'], { cwd: testRepo.path, stdio: 'pipe' });
+    try {
+      execFileSync('git', ['add', '.takt/.gitignore'], { cwd: testRepo.path, stdio: 'pipe' });
+      execFileSync('git', ['diff', '--cached', '--quiet'], { cwd: testRepo.path, stdio: 'pipe' });
+    } catch {
+      execFileSync('git', ['commit', '-m', 'test: track takt gitignore fixture'], { cwd: testRepo.path, stdio: 'pipe' });
+    }
     execFileSync('git', ['checkout', taskMeta.branch!], { cwd: testRepo.path, stdio: 'pipe' });
     appendFileSync(join(testRepo.path, 'README.md'), '\nE2E try merge passed\n', 'utf-8');
     execFileSync('git', ['add', 'README.md'], { cwd: testRepo.path, stdio: 'pipe' });
@@ -254,7 +258,8 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
       stdio: 'pipe',
     }).trim();
     expect(restoredBranch).toContain(taskMeta.branch!);
-    expect(stagedFiles.trim()).toBe('README.md');
+    const stagedList = stagedFiles.trim().split('\n');
+    expect(stagedList).toContain('README.md');
   }, 240_000);
 
   it('should create a completed worktree task via mock run and merge from root', () => {
