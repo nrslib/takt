@@ -108,6 +108,9 @@ export interface ParallelRunnerDeps {
     projectRoot: string;
     step: WorkflowStep;
     childProcessEnv?: Readonly<Record<string, string>>;
+    observabilityEnabled: boolean;
+    runId?: string;
+    workflowName?: string;
   }) => Promise<QualityGateRunResult>;
   readonly onPhaseStart?: (
     step: WorkflowStep,
@@ -354,6 +357,9 @@ export class ParallelRunner {
           projectRoot: this.deps.getCwd(),
           step: subStep,
           childProcessEnv: this.deps.engineOptions.childProcessEnv,
+          observabilityEnabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
         });
         if (!qualityGateResult.ok) {
           state.stepOutputs.set(subStep.name, qualityGateResult.response);

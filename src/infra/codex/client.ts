@@ -239,6 +239,7 @@ export class CodexClient {
     agentType: string,
     sessionId: string | undefined,
     failure: AgentFailureDetail,
+    retryCount: number,
   ): AgentResponse {
     const message = formatAgentFailure(failure);
     return {
@@ -249,6 +250,7 @@ export class CodexClient {
       timestamp: new Date(),
       sessionId,
       failureCategory: failure.category,
+      ...(retryCount > 0 ? { retryCount } : {}),
     };
   }
 
@@ -256,12 +258,14 @@ export class CodexClient {
     agentType: string,
     sessionId: string | undefined,
     message: string,
+    retryCount: number,
   ): AgentResponse {
     return {
       persona: agentType,
       timestamp: new Date(),
       sessionId,
       ...buildRateLimitedResponseFields('codex', 'sdk_error', message),
+      ...(retryCount > 0 ? { retryCount } : {}),
     };
   }
 
@@ -480,7 +484,8 @@ export class CodexClient {
 
         if (!success) {
           if (containsRateLimitError(failureMessage)) {
-            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, currentThreadId, failureMessage);
+            const retryCount = standardRetryCount + timeoutRetryCount;
+            const rateLimitedResponse = this.buildRateLimitedResponse(agentType, currentThreadId, failureMessage, retryCount);
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
             return rateLimitedResponse;
           }
@@ -503,7 +508,8 @@ export class CodexClient {
           }
 
           const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
-          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure);
+          const retryCount = standardRetryCount + timeoutRetryCount;
+          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure, retryCount);
           emitResult(
             options.onStream,
             false,
@@ -528,12 +534,14 @@ export class CodexClient {
             usageMissing: true,
             reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
           },
+          ...(standardRetryCount + timeoutRetryCount > 0 ? { retryCount: standardRetryCount + timeoutRetryCount } : {}),
         };
         return response;
       } catch (error) {
         const rawErrorMessage = getErrorMessage(error);
         if (containsRateLimitError(rawErrorMessage)) {
-          const rateLimitedResponse = this.buildRateLimitedResponse(agentType, currentThreadId, rawErrorMessage);
+          const retryCount = standardRetryCount + timeoutRetryCount;
+          const rateLimitedResponse = this.buildRateLimitedResponse(agentType, currentThreadId, rawErrorMessage, retryCount);
           emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, currentThreadId);
           return rateLimitedResponse;
         }
@@ -568,7 +576,8 @@ export class CodexClient {
         }
 
         const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);
-        const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure);
+        const retryCount = standardRetryCount + timeoutRetryCount;
+        const errorResponse = this.buildErrorResponse(agentType, currentThreadId, finalFailure, retryCount);
         emitResult(
           options.onStream,
           false,

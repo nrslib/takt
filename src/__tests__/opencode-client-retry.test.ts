@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
+import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
 
 type MockStreamEvent = Record<string, unknown>;
 type RunPlan =
@@ -127,6 +129,7 @@ describe('OpenCodeClient retry', () => {
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
+    expect(result.retryCount).toBeUndefined();
   });
 
   it('session.error が RateLimitError 名だけを示す場合は retry せず rate_limited を返す', async () => {
@@ -212,6 +215,7 @@ describe('OpenCodeClient retry', () => {
     expect(subscribe).toHaveBeenCalledTimes(2);
     expect(result.status).toBe('done');
     expect(result.content).toBe('timeout retry succeeded');
+    expect(result.retryCount).toBe(1);
   });
 
   it('ストリームの idle timeout は 2 回 retry 後に停止する', async () => {
@@ -247,6 +251,42 @@ describe('OpenCodeClient retry', () => {
     expect(subscribe).toHaveBeenCalledTimes(3);
     expect(result.status).toBe('error');
     expect(result.content).toBe('OpenCode stream timed out after 10 minutes of inactivity');
+    expect(result.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT);
+    expect(result.retryCount).toBe(2);
+
+    const points = await collectMetricPoints(async () => {
+      const { runWithStepSpan } = await import('../core/workflow/observability/workflowSpans.js');
+
+      await runWithStepSpan({
+        enabled: true,
+        runId: 'run-1',
+        workflowName: 'default',
+        step: {
+          name: 'implement',
+          persona: '../agents/coder.md',
+          instruction: 'Implement',
+        },
+        iteration: 1,
+        providerInfo: {
+          provider: 'opencode',
+          model: 'opencode/big-pickle',
+        },
+      }, async () => ({
+        response: result,
+        instruction: 'Implement',
+        providerInfo: {
+          provider: 'opencode',
+          model: 'opencode/big-pickle',
+        },
+      }));
+    });
+
+    expect(metricPoint(points, 'takt.provider.errors', {
+      'takt.run.id': 'run-1',
+      'takt.provider.name': 'opencode',
+      'takt.model.name': 'opencode/big-pickle',
+      'takt.provider.error_type': AGENT_FAILURE_CATEGORIES.STREAM_IDLE_TIMEOUT,
+    })?.value).toBe(1);
   });
 
   it('external abort は retry せずに停止する', async () => {

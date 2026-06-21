@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import { UsageEventsSpanProcessor } from '../infra/observability/usageEventsSpanProcessor.js';
+import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
 
 const tempDirs = new Set<string>();
 
@@ -32,6 +33,21 @@ afterEach(() => {
 });
 
 describe('UsageEventsSpanProcessor', () => {
+  it('does not record token metrics when no usage event writer is registered', async () => {
+    const points = await collectMetricPoints(() => {
+      const processor = new UsageEventsSpanProcessor();
+
+      processor.onEnd(makePhaseSpan('run-1') as unknown as ReadableSpan);
+    });
+
+    expect(metricPoint(points, 'takt.token.input_tokens', {
+      'takt.run.id': 'run-1',
+      'takt.provider.name': 'mock',
+      'takt.model.name': 'mock-model',
+      'takt.step.name': 'implement',
+    })).toBeUndefined();
+  });
+
   it('routes phase usage records to the matching registered run', () => {
     const firstLogPath = createTempLogPath('first-usage-events.phase.jsonl');
     const secondLogPath = createTempLogPath('second-usage-events.phase.jsonl');

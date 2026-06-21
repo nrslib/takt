@@ -44,4 +44,7 @@ export interface RunQualityGatesOptions {
   projectRoot: string;
   step: WorkflowStep;
   childProcessEnv?: Readonly<Record<string, string>>;
+  observabilityEnabled: boolean;
+  runId?: string;
+  workflowName?: string;
 }

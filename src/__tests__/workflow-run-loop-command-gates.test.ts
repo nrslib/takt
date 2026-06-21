@@ -5,14 +5,13 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
+import { runQualityGates as runRealQualityGates } from '../core/workflow/quality-gates/qualityGateRunner.js';
+import type { QualityGateRunResult, RunQualityGatesOptions } from '../core/workflow/quality-gates/types.js';
 import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
+import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
 
-type CommandGateRunResult = {
-  ok: true;
-} | {
-  ok: false;
-  response: AgentResponse;
-};
+type CommandGateRunResult = QualityGateRunResult;
+type RunQualityGatesFn = (options: RunQualityGatesOptions) => Promise<QualityGateRunResult>;
 
 function makeConfig(step: WorkflowStep): WorkflowConfig {
   return {
@@ -36,7 +35,7 @@ function makeDeps(
   state: WorkflowState,
   step: WorkflowStep,
   runStep: ReturnType<typeof vi.fn>,
-  runQualityGates: ReturnType<typeof vi.fn<() => Promise<CommandGateRunResult>>>,
+  runQualityGates: RunQualityGatesFn,
 ) {
   return {
     state,
@@ -138,6 +137,10 @@ describe('WorkflowRunLoop command quality gates', () => {
       qualityGates: step.qualityGates,
       projectRoot: '/worktree',
       step,
+      childProcessEnv: undefined,
+      observabilityEnabled: false,
+      runId: undefined,
+      workflowName: 'command-gate-workflow',
     });
     expect(deps.resolveDoneTransition).toHaveBeenCalledTimes(1);
     expect(runStep).toHaveBeenCalledTimes(2);
@@ -282,6 +285,275 @@ describe('WorkflowRunLoop command quality gates', () => {
     // must not be built — it is only consumed by the (disabled) span and would be
     // a redundant second buildPhase1Instruction call.
     expect(deps.buildPhase1Instruction).not.toHaveBeenCalled();
+  });
+
+  it('does not record loop metrics when observability is disabled', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValue({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.options = {
+      observability: { enabled: false },
+      observabilityRunId: 'run-1',
+      projectCwd: '/worktree',
+    };
+    deps.loopDetectorCheck = () => ({ shouldWarn: true, count: 2, isLoop: true });
+
+    const points = await collectMetricPoints(async () => {
+      await runSingleWorkflowIteration(deps);
+    });
+
+    expect(points.filter((point) => point.name === 'takt.workflow.loops_detected')).toEqual([]);
+  });
+
+  it('records loop metrics from a full workflow run when observability is enabled', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValue({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.options = {
+      observability: { enabled: true },
+      observabilityRunId: 'run-1',
+      projectCwd: '/worktree',
+    };
+    deps.loopDetectorCheck = () => ({ shouldWarn: true, count: 2, isLoop: true });
+
+    const points = await collectMetricPoints(async () => {
+      await runWorkflowToCompletion(deps);
+    });
+
+    expect(metricPoint(points, 'takt.workflow.loops_detected', {
+      'takt.run.id': 'run-1',
+      'takt.workflow.name': 'command-gate-workflow',
+      'takt.step.name': 'implement',
+    })?.value).toBe(1);
+  });
+
+  it('records loop metrics from a single workflow iteration when observability is enabled', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValue({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.options = {
+      observability: { enabled: true },
+      observabilityRunId: 'run-1',
+      projectCwd: '/worktree',
+    };
+    deps.loopDetectorCheck = () => ({ shouldWarn: true, count: 2, isLoop: true });
+
+    const points = await collectMetricPoints(async () => {
+      await runSingleWorkflowIteration(deps);
+    });
+
+    expect(metricPoint(points, 'takt.workflow.loops_detected', {
+      'takt.run.id': 'run-1',
+      'takt.workflow.name': 'command-gate-workflow',
+      'takt.step.name': 'implement',
+    })?.value).toBe(1);
+  });
+
+  it('records command quality gate metrics from a full workflow run when observability is enabled', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-workflow-quality-gate-metrics-'));
+    try {
+      const step = makeStep('implement', {
+        qualityGates: [
+          {
+            type: 'command',
+            name: 'workflow-gate',
+            command: 'node -e "process.exit(0)"',
+          },
+        ],
+        rules: [makeRule('Implementation complete', 'COMPLETE')],
+      });
+      const state = createInitialState(makeConfig(step), { projectCwd: tmpDir });
+      const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+      const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+        state.stepOutputs.set(step.name, response);
+        state.lastOutput = response;
+        return { response, instruction };
+      });
+      const deps = makeDeps(state, step, runStep, runRealQualityGates);
+      deps.getCwd = () => tmpDir;
+      deps.options = {
+        observability: { enabled: true },
+        observabilityRunId: 'run-1',
+        projectCwd: tmpDir,
+      };
+
+      const points = await collectMetricPoints(async () => {
+        await runWorkflowToCompletion(deps);
+      });
+
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'command-gate-workflow',
+        'takt.step.name': 'implement',
+        'takt.quality_gate.name': 'workflow-gate',
+        'takt.quality_gate.result': 'pass',
+      })?.value).toBe(1);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('records command quality gate metrics from a single workflow iteration when observability is enabled', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'takt-single-quality-gate-metrics-'));
+    try {
+      const step = makeStep('implement', {
+        qualityGates: [
+          {
+            type: 'command',
+            name: 'single-iteration-gate',
+            command: 'node -e "process.exit(0)"',
+          },
+        ],
+        rules: [makeRule('Implementation complete', 'COMPLETE')],
+      });
+      const state = createInitialState(makeConfig(step), { projectCwd: tmpDir });
+      const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+      const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+        state.stepOutputs.set(step.name, response);
+        state.lastOutput = response;
+        return { response, instruction };
+      });
+      const deps = makeDeps(state, step, runStep, runRealQualityGates);
+      deps.getCwd = () => tmpDir;
+      deps.options = {
+        observability: { enabled: true },
+        observabilityRunId: 'run-1',
+        projectCwd: tmpDir,
+      };
+
+      const points = await collectMetricPoints(async () => {
+        await runSingleWorkflowIteration(deps);
+      });
+
+      expect(metricPoint(points, 'takt.quality_gate.results', {
+        'takt.run.id': 'run-1',
+        'takt.workflow.name': 'command-gate-workflow',
+        'takt.step.name': 'implement',
+        'takt.quality_gate.name': 'single-iteration-gate',
+        'takt.quality_gate.result': 'pass',
+      })?.value).toBe(1);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not record cycle metrics when observability is disabled', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'implement')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValue({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.options = {
+      observability: { enabled: false },
+      observabilityRunId: 'run-1',
+      projectCwd: '/worktree',
+    };
+    deps.resolveDoneTransition.mockReturnValue({ nextStep: 'implement' });
+    deps.cycleDetectorRecordAndCheck = () => ({
+      triggered: true,
+      monitor: {
+        cycle: ['implement', 'implement'],
+        threshold: 2,
+        judge: {
+          rules: [{ condition: 'continue', next: 'COMPLETE' }],
+        },
+      },
+      cycleCount: 2,
+    });
+    deps.runLoopMonitorJudge.mockResolvedValue('COMPLETE');
+
+    const points = await collectMetricPoints(async () => {
+      await runWorkflowToCompletion(deps);
+    });
+
+    expect(points.filter((point) => point.name === 'takt.workflow.cycles_detected')).toEqual([]);
+  });
+
+  it('records cycle metrics when a loop monitor cycle triggers and observability is enabled', async () => {
+    const step = makeStep('implement', {
+      rules: [makeRule('Implementation complete', 'implement')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'implement', content: 'implementation done' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => {
+      state.stepOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    });
+    const runQualityGates = vi
+      .fn<() => Promise<CommandGateRunResult>>()
+      .mockResolvedValue({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.options = {
+      observability: { enabled: true },
+      observabilityRunId: 'run-1',
+      projectCwd: '/worktree',
+    };
+    deps.resolveDoneTransition.mockReturnValue({ nextStep: 'implement' });
+    deps.cycleDetectorRecordAndCheck = () => ({
+      triggered: true,
+      monitor: {
+        cycle: ['implement', 'implement'],
+        threshold: 2,
+        judge: {
+          rules: [{ condition: 'continue', next: 'COMPLETE' }],
+        },
+      },
+      cycleCount: 2,
+    });
+    deps.runLoopMonitorJudge.mockResolvedValue('COMPLETE');
+
+    const points = await collectMetricPoints(async () => {
+      await runWorkflowToCompletion(deps);
+    });
+
+    expect(metricPoint(points, 'takt.workflow.cycles_detected', {
+      'takt.run.id': 'run-1',
+      'takt.workflow.name': 'command-gate-workflow',
+      'takt.step.name': 'implement',
+    })?.value).toBe(1);
   });
 
   it('should return the current step from runSingleIteration when a command gate fails', async () => {

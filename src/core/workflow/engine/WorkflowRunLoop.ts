@@ -16,6 +16,10 @@ import { handleBlocked } from './blocked-handler.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
 import { runWithStepSpan, type StepSpanParams } from '../observability/workflowSpans.js';
+import {
+  recordWorkflowCycleDetectedMetric,
+  recordWorkflowLoopDetectedMetric,
+} from '../observability/workflowMetrics.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 
 const log = createLogger('workflow-run-loop');
@@ -59,6 +63,9 @@ interface WorkflowRunLoopDeps {
     projectRoot: string;
     step: WorkflowStep;
     childProcessEnv?: Readonly<Record<string, string>>;
+    observabilityEnabled: boolean;
+    runId?: string;
+    workflowName?: string;
   }) => Promise<QualityGateRunResult>;
   persistPreviousResponseSnapshot: (
     state: WorkflowState,
@@ -333,7 +340,16 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     deps.applyRuntimeEnvironment('step');
     const loopCheck = deps.loopDetectorCheck(step.name);
 
+    const observabilityEnabled = deps.options.observability?.enabled === true;
+
     if (loopCheck.shouldWarn) {
+      if (observabilityEnabled) {
+        recordWorkflowLoopDetectedMetric({
+          runId: deps.options.observabilityRunId,
+          workflowName: deps.getWorkflowName(),
+          stepName: step.name,
+        });
+      }
       deps.emit('step:loop_detected', step, loopCheck.count);
     }
     if (loopCheck.shouldAbort) {
@@ -362,7 +378,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
 
     try {
       const result = await runWithStepSpan({
-        enabled: deps.options.observability?.enabled === true,
+        enabled: observabilityEnabled,
         runId: deps.options.observabilityRunId,
         workflowName: deps.getWorkflowName(),
         step,
@@ -439,6 +455,9 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         projectRoot: deps.getCwd(),
         step,
         childProcessEnv: deps.options.childProcessEnv,
+        observabilityEnabled,
+        runId: deps.options.observabilityRunId,
+        workflowName: deps.getWorkflowName(),
       });
       if (!qualityGateResult.ok) {
         applyQualityGateFailure(
@@ -489,6 +508,13 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           cycleCount: cycleCheck.cycleCount,
           threshold: cycleCheck.monitor.threshold,
         });
+        if (observabilityEnabled) {
+          recordWorkflowCycleDetectedMetric({
+            runId: deps.options.observabilityRunId,
+            workflowName: deps.getWorkflowName(),
+            stepName: step.name,
+          });
+        }
         deps.emit('step:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
         nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime);
       }
@@ -522,6 +548,15 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const step = deps.getStep(deps.state.currentStep);
   deps.applyRuntimeEnvironment('step');
   const loopCheck = deps.loopDetectorCheck(step.name);
+  const observabilityEnabled = deps.options.observability?.enabled === true;
+
+  if (loopCheck.shouldWarn && observabilityEnabled) {
+    recordWorkflowLoopDetectedMetric({
+      runId: deps.options.observabilityRunId,
+      workflowName: deps.getWorkflowName(),
+      stepName: step.name,
+    });
+  }
 
   if (loopCheck.shouldAbort) {
     const abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
@@ -556,13 +591,13 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
   const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
   const result = await runWithStepSpan({
-    enabled: deps.options.observability?.enabled === true,
+    enabled: observabilityEnabled,
     runId: deps.options.observabilityRunId,
     workflowName: deps.getWorkflowName(),
     step,
     iteration: activeIteration,
     stepIteration,
-    instruction: deps.options.observability?.enabled === true && prebuiltInstruction
+    instruction: observabilityEnabled && prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '',
     workflowStack: deps.getCurrentWorkflowStack(),
@@ -635,6 +670,9 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     projectRoot: deps.getCwd(),
     step,
     childProcessEnv: deps.options.childProcessEnv,
+    observabilityEnabled,
+    runId: deps.options.observabilityRunId,
+    workflowName: deps.getWorkflowName(),
   });
   if (!qualityGateResult.ok) {
     applyQualityGateFailure(

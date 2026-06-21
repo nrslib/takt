@@ -590,6 +590,7 @@ describe('command quality gates', () => {
       ],
       projectRoot,
       step: makeStep('implement'),
+      observabilityEnabled: false,
     });
 
     expect(result.ok).toBe(false);
