@@ -10,6 +10,18 @@
 | No debug logging for new code paths | Warning |
 | Sensitive information in logs | REJECT |
 
+## Observable Side Effects
+
+Treat observable side effects such as metrics, logs, audit records, session records, events, and error classifications as contracts that readers and downstream processing depend on.
+
+| Criteria | Verdict |
+|----------|---------|
+| A non-target event is recorded, classified, or counted | REJECT |
+| A target event is not recorded, classified, or counted | REJECT |
+| The same semantic event is recorded with different classifications, labels, or attributes depending on the path | REJECT |
+| Numeric records can receive NaN, Infinity, negative values, or contract-invalid zero values | REJECT |
+| Success, failure, retry, interruption, and early-exit paths produce distinguishable observable results | OK |
+
 ## Maintainability
 
 | Criteria | Verdict |
