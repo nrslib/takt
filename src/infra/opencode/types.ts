@@ -212,7 +212,8 @@ function buildOpenCodeAllowedToolsRuleset(
     .map(toOpenCodeAllowedPermission)
     .filter((permission): permission is string => (
       permission !== null
-      && isAllowedByPermissionMode(permission, mode)
+      && isOpenCodePermissionKey(permission)
+      && (permission !== 'edit' || isAllowedByPermissionMode(permission, mode))
       && (networkAccess !== false || !isOpenCodeWebPermission(permission))
     ));
   const uniqueAllowed = Array.from(new Set(allowed));
