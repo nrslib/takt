@@ -211,13 +211,12 @@ describe('OpenCode permissions', () => {
     ]);
   });
 
-  it('should treat an explicit empty allowed tools list as deny all', () => {
+  it('should treat an explicit empty allowed tools list as wildcard deny', () => {
     const ruleset = buildOpenCodePermissionRuleset('edit', undefined, []);
 
-    expect(ruleset.length).toBeGreaterThan(1);
-    expect(ruleset.every((rule) => rule.action === 'deny')).toBe(true);
-    expect(ruleset).toContainEqual({ permission: 'read', pattern: '**', action: 'deny' });
-    expect(ruleset).toContainEqual({ permission: 'bash', pattern: '**', action: 'deny' });
+    expect(ruleset).toEqual([
+      { permission: '*', pattern: '*', action: 'deny' },
+    ]);
   });
 
   it('should not widen a whitelist when network access is enabled', () => {

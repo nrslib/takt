@@ -205,11 +205,7 @@ function buildOpenCodeAllowedToolsRuleset(
   allowedTools: OpenCodeAllowedTools,
 ): OpenCodePermissionRule[] {
   if (allowedTools.length === 0) {
-    return OPEN_CODE_PERMISSION_KEYS.map((permission) => ({
-      permission,
-      pattern: '**',
-      action: 'deny',
-    }));
+    return [{ permission: '*', pattern: '*', action: 'deny' }];
   }
 
   const allowed = allowedTools

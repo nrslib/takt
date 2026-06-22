@@ -164,17 +164,7 @@ const { createOpencodeMock } = vi.hoisted(() => ({
 }));
 
 const DENY_ONLY_OPEN_CODE_PERMISSION_RULESET = [
-  { permission: 'read', pattern: '**', action: 'deny' },
-  { permission: 'glob', pattern: '**', action: 'deny' },
-  { permission: 'grep', pattern: '**', action: 'deny' },
-  { permission: 'edit', pattern: '**', action: 'deny' },
-  { permission: 'write', pattern: '**', action: 'deny' },
-  { permission: 'bash', pattern: '**', action: 'deny' },
-  { permission: 'task', pattern: '**', action: 'deny' },
-  { permission: 'todowrite', pattern: '**', action: 'deny' },
-  { permission: 'websearch', pattern: '**', action: 'deny' },
-  { permission: 'webfetch', pattern: '**', action: 'deny' },
-  { permission: 'question', pattern: '**', action: 'deny' },
+  { permission: '*', pattern: '*', action: 'deny' },
 ];
 
 function deferred<T = void>(): {
