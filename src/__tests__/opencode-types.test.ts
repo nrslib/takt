@@ -178,6 +178,7 @@ describe('OpenCode permissions', () => {
     expect(ruleset).toEqual([
       { permission: '*', pattern: '*', action: 'deny' },
       { permission: 'read', pattern: '*', action: 'allow' },
+      { permission: 'bash', pattern: '*', action: 'allow' },
     ]);
   });
 

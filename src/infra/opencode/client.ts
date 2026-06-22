@@ -717,7 +717,7 @@ export class OpenCodeClient {
                   toolPart.state.error,
                 )
                 : undefined;
-              if (toolPart.state.status !== 'error') {
+              if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
               }
               handlePartUpdated(part, delta, options.onStream, state);
