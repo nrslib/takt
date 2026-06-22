@@ -754,7 +754,7 @@ describe('OpenCodeClient stream cleanup', () => {
     );
   });
 
-  it('should pass allowed tools as a permission whitelist to session.create', async () => {
+  it('Given allowed tools are configured, When calling OpenCode, Then it passes the same whitelist to session.create and promptAsync', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       {
@@ -806,7 +806,16 @@ describe('OpenCodeClient stream cleanup', () => {
       ],
     });
     expect(promptAsync).toHaveBeenCalledWith(
-      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.objectContaining({
+        tools: {
+          read: true,
+          edit: true,
+          todowrite: true,
+          bash: true,
+          websearch: true,
+          webfetch: true,
+        },
+      }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -858,7 +867,12 @@ describe('OpenCodeClient stream cleanup', () => {
       ],
     });
     expect(promptAsync).toHaveBeenCalledWith(
-      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.objectContaining({
+        tools: {
+          read: true,
+          bash: true,
+        },
+      }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -1477,9 +1491,13 @@ describe('OpenCodeClient stream cleanup', () => {
         { permission: '*', pattern: '*', action: 'allow' },
       ],
     });
+    expect(promptAsync).toHaveBeenCalledWith(
+      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
-  it('should pass deny-all permission ruleset when allowedTools is an explicit empty array', async () => {
+  it('Given allowedTools is an explicit empty array, When calling OpenCode, Then it denies permissions and hides all prompt tools', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       {
@@ -1522,7 +1540,7 @@ describe('OpenCodeClient stream cleanup', () => {
       permission: DENY_ONLY_OPEN_CODE_PERMISSION_RULESET,
     });
     expect(promptAsync).toHaveBeenCalledWith(
-      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.objectContaining({ tools: {} }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });

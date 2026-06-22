@@ -17,6 +17,7 @@ import {
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {
   buildOpenCodePermissionRuleset,
+  buildOpenCodePromptTools,
   resolveOpenCodePermissionReply,
   type OpenCodeCallOptions,
 } from './types.js';
@@ -639,12 +640,18 @@ export class OpenCodeClient {
           });
         }
 
+        const promptTools = buildOpenCodePromptTools(
+          options.permissionMode,
+          options.networkAccess,
+          options.allowedTools,
+        );
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
           model: parsedModel,
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
+          ...(promptTools !== undefined ? { tools: promptTools } : {}),
           parts: [{ type: 'text' as const, text: prompt }],
         };
         const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];

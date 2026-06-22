@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildOpenCodePermissionRuleset,
+  buildOpenCodePromptTools,
   mapToOpenCodePermissionReply,
   resolveOpenCodePermissionReply,
 } from '../infra/opencode/types.js';
@@ -240,5 +241,52 @@ describe('OpenCode permissions', () => {
       { permission: '*', pattern: '*', action: 'deny' },
       { permission: 'read', pattern: '*', action: 'allow' },
     ]);
+  });
+});
+
+describe('buildOpenCodePromptTools', () => {
+  it('Given allowedTools is unset, When building prompt tools, Then it preserves the existing unfiltered payload', () => {
+    expect(buildOpenCodePromptTools('edit', undefined, undefined)).toBeUndefined();
+  });
+
+  it('Given allowedTools is empty, When building prompt tools, Then it sends an explicit empty tool map', () => {
+    expect(buildOpenCodePromptTools('edit', undefined, [])).toEqual({});
+  });
+
+  it('Given allowedTools uses TAKT casing, When building prompt tools, Then it maps to OpenCode tool names', () => {
+    expect(buildOpenCodePromptTools('full', undefined, ['Read', 'Bash'])).toEqual({
+      read: true,
+      bash: true,
+    });
+  });
+
+  it('Given edit aliases are allowed, When building prompt tools, Then it exposes OpenCode edit only once', () => {
+    expect(buildOpenCodePromptTools('full', undefined, ['Edit', 'Write', 'apply_patch'])).toEqual({
+      edit: true,
+    });
+  });
+
+  it('Given network access is disabled, When building prompt tools, Then it removes web tools from the schema map', () => {
+    expect(buildOpenCodePromptTools('full', false, ['Read', 'WebSearch', 'WebFetch'])).toEqual({
+      read: true,
+    });
+  });
+
+  it('Given unknown custom tools are allowed, When building prompt tools, Then it omits them from the schema map', () => {
+    expect(buildOpenCodePromptTools('edit', undefined, ['Read', 'mcp__github__search'])).toEqual({
+      read: true,
+    });
+  });
+
+  it('Given a wildcard tool is allowed, When building prompt tools, Then it rejects the wildcard contract', () => {
+    expect(() => buildOpenCodePromptTools('full', false, ['*']))
+      .toThrow('OpenCode allowedTools does not accept wildcard permission: *');
+  });
+
+  it('Given readonly mode filters edit aliases, When building prompt tools, Then it matches the permission ruleset whitelist', () => {
+    expect(buildOpenCodePromptTools('readonly', undefined, ['Read', 'Bash', 'Edit'])).toEqual({
+      read: true,
+      bash: true,
+    });
   });
 });
