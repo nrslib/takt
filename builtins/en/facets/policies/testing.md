@@ -14,6 +14,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Reproducibility | Do not depend on time or randomness. Same result every run |
 | Do not freeze non-executable assets | Do not make prose or section structure that does not define runtime behavior a CI failure condition |
 | Verify negative contracts at observable units | Do not pass prohibition, rejection, non-inheritance, or unsupported cases by exact-string absence alone |
+| Mock contract fidelity | Keep external SDK/API mocks aligned with real contracts and do not freeze wrong assumptions in tests |
 
 ## Coverage Criteria
 
@@ -163,6 +164,18 @@ Test data should explicitly generate the minimum facts needed by each test. Muta
 | Each test hand-writes a huge full-field fixture | Warning. Consider a factory |
 | Factories provide defaults and each test overrides only relevant fields | OK |
 | Contract changes update fixtures, mocks, and snapshots in the same change | OK |
+
+## External Contract Mocks
+
+When mocking an external SDK, external API, generated client, or CLI, align mocked exception types, statuses, return values, missing values, partial successes, and idempotency with the real contract. Type compatibility alone does not verify the semantic contract.
+
+| Criteria | Verdict |
+|----------|---------|
+| Mock values are chosen by checking official specs, SDK types, generated schemas, or existing equivalent tests | OK |
+| The mock throws the exception or return value expected by the implementation, and test success is used as proof of the external contract | REJECT |
+| Error types or response shapes from a different operation in the same service are reused | REJECT |
+| The mock is type-safe but operation-specific semantic contracts, such as existing-resource behavior, partial success, or missing detection, are not verified | REJECT |
+| When real integration is stubbed, the report separates what the mock verifies from the unverified real-integration scope | OK |
 
 ### Naming
 

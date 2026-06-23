@@ -12,6 +12,7 @@ For released or operational systems, make changes that are causally related to t
 | Respect existing structure | Do not change file placement, type names, public APIs, or responsibility boundaries without causal relationship to the request |
 | Preserve comments | Do not delete comments that explain intent, constraints, or calculation rationale |
 | Tests are contracts | Do not treat behavior asserted by existing tests as incidental |
+| Verify external contracts from primary evidence | Confirm behavior of external services, SDKs, and generated artifacts from official specs or actual types/schemas |
 | Causal improvement judgment | Perform style improvements and refactoring when causally related to the request. Do not mix improvements without causal relationship |
 | Protect unrelated code | Prioritize preserving existing behavior and structure that is not causally related to the request |
 
@@ -50,6 +51,18 @@ UI, accessibility, tests, logs, APIs, types, file placement, and comments can be
 | Test expectations | Change only when the requested behavior changes |
 | Comments | Change only when correcting inaccurate comments or when code makes them truly obsolete |
 | File placement | Change only when causally related to the request |
+
+## External Dependency Contracts
+
+Treat behavior of external services, SDKs, generated code, schemas, and CLIs as boundary contracts of the existing system. Do not infer one operation's error types, statuses, return values, idempotency, limits, or optionality from another operation without verification.
+
+| Criteria | Verdict |
+|----------|---------|
+| The concrete contract is verified from official specs, actual type definitions, generated schemas, or existing equivalent implementation | OK |
+| Error types, statuses, or return values from a different operation in the same service are generalized as "equivalent" and reused for an unverified operation | REJECT |
+| Compile success, mock success, or stub expectations alone are treated as proof of the external contract | REJECT |
+| Plans or implementation guidelines keep vague external-contract wording such as "equivalent" or "same as" | REJECT |
+| When the external contract cannot be verified, the unverified scope, risk, and verification method are recorded | OK |
 
 ## Test Changes
 
