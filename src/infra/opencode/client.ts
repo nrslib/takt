@@ -8,6 +8,7 @@
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
 import {
@@ -155,6 +156,20 @@ async function createSharedServer(
         model,
         small_model: model,
         ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
+        agent: {
+          takt: {
+            prompt: loadTemplate('opencode_agent_prompt', 'en', {
+              listFilesMethod: 'runs bash ls to list files in the directory',
+            }),
+            tools: { task: false },
+          },
+          'takt-no-bash': {
+            prompt: loadTemplate('opencode_agent_prompt', 'en', {
+              listFilesMethod: 'uses read tool on the directory to list files',
+            }),
+            tools: { task: false },
+          },
+        },
       },
       timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
     })
@@ -639,10 +654,13 @@ export class OpenCodeClient {
           });
         }
 
+        const hasBash = options.allowedTools === undefined
+          || options.allowedTools.some((t) => t.toLowerCase() === 'bash');
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
           model: parsedModel,
+          agent: hasBash ? 'takt' : 'takt-no-bash',
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
           parts: [{ type: 'text' as const, text: prompt }],

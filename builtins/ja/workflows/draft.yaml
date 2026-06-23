@@ -98,7 +98,7 @@ steps:
       - review
       - ai-antipattern
     provider_options:
-      extends: review-web
+      extends: review-readonly
     rules:
       - condition: AI特有の問題なし
         next: COMPLETE

@@ -13,7 +13,6 @@ import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from '.
 const OPENCODE_TOOL_NAMING_FALLBACK = [
   'OpenCode tool names are lowercase.',
   'Use bash for shell commands, glob for file discovery, grep for search, read for file reads, edit/write for changes, and todowrite for todos.',
-  'Do not call run, list, todo, or todo_write.',
 ].join(' ');
 
 function buildToolNamingInstruction(
