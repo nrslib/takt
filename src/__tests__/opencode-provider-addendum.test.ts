@@ -177,6 +177,39 @@ describe('OpenCodeProvider tool naming addendum', () => {
     expect(listed).toEqual(['read', 'todowrite', 'edit', 'bash']);
   });
 
+  it('should exclude edit when permissionMode is readonly', () => {
+    const provider = new OpenCodeProvider() as {
+      getRuntimeInstructions(allowedTools?: string[], permissionMode?: string, networkAccess?: boolean): string | null;
+    };
+
+    const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'write', 'bash'], 'readonly', undefined);
+
+    const listed = extractToolNames(runtimeInstructions);
+    expect(listed).toEqual(['read', 'bash']);
+  });
+
+  it('should exclude web tools when networkAccess is false', () => {
+    const provider = new OpenCodeProvider() as {
+      getRuntimeInstructions(allowedTools?: string[], permissionMode?: string, networkAccess?: boolean): string | null;
+    };
+
+    const runtimeInstructions = provider.getRuntimeInstructions(['read', 'bash', 'websearch', 'webfetch'], 'full', false);
+
+    const listed = extractToolNames(runtimeInstructions);
+    expect(listed).toEqual(['read', 'bash']);
+  });
+
+  it('should include edit when permissionMode is full', () => {
+    const provider = new OpenCodeProvider() as {
+      getRuntimeInstructions(allowedTools?: string[], permissionMode?: string, networkAccess?: boolean): string | null;
+    };
+
+    const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'bash'], 'full', undefined);
+
+    const listed = extractToolNames(runtimeInstructions);
+    expect(listed).toEqual(['read', 'edit', 'bash']);
+  });
+
   it('should pass custom system prompt without appending OpenCode runtime instructions', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({
