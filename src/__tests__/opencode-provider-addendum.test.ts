@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PermissionMode } from '../core/models/index.js';
 
 function extractToolNames(instruction: string | null): string[] {
   const match = instruction?.match(/You have ONLY these tools:\s*(.*?)\./);
@@ -179,7 +180,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
 
   it('should exclude edit when permissionMode is readonly', () => {
     const provider = new OpenCodeProvider() as {
-      getRuntimeInstructions(allowedTools?: string[], permissionMode?: string, networkAccess?: boolean): string | null;
+      getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null;
     };
 
     const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'write', 'bash'], 'readonly', undefined);
@@ -190,7 +191,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
 
   it('should exclude web tools when networkAccess is false', () => {
     const provider = new OpenCodeProvider() as {
-      getRuntimeInstructions(allowedTools?: string[], permissionMode?: string, networkAccess?: boolean): string | null;
+      getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null;
     };
 
     const runtimeInstructions = provider.getRuntimeInstructions(['read', 'bash', 'websearch', 'webfetch'], 'full', false);
@@ -201,7 +202,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
 
   it('should include edit when permissionMode is full', () => {
     const provider = new OpenCodeProvider() as {
-      getRuntimeInstructions(allowedTools?: string[], permissionMode?: string, networkAccess?: boolean): string | null;
+      getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null;
     };
 
     const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'bash'], 'full', undefined);
