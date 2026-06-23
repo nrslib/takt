@@ -245,6 +245,8 @@ function isOpenCodePermissionKey(permission: string): permission is OpenCodePerm
   return (OPEN_CODE_PERMISSION_KEYS as readonly string[]).includes(permission);
 }
 
+export { toOpenCodeAllowedPermission as canonicalizeOpenCodeToolName };
+
 function toOpenCodeAllowedPermission(tool: string): string | null {
   const trimmed = tool.trim();
   if (!trimmed) {

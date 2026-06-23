@@ -4,15 +4,28 @@
 
 import { callOpenCode, callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
 import { mapsToOpenCodeEditPermission } from '../opencode/allowedTools.js';
+import { canonicalizeOpenCodeToolName } from '../opencode/types.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
-const OPENCODE_TOOL_NAMING_ADDENDUM = [
+const OPENCODE_TOOL_NAMING_FALLBACK = [
   'OpenCode tool names are lowercase.',
   'Use bash for shell commands, glob for file discovery, grep for search, read for file reads, edit/write for changes, and todowrite for todos.',
   'Do not call run, list, todo, or todo_write.',
 ].join(' ');
+
+function buildToolNamingInstruction(allowedTools: string[]): string {
+  const seen = new Set<string>();
+  for (const tool of allowedTools) {
+    const canonical = canonicalizeOpenCodeToolName(tool);
+    if (canonical !== null) {
+      seen.add(canonical);
+    }
+  }
+  const names = Array.from(seen);
+  return `You have ONLY these tools: ${names.join(', ')}. No other tools exist. Do not attempt to call any tool not in this list.`;
+}
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
   if (!options.model) {
@@ -43,10 +56,13 @@ export class OpenCodeProvider implements Provider {
   readonly supportsNativeImageInput = false;
 
   getRuntimeInstructions(allowedTools?: string[]): string | null {
-    if (allowedTools !== undefined && allowedTools.length === 0) {
+    if (allowedTools === undefined) {
+      return OPENCODE_TOOL_NAMING_FALLBACK;
+    }
+    if (allowedTools.length === 0) {
       return null;
     }
-    return OPENCODE_TOOL_NAMING_ADDENDUM;
+    return buildToolNamingInstruction(allowedTools);
   }
 
   keepsAllowedToolWithoutEdit(tool: string): boolean {

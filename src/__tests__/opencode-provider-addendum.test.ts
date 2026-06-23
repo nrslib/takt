@@ -93,10 +93,13 @@ describe('OpenCodeProvider tool naming addendum', () => {
     agentRunnerMocks.getRuntimeInstructionsMock.mockReset();
     agentRunnerMocks.getRuntimeInstructionsMock.mockImplementation(
       (allowedTools?: string[]) => {
-        if (allowedTools !== undefined && allowedTools.length === 0) {
+        if (allowedTools === undefined) {
+          return 'OpenCode tool names are lowercase. Do not call run, list, todo, or todo_write.';
+        }
+        if (allowedTools.length === 0) {
           return null;
         }
-        return 'OpenCode tool names are lowercase. Do not call run, list, todo, or todo_write.';
+        return `You have ONLY these tools: ${allowedTools.join(', ')}. No other tools exist.`;
       },
     );
     agentRunnerMocks.loadTemplateMock.mockReset().mockReturnValue('template');
@@ -147,15 +150,28 @@ describe('OpenCodeProvider tool naming addendum', () => {
     expect(runtimeInstructions).toContain('Do not call run, list, todo, or todo_write.');
   });
 
-  it('should include addendum when allowedTools contains tools', () => {
+  it('should list only allowed tools when allowedTools is specified', () => {
     const provider = new OpenCodeProvider() as {
       getRuntimeInstructions(allowedTools?: string[]): string | null;
     };
 
     const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'write']);
 
-    expect(runtimeInstructions).toContain('OpenCode tool names are lowercase.');
-    expect(runtimeInstructions).toContain('Do not call run, list, todo, or todo_write.');
+    expect(runtimeInstructions).toContain('You have ONLY these tools: read, edit.');
+    expect(runtimeInstructions).toContain('No other tools exist.');
+    expect(runtimeInstructions).not.toContain('write');
+  });
+
+  it('should canonicalize and deduplicate tool names', () => {
+    const provider = new OpenCodeProvider() as {
+      getRuntimeInstructions(allowedTools?: string[]): string | null;
+    };
+
+    const runtimeInstructions = provider.getRuntimeInstructions([' Read ', 'TODO_WRITE', 'apply_patch', 'read', 'Bash']);
+
+    expect(runtimeInstructions).toContain('You have ONLY these tools: read, todowrite, edit, bash.');
+    expect(runtimeInstructions).not.toContain('apply_patch');
+    expect(runtimeInstructions).not.toContain('TODO_WRITE');
   });
 
   it('should pass custom system prompt without appending OpenCode runtime instructions', async () => {
@@ -205,10 +221,13 @@ describe('OpenCodeProvider tool naming addendum', () => {
       agentRunnerMocks.getRuntimeInstructionsMock.mockReset();
       agentRunnerMocks.getRuntimeInstructionsMock.mockImplementation(
         (allowedTools?: string[]) => {
-          if (allowedTools !== undefined && allowedTools.length === 0) {
+          if (allowedTools === undefined) {
+            return 'OpenCode tool names are lowercase. Do not call run, list, todo, or todo_write.';
+          }
+          if (allowedTools.length === 0) {
             return null;
           }
-          return 'OpenCode tool names are lowercase. Do not call run, list, todo, or todo_write.';
+          return `You have ONLY these tools: ${allowedTools.join(', ')}. No other tools exist.`;
         },
       );
       agentRunnerMocks.loadTemplateMock.mockReset().mockReturnValue('template');
@@ -294,7 +313,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
         'provider_runtime_system_prompt',
         'en',
         expect.objectContaining({
-          providerRuntimeInstructions: expect.stringContaining('OpenCode tool names are lowercase.'),
+          providerRuntimeInstructions: expect.stringContaining('You have ONLY these tools:'),
         }),
       );
       expect(call.systemPrompt).toBe('template');
