@@ -208,6 +208,19 @@ function buildOpenCodeAllowedToolsRuleset(
     return [{ permission: '*', pattern: '*', action: 'deny' }];
   }
 
+  const uniqueAllowed = resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools);
+
+  return [
+    { permission: '*', pattern: '*', action: 'deny' },
+    ...uniqueAllowed.map((permission) => ({ permission, pattern: '*', action: 'allow' as const })),
+  ];
+}
+
+export function resolveOpenCodeAllowedPermissions(
+  mode: PermissionMode | undefined,
+  networkAccess: boolean | undefined,
+  allowedTools: OpenCodeAllowedTools,
+): string[] {
   const allowed = allowedTools
     .map(toOpenCodeAllowedPermission)
     .filter((permission): permission is string => (
@@ -216,12 +229,7 @@ function buildOpenCodeAllowedToolsRuleset(
       && (permission !== 'edit' || isAllowedByPermissionMode(permission, mode))
       && (networkAccess !== false || !isOpenCodeWebPermission(permission))
     ));
-  const uniqueAllowed = Array.from(new Set(allowed));
-
-  return [
-    { permission: '*', pattern: '*', action: 'deny' },
-    ...uniqueAllowed.map((permission) => ({ permission, pattern: '*', action: 'allow' as const })),
-  ];
+  return Array.from(new Set(allowed));
 }
 
 function isOpenCodeWebPermission(permission: string): boolean {

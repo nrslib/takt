@@ -269,7 +269,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
       expect(call.systemPrompt).toBe('');
       expect(call.systemPrompt).not.toContain('OpenCode tool names are lowercase.');
       expect(call.systemPrompt).not.toContain('glob for file discovery');
-      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith([]);
+      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith([], undefined, undefined);
     });
 
     it('should include addendum in resolved system prompt when allowedTools is undefined', async () => {
@@ -294,7 +294,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
         }),
       );
       expect(call.systemPrompt).toBe('template');
-      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(undefined);
+      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(undefined, undefined, undefined);
     });
 
     it('should include addendum in resolved system prompt when allowedTools is non-empty', async () => {
@@ -320,6 +320,6 @@ describe('OpenCodeProvider tool naming addendum', () => {
         }),
       );
       expect(call.systemPrompt).toBe('template');
-      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(['read', 'edit', 'write']);
+      expect(agentRunnerMocks.getRuntimeInstructionsMock).toHaveBeenCalledWith(['read', 'edit', 'write'], undefined, undefined);
     });
   });
