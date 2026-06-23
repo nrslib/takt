@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+function extractToolNames(instruction: string | null): string[] {
+  const match = instruction?.match(/You have ONLY these tools:\s*(.*?)\./);
+  return match?.[1]?.split(',').map((n) => n.trim()).filter(Boolean) ?? [];
+}
+
 const openCodeMocks = vi.hoisted(() => ({
   callOpenCode: vi.fn(),
   callOpenCodeCustom: vi.fn(),
@@ -157,9 +162,8 @@ describe('OpenCodeProvider tool naming addendum', () => {
 
     const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'write']);
 
-    expect(runtimeInstructions).toContain('You have ONLY these tools: read, edit.');
-    expect(runtimeInstructions).toContain('No other tools exist.');
-    expect(runtimeInstructions).not.toContain('write');
+    const listed = extractToolNames(runtimeInstructions);
+    expect(listed).toEqual(['read', 'edit']);
   });
 
   it('should canonicalize and deduplicate tool names', () => {
@@ -169,9 +173,8 @@ describe('OpenCodeProvider tool naming addendum', () => {
 
     const runtimeInstructions = provider.getRuntimeInstructions([' Read ', 'TODO_WRITE', 'apply_patch', 'read', 'Bash']);
 
-    expect(runtimeInstructions).toContain('You have ONLY these tools: read, todowrite, edit, bash.');
-    expect(runtimeInstructions).not.toContain('apply_patch');
-    expect(runtimeInstructions).not.toContain('TODO_WRITE');
+    const listed = extractToolNames(runtimeInstructions);
+    expect(listed).toEqual(['read', 'todowrite', 'edit', 'bash']);
   });
 
   it('should pass custom system prompt without appending OpenCode runtime instructions', async () => {

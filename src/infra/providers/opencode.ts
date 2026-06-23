@@ -15,13 +15,16 @@ const OPENCODE_TOOL_NAMING_FALLBACK = [
   'Do not call run, list, todo, or todo_write.',
 ].join(' ');
 
-function buildToolNamingInstruction(allowedTools: string[]): string {
+function buildToolNamingInstruction(allowedTools: string[]): string | null {
   const seen = new Set<string>();
   for (const tool of allowedTools) {
     const canonical = canonicalizeOpenCodeToolName(tool);
     if (canonical !== null) {
       seen.add(canonical);
     }
+  }
+  if (seen.size === 0) {
+    return null;
   }
   const names = Array.from(seen);
   return `You have ONLY these tools: ${names.join(', ')}. No other tools exist. Do not attempt to call any tool not in this list.`;
