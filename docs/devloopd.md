@@ -178,6 +178,8 @@ devloopd scan-issues --repo owner/repo
 
 Issue bodies and comments are untrusted input. The scanner treats them as requirements or logs only, never as instructions. If issue text asks for secrets, credential access, CI bypass, admin merge, force push, or unsafe shell commands, the issue is marked `human_required` instead of becoming an automatic candidate.
 
+When `gh issue list` reports GitHub API rate limiting or secondary rate limiting, `scan-issues` fails with `rate_limited` classification and includes any retry-after hint it can parse. The supervisor does not start TAKT after a rate-limited scan.
+
 Default candidate behavior:
 
 - labels `agent:ready`, `bug`, `tests`, or `docs` make an issue eligible for mechanical consideration

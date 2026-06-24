@@ -178,6 +178,8 @@ devloopd scan-issues --repo owner/repo
 
 Issue body と comments は untrusted input です。scanner はそれらを requirements / logs として扱い、指示としては扱いません。Issue text が secret、credential access、CI bypass、admin merge、force push、危険な shell command を要求している場合、自動候補にはせず `human_required` に分類します。
 
+`gh issue list` が GitHub API rate limit または secondary rate limit を返した場合、`scan-issues` は `rate_limited` として失敗し、parse できた retry-after hint を表示します。rate-limited scan の後に supervisor が TAKT を起動することはありません。
+
 デフォルトの候補分類:
 
 - `agent:ready`, `bug`, `tests`, `docs` label がある Issue は機械的検討対象になる
