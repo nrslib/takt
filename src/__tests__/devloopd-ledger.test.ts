@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -99,6 +99,43 @@ describe('devloopd ledger import and timeline', () => {
 
     expect(report.passed).toBe(true);
     expect(report.runSlug).toBe('new-run');
+  });
+
+  it('does not implicitly import latest run unless latest is requested', () => {
+    writeRunFixture(repoPath, 'new-run', { startTime: '2026-06-24T01:00:00.000Z' });
+
+    const report = importTaktRun({ repoPath, issue: 123 });
+
+    expect(report.passed).toBe(false);
+    expect(report.message).toContain('No TAKT runs found');
+  });
+
+  it('writes ledger directory and file with owner-only permissions', () => {
+    writeRunFixture(repoPath, 'run-123', { issue: 123 });
+
+    const report = importTaktRun({ repoPath, issue: 123, runSlug: 'run-123' });
+
+    expect(report.passed).toBe(true);
+    expect(statSync(join(repoPath, '.devloop')).mode & 0o777).toBe(0o700);
+    expect(statSync(join(repoPath, '.devloop', 'ledger.jsonl')).mode & 0o777).toBe(0o600);
+  });
+
+  it('does not change permissions on an existing custom ledger directory', () => {
+    writeRunFixture(repoPath, 'run-123', { issue: 123 });
+    const customLedgerDir = join(repoPath, 'public-ledger');
+    mkdirSync(customLedgerDir, { recursive: true });
+    chmodSync(customLedgerDir, 0o755);
+
+    const report = importTaktRun({
+      repoPath,
+      issue: 123,
+      runSlug: 'run-123',
+      ledgerPath: join('public-ledger', 'ledger.jsonl'),
+    });
+
+    expect(report.passed).toBe(true);
+    expect(statSync(customLedgerDir).mode & 0o777).toBe(0o755);
+    expect(statSync(join(customLedgerDir, 'ledger.jsonl')).mode & 0o777).toBe(0o600);
   });
 
   it('renders a timeline filtered by issue number', () => {

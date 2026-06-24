@@ -85,8 +85,11 @@ const DEFAULT_POLICY: MergeGatePolicy = {
     'package-lock.json',
     'Dockerfile',
     'src/middleware*',
+    'src/middleware/**',
     'src/routes*',
+    'src/routes/**',
     'src/config*',
+    'src/config/**',
   ],
   maxFilesChanged: 12,
   maxLinesChanged: 500,
@@ -168,8 +171,10 @@ function buildPolicyReasons(input: MergeGateEvaluationInput, policy: MergeGatePo
   if (!input.pr.labels.includes(policy.requiredLabel)) {
     humanReview.push(`missing required label: ${policy.requiredLabel}`);
   }
-  if (input.pr.reviewDecision !== undefined && input.pr.reviewDecision !== 'APPROVED') {
+  if (input.pr.reviewDecision === 'CHANGES_REQUESTED') {
     requestChanges.push(`review decision is ${input.pr.reviewDecision}`);
+  } else if (input.pr.reviewDecision !== undefined && input.pr.reviewDecision !== 'APPROVED') {
+    humanReview.push(`review decision is ${input.pr.reviewDecision}`);
   }
   if (input.pr.mergeStateStatus !== undefined && !['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(input.pr.mergeStateStatus)) {
     humanReview.push(`merge state is ${input.pr.mergeStateStatus}`);
@@ -319,7 +324,7 @@ async function checkGithubChecks(
   repo: string | undefined,
   env: NodeJS.ProcessEnv,
 ): Promise<boolean> {
-  const args = ['pr', 'checks', prRef, '--watch'];
+  const args = ['pr', 'checks', prRef];
   if (repo) {
     args.push('--repo', repo);
   }

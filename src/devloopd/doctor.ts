@@ -263,8 +263,7 @@ export async function runDevloopDoctor(options: RunDevloopDoctorOptions = {}): P
 }
 
 export function formatDevloopDoctorReport(report: DevloopDoctorReport, options: { verbose?: boolean } = {}): string {
-  const visibleChecks = options.verbose
-    || report.passed
+  const visibleChecks = options.verbose === true
     ? report.checks
     : report.checks.filter((check) => check.status !== 'pass');
   const lines = [

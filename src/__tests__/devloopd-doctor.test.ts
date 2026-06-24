@@ -95,6 +95,23 @@ describe('devloopd doctor', () => {
     expect(report.checks.filter((check) => check.status === 'fail')).toEqual([]);
   });
 
+  it('hides passing check details unless verbose is enabled', () => {
+    const report = {
+      passed: true,
+      checks: [
+        { status: 'pass' as const, name: 'command:takt', message: 'found takt' },
+        { status: 'warn' as const, name: 'devloop policy', message: 'no policy file provided' },
+      ],
+    };
+
+    const terseOutput = formatDevloopDoctorReport(report);
+    expect(terseOutput).toContain('devloopd doctor passed');
+    expect(terseOutput).toContain('devloop policy');
+    expect(terseOutput).not.toContain('command:takt');
+
+    expect(formatDevloopDoctorReport(report, { verbose: true })).toContain('command:takt');
+  });
+
   it('fails without leaking forbidden environment variable values', async () => {
     const report = await runDevloopDoctor({
       repoPath: projectDir,
@@ -181,7 +198,7 @@ steps:
     });
 
     expect(report.passed).toBe(true);
-    expect(formatDevloopDoctorReport(report)).toContain('agent');
+    expect(formatDevloopDoctorReport(report, { verbose: true })).toContain('agent');
   });
 
   it('fails when a required subscription CLI is missing', async () => {

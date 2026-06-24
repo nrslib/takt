@@ -84,6 +84,17 @@ describe('devloopd merge gate', () => {
     expect(runner.calls.some((call) => call.args[1] === 'merge')).toBe(false);
   });
 
+  it('denies root-level sensitive files and nested human-review paths before attempting merge', async () => {
+    const runner = makeRunner({ diff: '.env\nsecret.txt\nsrc/middleware/auth.ts\n' });
+
+    const report = await mergeIfSafe({ pr: '12', repoPath: '/repo', runner });
+
+    expect(report.result).toBe('POLICY_DENY');
+    expect(formatMergeGateReport(report)).toContain('forbidden path touched: .env');
+    expect(formatMergeGateReport(report)).toContain('forbidden path touched: secret.txt');
+    expect(runner.calls.some((call) => call.args[1] === 'merge')).toBe(false);
+  });
+
   it('treats leading globstar patterns as matching repository root files', () => {
     const report = evaluateMergeGate({
       pr: {
@@ -104,6 +115,37 @@ describe('devloopd merge gate', () => {
 
     expect(report.result).toBe('POLICY_DENY');
     expect(report.reasons).toContain('forbidden path touched: .env.local (**/.env*)');
+  });
+
+  it('routes review-required decisions to human review instead of request changes', () => {
+    const report = evaluateMergeGate({
+      pr: {
+        url: 'https://github.com/owner/repo/pull/12',
+        number: 12,
+        headRefOid: 'abc123',
+        labels: ['agent:auto-merge'],
+        reviewDecision: 'REVIEW_REQUIRED',
+        mergeStateStatus: 'CLEAN',
+        isDraft: false,
+        changedFiles: 1,
+        additions: 1,
+        deletions: 0,
+      },
+      changedPaths: ['src/app.ts'],
+      checksPassed: true,
+    });
+
+    expect(report.result).toBe('HUMAN_REVIEW_REQUIRED');
+    expect(report.reasons).toContain('review decision is REVIEW_REQUIRED');
+  });
+
+  it('checks GitHub status without watch mode so merge gate cannot hang indefinitely', async () => {
+    const runner = makeRunner();
+
+    await mergeIfSafe({ pr: '12', repoPath: '/repo', runner });
+
+    const checksCall = runner.calls.find((call) => call.args[0] === 'pr' && call.args[1] === 'checks');
+    expect(checksCall?.args).toEqual(['pr', 'checks', '12']);
   });
 
   it('requires the auto-merge label', async () => {

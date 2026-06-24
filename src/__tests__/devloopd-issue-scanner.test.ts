@@ -39,6 +39,7 @@ describe('devloopd issue scanner', () => {
 
     expect(candidate.mode).toBe('auto_merge_candidate');
     expect(candidate.mechanicalRisk).toBe('low');
+    expect('body' in candidate).toBe(false);
   });
 
   it('skips issues with forbidden labels', () => {
@@ -156,5 +157,22 @@ describe('devloopd issue scanner', () => {
     expect(report.retryAfterSeconds).toBe(60);
     expect(output).toContain('rate limited');
     expect(output).toContain('Retry after: 60s');
+  });
+
+  it('fails cleanly when gh returns invalid JSON', async () => {
+    const runner: DevloopIssueScannerCommandRunner = {
+      resolveCommand(command) {
+        return command === 'gh' ? '/mock/bin/gh' : undefined;
+      },
+      async exec() {
+        return { exitCode: 0, stdout: '{not json', stderr: '' };
+      },
+    };
+
+    const report = await scanIssues({ repoPath: '/repo', runner });
+
+    expect(report.passed).toBe(false);
+    expect(report.failureKind).toBe('gh_error');
+    expect(formatIssueScanReport(report)).toContain('invalid JSON');
   });
 });

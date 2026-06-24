@@ -3,6 +3,7 @@ import {
   createDefaultDevloopCommandRunner,
   type DevloopCommandRunner,
 } from './commandRunner.js';
+import { getErrorMessage } from '../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../shared/utils/sensitiveText.js';
 
 export type DevloopIssueScannerCommandRunner = DevloopCommandRunner;
@@ -158,17 +159,27 @@ function riskForMode(mode: IssueCandidateMode): IssueMechanicalRisk {
   return 'high';
 }
 
+function buildBaseCandidate(issue: RawIssueInput): Pick<IssueCandidate, 'number' | 'title' | 'url' | 'labels' | 'updatedAt' | 'comments'> {
+  return {
+    number: issue.number,
+    title: sanitizeText(issue.title),
+    url: issue.url,
+    labels: [...issue.labels],
+    updatedAt: issue.updatedAt,
+    comments: issue.comments,
+  };
+}
+
 export function classifyIssue(issue: RawIssueInput, policyInput?: Partial<IssueScanPolicy>): IssueCandidate {
   const policy = resolvePolicy(policyInput);
-  const labels = [...issue.labels];
+  const baseCandidate = buildBaseCandidate(issue);
+  const labels = baseCandidate.labels;
   const joinedUntrustedText = `${issue.title}\n${issue.body ?? ''}`;
   const forbiddenLabel = findMatchingLabel(labels, policy.labelsForbidden);
 
   if (forbiddenLabel !== undefined) {
     return {
-      ...issue,
-      title: sanitizeText(issue.title),
-      labels,
+      ...baseCandidate,
       mechanicalRisk: 'high',
       mode: 'skip',
       reason: `forbidden label: ${forbiddenLabel}`,
@@ -177,9 +188,7 @@ export function classifyIssue(issue: RawIssueInput, policyInput?: Partial<IssueS
 
   if (!hasAnyLabel(labels, policy.labelsAny)) {
     return {
-      ...issue,
-      title: sanitizeText(issue.title),
-      labels,
+      ...baseCandidate,
       mechanicalRisk: 'medium',
       mode: 'skip',
       reason: `missing allowed backlog label: ${policy.labelsAny.join(', ')}`,
@@ -188,9 +197,7 @@ export function classifyIssue(issue: RawIssueInput, policyInput?: Partial<IssueS
 
   if (matchesAny(joinedUntrustedText, policy.unsafeRequestPatterns)) {
     return {
-      ...issue,
-      title: sanitizeText(issue.title),
-      labels,
+      ...baseCandidate,
       mechanicalRisk: 'high',
       mode: 'human_required',
       reason: 'unsafe request in untrusted issue text',
@@ -199,9 +206,7 @@ export function classifyIssue(issue: RawIssueInput, policyInput?: Partial<IssueS
 
   if (matchesAny(joinedUntrustedText, policy.humanRequiredPatterns)) {
     return {
-      ...issue,
-      title: sanitizeText(issue.title),
-      labels,
+      ...baseCandidate,
       mechanicalRisk: 'high',
       mode: 'human_required',
       reason: 'matches human-review-required topic',
@@ -212,9 +217,7 @@ export function classifyIssue(issue: RawIssueInput, policyInput?: Partial<IssueS
     ? 'auto_merge_candidate'
     : 'auto_pr_only';
   return {
-    ...issue,
-    title: sanitizeText(issue.title),
-    labels,
+    ...baseCandidate,
     mechanicalRisk: riskForMode(mode),
     mode,
     reason: mode === 'auto_merge_candidate'
@@ -296,7 +299,20 @@ export async function scanIssues(options: ScanIssuesOptions = {}): Promise<Issue
     };
   }
 
-  const classified = parseIssues(result.stdout).map((issue) => classifyIssue(issue, policy));
+  let issues: RawIssueInput[];
+  try {
+    issues = parseIssues(result.stdout);
+  } catch (error) {
+    return {
+      passed: false,
+      message: `gh issue list returned invalid JSON: ${sanitizeText(getErrorMessage(error))}`,
+      candidates: [],
+      skipped: [],
+      failureKind: 'gh_error',
+    };
+  }
+
+  const classified = issues.map((issue) => classifyIssue(issue, policy));
   const candidates = classified.filter((candidate) => candidate.mode !== 'skip' && candidate.mode !== 'human_required');
   const skipped = classified.filter((candidate) => candidate.mode === 'skip' || candidate.mode === 'human_required');
 

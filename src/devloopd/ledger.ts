@@ -1,5 +1,6 @@
 import {
   existsSync,
+  chmodSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -137,7 +138,7 @@ function selectRunSlug(repoPath: string, options: ImportTaktRunOptions): string 
     return options.runSlug;
   }
 
-  if (options.latest === true || !options.runSlug) {
+  if (options.latest === true) {
     return listRecentRuns(repoPath)[0]?.slug;
   }
 
@@ -157,12 +158,15 @@ function listRunSlugs(repoPath: string): string[] {
   return readdirSync(runsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .map((slug) => ({
+      slug,
+      startTime: readRunMetaBySlug(repoPath, slug)?.startTime ?? slug,
+    }))
     .sort((left, right) => {
       // Preserve TAKT execution order so ledger replay stays stable across daemon restarts.
-      const leftMeta = readRunMetaBySlug(repoPath, left);
-      const rightMeta = readRunMetaBySlug(repoPath, right);
-      return (leftMeta?.startTime ?? left).localeCompare(rightMeta?.startTime ?? right);
-    });
+      return left.startTime.localeCompare(right.startTime);
+    })
+    .map((entry) => entry.slug);
 }
 
 function sha256File(filePath: string): { sha256: string; bytes: number } {
@@ -253,9 +257,15 @@ function buildImportEvent(
 }
 
 function appendLedgerEvent(ledgerPath: string, event: TaktRunImportedEvent): void {
-  mkdirSync(resolve(ledgerPath, '..'), { recursive: true });
+  const ledgerDir = resolve(ledgerPath, '..');
+  const ledgerDirExists = existsSync(ledgerDir);
+  mkdirSync(ledgerDir, { recursive: true, mode: 0o700 });
+  if (!ledgerDirExists) {
+    chmodSync(ledgerDir, 0o700);
+  }
   const line = `${JSON.stringify(event)}\n`;
-  writeFileSync(ledgerPath, line, { encoding: 'utf-8', flag: 'a' });
+  writeFileSync(ledgerPath, line, { encoding: 'utf-8', flag: 'a', mode: 0o600 });
+  chmodSync(ledgerPath, 0o600);
 }
 
 export function readDevloopLedgerEvents(ledgerPath: string): TaktRunImportedEvent[] {
