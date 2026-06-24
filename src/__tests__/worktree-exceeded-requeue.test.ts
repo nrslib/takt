@@ -107,6 +107,30 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
   );
 }
 
+function writeFailedRecord(testDir: string, overrides: Record<string, unknown> = {}): void {
+  mkdirSync(join(testDir, '.takt'), { recursive: true });
+  const record = {
+    name: 'task-a',
+    status: 'failed',
+    content: 'Do work',
+    workflow: 'test-workflow',
+    created_at: '2026-02-09T00:00:00.000Z',
+    started_at: '2026-02-09T00:01:00.000Z',
+    completed_at: '2026-02-09T00:05:00.000Z',
+    owner_pid: null,
+    start_step: 'implement',
+    failure: {
+      error: 'Boom after retry',
+    },
+    ...overrides,
+  };
+  writeFileSync(
+    join(testDir, '.takt', 'tasks.yaml'),
+    stringifyYaml({ tasks: [record] }),
+    'utf-8',
+  );
+}
+
 function buildTestWorkflowConfig(): WorkflowConfig {
   return {
     name: 'test-workflow',
@@ -314,6 +338,41 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     expect(vi.mocked(executeWorkflow)).toHaveBeenCalledOnce();
     const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
     expect(capturedOptions.startStep).toBe('implement');
+  });
+
+  it('scenario 7: failed requeue raises maxStepsOverride beyond the restored iteration', async () => {
+    vi.mocked(loadWorkflowByIdentifier).mockReturnValue({
+      ...buildTestWorkflowConfig(),
+      maxSteps: 50,
+    });
+    const resumePoint = {
+      version: 1 as const,
+      stack: [
+        { workflow: 'test-workflow', step: 'implement', kind: 'agent' as const },
+      ],
+      iteration: 51,
+      elapsed_ms: 183245,
+    };
+    writeFailedRecord(testDir, {
+      worktree: true,
+      worktree_path: cloneDir,
+      exceeded_current_iteration: 51,
+      resume_point: resumePoint,
+    });
+
+    runner.requeueTask('task-a', ['failed'], 'implement', undefined, resumePoint);
+
+    const [task] = runner.claimNextTasks(1);
+    if (!task) throw new Error('No task claimed');
+
+    vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true });
+
+    await executeAndCompleteTask(task, runner, testDir);
+
+    expect(vi.mocked(executeWorkflow)).toHaveBeenCalledOnce();
+    const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
+    expect(capturedOptions.initialIterationOverride).toBe(51);
+    expect(capturedOptions.maxStepsOverride).toBe(100);
   });
 
   it('scenario 6: re-execution trims workflow_call resume_point to the root step when the child no longer resolves', async () => {

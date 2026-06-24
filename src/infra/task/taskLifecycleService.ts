@@ -117,9 +117,15 @@ export class TaskLifecycleService {
       return retryMetadata;
     }
 
-    return retryMetadata.startStep
-      ? { startStep: retryMetadata.startStep }
-      : {};
+    // Failed terminal states are requeueable, so keep the latest resume cursor.
+    // Otherwise a retry can restore a later iteration while falling back to the
+    // workflow's original maxSteps and immediately exceed again.
+    return {
+      ...retryMetadata,
+      ...(task.exceeded_max_steps !== undefined && retryMetadata.currentIteration !== undefined
+        ? { maxSteps: task.exceeded_max_steps }
+        : {}),
+    };
   }
 
   completeTask(result: TaskResult): string {

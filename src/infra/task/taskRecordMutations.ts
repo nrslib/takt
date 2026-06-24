@@ -7,6 +7,7 @@ export interface ResolvedTaskRetryMetadata {
   startStep?: string;
   resumePoint?: WorkflowResumePoint;
   currentIteration?: number;
+  maxSteps?: number;
   preserveExisting?: boolean;
 }
 
@@ -45,6 +46,9 @@ export function buildTerminalTaskRecord(
     ...(nextRetryMetadata?.resumePoint ? { resume_point: nextRetryMetadata.resumePoint } : {}),
     ...(nextRetryMetadata?.currentIteration !== undefined
       ? { exceeded_current_iteration: nextRetryMetadata.currentIteration }
+      : {}),
+    ...(nextRetryMetadata?.maxSteps !== undefined
+      ? { exceeded_max_steps: nextRetryMetadata.maxSteps }
       : {}),
   };
 }

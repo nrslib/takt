@@ -13,7 +13,7 @@ import {
   resolveTaskStartStepValue,
   TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
-import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
@@ -58,7 +58,7 @@ export interface ResolvedTaskExecution {
 }
 
 function resolveRetryResume(
-  workflowIdentifier: string,
+  workflowConfig: WorkflowConfig | null | undefined,
   projectCwd: string,
   lookupCwd: string,
   configuredStartStep: string | undefined,
@@ -71,7 +71,6 @@ function resolveRetryResume(
     return configuredStartStep ? { startStep: configuredStartStep } : {};
   }
 
-  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd });
   if (!workflowConfig) {
     return {
       ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
@@ -100,6 +99,36 @@ function resolveRetryResume(
   return {
     ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
   };
+}
+
+function resolveWorkflowMaxSteps(workflowConfig: WorkflowConfig | null | undefined): number | undefined {
+  const maxSteps = workflowConfig?.maxSteps;
+  return typeof maxSteps === 'number' && Number.isFinite(maxSteps) && maxSteps > 0
+    ? maxSteps
+    : undefined;
+}
+
+function resolveRetryMaxStepsOverride(
+  storedMaxSteps: number | undefined,
+  initialIteration: number | undefined,
+  workflowMaxSteps: number | undefined,
+): number | undefined {
+  if (initialIteration === undefined) {
+    return storedMaxSteps;
+  }
+
+  const currentMaxSteps = storedMaxSteps ?? workflowMaxSteps;
+  if (currentMaxSteps === undefined || initialIteration < currentMaxSteps) {
+    return storedMaxSteps;
+  }
+  if (workflowMaxSteps === undefined) {
+    return storedMaxSteps;
+  }
+
+  // Iteration-limit checks run before the next step, so the restored ceiling
+  // must be strictly greater than the iteration count saved in retry metadata.
+  const retryWindowCount = Math.floor(initialIteration / workflowMaxSteps) + 1;
+  return Math.max(currentMaxSteps, retryWindowCount * workflowMaxSteps);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -224,16 +253,24 @@ export async function resolveTaskExecution(
   }
 
   const resolvedReportDirName = reportDirName ?? generateReportDir(task.content);
+  const needsWorkflowRetryContext = resumePoint !== undefined || data.exceeded_current_iteration !== undefined;
+  const workflowConfig = needsWorkflowRetryContext
+    ? loadWorkflowByIdentifier(workflowIdentifier, defaultCwd, { lookupCwd: execCwd })
+    : undefined;
   const retryResume = resolveRetryResume(
-    workflowIdentifier,
+    workflowConfig,
     defaultCwd,
     execCwd,
     configuredStartStep,
     resumePoint,
   );
   const resolvedRetryNote = data.retry_note;
-  const maxStepsOverride = data.exceeded_max_steps;
   const initialIterationOverride = data.exceeded_current_iteration ?? retryResume.resumePoint?.iteration;
+  const maxStepsOverride = resolveRetryMaxStepsOverride(
+    data.exceeded_max_steps,
+    initialIterationOverride,
+    resolveWorkflowMaxSteps(workflowConfig),
+  );
 
   const autoPr = data.auto_pr ?? resolveWorkflowConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolveWorkflowConfigValue(defaultCwd, 'draftPr') ?? false;
