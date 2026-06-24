@@ -10,6 +10,7 @@ import {
   importTaktRun,
   renderTimeline,
 } from '../../devloopd/ledger.js';
+import { formatMergeGateReport, mergeIfSafe } from '../../devloopd/mergeGate.js';
 import { formatDevloopRunReport, runDevloopIssue } from '../../devloopd/run.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 
@@ -142,6 +143,32 @@ program
     });
 
     console.log(formatTimelineReport(report));
+    if (!report.passed) {
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('merge-if-safe')
+  .description('Enable GitHub auto-merge only after mechanical merge gates pass')
+  .requiredOption('--pr <number-or-url>', 'Pull request number or URL')
+  .option('--repo <owner/repo>', 'GitHub repository')
+  .option('--expected-head <sha>', 'Expected PR head SHA')
+  .option('--cwd <path>', 'Repository path to inspect', process.cwd())
+  .action(async (options: {
+    pr: string;
+    repo?: string;
+    expectedHead?: string;
+    cwd: string;
+  }) => {
+    const report = await mergeIfSafe({
+      pr: options.pr,
+      repo: options.repo,
+      expectedHeadSha: options.expectedHead,
+      repoPath: resolve(options.cwd),
+    });
+
+    console.log(formatMergeGateReport(report));
     if (!report.passed) {
       process.exitCode = 1;
     }
