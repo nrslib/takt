@@ -10,6 +10,7 @@ import {
   importTaktRun,
   renderTimeline,
 } from '../../devloopd/ledger.js';
+import { buildDevloopMemory, formatDevloopMemoryReport } from '../../devloopd/memory.js';
 import { formatIssueScanReport, scanIssues } from '../../devloopd/issueScanner.js';
 import { formatMergeGateReport, mergeIfSafe } from '../../devloopd/mergeGate.js';
 import { formatDevloopRunReport, runDevloopIssue } from '../../devloopd/run.js';
@@ -145,6 +146,38 @@ program
     });
 
     console.log(formatTimelineReport(report));
+    if (!report.passed) {
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('memory')
+  .description('Render or write compact devloop project memory from imported runs')
+  .option('--issue <number>', 'Filter by GitHub issue number', (value: string) => Number(value))
+  .option('--limit <count>', 'Maximum imported runs to include', (value: string) => Number(value))
+  .option('--cwd <path>', 'Repository path to inspect', process.cwd())
+  .option('--ledger <path>', 'Ledger path relative to cwd or absolute path')
+  .option('--output <path>', 'Memory output path relative to cwd or absolute path')
+  .option('--write', 'Write memory to .devloop/memory.md instead of rendering only')
+  .action((options: {
+    issue?: number;
+    limit?: number;
+    cwd: string;
+    ledger?: string;
+    output?: string;
+    write?: boolean;
+  }) => {
+    const report = buildDevloopMemory({
+      repoPath: resolve(options.cwd),
+      ledgerPath: options.ledger,
+      outputPath: options.output,
+      issue: Number.isFinite(options.issue) ? options.issue : undefined,
+      limit: options.limit,
+      write: options.write === true,
+    });
+
+    console.log(formatDevloopMemoryReport(report));
     if (!report.passed) {
       process.exitCode = 1;
     }

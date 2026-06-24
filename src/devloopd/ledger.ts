@@ -67,7 +67,7 @@ export interface TimelineReport {
   ledgerPath: string;
 }
 
-const DEFAULT_LEDGER_RELATIVE_PATH = join('.devloop', 'ledger.jsonl');
+export const DEFAULT_DEVLOOP_LEDGER_RELATIVE_PATH = join('.devloop', 'ledger.jsonl');
 
 function sanitizeDetail(text: string): string {
   return sanitizeSensitiveText(text).trim();
@@ -77,8 +77,8 @@ function resolveRepoPath(repoPath: string | undefined): string {
   return resolve(repoPath ?? process.cwd());
 }
 
-function resolveLedgerPath(repoPath: string, ledgerPath: string | undefined): string {
-  return ledgerPath ? resolve(repoPath, ledgerPath) : join(repoPath, DEFAULT_LEDGER_RELATIVE_PATH);
+export function resolveDevloopLedgerPath(repoPath: string, ledgerPath: string | undefined): string {
+  return ledgerPath ? resolve(repoPath, ledgerPath) : join(repoPath, DEFAULT_DEVLOOP_LEDGER_RELATIVE_PATH);
 }
 
 function selectRunSlug(repoPath: string, options: ImportTaktRunOptions): string | undefined {
@@ -190,7 +190,7 @@ function appendLedgerEvent(ledgerPath: string, event: TaktRunImportedEvent): voi
   writeFileSync(ledgerPath, line, { encoding: 'utf-8', flag: 'a' });
 }
 
-function readLedgerEvents(ledgerPath: string): TaktRunImportedEvent[] {
+export function readDevloopLedgerEvents(ledgerPath: string): TaktRunImportedEvent[] {
   if (!existsSync(ledgerPath)) {
     return [];
   }
@@ -211,7 +211,7 @@ function readLedgerEvents(ledgerPath: string): TaktRunImportedEvent[] {
 
 export function importTaktRun(options: ImportTaktRunOptions): ImportTaktRunReport {
   const repoPath = resolveRepoPath(options.repoPath);
-  const ledgerPath = resolveLedgerPath(repoPath, options.ledgerPath);
+  const ledgerPath = resolveDevloopLedgerPath(repoPath, options.ledgerPath);
   const runSlug = selectRunSlug(repoPath, options);
   if (!runSlug) {
     return { passed: false, message: 'No TAKT runs found', ledgerPath };
@@ -235,8 +235,8 @@ export function importTaktRun(options: ImportTaktRunOptions): ImportTaktRunRepor
 
 export function renderTimeline(options: TimelineOptions): TimelineReport {
   const repoPath = resolveRepoPath(options.repoPath);
-  const ledgerPath = resolveLedgerPath(repoPath, options.ledgerPath);
-  const events = readLedgerEvents(ledgerPath)
+  const ledgerPath = resolveDevloopLedgerPath(repoPath, options.ledgerPath);
+  const events = readDevloopLedgerEvents(ledgerPath)
     .filter((event) => options.issue === undefined || event.issueNumber === options.issue)
     .filter((event) => options.runSlug === undefined || event.runSlug === options.runSlug)
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
