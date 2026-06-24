@@ -12,6 +12,7 @@ import {
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { inspectWorkflowFile } from '../infra/config/loaders/workflowDoctor.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
+import { findForbiddenSubscriptionOnlyConfigKeyPaths } from '../core/subscription-only/policy.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 
 function writeProjectConfig(projectDir: string, content: string): void {
@@ -96,6 +97,12 @@ describe('subscription-only policy', () => {
     expect(config.subscriptionOnly).toBe(true);
     expect(config.allowedProviders).toEqual(['codex-cli', 'cursor-cli']);
     expect(config.forbiddenProviders).toEqual(['codex', 'opencode']);
+  });
+
+  it('detects forbidden API key config nested inside arrays', () => {
+    expect(findForbiddenSubscriptionOnlyConfigKeyPaths({
+      providers: [{ api_key: 'sk-test' }],
+    })).toEqual(['providers[0].api_key']);
   });
 
   it('rejects API key settings when subscription-only mode is enabled', () => {

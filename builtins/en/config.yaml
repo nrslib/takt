@@ -12,7 +12,7 @@ language: en        # UI language: en | ja
 
 # Subscription/login-session-only execution
 # subscription_only: true             # Reject API-key config and SDK/API providers before workflow execution
-# allowed_providers: [codex-cli, cursor-cli, opencode-cli, agy-cli]
+# allowed_providers: [codex-cli, cursor-cli, opencode-cli, agy-cli, mock]
 # forbidden_providers: [codex, opencode, claude-sdk]
 
 # Execution control

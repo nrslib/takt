@@ -392,23 +392,23 @@ export async function callSubscriptionCli(
   options: SubscriptionCliCallOptions,
 ): Promise<AgentResponse> {
   let tempDir: string | undefined;
-  let outputPath = options.outputPath;
-  if (options.provider === 'codex-cli' && outputPath === undefined) {
-    tempDir = await mkdtemp(join(tmpdir(), 'takt-codex-cli-'));
-    outputPath = join(tempDir, 'last-message.txt');
-  }
-
-  const invocation = buildSubscriptionCliInvocation(options.provider, prompt, {
-    cwd: options.cwd,
-    systemPrompt: options.systemPrompt,
-    model: options.model,
-    sessionId: options.sessionId,
-    permissionMode: options.permissionMode,
-    commandPath: options.commandPath,
-    outputPath,
-  });
-
   try {
+    let outputPath = options.outputPath;
+    if (options.provider === 'codex-cli' && outputPath === undefined) {
+      tempDir = await mkdtemp(join(tmpdir(), 'takt-codex-cli-'));
+      outputPath = join(tempDir, 'last-message.txt');
+    }
+
+    const invocation = buildSubscriptionCliInvocation(options.provider, prompt, {
+      cwd: options.cwd,
+      systemPrompt: options.systemPrompt,
+      model: options.model,
+      sessionId: options.sessionId,
+      permissionMode: options.permissionMode,
+      commandPath: options.commandPath,
+      outputPath,
+    });
+
     const { stdout } = await execSubscriptionCli(invocation, options);
     const content = await resolveContent(options.provider, invocation, stdout);
     options.onStream?.({ type: 'text', data: { text: content } });

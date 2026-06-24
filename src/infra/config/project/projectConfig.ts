@@ -275,7 +275,12 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.rate_limit_fallback;
   }
   for (const [camel, snake] of [['subscriptionOnly', 'subscription_only'], ['allowedProviders', 'allowed_providers'], ['forbiddenProviders', 'forbidden_providers'], ['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewSteps', 'interactive_preview_steps'], ['syncProjectLocalTaktOnRetry', 'sync_project_local_takt_on_retry'], ['concurrency', 'concurrency']] as const) {
-    if (config[camel] !== undefined) savePayload[snake] = config[camel];
+    const value = config[camel];
+    if (Array.isArray(value)) {
+      if (value.length > 0) savePayload[snake] = value;
+    } else if (value !== undefined) {
+      savePayload[snake] = value;
+    }
   }
   delete savePayload.pipeline;
   if (config.pipeline) {

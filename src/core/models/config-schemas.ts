@@ -90,7 +90,7 @@ export const WorkflowCategoryOverlaySchema = z.object({
 const ProjectConfigObjectSchema = z.object({
   subscription_only: z.boolean().optional(),
   allowed_providers: z.array(ProviderTypeSchema).min(1).optional(),
-  forbidden_providers: z.array(z.string().min(1)).optional(),
+  forbidden_providers: z.array(ProviderTypeSchema).optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),

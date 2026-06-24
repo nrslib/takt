@@ -164,6 +164,19 @@ describe('projectConfig', () => {
   });
 
   describe('workflow_overrides empty array round-trip', () => {
+    it('should omit empty subscription provider arrays when saving project config', () => {
+      const config: ProjectLocalConfig = {
+        allowedProviders: [],
+        forbiddenProviders: [],
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).not.toContain('allowed_providers');
+      expect(raw).not.toContain('forbidden_providers');
+    });
+
     it('should preserve empty rate_limit_fallback switch_chain in save/load cycle', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(configPath, 'rate_limit_fallback:\n  switch_chain: []\n', 'utf-8');

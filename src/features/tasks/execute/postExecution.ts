@@ -55,11 +55,22 @@ function isGitCredentialPromptFailure(detail: string): boolean {
   return /could not read (Username|Password)|terminal prompts disabled|authentication failed|GIT_TERMINAL_PROMPT/i.test(detail);
 }
 
-function buildPublishAuthFailureMessage(branch: string, commitHash: string, detail: string): string {
+function buildPublishAuthFailureMessage(
+  task: string,
+  issues: readonly Issue[] | undefined,
+  branch: string,
+  commitHash: string,
+  detail: string,
+): string {
+  const issueSummary = issues && issues.length > 0
+    ? `  issues: ${issues.map((issue) => `#${issue.number}`).join(', ')}`
+    : undefined;
   return [
     'Workflow completed, but publishing failed.',
     '',
     'Local result is preserved:',
+    `  task: ${task}`,
+    issueSummary,
     `  branch: ${branch}`,
     `  commit: ${commitHash}`,
     '',
@@ -68,7 +79,7 @@ function buildPublishAuthFailureMessage(branch: string, commitHash: string, deta
     'Fix authentication, then retry publishing from takt list.',
     '',
     `Detail: ${detail}`,
-  ].join('\n');
+  ].filter((line): line is string => line !== undefined).join('\n');
 }
 
 /**
@@ -121,7 +132,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         error: pushDetail,
       });
       const pushFailureMessage = isGitCredentialPromptFailure(pushDetail)
-        ? buildPublishAuthFailureMessage(branch, commitResult.commitHash, pushDetail)
+        ? buildPublishAuthFailureMessage(task, issues, branch, commitResult.commitHash, pushDetail)
         : `${ORIGIN_PUSH_FAILURE_MESSAGE} ${pushDetail}`.trim();
       error(pushFailureMessage);
       return { prFailed: true, prError: pushFailureMessage };

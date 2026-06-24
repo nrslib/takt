@@ -116,6 +116,12 @@ export function findForbiddenSubscriptionOnlyConfigKeyPaths(
   prefix = '',
   options: ForbiddenConfigKeyScanOptions = {},
 ): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((child, index) =>
+      findForbiddenSubscriptionOnlyConfigKeyPaths(child, `${prefix}[${index}]`, options)
+    );
+  }
+
   if (!isRecord(value)) {
     return [];
   }

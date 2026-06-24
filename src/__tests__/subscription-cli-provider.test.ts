@@ -4,6 +4,7 @@ import { SubscriptionCliProvider } from '../infra/providers/subscription-cli.js'
 import {
   buildSubscriptionCliInvocation,
   buildSubscriptionOnlyEnv,
+  callSubscriptionCli,
 } from '../infra/subscription-cli/client.js';
 import { ProviderTypeSchema } from '../core/models/schema-base.js';
 import { isProviderType } from '../shared/types/provider.js';
@@ -87,5 +88,17 @@ describe('subscription-only CLI providers', () => {
         permissionMode: 'full',
       })
     ).toThrow(/does not support full permission/i);
+  });
+
+  it('returns an agent error when invocation validation fails before spawn', async () => {
+    const response = await callSubscriptionCli('coder', 'Do the task', {
+      provider: 'codex-cli',
+      cwd: '/repo',
+      permissionMode: 'full',
+      commandPath: '/mock/bin/codex',
+    });
+
+    expect(response.status).toBe('error');
+    expect(response.error).toMatch(/does not support full permission/i);
   });
 });

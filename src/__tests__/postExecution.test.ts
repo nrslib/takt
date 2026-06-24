@@ -355,10 +355,29 @@ describe('postExecutionFlow', () => {
     expect(result.taskFailed).toBeUndefined();
     expect(result.prFailed).toBe(true);
     expect(result.prError).toContain('Workflow completed, but publishing failed.');
+    expect(result.prError).toContain('task: Fix the bug');
     expect(result.prError).toContain('branch: task/fix-the-bug');
     expect(result.prError).toContain('commit: abc123');
     expect(result.prError).toContain('Git credentials are unavailable');
     expect(result.prError).toContain('retry publishing from takt list');
+  });
+
+  it('publish failure message includes issue identifiers when available', async () => {
+    mockPushBranch.mockImplementation(() => {
+      throw new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
+    });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      shouldCreatePr: true,
+      shouldPublishBranchToOrigin: true,
+      issues: [
+        { number: 123, title: 'Fix issue', body: '', url: 'https://github.com/org/repo/issues/123' } as Issue,
+      ],
+    });
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toContain('issues: #123');
   });
 
   it('relay push 失敗時（localPushFailed: true）は shouldCreatePr に関わらず taskFailed: true を返す', async () => {
