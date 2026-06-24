@@ -12,11 +12,10 @@ import {
   rmSync,
   unlinkSync,
   writeFileSync,
-  type Stats,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { isPathInside, isRealPathInside } from '../../shared/utils/index.js';
+import { basename, dirname, join } from 'node:path';
+import { assertPathSegmentsAreSafe, isRealPathInside, lstatIfExists } from '../../shared/utils/index.js';
 
 const OPEN_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
@@ -24,45 +23,13 @@ function buildBoundaryError(label: string, path: string): Error {
   return new Error(`Project-local ${label} must stay inside the project and must not use symlinks: ${path}`);
 }
 
-function lstatIfExists(path: string): Stats | null {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
-}
-
-function getProjectRelativeSegments(cwd: string, targetPath: string, label: string): string[] {
-  const resolvedProject = resolve(cwd);
-  const resolvedTarget = resolve(targetPath);
-  if (!isPathInside(resolvedProject, resolvedTarget) || resolvedProject === resolvedTarget) {
-    throw buildBoundaryError(label, targetPath);
-  }
-
-  return relative(resolvedProject, resolvedTarget)
-    .split(sep)
-    .filter((segment) => segment.length > 0);
-}
-
 function assertExistingSegmentsAreSafe(cwd: string, targetPath: string, label: string): void {
-  const segments = getProjectRelativeSegments(cwd, targetPath, label);
-  let current = resolve(cwd);
-  for (const [index, segment] of segments.entries()) {
-    current = join(current, segment);
-    const stats = lstatIfExists(current);
-    if (stats === null) {
-      return;
-    }
-    if (stats.isSymbolicLink()) {
-      throw buildBoundaryError(label, current);
-    }
-    if (index < segments.length - 1 && !stats.isDirectory()) {
-      throw buildBoundaryError(label, current);
-    }
-  }
+  assertPathSegmentsAreSafe(
+    cwd,
+    targetPath,
+    (_violation, segmentPath) => buildBoundaryError(label, segmentPath),
+    { rejectSamePath: true },
+  );
 }
 
 function prepareProjectLocalDirectory(cwd: string, dirPath: string, label: string): void {

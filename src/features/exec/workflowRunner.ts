@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { debugLog } from '../../shared/utils/index.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type { PermissionMode } from '../../core/models/status.js';
 import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
@@ -33,7 +34,7 @@ export function buildExecReadonlyProviderProfileOverrides(config: ExecConfig): P
   ])) as ProviderPermissionProfiles;
 }
 
-export async function generateWorkflowFile(cwd: string, config: ExecConfig, task: string, workflowName: string): Promise<string> {
+async function generateWorkflowFile(cwd: string, config: ExecConfig, task: string, workflowName: string): Promise<string> {
   const workflowDir = join(cwd, '.takt', 'exec');
   const workflowPath = join(workflowDir, 'workflow.yaml');
   const yaml = buildExecWorkflowYaml(config, {
@@ -44,7 +45,7 @@ export async function generateWorkflowFile(cwd: string, config: ExecConfig, task
   return workflowPath;
 }
 
-export function loadCompletedExecRun(
+function loadCompletedExecRun(
   cwd: string,
   runSlug: string,
   expectedJudgeReportNames: string[],
@@ -108,6 +109,10 @@ export async function runGeneratedWorkflow(
     providerProfileOverrides: buildExecReadonlyProviderProfileOverrides(config),
   }, agentOverrides);
   const context = loadCompletedExecRun(cwd, runSlug, config.judges.map((judge) => buildJudgeReportName(judge.name)));
-  saveLastUsedExecConfig(config);
+  try {
+    saveLastUsedExecConfig(config);
+  } catch (error) {
+    debugLog('exec', 'Failed to save last-used exec config', error instanceof Error ? error.message : String(error));
+  }
   return context;
 }

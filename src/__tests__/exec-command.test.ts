@@ -93,6 +93,7 @@ describe('exec command setup', () => {
   let globalConfigDir: string;
   const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   const originalTaktNoTty = process.env.TAKT_NO_TTY;
+  const originalTaktNotifyWebhook = process.env.TAKT_NOTIFY_WEBHOOK;
   const originalStdinIsTTY = process.stdin.isTTY;
 
   beforeEach(() => {
@@ -101,6 +102,7 @@ describe('exec command setup', () => {
       value: true,
     });
     delete process.env.TAKT_NO_TTY;
+    delete process.env.TAKT_NOTIFY_WEBHOOK;
     projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-command-'));
     globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-command-global-'));
     process.env.TAKT_CONFIG_DIR = globalConfigDir;
@@ -138,6 +140,11 @@ describe('exec command setup', () => {
       delete process.env.TAKT_NO_TTY;
     } else {
       process.env.TAKT_NO_TTY = originalTaktNoTty;
+    }
+    if (originalTaktNotifyWebhook === undefined) {
+      delete process.env.TAKT_NOTIFY_WEBHOOK;
+    } else {
+      process.env.TAKT_NOTIFY_WEBHOOK = originalTaktNotifyWebhook;
     }
     Object.defineProperty(process.stdin, 'isTTY', {
       configurable: true,
@@ -1015,18 +1022,22 @@ describe('exec command setup', () => {
     expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
   });
 
-  it('should not save last-used config when workflow execution fails', async () => {
-    mockReadInteractiveInput.mockResolvedValueOnce('/go Implement a small task');
+  it('should display error and continue loop when workflow execution fails', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' });
     mockSelectAndExecuteTask.mockRejectedValueOnce(new Error('workflow failed'));
 
-    await expect(runExecCommand(projectDir, { preset: 'backend' })).rejects.toThrow(/workflow failed/);
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
   });
 
-  it('should not save last-used config when completed judge reports are missing', async () => {
-    mockReadInteractiveInput.mockResolvedValueOnce('/go Implement a small task');
+  it('should display error and continue loop when completed judge reports are missing', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' });
     mockLoadRunSessionContext.mockReturnValueOnce({
       task: 'Executable task',
@@ -1036,7 +1047,7 @@ describe('exec command setup', () => {
       reports: [],
     });
 
-    await expect(runExecCommand(projectDir, { preset: 'backend' })).rejects.toThrow(/judge result report/);
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
   });
@@ -1053,30 +1064,49 @@ describe('exec command setup', () => {
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
   });
 
-  it('should reject unsafe actor names entered from setup', async () => {
+  it('should display error and continue menu when unsafe actor name is entered from setup', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
-      .mockResolvedValueOnce('../worker');
+      .mockResolvedValueOnce('../worker')
+      .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
       'workers',
       'edit:0',
       'name',
+      'back',
     );
 
-    await expect(runExecCommand(projectDir, { preset: 'backend' })).rejects.toThrow(/actor name must match/);
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
   });
 
-  it('should reject reserved workflow step names entered from setup', async () => {
+  it('should display error and continue menu when reserved name is entered from setup', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
-      .mockResolvedValueOnce('replan');
+      .mockResolvedValueOnce('replan')
+      .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
       'workers',
       'edit:0',
       'name',
+      'back',
     );
 
-    await expect(runExecCommand(projectDir, { preset: 'backend' })).rejects.toThrow(/actor name "replan" is reserved/);
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+  });
+
+  it('should display error and continue menu when exec-assistant reserved name is entered from setup', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('exec-assistant')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'name',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
   });
 
   it('should apply judge add and loop threshold setup branches to the generated workflow', async () => {
@@ -1112,10 +1142,11 @@ describe('exec command setup', () => {
     expect(workflow).toContain('name: judge-2-judge-result.md');
   });
 
-  it('should reject /go when any expected judge report is missing', async () => {
+  it('should display error and continue loop when expected judge report is missing from /go', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
-      .mockResolvedValueOnce('/go Implement a small task');
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
       'judges',
       'add',
@@ -1130,7 +1161,7 @@ describe('exec command setup', () => {
       ],
     });
 
-    await expect(runExecCommand(projectDir, { preset: 'backend' })).rejects.toThrow(/judge-2-judge-result\.md/);
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();

@@ -168,5 +168,5 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
       buildReplanStep(config),
     ],
   };
-  return stringifyYaml(workflow);
+  return stringifyYaml(workflow, { aliasDuplicateObjects: false });
 }

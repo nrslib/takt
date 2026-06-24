@@ -279,17 +279,23 @@ export function listExecPresets(options: ExecPresetStoreOptions): ExecPreset[] {
       if (!entry.endsWith('.yaml')) {
         continue;
       }
-      const presetName = validateExecPresetName(basename(entry, '.yaml'));
-      if (presets.has(presetName)) {
-        continue;
+      try {
+        const presetName = validateExecPresetName(basename(entry, '.yaml'));
+        if (presets.has(presetName)) {
+          continue;
+        }
+        const preset = readPresetFile(
+          join(dir, entry),
+          source,
+          presetName,
+          source === 'project' ? options.projectDir : undefined,
+        );
+        presets.set(preset.name, preset);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('Project-local ')) {
+          throw error;
+        }
       }
-      const preset = readPresetFile(
-        join(dir, entry),
-        source,
-        presetName,
-        source === 'project' ? options.projectDir : undefined,
-      );
-      presets.set(preset.name, preset);
     }
   }
   return [...presets.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -300,13 +306,21 @@ export function listExecPresetsBySource(
   options: ExecPresetStoreOptions,
 ): ExecPreset[] {
   const dir = getPresetDirForSource(source, options, resolveGlobalConfigDir(options));
-  return listPresetFiles(source, dir, options.projectDir)
-    .filter((entry) => entry.endsWith('.yaml'))
-    .map((entry) => {
+  const presets: ExecPreset[] = [];
+  for (const entry of listPresetFiles(source, dir, options.projectDir)) {
+    if (!entry.endsWith('.yaml')) {
+      continue;
+    }
+    try {
       const presetName = validateExecPresetName(basename(entry, '.yaml'));
-      return readPresetFile(join(dir, entry), source, presetName, source === 'project' ? options.projectDir : undefined);
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+      presets.push(readPresetFile(join(dir, entry), source, presetName, source === 'project' ? options.projectDir : undefined));
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Project-local ')) {
+        throw error;
+      }
+    }
+  }
+  return presets.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function serializeExecConfig(config: ExecConfig): string {

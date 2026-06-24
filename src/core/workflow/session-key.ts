@@ -18,25 +18,17 @@ import type { ProviderType } from '../../shared/types/provider.js';
  * - Base key: `step.sessionKey ?? step.persona ?? step.name`
  * - If the step specifies a provider, appends `:{provider}` to disambiguate
  *
+ * sessionKey is validated at parse time by Zod (z.string().trim().min(1).optional()),
+ * so it is guaranteed to be a non-empty, trimmed string when present.
+ *
  * Examples:
  *   - persona="coder", provider=undefined  → "coder"
  *   - persona="coder", provider="claude"   → "coder:claude"
  *   - persona="coder", provider="codex"    → "coder:codex"
  *   - persona=undefined, name="plan"       → "plan"
  */
-function resolveSessionKeyBase(step: WorkflowStep): string {
-  if (step.sessionKey !== undefined) {
-    const sessionKey = step.sessionKey.trim();
-    if (sessionKey.length === 0) {
-      throw new Error(`Invalid session_key for step "${step.name}": expected non-empty string`);
-    }
-    return sessionKey;
-  }
-  return step.persona ?? step.name;
-}
-
 export function buildSessionKey(step: WorkflowStep, providerOverride?: ProviderType): string {
-  const base = resolveSessionKeyBase(step);
+  const base = step.sessionKey ?? step.persona ?? step.name;
   const provider = providerOverride ?? step.provider;
   return provider ? `${base}:${provider}` : base;
 }

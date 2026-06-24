@@ -30,6 +30,7 @@ const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
   'execute',
   'judge',
   'replan',
+  'exec-assistant',
   'exec-replan',
   'exec-loop-monitor-small',
   'exec-loop-monitor-large',

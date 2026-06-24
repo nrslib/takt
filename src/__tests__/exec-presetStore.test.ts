@@ -454,9 +454,25 @@ describe('exec preset store', () => {
       expect(() => loadExecPreset('custom', { projectDir, builtinPresetsDir })).toThrow(
         /name "backend" must match filename "custom"/,
       );
-      expect(() => listExecPresets({ projectDir, builtinPresetsDir })).toThrow(
-        /name "backend" must match filename "custom"/,
-      );
+      const presets = listExecPresets({ projectDir, builtinPresetsDir });
+      expect(presets.find((p) => p.name === 'custom')).toBeUndefined();
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(builtinPresetsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should skip invalid presets and list valid presets when listing', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-skip-invalid-preset-'));
+    const builtinPresetsDir = mkdtempSync(join(tmpdir(), 'takt-exec-skip-invalid-builtin-'));
+    const presetDir = join(projectDir, '.takt', 'exec', 'presets');
+    try {
+      writeRawPreset(presetDir, 'invalid-name', 'name: wrong-name\n');
+      writePreset(presetDir, 'valid', createExecConfig('valid-worker'), 'Valid preset');
+
+      const presets = listExecPresets({ projectDir, builtinPresetsDir });
+      expect(presets.find((p) => p.name === 'valid')).toBeDefined();
+      expect(presets.find((p) => p.name === 'invalid-name')).toBeUndefined();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(builtinPresetsDir, { recursive: true, force: true });

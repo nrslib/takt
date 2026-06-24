@@ -12,7 +12,7 @@ import {
 } from '../../core/models/workflow-types.js';
 import { callAIWithRetry, type SessionContext } from '../interactive/aiCaller.js';
 import type { ExecConfig, ExecSessionConfig } from './types.js';
-import { assertExecProviderEffort } from './configValidation.js';
+import { assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidation.js';
 import type { ExecEffort } from './types.js';
 
 interface AskExecAssistantOptions {
@@ -31,7 +31,7 @@ function buildSessionProviderOptions(session: ExecSessionConfig): StepProviderOp
   if (session.effort === undefined) {
     return undefined;
   }
-  if (session.provider === 'claude' || session.provider === 'claude-sdk' || session.provider === 'claude-terminal') {
+  if (CLAUDE_TOOL_PROVIDERS.has(session.provider)) {
     return { claude: { effort: requireProviderEffort<ClaudeEffort>(CLAUDE_EFFORT_VALUES, session.effort) } };
   }
   if (session.provider === 'codex') {
@@ -40,7 +40,7 @@ function buildSessionProviderOptions(session: ExecSessionConfig): StepProviderOp
   if (session.provider === 'copilot') {
     return { copilot: { effort: requireProviderEffort<CopilotEffort>(COPILOT_EFFORT_VALUES, session.effort) } };
   }
-  return undefined;
+  throw new Error(`Unreachable: assertExecProviderEffort should have rejected provider "${session.provider}" with effort "${session.effort}"`);
 }
 
 export function createExecSessionContext(cwd: string, config: ExecConfig, sessionId?: string): SessionContext {

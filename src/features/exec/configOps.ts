@@ -7,7 +7,7 @@ import {
   getDefaultExecEffort,
   providerSupportsExecEffort,
 } from './configValidation.js';
-import type { ExecActorConfig, ExecConfig, ExecEffort, ExecSessionConfig } from './types.js';
+import type { ExecActorConfig, ExecConfig, ExecEffort } from './types.js';
 
 export function resolveEffortAfterProviderOverride(
   currentProvider: ProviderType,
@@ -23,27 +23,19 @@ export function resolveEffortAfterProviderOverride(
   return getDefaultExecEffort(nextProvider);
 }
 
-function applySessionOverride(session: ExecSessionConfig, overrides: TaskExecutionOptions | undefined): ExecSessionConfig {
-  const provider = overrides?.provider ?? session.provider;
+function applyProviderOverride<T extends { provider: ProviderType; model: string; effort?: ExecEffort }>(
+  config: T,
+  overrides: TaskExecutionOptions | undefined,
+  errorPath: string,
+): T {
+  const provider = overrides?.provider ?? config.provider;
   const next = {
-    ...session,
+    ...config,
     provider,
     ...(overrides?.model !== undefined ? { model: overrides.model } : {}),
-    effort: resolveEffortAfterProviderOverride(session.provider, provider, session.effort),
-  };
-  assertExecProviderEffort(next.provider, next.model, next.effort, 'exec.session.effort');
-  return next;
-}
-
-function applyActorOverride(actor: ExecActorConfig, overrides: TaskExecutionOptions | undefined): ExecActorConfig {
-  const provider = overrides?.provider ?? actor.provider;
-  const next = {
-    ...actor,
-    provider,
-    ...(overrides?.model !== undefined ? { model: overrides.model } : {}),
-    effort: resolveEffortAfterProviderOverride(actor.provider, provider, actor.effort),
-  };
-  assertExecProviderEffort(next.provider, next.model, next.effort, `exec.${actor.name}.effort`);
+    effort: resolveEffortAfterProviderOverride(config.provider, provider, config.effort),
+  } as T;
+  assertExecProviderEffort(next.provider, next.model, next.effort, errorPath);
   return next;
 }
 
@@ -53,9 +45,9 @@ export function applyExecOverrides(config: ExecConfig, overrides: TaskExecutionO
   }
   const next = {
     ...config,
-    session: applySessionOverride(config.session, overrides),
-    workers: config.workers.map((worker) => applyActorOverride(worker, overrides)),
-    judges: config.judges.map((judge) => applyActorOverride(judge, overrides)),
+    session: applyProviderOverride(config.session, overrides, 'exec.session.effort'),
+    workers: config.workers.map((worker) => applyProviderOverride(worker, overrides, `exec.${worker.name}.effort`)),
+    judges: config.judges.map((judge) => applyProviderOverride(judge, overrides, `exec.${judge.name}.effort`)),
   };
   assertExecConfig(next);
   return next;

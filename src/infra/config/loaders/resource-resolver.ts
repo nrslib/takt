@@ -231,19 +231,18 @@ function assertProjectFacetFileIsSafe(
   if (!isProjectFacetFile(filePath, facetType, context)) {
     return;
   }
-  if (!context?.projectDir) {
-    throw new Error(`Project facet file requires a project directory: ${filePath}`);
-  }
+  // isProjectFacetFile returned true → context.projectDir is guaranteed to be defined
+  const projectDir = context!.projectDir!;
 
   const stats = lstatSync(filePath);
   if (stats.isSymbolicLink() || !stats.isFile()) {
     throw new Error(`Project facet file must be a regular file and must not be a symlink: ${filePath}`);
   }
 
-  const projectDir = realpathSync(context.projectDir);
-  const facetDir = realpathSync(getProjectFacetDir(context.projectDir, facetType));
+  const resolvedProjectDir = realpathSync(projectDir);
+  const facetDir = realpathSync(getProjectFacetDir(projectDir, facetType));
   const realFilePath = realpathSync(filePath);
-  if (!isPathInsideOrSame(projectDir, facetDir) || !isPathInside(facetDir, realFilePath)) {
+  if (!isPathInsideOrSame(resolvedProjectDir, facetDir) || !isPathInside(facetDir, realFilePath)) {
     throw new Error(`Project facet file must stay inside the project and must not use symlinks: ${filePath}`);
   }
 }
@@ -498,7 +497,6 @@ export function resolvePersona(
   if (resolved.personaPath) {
     assertProjectFacetFileIsSafe(resolved.personaPath, 'personas', context);
     assertAllowedPersonaPath(resolved.personaPath, context);
-    return resolved;
   }
   return resolved;
 }

@@ -347,8 +347,16 @@ export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: Session
     if (section === null || section === undefined || section === 'back') {
       return current;
     }
-    current = await resolveSetupSection(cwd, section, current, workerTemplate, judgeTemplate, ctx);
-    assertExecConfig(current);
+    try {
+      const next = await resolveSetupSection(cwd, section, current, workerTemplate, judgeTemplate, ctx);
+      assertExecConfig(next);
+      current = next;
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Project-local ')) {
+        throw error;
+      }
+      info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+    }
     if (!shouldKeepSetupMenuOpen()) {
       return current;
     }

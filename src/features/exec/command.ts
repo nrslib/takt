@@ -107,7 +107,11 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
       return;
     }
     if (match?.command === SlashCommand.Go) {
-      ctx = await runGoCommand(cwd, currentConfig, history, match.text, ctx, agentOverrides);
+      try {
+        ctx = await runGoCommand(cwd, currentConfig, history, match.text, ctx, agentOverrides);
+      } catch (error) {
+        info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+      }
       continue;
     }
 

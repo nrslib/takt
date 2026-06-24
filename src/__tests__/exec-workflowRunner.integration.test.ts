@@ -163,6 +163,30 @@ describe('runGeneratedWorkflow integration', () => {
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
   });
 
+  it('should return context even when saveLastUsedExecConfig fails', async () => {
+    const task = 'Executable task with save failure';
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask);
+    });
+    // Make the global config dir unwritable to trigger a save failure
+    rmSync(globalConfigDir, { recursive: true, force: true });
+    mkdirSync(globalConfigDir, { recursive: true, mode: 0o444 });
+
+    const context = await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+
+    expect(context.reports.map((report) => report.filename)).toEqual([
+      'judge-1-judge-result.md',
+      'judge-2-judge-result.md',
+    ]);
+    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
+    // Restore permissions for cleanup
+    rmSync(globalConfigDir, { recursive: true, force: true });
+    mkdirSync(globalConfigDir, { recursive: true });
+  });
+
   it('should read back the exact generated run slug instead of searching by task text', async () => {
     const task = 'Executable task with duplicate text';
     mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {

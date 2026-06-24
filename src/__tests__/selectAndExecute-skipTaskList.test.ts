@@ -184,7 +184,7 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
     const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
       providerProfileOverrides?: ProviderPermissionProfiles;
     };
-    expect(executeArg.providerProfileOverrides).toBe(providerProfileOverrides);
+    expect(executeArg.providerProfileOverrides).toEqual(providerProfileOverrides);
   });
 
   it('skipTaskList: false の場合はタスクリストに追加する', async () => {

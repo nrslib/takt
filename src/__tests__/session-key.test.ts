@@ -74,13 +74,8 @@ describe('buildSessionKey', () => {
     expect(buildSessionKey(step, 'codex')).toBe('coder:codex');
   });
 
-  it('should reject whitespace-only explicit session key', () => {
-    const step = createStep({ sessionKey: '   ', persona: 'coder', provider: 'claude' });
-    expect(() => buildSessionKey(step)).toThrow(/Invalid session_key/);
-  });
-
-  it('should accept non-empty explicit session keys after trimming', () => {
-    const step = createStep({ sessionKey: ' shared reviewer ', persona: 'coder', provider: 'claude' });
+  it('should use explicit session key as-is (Zod trims at parse time)', () => {
+    const step = createStep({ sessionKey: 'shared reviewer', persona: 'coder', provider: 'claude' });
     expect(buildSessionKey(step)).toBe('shared reviewer:claude');
   });
 

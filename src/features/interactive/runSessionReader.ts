@@ -5,8 +5,8 @@
  * and formats them for injection into the interactive system prompt.
  */
 
-import { Dirent, existsSync, lstatSync, readdirSync, readFileSync, type Stats } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { Dirent, existsSync, readdirSync, readFileSync, type Stats } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import { readRunContextOrderContent } from '../../core/workflow/run/order-content.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import {
@@ -15,7 +15,7 @@ import {
 } from '../../core/logging/contracts.js';
 import { loadNdjsonLog } from '../../infra/fs/index.js';
 import type { SessionLog } from '../../shared/utils/index.js';
-import { isPathInside } from '../../shared/utils/index.js';
+import { assertPathSegmentsAreSafe, type BoundaryViolation, lstatIfExists } from '../../shared/utils/index.js';
 import { formatLiteralBlock } from './promptSections.js';
 
 /** Maximum number of runs to return from listing */
@@ -124,50 +124,19 @@ function formatReportArtifact(report: ReportEntry): string {
   ].join('\n');
 }
 
-function lstatIfExists(path: string): Stats | null {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw error;
+function buildReportBoundaryError(violation: BoundaryViolation, filename: string): Error {
+  switch (violation) {
+    case 'outside':
+      return new Error(`Report path is outside the reports directory: ${filename}`);
+    case 'symlink':
+      return new Error(`Report path must not be a symbolic link: ${filename}`);
+    case 'not_directory':
+      return new Error(`Report parent path is not a directory: ${filename}`);
   }
-}
-
-function getReportRelativeSegments(rootDir: string, fullPath: string, filename: string): string[] {
-  const resolvedRoot = resolve(rootDir);
-  const resolvedPath = resolve(fullPath);
-  if (!isPathInside(resolvedRoot, resolvedPath)) {
-    throw new Error(`Report path is outside the reports directory: ${filename}`);
-  }
-
-  return relative(resolvedRoot, resolvedPath)
-    .split(sep)
-    .filter((segment) => segment.length > 0);
 }
 
 function assertReportPathSegmentsAreSafe(rootDir: string, fullPath: string, filename: string): Stats | null {
-  const segments = getReportRelativeSegments(rootDir, fullPath, filename);
-  let current = resolve(rootDir);
-  let stats: Stats | null = null;
-
-  for (const [index, segment] of segments.entries()) {
-    current = join(current, segment);
-    stats = lstatIfExists(current);
-    if (stats === null) {
-      return null;
-    }
-
-    if (stats.isSymbolicLink()) {
-      throw new Error(`Report path must not be a symbolic link: ${filename}`);
-    }
-    if (index < segments.length - 1 && !stats.isDirectory()) {
-      throw new Error(`Report parent path is not a directory: ${filename}`);
-    }
-  }
-
-  return stats;
+  return assertPathSegmentsAreSafe(rootDir, fullPath, (violation) => buildReportBoundaryError(violation, filename));
 }
 
 function assertReportsDirectory(rootDir: string, stats: Stats): void {
@@ -183,9 +152,6 @@ function readReportFile(rootDir: string, fullPath: string, filename: string): Re
   const stats = assertReportPathSegmentsAreSafe(rootDir, fullPath, filename);
   if (stats === null) {
     throw new Error(`Expected report does not exist: ${filename}`);
-  }
-  if (stats.isSymbolicLink()) {
-    throw new Error(`Report path must not be a symbolic link: ${filename}`);
   }
   if (!stats.isFile()) {
     throw new Error(`Expected report is not a file: ${filename}`);
