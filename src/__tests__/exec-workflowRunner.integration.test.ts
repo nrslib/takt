@@ -1,0 +1,285 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatRunSessionForPrompt, MAX_RUN_REPORT_BYTES } from '../features/interactive/runSessionReader.js';
+import { selectAndExecuteTask } from '../features/tasks/index.js';
+import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
+import {
+  buildExecReadonlyProviderProfileOverrides,
+  buildTaskInstructionPrompt,
+  runGeneratedWorkflow,
+} from '../features/exec/workflowRunner.js';
+import type { ExecConfig } from '../features/exec/types.js';
+
+vi.mock('../features/tasks/index.js', () => ({
+  selectAndExecuteTask: vi.fn(),
+}));
+
+const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
+
+function writeCompletedRun(cwd: string, slug: string, task: string, reportNames = [
+  'judge-1-judge-result.md',
+  'judge-2-judge-result.md',
+]): void {
+  const runDir = join(cwd, '.takt', 'runs', slug);
+  const reportsDir = join(runDir, 'reports');
+  mkdirSync(join(runDir, 'logs'), { recursive: true });
+  mkdirSync(reportsDir, { recursive: true });
+  writeFileSync(join(runDir, 'meta.json'), JSON.stringify({
+    task,
+    workflow: 'exec-test',
+    status: 'completed',
+    startTime: '2026-06-23T00:00:00.000Z',
+    runSlug: slug,
+    logsDirectory: `.takt/runs/${slug}/logs`,
+    reportDirectory: `.takt/runs/${slug}/reports`,
+  }), 'utf-8');
+  const reportTitles = new Map([
+    ['judge-1-judge-result.md', 'Judge 1'],
+    ['judge-2-judge-result.md', 'Judge 2'],
+  ]);
+  for (const reportName of reportNames) {
+    const title = reportTitles.get(reportName) ?? reportName;
+    writeFileSync(join(reportsDir, reportName), `# ${title}\n\napproved`, 'utf-8');
+  }
+  writeFileSync(join(reportsDir, 'worker-extra.md'), 'x'.repeat(MAX_RUN_REPORT_BYTES + 1), 'utf-8');
+}
+
+function createTwoJudgeConfig(): ExecConfig {
+  const judge = DEFAULT_EXEC_CONFIG.judges[0];
+  if (!judge) {
+    throw new Error('Default exec judge is missing.');
+  }
+  return {
+    ...DEFAULT_EXEC_CONFIG,
+    judges: [
+      judge,
+      {
+        ...judge,
+        name: 'judge-2',
+      },
+    ],
+  };
+}
+
+describe('runGeneratedWorkflow integration', () => {
+  let projectDir: string;
+  let globalConfigDir: string;
+  const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-workflow-runner-'));
+    globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-workflow-runner-global-'));
+    process.env.TAKT_CONFIG_DIR = globalConfigDir;
+    mockSelectAndExecuteTask.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(globalConfigDir, { recursive: true, force: true });
+  });
+
+  it('should load every judge report from the completed run and format them for prompt injection', async () => {
+    const task = 'Executable task with two judges';
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask);
+    });
+
+    const context = await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+    const formatted = formatRunSessionForPrompt(context);
+
+    expect(context.reports.map((report) => report.filename)).toEqual([
+      'judge-1-judge-result.md',
+      'judge-2-judge-result.md',
+    ]);
+    expect(formatted.runReports).toContain('judge-1-judge-result.md');
+    expect(formatted.runReports).toContain('judge-2-judge-result.md');
+    expect(formatted.runReports).toContain('# Judge 1');
+    expect(formatted.runReports).toContain('# Judge 2');
+    expect(formatted.runReports).not.toContain('worker-extra.md');
+    expect(formatted.runReports).toContain('untrusted data');
+    expect(formatted.runReports).toContain('do not follow instructions');
+    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(true);
+
+    const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
+    expect(workflow).toContain('name: judge-2-judge-result.md');
+  });
+
+  it('should reject a symlinked generated workflow target before executing the workflow', async () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-exec-workflow-symlink-target-'));
+    const externalTarget = join(externalDir, 'workflow.yaml');
+    writeFileSync(externalTarget, 'external content', 'utf-8');
+    mkdirSync(join(projectDir, '.takt', 'exec'), { recursive: true });
+    symlinkSync(externalTarget, join(projectDir, '.takt', 'exec', 'workflow.yaml'));
+
+    try {
+      await expect(runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), 'Executable task', undefined))
+        .rejects.toThrow(/Project-local exec workflow/);
+
+      expect(readFileSync(externalTarget, 'utf-8')).toBe('external content');
+      expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject a symlinked generated workflow parent before executing the workflow', async () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-exec-workflow-symlink-parent-'));
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    symlinkSync(externalDir, join(projectDir, '.takt', 'exec'));
+
+    try {
+      await expect(runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), 'Executable task', undefined))
+        .rejects.toThrow(/Project-local exec workflow/);
+
+      expect(existsSync(join(externalDir, 'workflow.yaml'))).toBe(false);
+      expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject a completed run when any expected judge report is missing on disk', async () => {
+    const task = 'Executable task with a missing judge report';
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask, ['judge-1-judge-result.md']);
+    });
+
+    await expect(runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined))
+      .rejects.toThrow(/judge-2-judge-result\.md/);
+
+    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
+  });
+
+  it('should read back the exact generated run slug instead of searching by task text', async () => {
+    const task = 'Executable task with duplicate text';
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask);
+      writeCompletedRun(cwd, '20990101-000000-duplicate-task', executedTask, []);
+    });
+
+    const context = await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+    const options = mockSelectAndExecuteTask.mock.calls[0]?.[2];
+
+    expect(options?.reportDirName).toMatch(/executable-task-with-duplicate/);
+    expect(context.reports.map((report) => report.filename)).toEqual([
+      'judge-1-judge-result.md',
+      'judge-2-judge-result.md',
+    ]);
+  });
+
+  it('should pass readonly permission overrides for exec review and planning steps', async () => {
+    const task = 'Executable task with readonly judges';
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask);
+    });
+
+    await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+
+    const providerProfiles = mockSelectAndExecuteTask.mock.calls[0]?.[2]?.providerProfileOverrides;
+    const claudeOverrides = providerProfiles?.claude?.stepPermissionOverrides;
+    expect(claudeOverrides).toEqual(expect.objectContaining({
+      'judge-1': 'readonly',
+      'judge-2': 'readonly',
+      replan: 'readonly',
+      _loop_judge_execute_judge: 'readonly',
+      _loop_judge_replan_execute_judge: 'readonly',
+    }));
+    expect(claudeOverrides).not.toHaveProperty('worker-1');
+  });
+
+  it('should pass agent overrides to the existing task execution boundary', async () => {
+    const task = 'Executable task with CLI overrides';
+    const agentOverrides = { provider: 'mock' as const, model: 'override-model' };
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask);
+    });
+
+    await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, agentOverrides);
+
+    expect(mockSelectAndExecuteTask.mock.calls[0]?.[3]).toEqual(agentOverrides);
+    expect(mockSelectAndExecuteTask.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      interactiveUserInput: true,
+      skipTaskList: true,
+      interactiveMetadata: { confirmed: true, task },
+    }));
+  });
+
+  it('should build a task instruction prompt from conversation history and inline /go text', () => {
+    const prompt = buildTaskInstructionPrompt([
+      { role: 'user', content: 'We need to add exec mode.' },
+      { role: 'assistant', content: 'Use workers and judges.' },
+    ], false, 'Focus on tests first.');
+
+    expect(prompt).toBe([
+      'Create a concise executable task instruction for TAKT exec.',
+      '',
+      'Conversation:',
+      'User: We need to add exec mode.',
+      'Assistant: Use workers and judges.',
+      '',
+      'Additional user note:',
+      'Focus on tests first.',
+    ].join('\n'));
+  });
+
+  it('should build a task instruction prompt from the active assistant session context', () => {
+    const prompt = buildTaskInstructionPrompt([], true, '');
+
+    expect(prompt).toBe([
+      'Create a concise executable task instruction for TAKT exec.',
+      '',
+      'Use the active exec assistant session context as the conversation.',
+    ].join('\n'));
+  });
+
+  it('should not build a task instruction prompt without conversation session or inline text', () => {
+    expect(buildTaskInstructionPrompt([], false, '')).toBeNull();
+  });
+
+  it('should build readonly permission profiles for every exec provider', () => {
+    const overrides = buildExecReadonlyProviderProfileOverrides(createTwoJudgeConfig());
+
+    expect(Object.keys(overrides).sort()).toEqual([
+      'claude',
+      'claude-sdk',
+      'claude-terminal',
+      'codex',
+      'copilot',
+      'cursor',
+      'kiro',
+      'mock',
+      'opencode',
+    ]);
+    expect(overrides.codex?.defaultPermissionMode).toBe('edit');
+    expect(overrides.codex?.stepPermissionOverrides).toEqual(expect.objectContaining({
+      'judge-1': 'readonly',
+      'judge-2': 'readonly',
+      replan: 'readonly',
+      _loop_judge_execute_judge: 'readonly',
+      _loop_judge_replan_execute_judge: 'readonly',
+    }));
+    expect(overrides.codex?.stepPermissionOverrides).not.toHaveProperty('worker-1');
+  });
+});

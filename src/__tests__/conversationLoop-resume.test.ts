@@ -214,6 +214,50 @@ describe('callAIWithRetry', () => {
     expect(capture.systemPrompts[0]).toContain('## Provider Runtime Instructions');
     expect(capture.systemPrompts[0]).toContain('OpenCode tool names are lowercase.');
   });
+
+  it('passes session provider options to the initial call and stale-session retry', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ]);
+    const providerOptions = { claude: { effort: 'high' as const } };
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'claude',
+      model: 'opus',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+      providerOptions,
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx);
+
+    expect(capture.providerOptions).toEqual([providerOptions, providerOptions]);
+    expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+  });
+
+  it('passes permission mode to the initial call and stale-session retry', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex',
+      model: 'gpt-5',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+    };
+
+    await callAIWithRetry('hello', 'base system prompt', [], '/repo', ctx, {
+      permissionMode: 'readonly',
+    });
+
+    expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
+    expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+  });
 });
 
 // =================================================================

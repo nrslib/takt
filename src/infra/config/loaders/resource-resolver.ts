@@ -7,9 +7,9 @@
  * implementation.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import type { FacetType } from '../paths.js';
+import { getProjectFacetDir, type FacetType } from '../paths.js';
 import {
   resolveFacetPath as resolveFacetPathGeneric,
   resolvePersona as resolvePersonaGeneric,
@@ -77,6 +77,11 @@ function samePath(a: string, b: string): boolean {
 function isPathInside(basePath: string, targetPath: string): boolean {
   const rel = relative(resolve(basePath), resolve(targetPath));
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function isPathInsideOrSame(basePath: string, targetPath: string): boolean {
+  const rel = relative(resolve(basePath), resolve(targetPath));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 function contentSourceLabel(content: ResolvedFacetContent): string {
@@ -207,11 +212,57 @@ function findSourceLayerIndex(sourcePath: string, candidateDirs: readonly string
   return index >= 0 ? index : undefined;
 }
 
+function isProjectFacetFile(
+  filePath: string,
+  facetType: FacetType,
+  context: FacetResolutionContext | undefined,
+): boolean {
+  if (!context?.projectDir) {
+    return false;
+  }
+  return isPathInside(getProjectFacetDir(context.projectDir, facetType), filePath);
+}
+
+function assertProjectFacetFileIsSafe(
+  filePath: string,
+  facetType: FacetType,
+  context: FacetResolutionContext | undefined,
+): void {
+  if (!isProjectFacetFile(filePath, facetType, context)) {
+    return;
+  }
+  if (!context?.projectDir) {
+    throw new Error(`Project facet file requires a project directory: ${filePath}`);
+  }
+
+  const stats = lstatSync(filePath);
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new Error(`Project facet file must be a regular file and must not be a symlink: ${filePath}`);
+  }
+
+  const projectDir = realpathSync(context.projectDir);
+  const facetDir = realpathSync(getProjectFacetDir(context.projectDir, facetType));
+  const realFilePath = realpathSync(filePath);
+  if (!isPathInsideOrSame(projectDir, facetDir) || !isPathInside(facetDir, realFilePath)) {
+    throw new Error(`Project facet file must stay inside the project and must not use symlinks: ${filePath}`);
+  }
+}
+
+function readFacetFile(
+  filePath: string,
+  facetType: FacetType,
+  context: FacetResolutionContext | undefined,
+): string {
+  assertProjectFacetFileIsSafe(filePath, facetType, context);
+  return readFileSync(filePath, 'utf-8');
+}
+
 function resolveFacetFromCandidateDirs(
   name: string,
   facetType: FacetType,
   candidateDirs: readonly string[],
   refName: string,
+  context?: FacetResolutionContext,
   excludeSourcePath?: string,
 ): ResolvedFacetContent | undefined {
   for (const dir of candidateDirs) {
@@ -221,7 +272,7 @@ function resolveFacetFromCandidateDirs(
     }
     if (existsSync(filePath)) {
       return {
-        content: readFileSync(filePath, 'utf-8'),
+        content: readFacetFile(filePath, facetType, context),
         sourcePath: filePath,
         facetType,
         refName,
@@ -244,7 +295,7 @@ function resolveParentFacetWithSource(
   const candidateDirs = buildCandidateDirsWithPackage(facetType, context);
   const sourceLayerIndex = findSourceLayerIndex(currentSourcePath, candidateDirs);
   const searchDirs = candidateDirs.slice(sourceLayerIndex ?? 0);
-  return resolveFacetFromCandidateDirs(parentName, facetType, searchDirs, parentName, currentSourcePath);
+  return resolveFacetFromCandidateDirs(parentName, facetType, searchDirs, parentName, context, currentSourcePath);
 }
 
 function expandFacetInheritance(
@@ -303,7 +354,11 @@ export function resolveFacetPath(
     const filePath = resolveScopeRef(scopeRef, facetType, context.repertoireDir);
     return existsSync(filePath) ? filePath : undefined;
   }
-  return resolveFacetPathGeneric(name, buildCandidateDirsWithPackage(facetType, context));
+  const filePath = resolveFacetPathGeneric(name, buildCandidateDirsWithPackage(facetType, context));
+  if (filePath) {
+    assertProjectFacetFileIsSafe(filePath, facetType, context);
+  }
+  return filePath;
 }
 
 /**
@@ -330,7 +385,7 @@ export function resolveFacetByNameWithSource(
   if (filePath) {
     return expandFacetInheritance(
       {
-        content: readFileSync(filePath, 'utf-8'),
+        content: readFacetFile(filePath, facetType, context),
         sourcePath: filePath,
         facetType,
         refName: name,
@@ -392,7 +447,7 @@ export function resolveRefToContentWithSource(
     ? buildCandidateDirsWithPackage(facetType, context)
     : undefined;
   if (candidateDirs) {
-    const facetContent = resolveFacetFromCandidateDirs(ref, facetType!, candidateDirs, ref);
+    const facetContent = resolveFacetFromCandidateDirs(ref, facetType!, candidateDirs, ref, context);
     if (facetContent !== undefined) {
       return expandFacetInheritance(facetContent, facetType, context);
     }
@@ -441,7 +496,9 @@ export function resolvePersona(
     : undefined;
   const resolved = resolvePersonaGeneric(rawPersona, sections, workflowDir, candidateDirs);
   if (resolved.personaPath) {
+    assertProjectFacetFileIsSafe(resolved.personaPath, 'personas', context);
     assertAllowedPersonaPath(resolved.personaPath, context);
+    return resolved;
   }
   return resolved;
 }

@@ -6,6 +6,7 @@ export default defineConfig({
     ...e2eBaseTestConfig,
     include: [
       'e2e/specs/direct-task.e2e.ts',
+      'e2e/specs/exec.e2e.ts',
       'e2e/specs/pipeline-skip-git.e2e.ts',
       'e2e/specs/pipeline-local-repo.e2e.ts',
       'e2e/specs/report-judge.e2e.ts',

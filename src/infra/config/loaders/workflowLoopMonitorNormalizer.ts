@@ -5,6 +5,7 @@ import { normalizeProviderReference } from './workflowStepNormalizer.js';
 
 function normalizeLoopMonitorJudge(
   raw: {
+    session_key?: string;
     persona?: string;
     provider?: unknown;
     model?: string;
@@ -23,6 +24,7 @@ function normalizeLoopMonitorJudge(
     workflowDir,
   );
   return {
+    sessionKey: raw.session_key,
     persona: personaSpec,
     personaPath,
     provider: normalizedProvider.provider,
@@ -46,6 +48,7 @@ export function normalizeLoopMonitors(
     cycle: string[];
     threshold: number;
     judge: {
+      session_key?: string;
       persona?: string;
       provider?: unknown;
       model?: string;

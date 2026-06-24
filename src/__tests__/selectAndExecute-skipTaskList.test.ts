@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import { generateReportDir } from '../shared/utils/reportDir.js';
+import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
 
 const {
   mockAddTask,
@@ -161,6 +162,29 @@ describe('skipTaskList option in selectAndExecuteTask', () => {
       gitBaseBranch: 'main',
       worktreePath: '/project/.takt/worktrees/131-add-trace-metadata',
     });
+  });
+
+  it('skipTaskList: true の直接実行では providerProfileOverrides を executeTask に転送する', async () => {
+    const providerProfileOverrides = {
+      claude: {
+        defaultPermissionMode: 'edit',
+        stepPermissionOverrides: {
+          judge: 'readonly',
+          replan: 'readonly',
+        },
+      },
+    } satisfies ProviderPermissionProfiles;
+
+    await selectAndExecuteTask('/project', 'Run exec workflow', {
+      workflow: 'default',
+      skipTaskList: true,
+      providerProfileOverrides,
+    });
+
+    const executeArg = mockExecuteTask.mock.calls[0]?.[0] as {
+      providerProfileOverrides?: ProviderPermissionProfiles;
+    };
+    expect(executeArg.providerProfileOverrides).toBe(providerProfileOverrides);
   });
 
   it('skipTaskList: false の場合はタスクリストに追加する', async () => {

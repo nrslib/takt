@@ -5,13 +5,14 @@
  * for facet files (.md) and displays them with layer provenance.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import chalk from 'chalk';
 import type { WorkflowSource } from '../../infra/config/loaders/workflowResolver.js';
 import { getBuiltinFacetDir, getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import { section, error as logError, info } from '../../shared/ui/index.js';
+import { isRealPathInside } from '../../shared/utils/index.js';
 
 const FACET_TYPES = [
   'personas',
@@ -43,6 +44,10 @@ export function parseFacetType(input: string): FacetType | null {
  * Returns the first `# ` heading text, or falls back to the first non-empty line.
  */
 export function extractDescription(filePath: string): string {
+  const stats = lstatSync(filePath);
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new Error(`Facet file must be a regular file and must not be a symbolic link: ${filePath}`);
+  }
   const content = readFileSync(filePath, 'utf-8');
   let firstNonEmpty = '';
   for (const line of content.split('\n')) {
@@ -76,9 +81,23 @@ function getFacetDirs(
 }
 
 /** Scan a single directory for .md facet files. */
-function scanDirectory(dir: string): string[] {
+function scanDirectory(dir: string, boundaryDir?: string): string[] {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => f.endsWith('.md'));
+  const stats = lstatSync(dir);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) return [];
+  if (boundaryDir !== undefined && !isRealPathInside(boundaryDir, dir)) return [];
+  const realDir = realpathSync(dir);
+  return readdirSync(dir).filter((file) => {
+    if (!file.endsWith('.md')) {
+      return false;
+    }
+    const filePath = join(dir, file);
+    const fileStats = lstatSync(filePath);
+    if (fileStats.isSymbolicLink() || !fileStats.isFile()) {
+      return false;
+    }
+    return isRealPathInside(realDir, filePath);
+  });
 }
 
 /**
@@ -94,7 +113,7 @@ export function scanFacets(facetType: FacetType, cwd: string): FacetEntry[] {
   const allEntries: FacetEntry[] = [];
 
   for (const { dir, source } of dirs) {
-    const files = scanDirectory(dir);
+    const files = scanDirectory(dir, source === 'project' ? cwd : undefined);
     for (const file of files) {
       const name = basename(file, '.md');
       const description = extractDescription(join(dir, file));

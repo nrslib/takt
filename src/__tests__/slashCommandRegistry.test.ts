@@ -9,6 +9,8 @@ describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
     expect(result.length).toBe(8);
+    const commands = result.map((e) => e.command);
+    expect(commands).not.toContain('/setup');
   });
 
   it('should filter by prefix "/a"', () => {
@@ -83,5 +85,12 @@ describe('filterSlashCommands', () => {
         labelKey: 'interactive.commands.pasteImage',
       },
     ]);
+  });
+
+  it('should expose /setup only when exec command availability enables it', () => {
+    const normalCommands = filterSlashCommands('/set').map((entry) => entry.command);
+    const execCommands = filterSlashCommands('/set', { enableSetupCommand: true }).map((entry) => entry.command);
+    expect(normalCommands).toEqual([]);
+    expect(execCommands).toEqual(['/setup']);
   });
 });

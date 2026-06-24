@@ -43,6 +43,7 @@ const workflowCallForbiddenFieldCases = [
   },
   { field: 'required_permission_mode', value: 'full' },
   { field: 'edit', value: false },
+  { field: 'requires_user_input', value: true },
   { field: 'instruction', value: 'Do not allow inline instructions.' },
   { field: 'session', value: 'continue' },
   { field: 'delay_before_ms', value: 1000 },

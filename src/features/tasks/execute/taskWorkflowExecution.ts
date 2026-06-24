@@ -1,4 +1,9 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import type {
+  ProviderPermissionProfile,
+  ProviderPermissionProfiles,
+  ProviderProfileName,
+} from '../../../core/models/provider-profiles.js';
 import { loadWorkflowByIdentifier, isWorkflowPath, resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { info, error } from '../../../shared/ui/index.js';
@@ -16,6 +21,54 @@ type WorkflowExecutor = (
   cwd: string,
   options: WorkflowExecutionOptions,
 ) => Promise<WorkflowExecutionResult>;
+
+function cloneProviderProfile(profile: ProviderPermissionProfile): ProviderPermissionProfile {
+  return {
+    defaultPermissionMode: profile.defaultPermissionMode,
+    ...(profile.stepPermissionOverrides
+      ? { stepPermissionOverrides: { ...profile.stepPermissionOverrides } }
+      : {}),
+  };
+}
+
+function mergeProviderProfileOverrides(
+  base: ProviderPermissionProfiles | undefined,
+  overrides: ProviderPermissionProfiles | undefined,
+): ProviderPermissionProfiles | undefined {
+  if (!overrides) {
+    return base;
+  }
+
+  const providers = new Set([
+    ...Object.keys(base ?? {}),
+    ...Object.keys(overrides),
+  ] as ProviderProfileName[]);
+  const merged: ProviderPermissionProfiles = {};
+
+  for (const provider of providers) {
+    const baseProfile = base?.[provider];
+    const overrideProfile = overrides[provider];
+    if (!baseProfile && overrideProfile) {
+      merged[provider] = cloneProviderProfile(overrideProfile);
+      continue;
+    }
+    if (baseProfile && !overrideProfile) {
+      merged[provider] = cloneProviderProfile(baseProfile);
+      continue;
+    }
+    if (baseProfile && overrideProfile) {
+      merged[provider] = {
+        defaultPermissionMode: overrideProfile.defaultPermissionMode,
+        stepPermissionOverrides: {
+          ...baseProfile.stepPermissionOverrides,
+          ...overrideProfile.stepPermissionOverrides,
+        },
+      };
+    }
+  }
+
+  return merged;
+}
 
 export async function executeTaskWorkflow(
   options: ExecuteTaskOptions,
@@ -75,7 +128,7 @@ export async function executeTaskWorkflow(
     providerOptionsOriginResolver: providerOptions.originResolver,
     personaProviders: config.personaProviders,
     providerRouting: config.providerRouting,
-    providerProfiles: config.providerProfiles,
+    providerProfiles: mergeProviderProfileOverrides(config.providerProfiles, options.providerProfileOverrides),
     interactiveUserInput,
     interactiveMetadata,
     startStep,

@@ -24,6 +24,7 @@ import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
 import { computeReviewMetrics, formatReviewMetrics, parseSinceDuration, purgeOldEvents } from '../../features/analytics/index.js';
 import { doctorWorkflowCommand, initWorkflowCommand } from '../../features/workflowAuthoring/index.js';
+import { runExecCommand } from '../../features/exec/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 import { repertoireAddCommand } from '../../commands/repertoire/add.js';
@@ -112,6 +113,19 @@ program
   .description('Resume the latest failed or aborted direct run')
   .action(async () => {
     await resumeDirectRun(resolvedCwd, resolveAgentOverrides(program));
+  });
+
+program
+  .command('exec')
+  .description('Start instant multi-agent exec mode')
+  .argument('[preset]', 'Exec preset name')
+  .option('--list', 'List exec presets')
+  .action(async (preset: string | undefined, opts: { list?: boolean }) => {
+    await runExecCommand(resolvedCwd, {
+      preset,
+      list: opts.list === true,
+      agentOverrides: resolveAgentOverrides(program),
+    });
   });
 
 program

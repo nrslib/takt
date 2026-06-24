@@ -107,6 +107,33 @@ takt --task "Add authentication" --workflow dual
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
 
+## Instant Exec Mode
+
+`takt exec` starts an Assistant + Worker(s) + Judge(s) session without writing workflow YAML by hand.
+
+```bash
+takt exec          # choose previous config, preset, or default
+takt exec backend  # start from a named preset
+takt exec --list   # list available exec presets
+```
+
+Preset lookup order is project `.takt/exec/presets/`, then global `~/.takt/exec/presets/`, then builtin `builtins/exec/presets/`. A successful `/go` saves the selected configuration to `~/.takt/exec.yaml` for the next run.
+
+Inside exec mode:
+
+| Command | Description |
+|---------|-------------|
+| `/setup` | Edit assistant, workers, judges, replan facets, loop thresholds, and project/global presets |
+| `/go` | Summarize the conversation into executable task instructions and run the generated workflow |
+| `/go <note>` | Run with an additional note appended to the conversation summary |
+| `/cancel` | Exit without executing |
+
+`/setup` can save/delete project or global presets. Instruction, knowledge, and policy fields reference normal facets; new facets are saved under `.takt/facets/{instructions,knowledge,policies}/` or `~/.takt/facets/{instructions,knowledge,policies}/`.
+
+On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the existing workflow engine. `/go` with no prior conversation and no inline task text is rejected before creating the workflow or saving `exec.yaml`. The judge result reports are read from the completed run and injected back into the exec assistant session for the final summary.
+
+Generated exec workflows use `session_key` to keep Worker, Judge, replan, and loop-monitor sessions separate even when they share a persona. In user-authored workflows, `session_key` is supported only on normal agent steps, parallel sub-steps, and `loop_monitors.judge`; it is not supported on system steps, workflow_call steps, or parallel parent steps. The effective session key is suffixed with the resolved provider.
+
 ## GitHub Issue Tasks
 
 You can execute GitHub Issues directly as tasks. Issue title, body, labels, and comments are automatically incorporated as task content.

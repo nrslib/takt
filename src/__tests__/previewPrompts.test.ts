@@ -142,4 +142,26 @@ describe('previewPrompts', () => {
     expect(mockHeader).toHaveBeenCalledWith('Workflow Prompt Preview: bad-workflow\\n');
     expect(console.log).toHaveBeenCalledWith('Step 1: impl\\tstep (persona: coder\\rname)');
   });
+
+  it('通常stepの実行メタデータを1回だけ表示する', async () => {
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'default',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'replan',
+          personaDisplayName: 'planner',
+          outputContracts: [],
+          sessionKey: 'exec-replan',
+          requiresUserInput: true,
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+
+    const outputLines = consoleLogSpy.mock.calls.map(([line]) => line);
+    expect(outputLines.filter((line) => line === 'Session key: exec-replan')).toHaveLength(1);
+    expect(outputLines.filter((line) => line === 'Requires user input: yes')).toHaveLength(1);
+  });
 });

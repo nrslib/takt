@@ -72,6 +72,7 @@ interactive:
     cancel: "Exit interactive mode"
     resume: "Load a previous session"
     pasteImage: "Attach clipboard image"
+    setup: "Configure exec team"
 
 # ===== Workflow Execution UI =====
 workflow:

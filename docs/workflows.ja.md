@@ -55,6 +55,7 @@ report_formats:
 
 steps:
   - name: step-name
+    session_key: shared-coder        # 任意の明示セッションキー
     persona: coder                   # persona キー（personas マップを参照）
     persona_name: coder              # 表示名（省略可、provider_routing.personas には影響しない）
     tags: [implementation, edit]     # provider routing 用 tag（省略可）
@@ -95,6 +96,8 @@ steps:
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
 
 `persona_name` は表示名専用です。config の `provider_routing.personas` は raw `persona` キーに一致し、`provider_routing.tags` は step の任意の `tags` 配列に書かれた順で一致します。同じ provider / model / provider_options leaf では後ろの tag が前の tag を上書きします。
+
+`session_key` は通常の agent step、parallel sub-step、`loop_monitors.judge` で指定できます。system step、workflow-call step、parallel parent step では agent session を所有しないため指定できません。同じ persona を使う複数の agent step のセッションを分離したい場合、または別の agent step で意図的に同じセッションを共有したい場合に使います。実行時の有効キーは `session_key` に解決済み provider を付けた形になり、例: `shared-coder:claude` です。`session_key` を省略した場合は persona キー、persona が無い場合は step 名が使われます。空文字列と空白のみの値は workflow 検証で拒否されます。
 
 `quality_gates` の文字列は従来どおり agent step の AI への完了条件としてプロンプトに含まれます。`type: command` の gate は agent step 完了後に worktree 内で実行され、終了コード `0` の場合のみ成功します。workflow YAML の command gate を使うには config 側で `workflow_command_gates.custom_scripts: true` を有効にする必要があります。失敗時は command のメタデータ、cwd、終了コードまたは timeout / output limit 情報、output log path、上限付きでサニタイズされた stdout / stderr が同じ agent step の差し戻し入力に含まれます。raw stdout / stderr はローカルの output log にも保存されます。`system` と `workflow_call` step では `quality_gates` を指定できません。
 
@@ -160,6 +163,7 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
   - name: reviewers
     parallel:
       - name: arch-review
+        session_key: arch-review
         persona: architecture-reviewer
         policy: review
         knowledge: architecture
@@ -169,6 +173,7 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
           - condition: needs_fix
         instruction: review-arch
       - name: security-review
+        session_key: security-review
         persona: security-reviewer
         policy: review
         edit: false
@@ -331,6 +336,8 @@ promotion は並列サブ step ではサポートされません。
 |--------|---------|------|
 | `persona` | - | persona キー（section map 参照）またはファイルパス |
 | `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
+| `session_key` | - | 通常の agent step と parallel sub-step の明示セッションキー。実行時キーには解決済み provider が付く。空文字・空白のみは無効 |
+| `requires_user_input` | `false` | 通常の agent step がユーザー入力待ち可能であることを示す。system step、workflow-call step、parallel parent step では指定不可。`requires_user_input: true` の step は agent 実行前から interactive mode と user input handler が必須で、未設定の場合はその agent を実行せず workflow を abort する。実際の入力待ちは、一致した rule 側の `requires_user_input: true` でのみ発生する |
 | `tags` | - | config の `provider_routing.tags` に一致させる順序付き routing tag |
 | `policy` | - | policy キーまたはキー配列 |
 | `knowledge` | - | knowledge キーまたはキー配列 |
@@ -428,6 +435,7 @@ loop_monitors:
   - cycle: [review, fix]
     threshold: 3
     judge:
+      session_key: loop-supervisor
       persona: supervisor
       instruction: "fix ループに進捗があるかを評価してください..."
       rules:
@@ -436,6 +444,8 @@ loop_monitors:
         - condition: "進捗なし"
           next: ABORT
 ```
+
+`loop_monitors.judge.session_key` も step の `session_key` と同じく、実行時は provider suffix 付きのキーになります。同じ persona を使う複数の監視 judge が同じセッションを resume してはいけない場合に指定してください。
 
 ### `rate_limit_fallback`
 

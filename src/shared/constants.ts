@@ -24,5 +24,6 @@ export const SlashCommand = {
   Cancel: '/cancel',
   Resume: '/resume',
   PasteImage: '/paste-image',
+  Setup: '/setup',
 } as const;
 export type SlashCommand = typeof SlashCommand[keyof typeof SlashCommand];

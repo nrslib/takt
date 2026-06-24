@@ -124,7 +124,16 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
   // =====================================================
   describe('Judge triggered on cycle threshold', () => {
     it('should run judge and redirect to reviewers when cycle is unproductive', async () => {
-      const config = buildConfigWithLoopMonitor(2);
+      const config = buildConfigWithLoopMonitor(2, {
+        judge: {
+          persona: 'supervisor',
+          instruction: 'The loop repeated {cycle_count} times.',
+          rules: [
+            { condition: 'Healthy', next: 'ai_review' },
+            { condition: 'Unproductive', next: 'reviewers' },
+          ],
+        },
+      });
       engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
@@ -164,6 +173,9 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(state.status).toBe('completed');
       expect(cycleDetectedFn).toHaveBeenCalledOnce();
       expect(cycleDetectedFn.mock.calls[0][1]).toBe(2); // cycleCount
+      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
+      expect(judgeCall?.[1]).toContain('The loop repeated 2 times.');
+      expect(judgeCall?.[1]).not.toContain('{cycle_count}');
       // 7 iterations: implement + ai_review + ai_fix + ai_review + ai_fix + judge + reviewers
       expect(state.iteration).toBe(7);
     });
@@ -557,6 +569,104 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           },
         },
       }));
+    });
+
+    it('should use loop monitor judge sessionKey for session resume and updates', async () => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: {
+          sessionKey: 'loop-watch',
+          persona: 'supervisor',
+          rules: [
+            { condition: 'Healthy', next: 'ai_review' },
+            { condition: 'Unproductive', next: 'reviewers' },
+          ],
+        },
+      } as Partial<LoopMonitorConfig>);
+      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
+      if (!aiFixStep) {
+        throw new Error('ai_fix step is required for this test');
+      }
+      aiFixStep.provider = 'opencode';
+      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
+
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'claude',
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({ persona: 'supervisor', content: 'Loop is healthy', sessionId: 'monitor-session-1' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: Y' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed Y' }),
+        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected', sessionId: 'monitor-session-2' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'ai_judge_fallback' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'ai_judge_fallback' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      const judgeCalls = vi.mocked(runAgent).mock.calls.filter((call) => call[0] === 'supervisor');
+      expect(state.status).toBe('completed');
+      expect(judgeCalls.map((call) => call[2]?.sessionId)).toEqual([undefined, 'monitor-session-1']);
+      expect(state.personaSessions.get('loop-watch:opencode')).toBe('monitor-session-2');
+      expect(state.personaSessions.has('supervisor:opencode')).toBe(false);
+    });
+
+    it('should use the loop monitor judge persona as the default session key base', async () => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: {
+          persona: 'supervisor',
+          rules: [
+            { condition: 'Healthy', next: 'ai_review' },
+            { condition: 'Unproductive', next: 'reviewers' },
+          ],
+        },
+      } as Partial<LoopMonitorConfig>);
+      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
+      if (!aiFixStep) {
+        throw new Error('ai_fix step is required for this test');
+      }
+      aiFixStep.provider = 'opencode';
+      aiFixStep.model = 'opencode/zai-coding-plan/glm-5.1';
+
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'claude',
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected', sessionId: 'default-monitor-session' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'ai_judge_fallback' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(state.personaSessions.get('supervisor:opencode')).toBe('default-monitor-session');
     });
   });
 

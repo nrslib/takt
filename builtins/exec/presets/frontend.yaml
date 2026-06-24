@@ -1,0 +1,40 @@
+name: frontend
+description: Frontend development team
+session:
+  provider: claude
+  model: opus
+  effort: high
+replan:
+  instruction: exec-replan
+  knowledge:
+    - architecture
+    - frontend
+    - react
+  policy: []
+workers:
+  - name: worker-1
+    provider: claude
+    model: sonnet
+    effort: high
+    instruction: exec-worker
+    knowledge:
+      - frontend
+      - react
+    policy:
+      - coding
+      - testing
+judges:
+  - name: judge-1
+    provider: claude
+    model: opus
+    effort: high
+    instruction: exec-judge
+    knowledge:
+      - frontend
+      - react
+    policy:
+      - review
+loop:
+  threshold: 3
+  large_threshold: 2
+  max_steps: 20

@@ -15,7 +15,7 @@ import type { ProviderType } from '../../shared/types/provider.js';
 /**
  * Build a unique session key for a step.
  *
- * - Base key: `step.persona ?? step.name`
+ * - Base key: `step.sessionKey ?? step.persona ?? step.name`
  * - If the step specifies a provider, appends `:{provider}` to disambiguate
  *
  * Examples:
@@ -24,8 +24,19 @@ import type { ProviderType } from '../../shared/types/provider.js';
  *   - persona="coder", provider="codex"    → "coder:codex"
  *   - persona=undefined, name="plan"       → "plan"
  */
+function resolveSessionKeyBase(step: WorkflowStep): string {
+  if (step.sessionKey !== undefined) {
+    const sessionKey = step.sessionKey.trim();
+    if (sessionKey.length === 0) {
+      throw new Error(`Invalid session_key for step "${step.name}": expected non-empty string`);
+    }
+    return sessionKey;
+  }
+  return step.persona ?? step.name;
+}
+
 export function buildSessionKey(step: WorkflowStep, providerOverride?: ProviderType): string {
-  const base = step.persona ?? step.name;
+  const base = resolveSessionKeyBase(step);
   const provider = providerOverride ?? step.provider;
   return provider ? `${base}:${provider}` : base;
 }

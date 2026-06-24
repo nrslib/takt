@@ -3,7 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
-import { runTakt } from '../helpers/takt-runner';
+import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -49,7 +49,7 @@ describe('E2E: Direct task execution (--task)', () => {
       timeout: 240_000,
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
     expect(result.stdout).toContain('Running Workflow:');
     expect(result.stdout).toContain('Workflow completed');
   }, 240_000);

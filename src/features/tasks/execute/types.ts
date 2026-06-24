@@ -152,6 +152,8 @@ export interface ExecuteTaskOptions {
   directResume?: DirectResumeMetadata;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
+  /** Provider permission profile overrides supplied by a trusted runtime boundary. */
+  providerProfileOverrides?: ProviderPermissionProfiles;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
@@ -215,4 +217,8 @@ export interface SelectAndExecuteOptions {
   attachments?: TaskAttachment[];
   /** Source metadata for direct trace discovery when no task record exists. */
   traceTaskContext?: TraceTaskContext;
+  /** Override report directory name (e.g. "20260201-015714-foptng") */
+  reportDirName?: string;
+  /** Provider permission profile overrides supplied by a trusted runtime boundary. */
+  providerProfileOverrides?: ProviderPermissionProfiles;
 }

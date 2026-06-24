@@ -165,6 +165,16 @@ describe('edge cases', () => {
     expect(matchSlashCommand('/unknown')).toBeNull();
   });
 
+  it('should not match /setup unless exec availability enables it', () => {
+    expect(matchSlashCommand('/setup')).toBeNull();
+    expect(matchSlashCommand('configure team /setup')).toBeNull();
+    expect(matchSlashCommand('/setup', { enableSetupCommand: true })).toEqual({ command: '/setup', text: '' });
+    expect(matchSlashCommand('configure team /setup', { enableSetupCommand: true })).toEqual({
+      command: '/setup',
+      text: 'configure team',
+    });
+  });
+
   it('should not match unknown slash command at end', () => {
     expect(matchSlashCommand('text /unknown')).toBeNull();
   });

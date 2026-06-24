@@ -11,10 +11,77 @@ import { ReportInstructionBuilder } from '../../core/workflow/instruction/Report
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
 import { needsStatusJudgmentPhase } from '../../core/workflow/index.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
+import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
 import type { Language } from '../../core/models/types.js';
 import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+
+function printStepExecutionMetadata(step: WorkflowStep): void {
+  if (step.sessionKey) {
+    console.log(`Session key: ${sanitizeTerminalText(step.sessionKey)}`);
+  }
+  if (step.requiresUserInput === true) {
+    console.log('Requires user input: yes');
+  }
+  if (step.parallel && step.parallel.length > 0) {
+    console.log(`Parallel substeps: ${step.parallel.length}`);
+  }
+}
+
+function buildInstructionContext(
+  cwd: string,
+  config: WorkflowConfig,
+  stepIndex: number,
+  step: WorkflowStep,
+  language: Language,
+): InstructionContext {
+  return {
+    task: '<task content>',
+    iteration: 1,
+    maxSteps: config.maxSteps,
+    stepIteration: 1,
+    cwd,
+    projectCwd: cwd,
+    userInputs: [],
+    workflowSteps: config.steps,
+    currentStepIndex: stepIndex,
+    reportDir: step.outputContracts && step.outputContracts.length > 0 ? '.takt/runs/preview/reports' : undefined,
+    language,
+  };
+}
+
+function previewAgentStep(
+  cwd: string,
+  config: WorkflowConfig,
+  stepIndex: number,
+  step: WorkflowStep,
+  language: Language,
+): void {
+  printStepExecutionMetadata(step);
+
+  const context = buildInstructionContext(cwd, config, stepIndex, step, language);
+  const phase1Builder = new InstructionBuilder(step, context);
+  console.log('\n--- Phase 1 (Main Execution) ---\n');
+  console.log(phase1Builder.build());
+
+  if (step.outputContracts && step.outputContracts.length > 0) {
+    const reportBuilder = new ReportInstructionBuilder(step, {
+      cwd,
+      reportDir: '.takt/runs/preview/reports',
+      stepIteration: 1,
+      language,
+    });
+    console.log('\n--- Phase 2 (Report Output) ---\n');
+    console.log(reportBuilder.build());
+  }
+
+  if (needsStatusJudgmentPhase(step)) {
+    const judgmentBuilder = new StatusJudgmentBuilder(step, { language });
+    console.log('\n--- Phase 3 (Status Judgment) ---\n');
+    console.log(judgmentBuilder.build());
+  }
+}
 
 /**
  * Preview all prompts for a workflow.
@@ -49,42 +116,16 @@ export async function previewPrompts(cwd: string, workflowIdentifier?: string): 
     console.log(`Step ${i + 1}: ${safeStepName} (persona: ${safePersonaDisplayName})`);
     console.log(separator);
 
-    // Phase 1: Main execution
-    const context: InstructionContext = {
-      task: '<task content>',
-      iteration: 1,
-      maxSteps: config.maxSteps,
-      stepIteration: 1,
-      cwd,
-      projectCwd: cwd,
-      userInputs: [],
-      workflowSteps: config.steps,
-      currentStepIndex: i,
-      reportDir: step.outputContracts && step.outputContracts.length > 0 ? '.takt/runs/preview/reports' : undefined,
-      language,
-    };
-
-    const phase1Builder = new InstructionBuilder(step, context);
-    console.log('\n--- Phase 1 (Main Execution) ---\n');
-    console.log(phase1Builder.build());
-
-    // Phase 2: Report output (only if step has output contracts)
-    if (step.outputContracts && step.outputContracts.length > 0) {
-      const reportBuilder = new ReportInstructionBuilder(step, {
-        cwd,
-        reportDir: '.takt/runs/preview/reports',
-        stepIteration: 1,
-        language,
-      });
-      console.log('\n--- Phase 2 (Report Output) ---\n');
-      console.log(reportBuilder.build());
-    }
-
-    // Phase 3: Status judgment (only if step has tag-based rules)
-    if (needsStatusJudgmentPhase(step)) {
-      const judgmentBuilder = new StatusJudgmentBuilder(step, { language });
-      console.log('\n--- Phase 3 (Status Judgment) ---\n');
-      console.log(judgmentBuilder.build());
+    if (step.parallel && step.parallel.length > 0) {
+      printStepExecutionMetadata(step);
+      for (const [subIndex, substep] of step.parallel.entries()) {
+        const safeSubstepName = sanitizeTerminalText(substep.name);
+        const safeSubstepPersonaDisplayName = sanitizeTerminalText(substep.personaDisplayName);
+        console.log(`\n--- Parallel Substep ${subIndex + 1}: ${safeSubstepName} (persona: ${safeSubstepPersonaDisplayName}) ---\n`);
+        previewAgentStep(cwd, config, i, substep, language);
+      }
+    } else {
+      previewAgentStep(cwd, config, i, step, language);
     }
 
     blankLine();

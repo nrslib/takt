@@ -1,0 +1,46 @@
+name: dual
+description: Two-worker development team
+session:
+  provider: claude
+  model: opus
+  effort: high
+replan:
+  instruction: exec-replan
+  knowledge:
+    - architecture
+  policy: []
+workers:
+  - name: worker-1
+    provider: claude
+    model: sonnet
+    effort: high
+    instruction: exec-worker
+    knowledge:
+      - architecture
+    policy:
+      - coding
+      - testing
+  - name: worker-2
+    provider: claude
+    model: sonnet
+    effort: high
+    instruction: exec-worker
+    knowledge:
+      - unit-testing
+    policy:
+      - coding
+      - testing
+judges:
+  - name: judge-1
+    provider: claude
+    model: opus
+    effort: high
+    instruction: exec-judge
+    knowledge:
+      - architecture
+    policy:
+      - review
+loop:
+  threshold: 3
+  large_threshold: 2
+  max_steps: 20

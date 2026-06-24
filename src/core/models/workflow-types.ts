@@ -158,6 +158,8 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   mode?: never;
   call?: never;
   overrides?: never;
+  sessionKey?: string;
+  requiresUserInput?: boolean;
   persona?: string;
   allowGitCommit?: boolean;
   session?: 'continue' | 'refresh';
@@ -191,6 +193,8 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   mode?: never;
   call?: never;
   overrides?: never;
+  sessionKey?: never;
+  requiresUserInput?: never;
   persona?: never;
   tags?: never;
   allowGitCommit?: never;
@@ -222,6 +226,8 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   call: string;
   overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
+  sessionKey?: never;
+  requiresUserInput?: never;
   persona?: never;
   tags?: never;
   allowGitCommit?: never;
@@ -279,6 +285,7 @@ export interface LoopMonitorRule {
 }
 
 export interface LoopMonitorJudge {
+  sessionKey?: string;
   persona?: string;
   personaPath?: string;
   provider?: ProviderType;

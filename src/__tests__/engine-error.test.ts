@@ -91,6 +91,280 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   });
 
   // =====================================================
+  // 1.5 User input runtime requirements
+  // =====================================================
+  describe('User input runtime requirements', () => {
+    it('should abort before running a user-input step when workflow interactive mode is disabled', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'replan',
+        steps: [
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+      expect(abortFn).toHaveBeenCalledOnce();
+      const abortState = abortFn.mock.calls[0]?.[0];
+      expect(abortState?.status).toBe('aborted');
+      expect(abortState?.currentStep).toBe('replan');
+      const reason = abortFn.mock.calls[0]?.[1] as string;
+      expect(reason).toContain('interactive mode is disabled');
+    });
+
+    it('should abort before running a user-input step when no user input handler is configured', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'replan',
+        steps: [
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+      });
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+      expect(abortFn).toHaveBeenCalledOnce();
+      const abortState = abortFn.mock.calls[0]?.[0];
+      expect(abortState?.status).toBe('aborted');
+      expect(abortState?.currentStep).toBe('replan');
+      const reason = abortFn.mock.calls[0]?.[1] as string;
+      expect(reason).toContain('no handler is configured');
+    });
+
+    it('should run a user-input step without waiting when interactive requirements are satisfied and no rule asks for input', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'replan',
+        steps: [
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      });
+      const onUserInput = vi.fn();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+        onUserInput,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'replan', status: 'done', content: 'done' }),
+      ]);
+      mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+      expect(onUserInput).not.toHaveBeenCalled();
+    });
+
+    it('should collect exec replan input, rerun replan, and return to execute', async () => {
+      const workerStep = makeStep('worker-1', {
+        rules: [makeRule('done', 'COMPLETE')],
+      });
+      const judgeStep = makeStep('judge-1', {
+        rules: [
+          makeRule('approved', 'COMPLETE'),
+          makeRule('needs_fix', 'COMPLETE'),
+          makeRule('needs_replan', 'COMPLETE'),
+        ],
+      });
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'execute',
+        steps: [
+          makeStep('execute', {
+            parallel: [workerStep],
+            rules: [
+              makeRule('all("done")', 'judge', {
+                isAggregateCondition: true,
+                aggregateType: 'all',
+                aggregateConditionText: 'done',
+              }),
+            ],
+          }),
+          makeStep('judge', {
+            parallel: [judgeStep],
+            rules: [
+              makeRule('all("approved")', 'COMPLETE', {
+                isAggregateCondition: true,
+                aggregateType: 'all',
+                aggregateConditionText: 'approved',
+              }),
+              makeRule('any("needs_replan")', 'replan', {
+                isAggregateCondition: true,
+                aggregateType: 'any',
+                aggregateConditionText: 'needs_replan',
+              }),
+            ],
+          }),
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [
+              makeRule('User input needed for clarification', 'replan', {
+                requiresUserInput: true,
+                interactiveOnly: true,
+              }),
+              makeRule('New plan ready', 'execute'),
+              makeRule('Cannot proceed', 'ABORT'),
+            ],
+          }),
+        ],
+      });
+      const onUserInput = vi.fn().mockResolvedValueOnce('Refine the implementation plan');
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+        onUserInput,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'worker-1', content: 'done' }),
+        makeResponse({ persona: 'judge-1', content: 'needs_replan' }),
+        makeResponse({ persona: 'replan', content: 'User input needed for clarification' }),
+        makeResponse({ persona: 'replan', content: 'New plan ready' }),
+        makeResponse({ persona: 'worker-1', content: 'done' }),
+        makeResponse({ persona: 'judge-1', content: 'approved' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 2, method: 'phase1_tag' },
+        { index: 1, method: 'aggregate' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+      ]);
+
+      const userInputFn = vi.fn();
+      engine.on('step:user_input', userInputFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(onUserInput).toHaveBeenCalledOnce();
+      expect(onUserInput).toHaveBeenCalledWith(expect.objectContaining({
+        step: expect.objectContaining({ name: 'replan' }),
+        prompt: 'User input needed for clarification',
+      }));
+      expect(userInputFn).toHaveBeenCalledOnce();
+      expect(state.userInputs).toEqual(['Refine the implementation plan']);
+      expect(state.stepIterations.get('replan')).toBe(2);
+      expect(vi.mocked(runAgent).mock.calls.map((call) => call[0])).toEqual([
+        '../personas/worker-1.md',
+        '../personas/judge-1.md',
+        '../personas/replan.md',
+        '../personas/replan.md',
+        '../personas/worker-1.md',
+        '../personas/judge-1.md',
+      ]);
+    });
+
+    it('should abort exec replan when requested user input is canceled', async () => {
+      const workerStep = makeStep('worker-1', {
+        rules: [makeRule('done', 'COMPLETE')],
+      });
+      const judgeStep = makeStep('judge-1', {
+        rules: [
+          makeRule('approved', 'COMPLETE'),
+          makeRule('needs_replan', 'COMPLETE'),
+        ],
+      });
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'execute',
+        steps: [
+          makeStep('execute', {
+            parallel: [workerStep],
+            rules: [
+              makeRule('all("done")', 'judge', {
+                isAggregateCondition: true,
+                aggregateType: 'all',
+                aggregateConditionText: 'done',
+              }),
+            ],
+          }),
+          makeStep('judge', {
+            parallel: [judgeStep],
+            rules: [
+              makeRule('all("approved")', 'COMPLETE', {
+                isAggregateCondition: true,
+                aggregateType: 'all',
+                aggregateConditionText: 'approved',
+              }),
+              makeRule('any("needs_replan")', 'replan', {
+                isAggregateCondition: true,
+                aggregateType: 'any',
+                aggregateConditionText: 'needs_replan',
+              }),
+            ],
+          }),
+          makeStep('replan', {
+            requiresUserInput: true,
+            rules: [
+              makeRule('User input needed for clarification', 'replan', {
+                requiresUserInput: true,
+                interactiveOnly: true,
+              }),
+              makeRule('New plan ready', 'execute'),
+            ],
+          }),
+        ],
+      });
+      const onUserInput = vi.fn().mockResolvedValueOnce(null);
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        interactive: true,
+        onUserInput,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'worker-1', content: 'done' }),
+        makeResponse({ persona: 'judge-1', content: 'needs_replan' }),
+        makeResponse({ persona: 'replan', content: 'User input needed for clarification' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 1, method: 'aggregate' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(state.currentStep).toBe('replan');
+      expect(state.userInputs).toEqual([]);
+      expect(onUserInput).toHaveBeenCalledOnce();
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // =====================================================
   // 2. runAgent throws
   // =====================================================
   describe('runAgent throws', () => {

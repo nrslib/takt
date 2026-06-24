@@ -228,6 +228,30 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
   );
 }
 
+function validateUserInputRuntime(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+): WorkflowAbortResult | undefined {
+  if (step.requiresUserInput !== true) {
+    return undefined;
+  }
+  if (deps.options.interactive !== true) {
+    return abortWorkflow(
+      deps,
+      'user_input_required',
+      `Step "${step.name}" requires interactive user input but workflow interactive mode is disabled`,
+    );
+  }
+  if (!deps.options.onUserInput) {
+    return abortWorkflow(
+      deps,
+      'user_input_required',
+      `Step "${step.name}" requires user input but no handler is configured`,
+    );
+  }
+  return undefined;
+}
+
 function prepareRateLimitFallback(
   deps: WorkflowRunLoopDeps,
   step: WorkflowStep,
@@ -330,6 +354,11 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     }
 
     const step = deps.getStep(deps.state.currentStep);
+    const userInputRuntimeAbort = validateUserInputRuntime(deps, step);
+    if (userInputRuntimeAbort) {
+      abort = userInputRuntimeAbort;
+      break;
+    }
     deps.applyRuntimeEnvironment('step');
     const loopCheck = deps.loopDetectorCheck(step.name);
 
@@ -520,6 +549,20 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
 
 async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
   const step = deps.getStep(deps.state.currentStep);
+  const userInputRuntimeAbort = validateUserInputRuntime(deps, step);
+  if (userInputRuntimeAbort) {
+    return {
+      response: {
+        persona: step.persona ?? step.name,
+        status: 'blocked',
+        content: userInputRuntimeAbort.reason,
+        timestamp: new Date(),
+      },
+      nextStep: ABORT_STEP,
+      isComplete: true,
+      abort: userInputRuntimeAbort,
+    };
+  }
   deps.applyRuntimeEnvironment('step');
   const loopCheck = deps.loopDetectorCheck(step.name);
 

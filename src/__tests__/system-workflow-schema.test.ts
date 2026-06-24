@@ -371,6 +371,29 @@ describe('system workflow schema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('system step 直下の requires_user_input を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'confirm_issue_enqueue',
+      mode: 'system',
+      requires_user_input: true,
+      rules: [
+        {
+          when: 'true',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: ['requires_user_input'],
+        }),
+      ]));
+    }
+  });
+
   it('issue_list system input では where filter を reject する', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'route_context',

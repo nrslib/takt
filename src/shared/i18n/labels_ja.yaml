@@ -72,6 +72,7 @@ interactive:
     cancel: "対話モードを終了"
     resume: "セッションを読み込む"
     pasteImage: "クリップボード画像を添付"
+    setup: "exec チームを設定"
 
 # ===== Workflow Execution UI =====
 workflow:

@@ -16,6 +16,7 @@ import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderImageAttachment } from '../../infra/providers/types.js';
+import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
 
@@ -36,10 +37,12 @@ export interface SessionContext {
   lang: 'en' | 'ja';
   personaName: string;
   sessionId: string | undefined;
+  providerOptions?: StepProviderOptions;
 }
 
 interface CallAIWithRetryOptions {
   imageAttachments?: ProviderImageAttachment[];
+  permissionMode?: PermissionMode;
 }
 
 /**
@@ -90,6 +93,8 @@ export async function callAIWithRetry(
       model: ctx.model,
       sessionId,
       allowedTools,
+      permissionMode: options.permissionMode,
+      providerOptions: ctx.providerOptions,
       abortSignal: abortController.signal,
       onStream: display.createHandler(),
       imageAttachments: nativeImageAttachments,
@@ -107,6 +112,8 @@ export async function callAIWithRetry(
         model: ctx.model,
         sessionId: undefined,
         allowedTools,
+        permissionMode: options.permissionMode,
+        providerOptions: ctx.providerOptions,
         abortSignal: abortController.signal,
         onStream: retryDisplay.createHandler(),
         imageAttachments: nativeImageAttachments,

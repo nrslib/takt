@@ -114,6 +114,8 @@ export interface MockProviderCapture {
   callCount: number;
   prompts: string[];
   sessionIds: Array<string | undefined>;
+  providerOptions: unknown[];
+  permissionModes: Array<string | undefined>;
   imageAttachments: Array<Array<{ placeholder: string; path: string }> | undefined>;
 }
 
@@ -153,17 +155,23 @@ export function createScenarioProvider(
     callCount: 0,
     prompts: [],
     sessionIds: [],
+    providerOptions: [],
+    permissionModes: [],
     imageAttachments: [],
   };
 
   const mockCall = vi.fn(async (prompt: string, options?: {
     sessionId?: string;
+    providerOptions?: unknown;
+    permissionMode?: string;
     imageAttachments?: Array<{ placeholder: string; path: string }>;
   }) => {
     const idx = capture.callCount;
     capture.callCount++;
     capture.prompts.push(prompt);
     capture.sessionIds.push(options?.sessionId);
+    capture.providerOptions.push(options?.providerOptions);
+    capture.permissionModes.push(options?.permissionMode);
     capture.imageAttachments.push(options?.imageAttachments);
 
     const scenario = idx < scenarios.length

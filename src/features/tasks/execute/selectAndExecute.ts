@@ -108,13 +108,13 @@ export async function selectAndExecuteTask(
   let taskRecord: Awaited<ReturnType<TaskRunner['addTask']>> | null = null;
   let preparedSpec: ReturnType<typeof prepareTaskSpecDirectory> | undefined;
   let stagedSpec: StagedTaskSpec | undefined;
-  let reportDirName: string | undefined;
+  let reportDirName = options?.reportDirName;
   try {
     preparedSpec = options?.attachments && options.attachments.length > 0
       ? prepareTaskSpecDirectory(cwd, task, options.attachments)
       : undefined;
     if (preparedSpec) {
-      reportDirName = generateExecutionReportDir(execCwd, task);
+      reportDirName = reportDirName ?? generateExecutionReportDir(execCwd, task);
       stagedSpec = stageTaskSpecForExecution(cwd, execCwd, preparedSpec.taskDirRelative, reportDirName);
     }
   } catch (error) {
@@ -149,6 +149,7 @@ export async function selectAndExecuteTask(
       interactiveUserInput: options?.interactiveUserInput === true,
       interactiveMetadata: options?.interactiveMetadata,
       ...(reportDirName ? { reportDirName } : {}),
+      ...(options?.providerProfileOverrides ? { providerProfileOverrides: options.providerProfileOverrides } : {}),
       traceTaskMetadata: buildTraceTaskMetadata({
         task: taskRecord ?? undefined,
         taskContent: stagedSpec?.taskPrompt ?? task,

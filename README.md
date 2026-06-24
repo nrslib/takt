@@ -234,6 +234,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | Command | Description |
 |---------|-------------|
 | `takt` | Talk to AI, refine requirements, execute or queue tasks |
+| `takt exec` | Start instant Assistant + Worker(s) + Judge(s) mode without writing workflow YAML |
 | `takt run` | Execute all pending tasks |
 | `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
 | `takt #N` | Execute GitHub Issue as task |
@@ -243,6 +244,16 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt repertoire add` | Install a repertoire package from GitHub |
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
+
+### Instant exec mode
+
+`takt exec` starts a temporary multi-agent session from a preset or the previous exec configuration. Use `/setup` during the conversation to edit the assistant, workers, judges, loop thresholds, presets, and referenced instruction/knowledge/policy facets. Use `/go` after the task is clear; inline text after `/go` is treated as an additional note.
+
+Exec presets resolve in this order: project `.takt/exec/presets/` → global `~/.takt/exec/presets/` → builtin `builtins/exec/presets/`. The last successful exec configuration is saved to `~/.takt/exec.yaml`. `/setup` can save or delete project/global presets, and created facets are stored under `.takt/facets/` or `~/.takt/facets/`.
+
+When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it through the normal workflow engine. `/go` without prior conversation or inline task text does not generate the workflow or save `exec.yaml`.
+
+Normal agent steps, parallel sub-steps, and loop monitor judges may set `session_key` to share or isolate persona sessions. System steps, workflow_call steps, and parallel parent steps cannot set `session_key`. TAKT builds the runtime key as `session_key` plus the resolved provider, so values must be non-empty strings that do not collide with other generated session routes.
 
 ## Configuration
 

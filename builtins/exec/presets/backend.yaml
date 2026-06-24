@@ -1,0 +1,40 @@
+name: backend
+description: Backend development team
+session:
+  provider: claude
+  model: opus
+  effort: high
+replan:
+  instruction: exec-replan
+  knowledge:
+    - architecture
+    - backend
+  policy: []
+workers:
+  - name: worker-1
+    provider: claude
+    model: sonnet
+    effort: high
+    instruction: exec-worker
+    knowledge:
+      - architecture
+      - backend
+      - security
+    policy:
+      - coding
+      - testing
+judges:
+  - name: judge-1
+    provider: claude
+    model: opus
+    effort: high
+    instruction: exec-judge
+    knowledge:
+      - architecture
+      - security
+    policy:
+      - review
+loop:
+  threshold: 3
+  large_threshold: 2
+  max_steps: 20

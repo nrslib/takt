@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
+import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
 const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
@@ -255,6 +256,66 @@ describe('executeAndCompleteTask', () => {
       providerRouting?: unknown;
     };
     expect(workflowExecutionOptions?.providerRouting).toBe(providerRouting);
+  });
+
+  it('should merge provider profile overrides with runtime defaults taking priority', async () => {
+    const configProviderProfiles: ProviderPermissionProfiles = {
+      codex: {
+        defaultPermissionMode: 'full',
+        stepPermissionOverrides: {
+          worker: 'full',
+          judge: 'edit',
+        },
+      },
+    };
+    const runtimeProviderProfileOverrides: ProviderPermissionProfiles = {
+      codex: {
+        defaultPermissionMode: 'edit',
+        stepPermissionOverrides: {
+          judge: 'readonly',
+          replan: 'readonly',
+        },
+      },
+      claude: {
+        defaultPermissionMode: 'edit',
+        stepPermissionOverrides: {
+          judge: 'readonly',
+        },
+      },
+    };
+    mockResolveWorkflowConfigValues.mockReturnValueOnce({
+      language: 'en',
+      personaProviders: {},
+      providerRouting: {},
+      providerProfiles: configProviderProfiles,
+    });
+
+    await executeTask({
+      task: 'Task: provider profile overrides',
+      cwd: '/project',
+      projectCwd: '/project',
+      workflowIdentifier: 'default',
+      providerProfileOverrides: runtimeProviderProfileOverrides,
+    });
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      providerProfiles?: ProviderPermissionProfiles;
+    };
+    expect(workflowExecutionOptions.providerProfiles?.codex).toEqual({
+      defaultPermissionMode: 'edit',
+      stepPermissionOverrides: {
+        worker: 'full',
+        judge: 'readonly',
+        replan: 'readonly',
+      },
+    });
+    expect(workflowExecutionOptions.providerProfiles?.claude).toEqual({
+      defaultPermissionMode: 'edit',
+      stepPermissionOverrides: {
+        judge: 'readonly',
+      },
+    });
   });
 
   it('should pass ignoreIterationLimit from run execution context into executeWorkflow', async () => {

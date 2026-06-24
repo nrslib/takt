@@ -35,31 +35,64 @@ export type {
 } from './interactive-summary-types.js';
 export { BASE_SUMMARY_ACTIONS } from './interactive-summary-types.js';
 
-export function formatStepPreviews(previews: StepPreview[], lang: TaskHistoryLocale): string {
-  return previews.map((p, i) => {
-    const toolsStr = p.allowedTools.length > 0
-      ? p.allowedTools.join(', ')
-      : (lang === 'ja' ? 'なし' : 'None');
-    const editStr = p.canEdit
-      ? (lang === 'ja' ? '可' : 'Yes')
-      : (lang === 'ja' ? '不可' : 'No');
-    const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
-    const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
-    const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
-    const editLabel = lang === 'ja' ? '編集' : 'Edit';
+function formatPreviewMetadata(p: StepPreview, lang: TaskHistoryLocale): string[] {
+  const sessionKeyLabel = lang === 'ja' ? 'セッションキー' : 'Session key';
+  const userInputLabel = lang === 'ja' ? 'ユーザー入力' : 'User input';
+  const parallelLabel = lang === 'ja' ? '並列サブステップ' : 'Parallel substeps';
+  const requiredLabel = lang === 'ja' ? '必要' : 'required';
+  const lines: string[] = [];
 
-    const lines = [
-      `### ${i + 1}. ${p.name} (${p.personaDisplayName})`,
-    ];
-    if (p.personaContent) {
-      lines.push(`**${personaLabel}:**`, p.personaContent);
-    }
-    if (p.instructionContent) {
-      lines.push(`**${instructionLabel}:**`, p.instructionContent);
-    }
-    lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
-    return lines.join('\n');
-  }).join('\n\n');
+  if (p.sessionKey) {
+    lines.push(`**${sessionKeyLabel}:** ${p.sessionKey}`);
+  }
+  if (p.requiresUserInput === true) {
+    lines.push(`**${userInputLabel}:** ${requiredLabel}`);
+  }
+  if (p.substeps && p.substeps.length > 0) {
+    lines.push(`**${parallelLabel}:** ${p.substeps.length}`);
+  }
+  return lines;
+}
+
+function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocale): string {
+  const toolsStr = p.allowedTools.length > 0
+    ? p.allowedTools.join(', ')
+    : (lang === 'ja' ? 'なし' : 'None');
+  const editStr = p.canEdit
+    ? (lang === 'ja' ? '可' : 'Yes')
+    : (lang === 'ja' ? '不可' : 'No');
+  const personaLabel = lang === 'ja' ? 'ペルソナ' : 'Persona';
+  const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
+  const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
+  const editLabel = lang === 'ja' ? '編集' : 'Edit';
+
+  const lines = [
+    `### ${label}. ${p.name} (${p.personaDisplayName})`,
+    ...formatPreviewMetadata(p, lang),
+  ];
+  if (p.personaContent) {
+    lines.push(`**${personaLabel}:**`, p.personaContent);
+  }
+  if (p.instructionContent) {
+    lines.push(`**${instructionLabel}:**`, p.instructionContent);
+  }
+  lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
+
+  if (p.substeps && p.substeps.length > 0) {
+    lines.push(
+      ...p.substeps.map((substep, index) =>
+        formatStepPreview(substep, `${label}.${index + 1}`, lang),
+      ),
+    );
+  }
+
+  return lines.join('\n');
+}
+
+export function formatStepPreviews(previews: StepPreview[], lang: TaskHistoryLocale): string {
+  return previews.map((preview, index) =>
+    formatStepPreview(preview, String(index + 1), lang),
+  ).join('\n\n');
 }
 
 function normalizeDateTime(value: string): string {

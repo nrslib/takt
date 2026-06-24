@@ -28,6 +28,9 @@ export interface StepPreview {
   instructionContent: string;
   allowedTools: string[];
   canEdit: boolean;
+  sessionKey?: string;
+  requiresUserInput?: boolean;
+  substeps?: StepPreview[];
 }
 
 export interface FirstStepInfo {
@@ -77,6 +80,30 @@ function resolvePreviewStep(step: WorkflowStep): WorkflowStep {
 
 function resolvePreviewCanEdit(step: WorkflowStep): boolean {
   return !step.teamLeader && step.edit === true;
+}
+
+function buildStepPreview(
+  step: WorkflowStep,
+  projectCwd: string,
+  resolution: PreviewProviderResolution,
+): StepPreview {
+  const previewStep = resolvePreviewStep(step);
+  const substeps = previewStep.parallel?.map((substep) =>
+    buildStepPreview(substep, projectCwd, resolution),
+  );
+  const isParallelParent = substeps !== undefined && substeps.length > 0;
+
+  return {
+    name: step.name,
+    personaDisplayName: previewStep.personaDisplayName,
+    personaContent: isParallelParent ? '' : readStepPersona(previewStep, projectCwd),
+    instructionContent: isParallelParent ? '' : previewStep.instruction,
+    allowedTools: isParallelParent ? [] : resolvePreviewAllowedTools(previewStep, resolution),
+    canEdit: isParallelParent ? false : resolvePreviewCanEdit(previewStep),
+    sessionKey: previewStep.sessionKey,
+    requiresUserInput: previewStep.requiresUserInput,
+    ...(isParallelParent ? { substeps } : {}),
+  };
 }
 
 function resolvePreviewProviderResolution(projectCwd: string): PreviewProviderResolution {
@@ -159,15 +186,7 @@ function buildStepPreviews(
     visited.add(currentName);
     const step = stepMap.get(currentName);
     if (!step) break;
-    const previewStep = resolvePreviewStep(step);
-    previews.push({
-      name: step.name,
-      personaDisplayName: previewStep.personaDisplayName,
-      personaContent: readStepPersona(previewStep, projectCwd),
-      instructionContent: previewStep.instruction,
-      allowedTools: resolvePreviewAllowedTools(previewStep, resolution),
-      canEdit: resolvePreviewCanEdit(previewStep),
-    });
+    previews.push(buildStepPreview(step, projectCwd, resolution));
     currentName = step.rules?.[0]?.next;
   }
 

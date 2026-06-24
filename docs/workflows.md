@@ -55,6 +55,7 @@ report_formats:
 
 steps:
   - name: step-name
+    session_key: shared-coder        # Optional explicit session key for this step
     persona: coder                   # Persona key (references personas map)
     persona_name: coder              # Display name (optional, does not affect provider_routing.personas)
     tags: [implementation, edit]     # Provider routing tags (optional)
@@ -95,6 +96,8 @@ steps:
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
 
 `persona_name` is only a display name. `provider_routing.personas` in config matches the raw `persona` key, while `provider_routing.tags` matches the optional `tags` array in the order written on the step. Later tags override earlier tags for the same provider/model/provider_options leaf.
+
+`session_key` is supported on normal agent steps, parallel sub-steps, and `loop_monitors.judge`. It is not supported on system steps, workflow-call steps, or parallel parent steps because those entries do not own an agent session. Use it when multiple agent steps share a persona but must keep separate sessions, or when different agent steps must intentionally share one session. The effective runtime key is `session_key` plus the resolved provider suffix, for example `shared-coder:claude`. When `session_key` is omitted, TAKT uses the persona key, or the step name when no persona is set. Empty strings and whitespace-only values are rejected during workflow validation.
 
 String `quality_gates` remain AI completion directives and are injected into agent step prompts. `type: command` gates run inside the worktree after an agent step completes and pass only when the command exits with code `0`. Workflow YAML command gates require `workflow_command_gates.custom_scripts: true` in config. On failure, TAKT feeds command metadata, cwd, exit code or timeout/output-limit details, the output log path, and bounded sanitized stdout/stderr back into the same agent step. Raw stdout and stderr are also written to the local output log. `system` and `workflow_call` steps do not accept `quality_gates`.
 
@@ -161,6 +164,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
   - name: reviewers
     parallel:
       - name: arch-review
+        session_key: arch-review
         persona: architecture-reviewer
         policy: review
         knowledge: architecture
@@ -170,6 +174,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
           - condition: needs_fix
         instruction: review-arch
       - name: security-review
+        session_key: security-review
         persona: security-reviewer
         policy: review
         edit: false
@@ -332,6 +337,8 @@ Promotion is not supported on parallel sub-steps.
 |--------|---------|-------------|
 | `persona` | - | Persona key (references section map) or file path |
 | `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
+| `session_key` | - | Explicit session key for normal agent steps and parallel sub-steps. The resolved provider is appended to the runtime key; empty and whitespace-only values are invalid |
+| `requires_user_input` | `false` | Marks a normal agent step as capable of waiting for user input. System steps, workflow-call steps, and parallel parent steps cannot set it. A step with `requires_user_input: true` requires interactive mode and a user input handler before the agent runs; otherwise the workflow aborts without executing that agent. The actual wait is triggered only by a matching rule with `requires_user_input: true` |
 | `tags` | - | Ordered provider routing tags matched against `provider_routing.tags` in config |
 | `policy` | - | Policy key or array of keys |
 | `knowledge` | - | Knowledge key or array of keys |
@@ -429,6 +436,7 @@ loop_monitors:
   - cycle: [review, fix]
     threshold: 3
     judge:
+      session_key: loop-supervisor
       persona: supervisor
       instruction: "Evaluate if the fix loop is making progress..."
       rules:
@@ -437,6 +445,8 @@ loop_monitors:
         - condition: "No progress"
           next: ABORT
 ```
+
+`loop_monitors.judge.session_key` follows the same provider-suffixed runtime key behavior as step `session_key`. Set it when separate monitors use the same persona but should not resume the same judge session.
 
 ### `rate_limit_fallback`
 

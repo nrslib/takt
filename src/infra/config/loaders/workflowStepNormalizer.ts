@@ -275,6 +275,8 @@ export function normalizeStepFromRaw(
   const normalizedStep: AgentWorkflowStep = {
     name: step.name,
     description: step.description,
+    sessionKey: step.session_key,
+    requiresUserInput: step.requires_user_input,
     kind: 'agent',
     persona: personaSpec,
     providerRoutingPersonaKey: normalizedRawPersona,

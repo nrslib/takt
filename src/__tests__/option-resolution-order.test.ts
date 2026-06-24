@@ -996,6 +996,39 @@ describe('option resolution order', () => {
     );
   });
 
+  it('should pass step permission overrides to the provider call', async () => {
+    loadProjectConfigMock.mockReturnValue({});
+    loadGlobalConfigMock.mockReturnValue({
+      provider: 'codex',
+      providerProfiles: {
+        codex: { defaultPermissionMode: 'full' },
+      },
+      language: 'en',
+      concurrency: 1,
+      taskPollIntervalMs: 500,
+    });
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      permissionResolution: {
+        stepName: 'judge-1',
+        providerProfiles: {
+          codex: {
+            defaultPermissionMode: 'edit',
+            stepPermissionOverrides: {
+              'judge-1': 'readonly',
+            },
+          },
+        },
+      },
+    });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ permissionMode: 'readonly' }),
+    );
+  });
+
   it('should preserve explicit permission mode when permissionResolution is not set', async () => {
     loadProjectConfigMock.mockReturnValue({});
     loadGlobalConfigMock.mockReturnValue({

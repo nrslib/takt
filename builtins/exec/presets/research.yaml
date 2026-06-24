@@ -1,0 +1,60 @@
+name: research
+description: Research and implementation team
+session:
+  provider: claude
+  model: opus
+  effort: high
+replan:
+  instruction: exec-replan
+  knowledge:
+    - research
+  policy: []
+workers:
+  - name: worker-1
+    provider: claude
+    model: sonnet
+    effort: high
+    instruction: exec-worker
+    knowledge:
+      - research
+      - architecture
+    policy:
+      - coding
+      - testing
+  - name: worker-2
+    provider: claude
+    model: sonnet
+    effort: high
+    instruction: exec-worker
+    knowledge:
+      - research
+      - unit-testing
+    policy:
+      - coding
+      - testing
+  - name: worker-3
+    provider: claude
+    model: sonnet
+    effort: high
+    instruction: exec-worker
+    knowledge:
+      - research
+      - architecture
+    policy:
+      - coding
+      - testing
+judges:
+  - name: judge-1
+    provider: claude
+    model: opus
+    effort: high
+    instruction: exec-judge
+    knowledge:
+      - research
+      - architecture
+    policy:
+      - review
+loop:
+  threshold: 3
+  large_threshold: 2
+  max_steps: 20

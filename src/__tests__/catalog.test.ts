@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -109,6 +109,20 @@ describe('extractDescription', () => {
     writeFileSync(filePath, '#   Spaced Heading  \n');
 
     expect(extractDescription(filePath)).toBe('Spaced Heading');
+  });
+
+  it('should reject symlinked markdown files', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-catalog-secret-'));
+    try {
+      const secretPath = join(externalDir, 'secret.md');
+      const linkPath = join(tempDir, 'linked.md');
+      writeFileSync(secretPath, '# Secret');
+      symlinkSync(secretPath, linkPath);
+
+      expect(() => extractDescription(linkPath)).toThrow(/must not be a symbolic link/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -231,6 +245,44 @@ describe('scanFacets', () => {
     // Then: only .md file is included
     expect(entries).toHaveLength(1);
     expect(entries[0]!.name).toBe('valid');
+  });
+
+  it('should skip project facet file symlinks and not expose linked descriptions', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-catalog-linked-file-'));
+    try {
+      const projectInstructions = join(projectDir, '.takt', 'facets', 'instructions');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(projectInstructions, { recursive: true });
+      writeFileSync(secretPath, '# External Secret');
+      writeFileSync(join(projectInstructions, 'safe.md'), '# Safe Instruction');
+      symlinkSync(secretPath, join(projectInstructions, 'linked.md'));
+
+      const entries = scanFacets('instructions', projectDir);
+
+      expect(entries.map((entry) => entry.name)).toContain('safe');
+      expect(entries.map((entry) => entry.name)).not.toContain('linked');
+      expect(entries.map((entry) => entry.description)).not.toContain('External Secret');
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should skip project facet directories that resolve outside the project', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-catalog-linked-dir-'));
+    try {
+      mkdirSync(join(projectDir, '.takt', 'facets'), { recursive: true });
+      const externalKnowledge = join(externalDir, 'knowledge');
+      mkdirSync(externalKnowledge, { recursive: true });
+      writeFileSync(join(externalKnowledge, 'secret.md'), '# External Secret');
+      symlinkSync(externalKnowledge, join(projectDir, '.takt', 'facets', 'knowledge'));
+
+      const entries = scanFacets('knowledge', projectDir);
+
+      expect(entries.map((entry) => entry.name)).not.toContain('secret');
+      expect(entries.map((entry) => entry.description)).not.toContain('External Secret');
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 
   it('should work with all facet types', () => {

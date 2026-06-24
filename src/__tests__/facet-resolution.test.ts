@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -183,6 +183,43 @@ describe('resolveRefToContent with layer resolution', () => {
 
     // Then: falls back to resolveResourceContent, which returns the ref as inline content
     expect(content).toBe('nonexistent-facet-xyz');
+  });
+
+  it('should reject project facet file symlinks before reading linked content', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-secret-'));
+    try {
+      const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(instructionsDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret instruction content');
+      symlinkSync(secretPath, join(instructionsDir, 'exec-worker.md'));
+
+      expect(() => resolveRefToContent('exec-worker', undefined, tempDir, 'instructions', context))
+        .toThrow(/Project facet file must be a regular file/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject project facet directory symlinks for every named facet type', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-facets-external-'));
+    try {
+      mkdirSync(join(tempDir, '.takt'), { recursive: true });
+      mkdirSync(join(externalDir, 'facets'), { recursive: true });
+      symlinkSync(join(externalDir, 'facets'), join(tempDir, '.takt', 'facets'));
+
+      const facetTypes: FacetType[] = ['instructions', 'knowledge', 'policies', 'output-contracts'];
+      for (const facetType of facetTypes) {
+        const dir = join(externalDir, 'facets', facetType);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'external.md'), `External ${facetType}`);
+
+        expect(() => resolveRefToContent('external', undefined, tempDir, facetType, context))
+          .toThrow(/Project facet file must stay inside the project/);
+      }
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -483,6 +520,37 @@ describe('resolvePersona with layer resolution', () => {
     const result = resolvePersona('custom-persona', emptySections, tempDir, context);
     expect(result.personaSpec).toBe('custom-persona');
     expect(result.personaPath).toBe(personaPath);
+  });
+
+  it('should reject project persona symlinks during named persona resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-persona-secret-'));
+    try {
+      const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
+      const secretPath = join(externalDir, 'secret-persona.md');
+      mkdirSync(projectPersonasDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret persona content');
+      symlinkSync(secretPath, join(projectPersonasDir, 'custom-persona.md'));
+
+      expect(() => resolvePersona('custom-persona', emptySections, tempDir, context))
+        .toThrow(/Project facet file must be a regular file/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject project persona directory symlinks during named persona resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-persona-external-'));
+    try {
+      mkdirSync(join(projectDir, '.takt', 'facets'), { recursive: true });
+      mkdirSync(join(externalDir, 'personas'), { recursive: true });
+      writeFileSync(join(externalDir, 'personas', 'custom-persona.md'), 'External persona content');
+      symlinkSync(join(externalDir, 'personas'), join(projectDir, '.takt', 'facets', 'personas'));
+
+      expect(() => resolvePersona('custom-persona', emptySections, tempDir, context))
+        .toThrow(/Project facet file must stay inside the project/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 
   it('should prefer section map over layer resolution', () => {

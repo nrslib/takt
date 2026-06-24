@@ -89,6 +89,7 @@ export class LoopMonitorJudgeRunner {
 
     return {
       name: `_loop_judge_${monitor.cycle.join('_')}`,
+      sessionKey: monitor.judge.sessionKey,
       persona: monitor.judge.persona,
       personaPath: monitor.judge.personaPath,
       personaDisplayName: 'loop-judge',
