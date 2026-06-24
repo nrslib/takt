@@ -22,7 +22,7 @@ Instead of asking one agent to remember the whole process, TAKT gives each step 
 - Run plan → implement → review → fix loops as explicit workflow steps
 - Keep context focused with step-specific personas, policies, knowledge, instructions, and output contracts
 - Execute queued tasks in isolated worktrees and inspect logs and reports afterward
-- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, Cursor, GitHub Copilot CLI, or Kiro as providers
+- Use Claude Code, Claude SDK, Codex SDK, OpenCode SDK, subscription/login-based CLI providers, Cursor, GitHub Copilot CLI, or Kiro as providers
 
 **T**AKT **A**gent **K**oordination **T**opology orchestrates multiple AI agents with structured review loops, managed prompts, and guardrails.
 
@@ -96,6 +96,13 @@ These providers require an external CLI:
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
 - `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
+
+These CLI-only providers are intended for subscription or login-session operation. TAKT strips common API-key environment variables before launching them:
+
+- `codex-cli` — Codex CLI via `codex exec`
+- `opencode-cli` — OpenCode CLI via `opencode run`
+- `cursor-cli` — Cursor Agent CLI via `cursor-agent`
+- `agy-cli` — Antigravity CLI via `agy -p`
 
 Optional:
 
@@ -249,7 +256,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 Minimal `~/.takt/config.yaml`:
 
 ```yaml
-provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
+provider: claude    # claude, claude-sdk, claude-terminal, codex, codex-cli, opencode, opencode-cli, cursor, cursor-cli, copilot, kiro, agy-cli, or mock
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```

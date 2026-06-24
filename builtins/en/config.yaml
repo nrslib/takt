@@ -7,7 +7,7 @@
 language: en        # UI language: en | ja
 
 # Default provider and model
-# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | opencode | cursor | copilot | kiro | mock
+# provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | codex-cli | opencode | opencode-cli | cursor | cursor-cli | copilot | kiro | agy-cli | mock
 # model: sonnet                       # Default model (passed directly to provider)
 
 # Execution control
