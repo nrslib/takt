@@ -17,6 +17,7 @@ import type {
   WorkflowEngineOptions,
   WorkflowRunResult,
   WorkflowSharedRuntimeState,
+  WorkflowStepProgressInfo,
 } from '../types.js';
 import { LoopDetector } from './loop-detector.js';
 import { createInitialState, addUserInput as addUserInputToState } from './state-manager.js';
@@ -237,6 +238,7 @@ export class WorkflowEngine extends EventEmitter {
           buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
           buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+          getStepProgress: this.getStepProgressInfo.bind(this),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           setActiveStep: this.setActiveResumePoint.bind(this),
           addUserInput: this.addUserInput.bind(this),
@@ -284,6 +286,15 @@ export class WorkflowEngine extends EventEmitter {
       stack: [...this.resumeStackPrefix, buildWorkflowResumePointEntry(this.config, step.name, getWorkflowStepKind(step))],
       iteration,
       elapsed_ms: Date.now() - this.sharedRuntime.startedAtMs,
+    };
+  }
+
+  private getStepProgressInfo(step: WorkflowStep): WorkflowStepProgressInfo {
+    const stepIndex = this.config.steps.findIndex((candidate) => candidate.name === step.name);
+    return {
+      workflowName: this.config.name,
+      stepIndex: stepIndex >= 0 ? stepIndex : 0,
+      totalSteps: this.config.steps.length,
     };
   }
 

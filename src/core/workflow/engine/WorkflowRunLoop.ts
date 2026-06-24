@@ -4,6 +4,7 @@ import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
+  WorkflowStepProgressInfo,
   StepRunResult,
   WorkflowAbortKind,
   WorkflowAbortResult,
@@ -69,6 +70,7 @@ interface WorkflowRunLoopDeps {
   buildInstruction: (step: WorkflowStep, stepIteration: number) => string;
   buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  getStepProgress?: (step: WorkflowStep) => WorkflowStepProgressInfo;
   resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
   setActiveStep: (step: WorkflowStep, iteration: number) => void;
   addUserInput: (input: string) => void;
@@ -358,7 +360,12 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       : '';
     deps.setActiveStep(step, activeIteration);
     const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
-    deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo);
+    const progressInfo = deps.getStepProgress?.(step);
+    if (progressInfo) {
+      deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo, progressInfo);
+    } else {
+      deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo);
+    }
 
     try {
       const result = await runWithStepSpan({

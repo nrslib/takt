@@ -39,6 +39,8 @@ function createBridgeHarness(options?: {
   resumePoint?: WorkflowResumePoint;
   findingIds?: string[];
   traceDiscovery?: { queries: string[] };
+  usePrefixWriter?: boolean;
+  workflowSteps?: Array<{ name: string }>;
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 1,
@@ -72,20 +74,21 @@ function createBridgeHarness(options?: {
     onFindingLedgerUpdated: vi.fn(),
     seedFindingContractFindingIds: vi.fn(),
   };
+  const displayRef = { current: null };
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
     workflowConfig: {
       name: 'parent',
       maxSteps: 5,
-      steps: [{ name: 'review' }],
+      steps: options?.workflowSteps ?? [{ name: 'review' }],
     },
     task: 'task',
     projectCwd: '/tmp/project',
     currentProvider: options?.currentProvider ?? 'mock',
     configuredModel: options?.configuredModel ?? 'gpt-test',
     out: out as never,
-    prefixWriter: prefixWriter as never,
-    displayRef: { current: null },
+    prefixWriter: options?.usePrefixWriter === false ? undefined : prefixWriter as never,
+    displayRef,
     handlerRef: { current: null },
     providerEventLogger: {
       setStep: vi.fn(),
@@ -126,7 +129,7 @@ function createBridgeHarness(options?: {
     },
   });
 
-  return { bridge, engine, out, runMetaManager, resumePoint, analyticsEmitter };
+  return { bridge, engine, out, runMetaManager, resumePoint, analyticsEmitter, displayRef };
 }
 
 describe('bindWorkflowExecutionEvents', () => {
@@ -277,6 +280,35 @@ describe('bindWorkflowExecutionEvents', () => {
     });
 
     expect(out.info).toHaveBeenCalledWith('Variant: high');
+  });
+
+  it('should use child workflow progress when relaying workflow_call child step starts', () => {
+    const { engine, displayRef } = createBridgeHarness({
+      usePrefixWriter: false,
+      workflowSteps: [{ name: 'plan' }, { name: 'delegate' }, { name: 'summarize' }],
+    });
+    const childStep = {
+      name: 'child-review',
+      personaDisplayName: 'Child Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', childStep, 2, 'instruction', {
+      provider: 'mock',
+      model: 'gpt-test',
+    }, {
+      workflowName: 'child',
+      stepIndex: 0,
+      totalSteps: 2,
+    });
+
+    expect(displayRef.current).not.toBeNull();
+    expect((displayRef.current as never as { progressInfo?: unknown }).progressInfo).toMatchObject({
+      iteration: 2,
+      maxSteps: 5,
+      stepIndex: 0,
+      totalSteps: 2,
+    });
   });
 
   it('Codex reasoning effort を step start の provider option 表示に含める', () => {

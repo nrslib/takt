@@ -200,6 +200,117 @@ steps:
     expect(finalPrompt).toContain('Child review complete');
   });
 
+  it('should relay child workflow progress info when workflow_call emits child step starts', async () => {
+    writeWorkflow(tmpDir, 'child.yaml', `name: child
+subworkflow:
+  callable: true
+initial_step: draft
+max_steps: 5
+steps:
+  - name: draft
+    persona: draft
+    instruction: "Draft child workflow"
+    rules:
+      - condition: done
+        next: review
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 5,
+      steps: [
+        {
+          name: 'plan',
+          persona: 'planner',
+          instruction: 'Plan parent workflow',
+          rules: [
+            {
+              condition: 'done',
+              next: 'delegate',
+            },
+          ],
+        },
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+        {
+          name: 'summarize',
+          persona: 'summarizer',
+          instruction: 'Summarize child output',
+          rules: [
+            {
+              condition: 'done',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+    const stepStarts: Array<{ stepName: string; progressInfo: unknown }> = [];
+    mockPersonaResponses({
+      draft: 'draft done',
+      reviewer: 'review done',
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'Verify workflow progress', createWorkflowCallOptions(tmpDir));
+    engine.on('step:start', (step, _iteration, _instruction, _providerInfo, progressInfo) => {
+      stepStarts.push({ stepName: step.name, progressInfo });
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(stepStarts).toEqual([
+      {
+        stepName: 'delegate',
+        progressInfo: {
+          workflowName: 'parent',
+          stepIndex: 1,
+          totalSteps: 3,
+        },
+      },
+      {
+        stepName: 'draft',
+        progressInfo: {
+          workflowName: 'child',
+          stepIndex: 0,
+          totalSteps: 2,
+        },
+      },
+      {
+        stepName: 'review',
+        progressInfo: {
+          workflowName: 'child',
+          stepIndex: 1,
+          totalSteps: 2,
+        },
+      },
+    ]);
+  });
+
   it('子 workflow の step:rate_limited イベントを親 engine に中継する', async () => {
     writeWorkflow(tmpDir, 'child.yaml', `name: child
 subworkflow:

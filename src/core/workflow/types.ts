@@ -149,6 +149,12 @@ export interface WorkflowRunResult {
   returnValue?: string;
 }
 
+export interface WorkflowStepProgressInfo {
+  workflowName: string;
+  stepIndex: number;
+  totalSteps: number;
+}
+
 export interface WorkflowCallChildEngine {
   on: (event: string, listener: (...args: unknown[]) => void) => void;
   runWithResult: () => Promise<WorkflowRunResult>;
@@ -166,7 +172,13 @@ export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => W
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
-  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo) => void;
+  'step:start': (
+    step: WorkflowStep,
+    iteration: number,
+    instruction: string,
+    providerInfo: StepProviderInfo,
+    progressInfo?: WorkflowStepProgressInfo,
+  ) => void;
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
   'findings:ledger': (ledger: FindingLedger) => void;

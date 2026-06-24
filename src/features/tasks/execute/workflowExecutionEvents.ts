@@ -3,7 +3,7 @@ import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
-import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import type { StepProviderInfo, WorkflowStepProgressInfo } from '../../../core/workflow/types.js';
 import { CONFIGURED_PROVIDER_OPTION_VALUE } from '../../../core/workflow/providerOptionsRedaction.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
@@ -124,6 +124,34 @@ function emitProviderOptionLines(
   }
 }
 
+function resolveDisplayProgress(
+  workflowConfig: WorkflowExecutionEventBridgeDeps['workflowConfig'],
+  step: { name: string },
+  progressInfo: WorkflowStepProgressInfo | undefined,
+): Pick<WorkflowStepProgressInfo, 'stepIndex' | 'totalSteps'> {
+  // workflow_call relays child step events through the parent bridge, so the
+  // emitting engine must be allowed to provide its own workflow-local progress.
+  if (
+    progressInfo
+    && Number.isInteger(progressInfo.stepIndex)
+    && progressInfo.stepIndex >= 0
+    && Number.isInteger(progressInfo.totalSteps)
+    && progressInfo.totalSteps > 0
+    && progressInfo.stepIndex < progressInfo.totalSteps
+  ) {
+    return {
+      stepIndex: progressInfo.stepIndex,
+      totalSteps: progressInfo.totalSteps,
+    };
+  }
+
+  const stepIndex = workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
+  return {
+    stepIndex: stepIndex >= 0 ? stepIndex : 0,
+    totalSteps: workflowConfig.steps.length,
+  };
+}
+
 export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
@@ -197,7 +225,7 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('step:start', (step, iteration, instruction, providerInfo) => {
+  deps.engine.on('step:start', (step, iteration, instruction, providerInfo, progressInfo) => {
     state.currentIteration = iteration;
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateStep(step.name, iteration, state.lastResumePoint);
@@ -234,12 +262,12 @@ export function bindWorkflowExecutionEvents(
     deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel);
 
     if (!deps.prefixWriter) {
-      const stepIndex = deps.workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
+      const displayProgress = resolveDisplayProgress(deps.workflowConfig, step, progressInfo);
       deps.displayRef.current = new StreamDisplay(safePersonaDisplayName, isQuietMode(), {
         iteration,
         maxSteps: deps.workflowConfig.maxSteps,
-        stepIndex: stepIndex >= 0 ? stepIndex : 0,
-        totalSteps: deps.workflowConfig.steps.length,
+        stepIndex: displayProgress.stepIndex,
+        totalSteps: displayProgress.totalSteps,
       });
       deps.handlerRef.current = null;
     }
