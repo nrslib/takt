@@ -34,6 +34,7 @@ import {
   emitCodexItemUpdate,
 } from './CodexStreamHandler.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { normalizeCodexOutputSchema } from './structured-output-schema.js';
 
 export type { CodexCallOptions } from './types.js';
 
@@ -359,7 +360,7 @@ export class CodexClient {
 
         const turnOptions: TurnOptions = {
           signal: streamAbortController.signal,
-          ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
+          ...(options.outputSchema ? { outputSchema: normalizeCodexOutputSchema(options.outputSchema) } : {}),
         };
         const { events } = await thread.runStreamed(input, turnOptions);
         resetIdleTimeout();

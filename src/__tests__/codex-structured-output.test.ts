@@ -16,6 +16,7 @@ import type { CodexCallOptions } from '../infra/codex/types.js';
 
 let mockEvents: Array<Record<string, unknown>> = [];
 let lastThreadOptions: Record<string, unknown> | undefined;
+let lastRunOptions: Record<string, unknown> | undefined;
 let lastCodexConstructorOptions: Record<string, unknown> | undefined;
 
 vi.mock('@openai/codex-sdk', () => {
@@ -28,13 +29,16 @@ vi.mock('@openai/codex-sdk', () => {
         lastThreadOptions = options;
         return {
           id: 'thread-mock',
-          runStreamed: async () => ({
-            events: (async function* () {
-              for (const event of mockEvents) {
-                yield event;
-              }
-            })(),
-          }),
+          runStreamed: async (_input: unknown, options?: Record<string, unknown>) => {
+            lastRunOptions = options;
+            return {
+              events: (async function* () {
+                for (const event of mockEvents) {
+                  yield event;
+                }
+              })(),
+            };
+          },
         };
       }
       async resumeThread() {
@@ -52,6 +56,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
     vi.clearAllMocks();
     mockEvents = [];
     lastThreadOptions = undefined;
+    lastRunOptions = undefined;
     lastCodexConstructorOptions = undefined;
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
@@ -270,6 +275,126 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
 
     expect(result.structuredOutput).toEqual({ step: 1 });
+  });
+
+  it('should normalize the schema sent to Codex while keeping literal values unchanged when outputSchema is provided', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        allOf: { type: 'string' },
+        action: { type: 'string' },
+        goals: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        meta: {
+          type: 'object',
+          properties: {
+            owner: { type: 'string' },
+          },
+          default: { properties: { owner: 'nrs' } },
+          enum: [{ properties: { owner: 'nrs' } }],
+          allOf: [
+            {
+              properties: {
+                owner: { minLength: 1 },
+              },
+            },
+          ],
+        },
+      },
+      $defs: {
+        taskRef: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          allOf: [
+            {
+              properties: {
+                id: { minLength: 1 },
+              },
+            },
+          ],
+        },
+      },
+      allOf: [
+        {
+          if: {
+            properties: { action: { const: 'enqueue_new_task' } },
+            required: ['action'],
+          },
+          then: {
+            properties: {
+              goals: { minItems: 1 },
+            },
+          },
+        },
+      ],
+      required: ['action', 'goals'],
+      additionalProperties: false,
+    };
+    const originalSchema = structuredClone(schema);
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'msg-1',
+          type: 'agent_message',
+          text: '{"allOf": "field", "action": "wait_before_next_scan", "goals": [], "labels": [], "meta": {"owner": "nrs"}}',
+        },
+      },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      outputSchema: schema,
+    });
+
+    expect(lastRunOptions?.outputSchema).toEqual({
+      type: 'object',
+      properties: {
+        allOf: { type: 'string' },
+        action: { type: 'string' },
+        goals: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        meta: {
+          type: 'object',
+          properties: {
+            owner: { type: 'string' },
+          },
+          default: { properties: { owner: 'nrs' } },
+          enum: [{ properties: { owner: 'nrs' } }],
+          required: ['owner'],
+        },
+      },
+      $defs: {
+        taskRef: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+        },
+      },
+      required: ['action', 'goals', 'allOf', 'labels', 'meta'],
+      additionalProperties: false,
+    });
+    expect(lastRunOptions?.outputSchema).not.toHaveProperty('allOf');
+    expect(schema).toEqual(originalSchema);
   });
 
   it('provider_options.codex.network_access が ThreadOptions に反映される', async () => {
