@@ -124,6 +124,15 @@ describe('label integrity', () => {
     expect(ui).toHaveProperty('acceptNoAssistant');
   });
 
+  it('contains interactive task completion continue labels', () => {
+    expect(getLabel('interactive.taskResult.completed', 'en')).toBe('Task completed');
+    expect(getLabel('interactive.taskResult.failed', 'en')).toBe('Task failed');
+    expect(getLabel('interactive.taskResult.continuePrompt', 'en')).toBe('Continue?');
+    expect(() => getLabel('interactive.taskResult.completed', 'ja')).not.toThrow();
+    expect(() => getLabel('interactive.taskResult.failed', 'ja')).not.toThrow();
+    expect(() => getLabel('interactive.taskResult.continuePrompt', 'ja')).not.toThrow();
+  });
+
   it('contains all expected workflow keys in en', () => {
     expect(() => getLabel('workflow.iterationLimit.maxReached')).not.toThrow();
     expect(() => getLabel('workflow.iterationLimit.currentStep')).not.toThrow();
@@ -147,6 +156,9 @@ describe('label integrity', () => {
       'interactive.ui.introQuiet',
       'interactive.ui.introPassthrough',
       'interactive.ui.cancelled',
+      'interactive.taskResult.completed',
+      'interactive.taskResult.failed',
+      'interactive.taskResult.continuePrompt',
       'interactive.ui.acceptNoAssistant',
       'interactive.commands.accept',
       'workflow.iterationLimit.maxReached',

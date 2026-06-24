@@ -13,6 +13,7 @@ export {
   confirmAndCreateWorktree,
   determineWorkflow,
   type SelectAndExecuteOptions,
+  type SelectAndExecuteTaskResult,
   type WorktreeConfirmationResult,
 } from './execute/selectAndExecute.js';
 export { postExecutionFlow, type PostExecutionOptions } from './execute/postExecution.js';

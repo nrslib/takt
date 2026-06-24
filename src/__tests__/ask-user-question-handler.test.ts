@@ -50,7 +50,11 @@ describe('createAskUserQuestionHandler', () => {
   const originalTouchTty = process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
   afterEach(() => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: originalIsTTY,
+      writable: true,
+      configurable: true,
+    });
     if (originalNoTty === undefined) {
       delete process.env.TAKT_NO_TTY;
     } else {
@@ -64,7 +68,7 @@ describe('createAskUserQuestionHandler', () => {
   });
 
   it('should return a handler when TTY is available', () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true, configurable: true });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
@@ -74,7 +78,7 @@ describe('createAskUserQuestionHandler', () => {
   });
 
   it('should return a deny handler when no TTY is available', () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true, configurable: true });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
@@ -84,7 +88,7 @@ describe('createAskUserQuestionHandler', () => {
   });
 
   it('should return a deny handler when TAKT_NO_TTY=1', () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true, configurable: true });
     process.env.TAKT_NO_TTY = '1';
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
@@ -93,7 +97,7 @@ describe('createAskUserQuestionHandler', () => {
   });
 
   it('deny handler should throw AskUserQuestionDeniedError', () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true, configurable: true });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
@@ -412,7 +416,11 @@ describe('buildSdkOptions — AskUserQuestion hooks registration', () => {
   const originalTouchTty = process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
   afterEach(() => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: originalIsTTY,
+      writable: true,
+      configurable: true,
+    });
     if (originalNoTty === undefined) {
       delete process.env.TAKT_NO_TTY;
     } else {
@@ -426,7 +434,7 @@ describe('buildSdkOptions — AskUserQuestion hooks registration', () => {
   });
 
   it('should auto-register PreToolUse hooks in non-TTY when no handler is provided', () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true, configurable: true });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
@@ -438,7 +446,7 @@ describe('buildSdkOptions — AskUserQuestion hooks registration', () => {
   });
 
   it('should register hooks in TTY when no handler is provided', () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, writable: true, configurable: true });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
@@ -450,7 +458,7 @@ describe('buildSdkOptions — AskUserQuestion hooks registration', () => {
   });
 
   it('non-TTY auto-deny hook should return decision: block for AskUserQuestion', async () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true, configurable: true });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 
@@ -474,7 +482,7 @@ describe('buildSdkOptions — AskUserQuestion hooks registration', () => {
   });
 
   it('should use explicit handler when provided, even in non-TTY', () => {
-    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, writable: true, configurable: true });
     delete process.env.TAKT_NO_TTY;
     delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
 

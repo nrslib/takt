@@ -63,6 +63,10 @@ interactive:
     userStopped: "⚠️ Previous task was interrupted by user"
     workflow: "Workflow: {workflowName}"
     timestamp: "Executed: {timestamp}"
+  taskResult:
+    completed: "Task completed"
+    failed: "Task failed"
+    continuePrompt: "Continue?"
   commands:
     accept: "Accept latest assistant response"
     play: "Run a task immediately"

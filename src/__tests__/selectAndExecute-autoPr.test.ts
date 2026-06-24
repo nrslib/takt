@@ -72,6 +72,12 @@ vi.mock('../infra/github/index.js', () => ({
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeTask: (...args: unknown[]) => mockExecuteTask(...args),
+  executeTaskWithResult: async (...args: unknown[]) => {
+    const result = await mockExecuteTask(...args);
+    return typeof result === 'boolean'
+      ? { success: result, ...(result ? {} : { reason: 'Task failed' }) }
+      : result;
+  },
 }));
 
 vi.mock('../features/workflowSelection/index.js', () => ({
@@ -99,10 +105,11 @@ beforeEach(() => {
 
 describe('selectAndExecuteTask (execute path)', () => {
   it('should execute in-place without worktree setup or PR prompts', async () => {
-    await selectAndExecuteTask('/project', 'test task', {
+    const result = await selectAndExecuteTask('/project', 'test task', {
       workflow: 'default',
     });
 
+    expect(result).toEqual({ success: true, status: 'completed' });
     expect(mockAutoCommitAndPush).not.toHaveBeenCalled();
     expect(mockAddTask).toHaveBeenCalledWith('test task', { workflow: 'default' });
     expect(mockExecuteTask).toHaveBeenCalledWith(
@@ -160,10 +167,11 @@ describe('selectAndExecuteTask (execute path)', () => {
   it('should record task and complete when executeTask returns true', async () => {
     mockExecuteTask.mockResolvedValue(true);
 
-    await selectAndExecuteTask('/project', 'test task', {
+    const result = await selectAndExecuteTask('/project', 'test task', {
       workflow: 'default',
     });
 
+    expect(result).toEqual({ success: true, status: 'completed' });
     expect(mockAddTask).toHaveBeenCalledWith('test task', { workflow: 'default' });
     expect(mockCompleteTask).toHaveBeenCalledTimes(1);
     expect(mockFailTask).not.toHaveBeenCalled();
@@ -180,6 +188,26 @@ describe('selectAndExecuteTask (execute path)', () => {
       workflow: 'default',
     })).rejects.toThrow('process exit');
 
+    expect(mockAddTask).toHaveBeenCalledWith('test task', { workflow: 'default' });
+    expect(mockFailTask).toHaveBeenCalledTimes(1);
+    expect(mockCompleteTask).not.toHaveBeenCalled();
+    processExitSpy.mockRestore();
+  });
+
+  it('should return false without exiting when exitOnFailure is disabled', async () => {
+    mockExecuteTask.mockResolvedValue(false);
+
+    const processExitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process exit');
+    }) as (code?: string | number | null | undefined) => never);
+
+    const result = await selectAndExecuteTask('/project', 'test task', {
+      workflow: 'default',
+      exitOnFailure: false,
+    });
+
+    expect(result).toEqual({ success: false, status: 'failed', reason: 'Task failed' });
+    expect(processExitSpy).not.toHaveBeenCalled();
     expect(mockAddTask).toHaveBeenCalledWith('test task', { workflow: 'default' });
     expect(mockFailTask).toHaveBeenCalledTimes(1);
     expect(mockCompleteTask).not.toHaveBeenCalled();
