@@ -89,26 +89,16 @@ export class CloneManager {
         : path.resolve(projectDir, options.worktree);
     }
 
-    return CloneManager.resolveAvailableClonePath(
+    return CloneManager.reserveAvailableClonePath(
       CloneManager.resolveCloneBaseDir(projectDir),
       dirName,
     );
   }
 
-  private static resolveAvailableClonePath(baseDir: string, dirName: string): string {
-    const firstCandidate = path.join(baseDir, dirName);
-    if (!fs.existsSync(firstCandidate)) {
-      return firstCandidate;
-    }
-
-    for (let suffix = 2; suffix <= 100; suffix += 1) {
-      const candidate = path.join(baseDir, `${dirName}-${suffix}`);
-      if (!fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-
-    throw new Error(`Unable to allocate clone path in ${baseDir} for ${dirName}`);
+  private static reserveAvailableClonePath(baseDir: string, dirName: string): string {
+    fs.mkdirSync(baseDir, { recursive: true });
+    // Existence checks race when parallel tasks choose the same minute+slug path.
+    return fs.mkdtempSync(path.join(baseDir, `${dirName}-`));
   }
 
   private static resolveBranchName(options: WorktreeOptions): string {
@@ -237,7 +227,7 @@ export class CloneManager {
     CloneManager.resolveBaseBranch(projectDir);
 
     const timestamp = CloneManager.generateTimestamp();
-    const clonePath = CloneManager.resolveAvailableClonePath(
+    const clonePath = CloneManager.reserveAvailableClonePath(
       CloneManager.resolveCloneBaseDir(projectDir),
       `tmp-${timestamp}`,
     );
