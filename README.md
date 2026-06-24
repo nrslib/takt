@@ -104,6 +104,8 @@ These CLI-only providers are intended for subscription or login-session operatio
 - `cursor-cli` — Cursor Agent CLI via `cursor-agent`
 - `agy-cli` — Antigravity CLI via `agy -p`
 
+Set `subscription_only: true` in config to make TAKT reject SDK/API providers and API-key config before workflow execution. The default subscription-only allowlist is `codex-cli`, `cursor-cli`, `opencode-cli`, `agy-cli`, and `mock`.
+
 Optional:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — for `takt #N` (GitHub Issue tasks)
@@ -260,6 +262,16 @@ provider: claude    # claude, claude-sdk, claude-terminal, codex, codex-cli, ope
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
+
+Subscription/login-session-only mode:
+
+```yaml
+subscription_only: true
+provider: codex-cli
+allowed_providers: [codex-cli, cursor-cli, opencode-cli, agy-cli]
+```
+
+When `subscription_only` is enabled, TAKT rejects API-key config such as `openai_api_key`, SDK/API providers such as `codex` and `opencode`, workflow step overrides outside the allowlist, and execution-time `--provider` overrides outside the allowlist.
 
 Or use API keys directly (no CLI installation required for Claude, Codex, OpenCode):
 

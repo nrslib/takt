@@ -104,6 +104,8 @@ takt list
 - `cursor-cli` — `cursor-agent` で Cursor Agent CLI を実行
 - `agy-cli` — `agy -p` で Antigravity CLI を実行
 
+設定で `subscription_only: true` を有効にすると、TAKT は workflow 実行前に SDK/API provider と API key 設定を拒否します。デフォルトの allowlist は `codex-cli`, `cursor-cli`, `opencode-cli`, `agy-cli`, `mock` です。
+
 任意:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — `takt #N` で GitHub Issue を使う場合に必要です

@@ -10,6 +10,11 @@ language: en        # UI language: en | ja
 # provider: claude                    # Default provider: claude | claude-sdk | claude-terminal | codex | codex-cli | opencode | opencode-cli | cursor | cursor-cli | copilot | kiro | agy-cli | mock
 # model: sonnet                       # Default model (passed directly to provider)
 
+# Subscription/login-session-only execution
+# subscription_only: true             # Reject API-key config and SDK/API providers before workflow execution
+# allowed_providers: [codex-cli, cursor-cli, opencode-cli, agy-cli]
+# forbidden_providers: [codex, opencode, claude-sdk]
+
 # Execution control
 # worktree_dir: ~/takt-worktrees   # Base directory for shared clone execution
 # prevent_sleep: false             # Prevent macOS idle sleep while running
