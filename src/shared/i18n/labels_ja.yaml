@@ -32,6 +32,8 @@ interactive:
     playNoTask: "タスク内容を指定してください: /play <タスク内容>"
     retryNoOrder: "前回の指示書（order.md）が見つかりません。/retry はリトライ時のみ使用できます。"
     retryUnavailable: "/retry は `takt list` の Retry モードでのみ使用できます。"
+    resumeUnavailable: "/resume はこのモードでは使用できません。"
+    directExecuteUnavailable: "確定した変更を適用するには /go を使用してください。"
     pasteImageUnavailable: "/paste-image は対話入力中の画像添付にのみ使用できます。"
     personaFallback: "先頭ステップにペルソナがありません。アシスタントモードにフォールバックします。"
   modeSelection:

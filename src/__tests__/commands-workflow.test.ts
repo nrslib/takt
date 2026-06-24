@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockInitWorkflowCommand = vi.fn();
 const mockDoctorWorkflowCommand = vi.fn();
+const mockBuilderWorkflowCommand = vi.fn();
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   const commandActions = new Map<string, (...args: unknown[]) => void>();
@@ -116,6 +117,7 @@ vi.mock('../commands/repertoire/list.js', () => ({
 vi.mock('../features/workflowAuthoring/index.js', () => ({
   initWorkflowCommand: (...args: unknown[]) => mockInitWorkflowCommand(...args),
   doctorWorkflowCommand: (...args: unknown[]) => mockDoctorWorkflowCommand(...args),
+  builderWorkflowCommand: (...args: unknown[]) => mockBuilderWorkflowCommand(...args),
 }));
 
 import '../app/cli/commands.js';
@@ -124,6 +126,7 @@ describe('CLI workflow command', () => {
   beforeEach(() => {
     mockInitWorkflowCommand.mockClear();
     mockDoctorWorkflowCommand.mockClear();
+    mockBuilderWorkflowCommand.mockClear();
   });
 
   it('should register workflow root command and subcommands', () => {
@@ -133,6 +136,7 @@ describe('CLI workflow command', () => {
     expect(calledCommandNames).toContain('workflow');
     expect(commandMocks.get('root.workflow.init')).toBeTruthy();
     expect(commandMocks.get('root.workflow.doctor')).toBeTruthy();
+    expect(commandMocks.get('root.workflow.builder')).toBeTruthy();
   });
 
   it('should describe workflow command set with workflow terminology', () => {
@@ -142,11 +146,14 @@ describe('CLI workflow command', () => {
       .toHaveBeenCalledWith('Initialize a new workflow scaffold');
     expect(commandMocks.get('root.workflow.doctor')?.description)
       .toHaveBeenCalledWith('Validate workflow definitions');
+    expect(commandMocks.get('root.workflow.builder')?.description)
+      .toHaveBeenCalledWith('Design workflows interactively with an AI builder');
   });
 
-  it('should define init options and doctor target arguments', () => {
+  it('should define init options, doctor target arguments, and no builder arguments or options', () => {
     const initCommand = commandMocks.get('root.workflow.init');
     const doctorCommand = commandMocks.get('root.workflow.doctor');
+    const builderCommand = commandMocks.get('root.workflow.builder');
 
     expect(initCommand?.argument).toHaveBeenCalledWith('<name>', 'Workflow name');
     expect(initCommand?.option.mock.calls).toContainEqual(['--description <text>', 'Workflow description']);
@@ -159,6 +166,8 @@ describe('CLI workflow command', () => {
       'Create in ~/.takt/workflows instead of project .takt/workflows',
     ]);
     expect(doctorCommand?.argument).toHaveBeenCalledWith('[targets...]', 'Workflow names or YAML paths');
+    expect(builderCommand?.argument).not.toHaveBeenCalled();
+    expect(builderCommand?.option).not.toHaveBeenCalled();
   });
 
   it('should delegate init action to workflow authoring feature', async () => {
@@ -190,5 +199,15 @@ describe('CLI workflow command', () => {
     await doctorAction?.(['default', './flow.yaml']);
 
     expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default', './flow.yaml'], '/test/cwd');
+  });
+
+  it('should delegate builder action to workflow authoring feature with projectDir only', async () => {
+    const builderAction = commandActions.get('root.workflow.builder');
+
+    expect(builderAction).toBeTypeOf('function');
+
+    await builderAction?.();
+
+    expect(mockBuilderWorkflowCommand).toHaveBeenCalledWith({ projectDir: '/test/cwd' });
   });
 });

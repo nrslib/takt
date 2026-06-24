@@ -1,4 +1,5 @@
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
+import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
 import {
   type FacetResolutionContext,
   type WorkflowSections,
@@ -13,6 +14,15 @@ type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
 type RawStep = RawWorkflow['steps'][number];
 type RawParamDefinition = NonNullable<NonNullable<RawWorkflow['subworkflow']>['params']>[string];
 type RawParamType = RawParamDefinition['type'];
+type WorkflowUsedLocalFacetKeys = Record<'personas' | 'policies' | 'knowledge' | 'instructions' | 'report_formats', Set<string>>;
+export type WorkflowFacetReference = {
+  section: keyof WorkflowUsedLocalFacetKeys;
+  ref: string;
+};
+export type WorkflowCallReference = {
+  call: string;
+  stepName: string;
+};
 function isNamedRef(ref: string): boolean {
   return !isResourcePath(ref) && !/\s/.test(ref);
 }
@@ -87,6 +97,25 @@ function collectNamedRefsFromField(
   return collectNamedRefs(definition.default);
 }
 
+function collectFacetRefsFromField(
+  raw: RawWorkflow,
+  value: unknown,
+  expectedTypes: readonly RawParamType[],
+  expectedKind: RawParamDefinition['facet_kind'],
+): string[] {
+  if (typeof value === 'string') {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.filter((ref): ref is string => typeof ref === 'string');
+  }
+  const definition = getParamDefinition(raw, value, expectedTypes, expectedKind);
+  if (!definition?.default) {
+    return [];
+  }
+  return Array.isArray(definition.default) ? definition.default : [definition.default];
+}
+
 function validateScalarRefs(
   diagnostics: WorkflowDiagnostic[],
   label: string,
@@ -108,7 +137,7 @@ function validateScalarRefs(
   }
 }
 
-function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' | 'knowledge' | 'instructions' | 'report_formats', Set<string>> {
+function collectWorkflowUsedLocalFacetKeys(raw: RawWorkflow): WorkflowUsedLocalFacetKeys {
   const used = {
     instructions: new Set<string>(),
     knowledge: new Set<string>(),
@@ -116,29 +145,37 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
     policies: new Set<string>(),
     report_formats: new Set<string>(),
   };
-  const collectStep = (step: RawStep): void => {
-    if (step.persona && isNamedRef(step.persona)) {
-      used.personas.add(step.persona);
+  for (const reference of collectWorkflowUsedFacetReferences(raw)) {
+    if (isNamedRef(reference.ref)) {
+      used[reference.section].add(reference.ref);
     }
-    if (step.team_leader?.persona && isNamedRef(step.team_leader.persona)) {
-      used.personas.add(step.team_leader.persona);
-    }
-    if (step.team_leader?.part_persona && isNamedRef(step.team_leader.part_persona)) {
-      used.personas.add(step.team_leader.part_persona);
-    }
+  }
+  return used;
+}
 
-    for (const ref of collectNamedRefsFromField(raw, step.instruction, ['facet_ref'], 'instruction')) {
-      used.instructions.add(ref);
+export function collectWorkflowUsedFacetReferences(raw: RawWorkflow): WorkflowFacetReference[] {
+  const references: WorkflowFacetReference[] = [];
+  const addReference = (section: WorkflowFacetReference['section'], ref: unknown): void => {
+    if (typeof ref === 'string') {
+      references.push({ section, ref });
     }
-    for (const ref of collectNamedRefsFromField(raw, step.policy, ['facet_ref', 'facet_ref[]'], 'policy')) {
-      used.policies.add(ref);
+  };
+  const collectStep = (step: RawStep): void => {
+    addReference('personas', step.persona);
+    addReference('personas', step.team_leader?.persona);
+    addReference('personas', step.team_leader?.part_persona);
+    for (const ref of collectFacetRefsFromField(raw, step.instruction, ['facet_ref'], 'instruction')) {
+      addReference('instructions', ref);
     }
-    for (const ref of collectNamedRefsFromField(raw, step.knowledge, ['facet_ref', 'facet_ref[]'], 'knowledge')) {
-      used.knowledge.add(ref);
+    for (const ref of collectFacetRefsFromField(raw, step.policy, ['facet_ref', 'facet_ref[]'], 'policy')) {
+      addReference('policies', ref);
+    }
+    for (const ref of collectFacetRefsFromField(raw, step.knowledge, ['facet_ref', 'facet_ref[]'], 'knowledge')) {
+      addReference('knowledge', ref);
     }
     for (const report of step.output_contracts?.report ?? []) {
-      for (const ref of collectNamedRefsFromField(raw, report.format, ['facet_ref'], 'report_format')) {
-        used.report_formats.add(ref);
+      for (const ref of collectFacetRefsFromField(raw, report.format, ['facet_ref'], 'report_format')) {
+        addReference('report_formats', ref);
       }
     }
     for (const sub of step.parallel ?? []) {
@@ -149,18 +186,30 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
     collectStep(step);
   }
   for (const monitor of raw.loop_monitors ?? []) {
-    if (monitor.judge.persona && isNamedRef(monitor.judge.persona)) {
-      used.personas.add(monitor.judge.persona);
-    }
-    if (monitor.judge.instruction && isNamedRef(monitor.judge.instruction)) {
-      used.instructions.add(monitor.judge.instruction);
-    }
+    addReference('personas', monitor.judge.persona);
+    addReference('instructions', monitor.judge.instruction);
   }
-  return used;
+  return references;
+}
+
+export function collectWorkflowCallReferences(raw: RawWorkflow): WorkflowCallReference[] {
+  const calls: WorkflowCallReference[] = [];
+  const collectStep = (step: RawStep): void => {
+    if (getWorkflowStepKind(step) === 'workflow_call' && typeof step.call === 'string') {
+      calls.push({ call: step.call, stepName: step.name });
+    }
+    for (const sub of step.parallel ?? []) {
+      collectStep(sub as RawStep);
+    }
+  };
+  for (const step of raw.steps) {
+    collectStep(step);
+  }
+  return calls;
 }
 
 function collectUnusedSectionWarnings(raw: RawWorkflow, diagnostics: WorkflowDiagnostic[]): void {
-  const used = collectUsedLocalKeys(raw);
+  const used = collectWorkflowUsedLocalFacetKeys(raw);
   const sections = [
     ['personas', raw.personas],
     ['policies', raw.policies],

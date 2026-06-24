@@ -24,6 +24,7 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 | Bug fix | Regression test required. REJECT if missing |
 | Behavior change | Test update required. REJECT if missing |
 | Side-effect or state-transition change | Successful path and representative failure paths must be verified. REJECT if failure paths are untested |
+| Observable side-effect change | Emitted cases, non-emitted cases, invalid values, and primary branches must be verified |
 | Contract changes through consolidation or abstraction | Must verify that the contract holds on existing equivalent branches, not only on the new shared path |
 | Parser or configuration boundary changes | Must verify syntactically valid inputs with unexpected shapes, missing values, and isolation from personal configuration |
 | Build (type check) | Build must succeed. REJECT if it fails |
@@ -103,6 +104,18 @@ Changes involving side effects or state transitions are not sufficiently verifie
 | A change affects shared state or downstream execution but does not verify rerun behavior after partial failure | Warning. REJECT when it affects a primary path |
 | Mock-verified behavior is not distinguished from unverified real-integration scope | Warning. REJECT when it is a primary requirement |
 | Successful path, representative failure paths, and boundary state transitions are each verified | OK |
+
+## Testing Observable Side Effects
+
+Observable side effects such as records, notifications, classifications, and counters must verify both emission and non-emission conditions at observable units, not only existence.
+
+| Criteria | Verdict |
+|----------|---------|
+| Only the successful emitted path is checked, with no non-emission condition tested | REJECT |
+| Labels, attributes, classifications, counts, or numeric values are not extracted as observable units, relying only on whole-string equality or absence | REJECT |
+| Boundary values that can distort aggregation or classification, such as zero, missing, invalid, or unknown values, are not tested | REJECT |
+| The same semantic event is not verified to keep the same contract across success, failure, retry, interruption, and early-exit paths | REJECT |
+| Emission conditions, non-emission conditions, boundary values, and primary branches are each verified | OK |
 
 ## Testing Contract Changes and Existing Branches
 

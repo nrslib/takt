@@ -46,6 +46,44 @@ describe('loadTemplate', () => {
     expect(result).toContain('リトライアシスタント');
   });
 
+  it('loads an English workflow builder system prompt template with injected source context', () => {
+    const result = loadTemplate('builder_system_prompt', 'en', {
+      styleGuide: 'STYLE GUIDE BODY',
+      yamlSchema: 'YAML SCHEMA BODY',
+      scopeSummary: 'scope: project .takt',
+      assetInventory: 'workflows: default.yaml',
+      targetContext: 'target workflow body',
+      relatedGraph: 'related: review-flow',
+    });
+
+    expect(result).toContain('Workflow Builder');
+    expect(result).toContain('STYLE GUIDE BODY');
+    expect(result).toContain('YAML SCHEMA BODY');
+    expect(result).toContain('scope: project .takt');
+    expect(result).toContain('workflows: default.yaml');
+    expect(result).toContain('target workflow body');
+    expect(result).toContain('related: review-flow');
+  });
+
+  it('loads a Japanese workflow builder system prompt template with injected source context', () => {
+    const result = loadTemplate('builder_system_prompt', 'ja', {
+      styleGuide: 'STYLE GUIDE BODY',
+      yamlSchema: 'YAML SCHEMA BODY',
+      scopeSummary: 'scope: project .takt',
+      assetInventory: 'workflows: default.yaml',
+      targetContext: 'target workflow body',
+      relatedGraph: 'related: review-flow',
+    });
+
+    expect(result).toContain('ワークフロービルダー');
+    expect(result).toContain('STYLE GUIDE BODY');
+    expect(result).toContain('YAML SCHEMA BODY');
+    expect(result).toContain('scope: project .takt');
+    expect(result).toContain('workflows: default.yaml');
+    expect(result).toContain('target workflow body');
+    expect(result).toContain('related: review-flow');
+  });
+
   it('loads score_slug_system_prompt with explicit lang', () => {
     const result = loadTemplate('score_slug_system_prompt', 'en');
     expect(result).toContain('You are a slug generator');
@@ -162,6 +200,7 @@ describe('template file existence', () => {
     'perform_phase3_message',
     'perform_agent_system_prompt',
     'perform_judge_message',
+    'builder_system_prompt',
   ];
 
   for (const name of allTemplates) {

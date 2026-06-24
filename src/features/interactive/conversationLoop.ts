@@ -92,6 +92,16 @@ export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): voi
 
 export type { PostSummaryAction } from './interactive.js';
 
+export interface ConversationGoContext {
+  history: ConversationMessage[];
+  inlineText: string;
+  sessionId: string | undefined;
+  sourceContext: string | undefined;
+  workflowContext: WorkflowContext | undefined;
+  cwd: string;
+  ctx: SessionContext;
+}
+
 /** Strategy for customizing conversation loop behavior */
 export interface ConversationStrategy {
   /** System prompt for AI calls */
@@ -112,6 +122,12 @@ export interface ConversationStrategy {
   initialPromptContext?: string;
   /** Context prepended to summary prompts. */
   summaryPromptContext?: string;
+  /** Custom /go handler. Return null to keep the conversation open. */
+  handleGo?: (context: ConversationGoContext) => Promise<InteractiveModeResult | null>;
+  /** Disable direct execute shortcuts when a mode must finalize through /go. */
+  disableDirectExecuteCommands?: boolean;
+  /** Disable session resume when a mode does not support resuming partial conversations. */
+  enableResumeCommand?: boolean;
 }
 
 /**
@@ -175,6 +191,7 @@ export async function runConversationLoop(
   const commandAvailability: CommandAvailability = {
     enableRetryCommand: strategy.enableRetryCommand,
     hasPreviousOrder: !!strategy.previousOrderContent,
+    enableResumeCommand: strategy.enableResumeCommand,
   };
 
   while (true) {
@@ -227,6 +244,10 @@ export async function runConversationLoop(
 
     switch (match.command) {
       case SlashCommand.Accept: {
+        if (strategy.disableDirectExecuteCommands) {
+          info(ui.directExecuteUnavailable);
+          continue;
+        }
         const assistantMessage = findLatestAssistantMessage(history);
         if (!assistantMessage) {
           info(ui.acceptNoAssistant);
@@ -236,6 +257,10 @@ export async function runConversationLoop(
       }
 
       case SlashCommand.Play: {
+        if (strategy.disableDirectExecuteCommands) {
+          info(ui.directExecuteUnavailable);
+          continue;
+        }
         if (!match.text) {
           info(ui.playNoTask);
           continue;
@@ -262,6 +287,22 @@ export async function runConversationLoop(
       }
 
       case SlashCommand.Go: {
+        if (strategy.handleGo) {
+          const goResult = await strategy.handleGo({
+            history,
+            inlineText: match.text,
+            sessionId,
+            sourceContext,
+            workflowContext,
+            cwd,
+            ctx: { ...ctx, sessionId },
+          });
+          if (goResult === null) {
+            continue;
+          }
+          return goResult;
+        }
+
         const { summaryHistory, userNote } = resolveGoSummaryInput(
           history,
           !!sessionId,
@@ -326,6 +367,10 @@ export async function runConversationLoop(
       }
 
       case SlashCommand.Resume: {
+        if (strategy.enableResumeCommand === false) {
+          info(ui.resumeUnavailable);
+          continue;
+        }
         const selectedId = await selectRecentSession(cwd, ctx.lang);
         if (selectedId) {
           sessionId = selectedId;

@@ -393,7 +393,7 @@ Dependencies and triggers must match the conditions under which the behavior sho
 
 ## Contract Change Consistency
 
-When changing contracts that other code or users depend on — types, interfaces, APIs, config schemas, persistence formats, events, or file formats — keep definitions, producers, consumers, and verification aligned in the same change.
+When changing contracts that other code or users depend on — types, interfaces, APIs, config schemas, persistence formats, events, file formats, or observable side effects — keep definitions, producers, consumers, and verification aligned in the same change.
 
 | Criteria | Judgment |
 |----------|----------|
@@ -401,6 +401,7 @@ When changing contracts that other code or users depend on — types, interfaces
 | A new argument, field, or config value is added but there is no route to pass it to consumers | REJECT |
 | Fields or values not present in the documented schema/config format are used | REJECT |
 | Mocks, fixtures, or test data return shapes that differ from the real contract | REJECT |
+| Observable contracts differ across return, throw, early-return, or catch paths | REJECT |
 | The contract change and updates to callers, producers, and tests are made in the same change | OK |
 
 ## State Management
