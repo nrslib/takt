@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  exportDevloopLedger,
+  formatExportDevloopLedgerReport,
   formatImportTaktRunReport,
   formatReconcileTaktRunsReport,
   formatTimelineReport,
@@ -141,5 +143,35 @@ describe('devloopd ledger import and timeline', () => {
 
     const ledger = readFileSync(join(repoPath, '.devloop', 'ledger.jsonl'), 'utf-8').trim().split('\n');
     expect(ledger).toHaveLength(2);
+  });
+
+  it('exports filtered ledger events without overwriting an existing backup by default', () => {
+    writeRunFixture(repoPath, 'run-123', { issue: 123, task: 'Fix bug' });
+    writeRunFixture(repoPath, 'run-456', { issue: 456, task: 'Other issue' });
+    importTaktRun({ repoPath, issue: 123, runSlug: 'run-123' });
+    importTaktRun({ repoPath, issue: 456, runSlug: 'run-456' });
+
+    const outputPath = join('.devloop', 'backup', 'ledger-123.jsonl');
+    const exportReport = exportDevloopLedger({ repoPath, issue: 123, outputPath });
+    const output = formatExportDevloopLedgerReport(exportReport);
+
+    expect(exportReport.passed).toBe(true);
+    expect(exportReport.events).toHaveLength(1);
+    expect(output).toContain('1 ledger event');
+
+    const exportedLines = readFileSync(join(repoPath, outputPath), 'utf-8').trim().split('\n');
+    expect(exportedLines).toHaveLength(1);
+    expect(JSON.parse(exportedLines[0]!) as { runSlug: string }).toMatchObject({ runSlug: 'run-123' });
+
+    const blockedReport = exportDevloopLedger({ repoPath, issue: 123, outputPath });
+    expect(blockedReport.passed).toBe(false);
+    expect(blockedReport.message).toContain('--force');
+
+    const forcedReport = exportDevloopLedger({ repoPath, issue: 123, outputPath, force: true });
+    expect(forcedReport.passed).toBe(true);
+
+    const escapedReport = exportDevloopLedger({ repoPath, outputPath: '../outside-ledger.jsonl' });
+    expect(escapedReport.passed).toBe(false);
+    expect(escapedReport.message).toContain('inside the repository');
   });
 });

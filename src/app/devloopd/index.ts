@@ -7,6 +7,8 @@ import { formatDevloopDoctorReport, runDevloopDoctor } from '../../devloopd/doct
 import { formatActiveRunsReport, inspectActiveRuns } from '../../devloopd/activeRuns.js';
 import { formatIssueSelectionReport, selectIssueFromScan } from '../../devloopd/issueSelector.js';
 import {
+  exportDevloopLedger,
+  formatExportDevloopLedgerReport,
   formatImportTaktRunReport,
   formatReconcileTaktRunsReport,
   formatTimelineReport,
@@ -173,6 +175,38 @@ program
     });
 
     console.log(formatReconcileTaktRunsReport(report));
+    if (!report.passed) {
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('export-ledger')
+  .description('Export filtered devloop ledger events to a JSONL backup')
+  .option('--issue <number>', 'Filter by GitHub issue number', (value: string) => Number(value))
+  .option('--run <slug>', 'Filter by TAKT run slug')
+  .option('--cwd <path>', 'Repository path to inspect', process.cwd())
+  .option('--ledger <path>', 'Ledger path relative to cwd or absolute path')
+  .requiredOption('--output <path>', 'Output JSONL path. Relative paths must stay inside cwd')
+  .option('--force', 'Overwrite an existing output file')
+  .action((options: {
+    issue?: number;
+    run?: string;
+    cwd: string;
+    ledger?: string;
+    output: string;
+    force?: boolean;
+  }) => {
+    const report = exportDevloopLedger({
+      repoPath: resolve(options.cwd),
+      issue: Number.isFinite(options.issue) ? options.issue : undefined,
+      runSlug: options.run,
+      ledgerPath: options.ledger,
+      outputPath: options.output,
+      force: options.force === true,
+    });
+
+    console.log(formatExportDevloopLedgerReport(report));
     if (!report.passed) {
       process.exitCode = 1;
     }

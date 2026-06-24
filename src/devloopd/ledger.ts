@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { readRunMetaBySlug, type RunMeta } from '../core/workflow/run/run-meta.js';
 import { listRecentRuns } from '../features/interactive/runSessionReader.js';
 import { isPathInside } from '../shared/utils/pathBoundary.js';
@@ -86,6 +86,24 @@ export interface ReconcileTaktRunsReport {
   ledgerPath: string;
 }
 
+export interface ExportDevloopLedgerOptions {
+  repoPath?: string;
+  ledgerPath?: string;
+  issue?: number;
+  runSlug?: string;
+  outputPath: string;
+  force?: boolean;
+}
+
+export interface ExportDevloopLedgerReport {
+  passed: boolean;
+  message: string;
+  events: TaktRunImportedEvent[];
+  ledgerPath: string;
+  outputPath: string;
+  bytes: number;
+}
+
 export const DEFAULT_DEVLOOP_LEDGER_RELATIVE_PATH = join('.devloop', 'ledger.jsonl');
 
 function sanitizeDetail(text: string): string {
@@ -98,6 +116,20 @@ function resolveRepoPath(repoPath: string | undefined): string {
 
 export function resolveDevloopLedgerPath(repoPath: string, ledgerPath: string | undefined): string {
   return ledgerPath ? resolve(repoPath, ledgerPath) : join(repoPath, DEFAULT_DEVLOOP_LEDGER_RELATIVE_PATH);
+}
+
+function resolveLedgerExportPath(repoPath: string, outputPath: string): { outputPath: string } | { error: string } {
+  if (outputPath.trim().length === 0) {
+    return { error: 'Output path is required' };
+  }
+
+  const repoRoot = resolve(repoPath);
+  const resolvedOutputPath = isAbsolute(outputPath) ? resolve(outputPath) : resolve(repoRoot, outputPath);
+  if (!isAbsolute(outputPath) && !isPathInside(repoRoot, resolvedOutputPath)) {
+    return { error: 'Relative export path must stay inside the repository. Use an absolute path for external backups.' };
+  }
+
+  return { outputPath: resolvedOutputPath };
 }
 
 function selectRunSlug(repoPath: string, options: ImportTaktRunOptions): string | undefined {
@@ -332,6 +364,50 @@ export function reconcileTaktRuns(options: ReconcileTaktRunsOptions = {}): Recon
   };
 }
 
+export function exportDevloopLedger(options: ExportDevloopLedgerOptions): ExportDevloopLedgerReport {
+  const repoPath = resolveRepoPath(options.repoPath);
+  const ledgerPath = resolveDevloopLedgerPath(repoPath, options.ledgerPath);
+  const resolvedOutput = resolveLedgerExportPath(repoPath, options.outputPath);
+  if ('error' in resolvedOutput) {
+    return {
+      passed: false,
+      message: resolvedOutput.error,
+      events: [],
+      ledgerPath,
+      outputPath: options.outputPath,
+      bytes: 0,
+    };
+  }
+
+  if (existsSync(resolvedOutput.outputPath) && options.force !== true) {
+    return {
+      passed: false,
+      message: `Output already exists: ${resolvedOutput.outputPath}. Pass --force to overwrite it.`,
+      events: [],
+      ledgerPath,
+      outputPath: resolvedOutput.outputPath,
+      bytes: 0,
+    };
+  }
+
+  const events = readDevloopLedgerEvents(ledgerPath)
+    // Keep append order so exported JSONL can be replayed as the same audit ledger.
+    .filter((event) => options.issue === undefined || event.issueNumber === options.issue)
+    .filter((event) => options.runSlug === undefined || event.runSlug === options.runSlug);
+  const content = events.map((event) => JSON.stringify(event)).join('\n') + (events.length > 0 ? '\n' : '');
+  mkdirSync(resolve(resolvedOutput.outputPath, '..'), { recursive: true });
+  writeFileSync(resolvedOutput.outputPath, content, { encoding: 'utf-8', flag: 'w' });
+
+  return {
+    passed: true,
+    message: `Exported ${events.length} ledger event(s)`,
+    events,
+    ledgerPath,
+    outputPath: resolvedOutput.outputPath,
+    bytes: Buffer.byteLength(content, 'utf-8'),
+  };
+}
+
 export function formatImportTaktRunReport(report: ImportTaktRunReport): string {
   const lines = [
     report.passed ? 'devloopd import-takt-run passed' : 'devloopd import-takt-run failed',
@@ -380,6 +456,22 @@ export function formatReconcileTaktRunsReport(report: ReconcileTaktRunsReport): 
   if (report.skipped.length > 0) {
     lines.push('Skipped:');
     lines.push(...report.skipped.map((item) => `- ${item.runSlug}: ${item.reason}`));
+  }
+
+  return lines.join('\n');
+}
+
+export function formatExportDevloopLedgerReport(report: ExportDevloopLedgerReport): string {
+  const lines = [
+    report.passed ? 'devloopd export-ledger passed' : 'devloopd export-ledger failed',
+    report.message,
+    `Ledger: ${report.ledgerPath}`,
+    `Output: ${report.outputPath}`,
+  ];
+
+  if (report.passed) {
+    lines.push(`Events: ${report.events.length}`);
+    lines.push(`Bytes: ${report.bytes}`);
   }
 
   return lines.join('\n');
