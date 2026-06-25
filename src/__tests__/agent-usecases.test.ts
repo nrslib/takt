@@ -405,7 +405,7 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledWith('team-leader', expect.any(String), expect.objectContaining({
       allowedTools: [],
       permissionMode: 'readonly',
-      maxTurns: 5,
+      maxTurns: 15,
       outputSchema: { type: 'decomposition', maxTotalParts: 3 },
     }));
   });
@@ -553,7 +553,7 @@ describe('agent-usecases', () => {
       allowedTools: [],
       outputSchema: { type: 'more-parts', maxAdditionalParts: 2 },
       permissionMode: 'readonly',
-      maxTurns: 5,
+      maxTurns: 15,
     }));
   });
 
