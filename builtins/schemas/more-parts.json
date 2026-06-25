@@ -30,6 +30,14 @@
         "required": ["id", "title", "instruction"],
         "additionalProperties": false
       }
+    },
+    "cancel_part_ids": {
+      "type": "array",
+      "description": "IDs of unfinished scheduled parts that became obsolete and should be canceled",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     }
   },
   "required": ["done", "reasoning", "parts"],

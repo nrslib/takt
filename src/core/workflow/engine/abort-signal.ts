@@ -2,20 +2,24 @@ import { createPartTimeoutReason } from '../../../shared/types/agent-failure.js'
 
 export function buildAbortSignal(
   timeoutMs: number,
-  parentSignal: AbortSignal | undefined,
+  parentSignal: AbortSignal | readonly AbortSignal[] | undefined,
 ): { signal: AbortSignal; dispose: () => void } {
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
     timeoutController.abort(new Error(createPartTimeoutReason(timeoutMs)));
   }, timeoutMs);
 
-  let abortListener: (() => void) | undefined;
-  if (parentSignal) {
-    abortListener = () => timeoutController.abort(parentSignal.reason);
-    if (parentSignal.aborted) {
-      abortListener();
+  const parentSignals = Array.isArray(parentSignal)
+    ? parentSignal
+    : parentSignal ? [parentSignal] : [];
+  const abortListeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
+  for (const signal of parentSignals) {
+    const listener = () => timeoutController.abort(signal.reason);
+    if (signal.aborted) {
+      listener();
     } else {
-      parentSignal.addEventListener('abort', abortListener, { once: true });
+      signal.addEventListener('abort', listener, { once: true });
+      abortListeners.push({ signal, listener });
     }
   }
 
@@ -23,8 +27,8 @@ export function buildAbortSignal(
     signal: timeoutController.signal,
     dispose: () => {
       clearTimeout(timeoutId);
-      if (parentSignal && abortListener) {
-        parentSignal.removeEventListener('abort', abortListener);
+      for (const { signal, listener } of abortListeners) {
+        signal.removeEventListener('abort', listener);
       }
     },
   };

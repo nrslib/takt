@@ -22,6 +22,19 @@ function makeResult(part: PartDefinition): PartResult {
   };
 }
 
+function makeErrorResult(part: PartDefinition, error: string): PartResult {
+  return {
+    part,
+    response: {
+      persona: `execute.${part.id}`,
+      status: 'error',
+      content: '',
+      error,
+      timestamp: new Date(),
+    },
+  };
+}
+
 describe('runTeamLeaderExecution', () => {
   it('初回5パートを最大2並列で順次実行する', async () => {
     const parts = ['p1', 'p2', 'p3', 'p4', 'p5'].map(makePart);
@@ -178,5 +191,71 @@ describe('runTeamLeaderExecution', () => {
     expect(result.plannedParts.map((p) => p.id)).toEqual(['p1']);
     expect(result.partResults).toHaveLength(1);
     expect(onPlanningNoNewParts).toHaveBeenCalledTimes(1);
+  });
+
+  it('feedback の cancelPartIds で未起動パートを planned から外して実行しない', async () => {
+    const part1 = makePart('impl');
+    const part2 = makePart('verify');
+    const onPartsCanceled = vi.fn();
+    const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
+    const requestMoreParts = vi.fn().mockResolvedValue({
+      done: true,
+      reasoning: 'replacement verification already passed',
+      parts: [],
+      cancelPartIds: ['verify'],
+    });
+
+    const result = await runTeamLeaderExecution({
+      initialParts: [part1, part2],
+      maxConcurrency: 1,
+      refillThreshold: 1,
+      runPart,
+      requestMoreParts,
+      onPartsCanceled,
+    });
+
+    expect(result.plannedParts.map((part) => part.id)).toEqual(['impl']);
+    expect(result.partResults.map((result) => result.part.id)).toEqual(['impl']);
+    expect(runPart).toHaveBeenCalledTimes(1);
+    expect(onPartsCanceled).toHaveBeenCalledWith({
+      partIds: ['verify'],
+      reason: 'replacement verification already passed',
+    });
+  });
+
+  it('feedback の cancelPartIds で実行中パートへ AbortSignal を発火し、集計から外す', async () => {
+    const part1 = makePart('impl');
+    const part2 = makePart('verify');
+    let verifySignal: AbortSignal | undefined;
+    const runPart = vi.fn(async (
+      part: PartDefinition,
+      _partIndex: number,
+      abortSignal?: AbortSignal,
+    ) => {
+      if (part.id === 'verify') {
+        verifySignal = abortSignal;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return makeErrorResult(part, 'should be ignored after cancellation');
+      }
+      return makeResult(part);
+    });
+    const requestMoreParts = vi.fn().mockResolvedValue({
+      done: true,
+      reasoning: 'new verification part made old one obsolete',
+      parts: [],
+      cancelPartIds: ['verify'],
+    });
+
+    const result = await runTeamLeaderExecution({
+      initialParts: [part1, part2],
+      maxConcurrency: 2,
+      refillThreshold: 1,
+      runPart,
+      requestMoreParts,
+    });
+
+    expect(verifySignal?.aborted).toBe(true);
+    expect(result.plannedParts.map((part) => part.id)).toEqual(['impl']);
+    expect(result.partResults.map((partResult) => partResult.part.id)).toEqual(['impl']);
   });
 });

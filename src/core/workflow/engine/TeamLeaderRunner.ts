@@ -224,6 +224,13 @@ export class TeamLeaderRunner {
           reasoning: reason,
         });
       },
+      onPartsCanceled: ({ partIds, reason }) => {
+        log.info('Team leader canceled obsolete parts', {
+          step: step.name,
+          partIds,
+          reasoning: reason,
+        });
+      },
       onPlanningError: (error) => {
         log.info('Team leader feedback failed; stop adding new parts', {
           step: step.name,
@@ -293,7 +300,7 @@ export class TeamLeaderRunner {
           throw error;
         }
       },
-      runPart: async (part, partIndex) => this.runSinglePart(
+      runPart: async (part, partIndex, partAbortSignal) => this.runSinglePart(
         step,
         leaderWorkflowMeta,
         part,
@@ -303,6 +310,7 @@ export class TeamLeaderRunner {
         updatePersonaSession,
         parallelLogger,
         runtime,
+        partAbortSignal,
       ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
     });
 
@@ -396,6 +404,7 @@ export class TeamLeaderRunner {
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     parallelLogger: ParallelLogger | undefined,
     runtime?: RuntimeStepResolution,
+    partAbortSignal?: AbortSignal,
   ): Promise<PartResult> {
     return runTeamLeaderPart(
       this.deps.optionsBuilder,
@@ -415,6 +424,7 @@ export class TeamLeaderRunner {
         sanitizeText: this.deps.sanitizeObservabilityText,
       },
       runtime,
+      partAbortSignal,
     );
   }
 }

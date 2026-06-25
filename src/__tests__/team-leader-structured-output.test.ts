@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toPartDefinitions } from '../agents/team-leader-structured-output.js';
+import { toMorePartsResponse, toPartDefinitions } from '../agents/team-leader-structured-output.js';
 
 function makeRawPart(id: string): Record<string, string> {
   return {
@@ -24,5 +24,27 @@ describe('toPartDefinitions', () => {
     expect(() => toPartDefinitions(rawParts, 5)).toThrow(
       'Structured output produced too many total parts: 6 > max_total_parts 5',
     );
+  });
+});
+
+describe('toMorePartsResponse', () => {
+  it('cancel_part_ids を cancelPartIds として正規化する', () => {
+    const result = toMorePartsResponse({
+      done: false,
+      reasoning: 'replace old verify',
+      parts: [],
+      cancel_part_ids: [' verify ', 'verify', 'legacy-check'],
+    }, 2);
+
+    expect(result.cancelPartIds).toEqual(['verify', 'legacy-check']);
+  });
+
+  it('cancel_part_ids が配列でない場合は明確なエラーにする', () => {
+    expect(() => toMorePartsResponse({
+      done: false,
+      reasoning: 'bad cancel ids',
+      parts: [],
+      cancel_part_ids: 'verify',
+    }, 2)).toThrow('Structured output "cancel_part_ids" must be an array');
   });
 });

@@ -36,6 +36,20 @@ describe('buildAbortSignal', () => {
     dispose();
   });
 
+  it('複数の親シグナルのいずれかがabortされると子シグナルへ伝搬する', () => {
+    const workflowParent = new AbortController();
+    const partParent = new AbortController();
+    const { signal, dispose } = buildAbortSignal(1000, [workflowParent.signal, partParent.signal]);
+    const reason = new Error('part canceled');
+
+    partParent.abort(reason);
+
+    expect(signal.aborted).toBe(true);
+    expect(signal.reason).toBe(reason);
+
+    dispose();
+  });
+
   it('disposeでタイマーと親リスナーを解放する', () => {
     const parent = new AbortController();
     const addSpy = vi.spyOn(parent.signal, 'addEventListener');

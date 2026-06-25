@@ -48,12 +48,32 @@ export function toMorePartsResponse(raw: unknown, maxAdditionalParts: number): M
 
   const parts = payload.parts.map((entry, index) => parsePartDefinitionEntry(entry, index));
   ensureUniquePartIds(parts);
+  const cancelPartIds = parseCancelPartIds(payload);
 
   return {
     done: payload.done,
     reasoning: payload.reasoning,
     parts,
+    ...(cancelPartIds ? { cancelPartIds } : {}),
   };
+}
+
+function parseCancelPartIds(payload: Record<string, unknown>): string[] | undefined {
+  const rawCancelPartIds = payload.cancel_part_ids ?? payload.cancelPartIds;
+  if (rawCancelPartIds === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(rawCancelPartIds)) {
+    throw new Error('Structured output "cancel_part_ids" must be an array');
+  }
+
+  const cancelPartIds = rawCancelPartIds.map((entry, index) => {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      throw new Error(`Structured output "cancel_part_ids[${index}]" must be a non-empty string`);
+    }
+    return entry.trim();
+  });
+  return [...new Set(cancelPartIds)];
 }
 
 function buildInspectToolGuidance(
@@ -171,6 +191,8 @@ function buildMorePartsBasePrompt(
       '## 判断ルール',
       '- 追加作業が不要なら done=true にする',
       '- 追加作業が必要なら parts に新しいパートを入れる',
+      '- 不要になった未完了パートがある場合は cancel_part_ids に対象IDを入れる',
+      '- 完了済みパートは cancel_part_ids に入れない',
       '- 不足が複数ある場合は、可能な限り一括で複数パートを返す',
       '- 既存差分を破壊しない',
       '- 未完了作業だけを追加 part に切り出す',
@@ -193,6 +215,8 @@ function buildMorePartsBasePrompt(
     '## Decision Rules',
     '- Set done=true when no additional work is required',
     '- If more work is needed, provide new parts in "parts"',
+    '- If unfinished scheduled parts became obsolete, put their IDs in "cancel_part_ids"',
+    '- Do not include completed parts in "cancel_part_ids"',
     '- If multiple missing tasks are known, return multiple new parts in one batch when possible',
     '- Preserve existing changes',
     '- Put only unfinished work into additional parts',
@@ -270,13 +294,13 @@ export function buildPromptBasedMorePartsPrompt(
         '',
         '出力形式:',
         '- ```json ... ``` ブロックのみを返す',
-        '- JSON は {"done": boolean, "reasoning": string, "parts": []} の形にする',
+        '- JSON は {"done": boolean, "reasoning": string, "parts": [], "cancel_part_ids": []} の形にする',
       ]
     : [
         '',
         'Output format:',
         '- Return only one ```json ... ``` block',
-        '- The JSON must be {"done": boolean, "reasoning": string, "parts": []}',
+        '- The JSON must be {"done": boolean, "reasoning": string, "parts": [], "cancel_part_ids": []}',
       ];
 
   return `${buildMorePartsBasePrompt(

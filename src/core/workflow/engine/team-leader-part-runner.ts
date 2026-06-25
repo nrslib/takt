@@ -79,6 +79,7 @@ export async function runTeamLeaderPart(
   parallelLogger: ParallelLogger | undefined,
   observability: TeamLeaderPartObservability,
   runtime?: RuntimeStepResolution,
+  partAbortSignal?: AbortSignal,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
   const partProviderInfo = runtime
@@ -92,7 +93,12 @@ export async function runTeamLeaderPart(
       processSafety: leaderWorkflowMeta?.processSafety,
     },
   });
-  const { signal, dispose } = buildAbortSignal(defaultTimeoutMs, baseOptions.abortSignal);
+  const parentSignals = [baseOptions.abortSignal, partAbortSignal]
+    .filter((signal): signal is AbortSignal => signal !== undefined);
+  const { signal, dispose } = buildAbortSignal(
+    defaultTimeoutMs,
+    parentSignals.length > 0 ? parentSignals : undefined,
+  );
   const options = parallelLogger
     ? {
       ...baseOptions,

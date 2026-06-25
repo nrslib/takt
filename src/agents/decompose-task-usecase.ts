@@ -36,6 +36,7 @@ export interface MorePartsResponse {
   done: boolean;
   reasoning: string;
   parts: PartDefinition[];
+  cancelPartIds?: string[];
 }
 
 export const TEAM_LEADER_MAX_TURNS = 5;
