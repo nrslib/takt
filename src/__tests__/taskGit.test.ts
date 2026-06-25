@@ -42,8 +42,45 @@ describe('pushBranch', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['push', 'origin', 'feature/my-branch'],
-      { cwd: '/project', stdio: 'pipe' },
+      expect.objectContaining({
+        cwd: '/project',
+        stdio: 'pipe',
+        env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+      }),
     );
+  });
+
+  it('disables askpass and SSH prompts for origin pushes', () => {
+    const previousSshCommand = process.env.GIT_SSH_COMMAND;
+    process.env.GIT_SSH_COMMAND = 'ssh -i ~/.ssh/takt-test-key -o BatchMode=no';
+    mockExecFileSync.mockReturnValue(Buffer.from(''));
+
+    try {
+      pushBranch('/project', 'feature/my-branch');
+    } finally {
+      if (previousSshCommand === undefined) {
+        delete process.env.GIT_SSH_COMMAND;
+      } else {
+        process.env.GIT_SSH_COMMAND = previousSshCommand;
+      }
+    }
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['push', 'origin', 'feature/my-branch'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GIT_ASKPASS: '',
+          SSH_ASKPASS: '',
+          GCM_INTERACTIVE: 'never',
+          GIT_SSH_COMMAND: 'ssh -i ~/.ssh/takt-test-key -o BatchMode=yes',
+        }),
+      }),
+    );
+    const env = (mockExecFileSync.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }).env;
+    const askPassConfigIndex = Number(env.GIT_CONFIG_COUNT) - 1;
+    expect(env[`GIT_CONFIG_KEY_${askPassConfigIndex}`]).toBe('core.askPass');
+    expect(env[`GIT_CONFIG_VALUE_${askPassConfigIndex}`]).toBe('');
   });
 
   it('should throw when git push fails', () => {
@@ -103,7 +140,11 @@ describe('pushHeadToOriginBranch', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['push', 'origin', 'HEAD:refs/heads/feature/my-branch'],
-      { cwd: '/clone', stdio: 'pipe' },
+      expect.objectContaining({
+        cwd: '/clone',
+        stdio: 'pipe',
+        env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+      }),
     );
   });
 

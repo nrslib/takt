@@ -532,6 +532,34 @@ describe('postExecutionFlow', () => {
     expect(result.taskFailed).toBeUndefined();
   });
 
+  it('origin push の認証プロンプト失敗は workflow 失敗にせず retryable publish failure として返す', async () => {
+    mockAutoCommitAndPush.mockReturnValue({
+      success: true,
+      commitHash: 'abc123',
+      message: 'Committed: abc123 - takt: Fix the bug',
+    });
+    mockPushBranch.mockImplementation(() => {
+      throw new Error("fatal: could not read Username for 'https://github.com': terminal prompts disabled");
+    });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      shouldCreatePr: true,
+      shouldPublishBranchToOrigin: true,
+    });
+
+    expect(mockPushBranch).toHaveBeenCalledWith('/project', 'task/fix-the-bug');
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(result.taskFailed).toBeUndefined();
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toContain('Workflow completed, but publishing failed.');
+    expect(result.prError).toContain('branch: task/fix-the-bug');
+    expect(result.prError).toContain('commit: abc123');
+    expect(result.prError).toContain('TAKT does not prompt for credentials during task execution.');
+    expect(result.prError).toContain('retry publishing from takt list');
+  });
+
   it('root からの origin push が git 整形済み non-fast-forward エラーのとき prError に診断ヒントまで伝播する', async () => {
     const stderr =
       '! [rejected] task/fix-the-bug -> task/fix-the-bug (non-fast-forward)\n' +

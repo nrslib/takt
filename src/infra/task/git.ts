@@ -126,6 +126,39 @@ function throwPushFailureWithStderr(err: unknown, extraHint: string): never {
   throw err;
 }
 
+function appendGitConfigEnv(env: NodeJS.ProcessEnv, key: string, value: string): void {
+  const parsedCount = Number.parseInt(env.GIT_CONFIG_COUNT ?? '0', 10);
+  const index = Number.isFinite(parsedCount) && parsedCount >= 0 ? parsedCount : 0;
+  env[`GIT_CONFIG_KEY_${index}`] = key;
+  env[`GIT_CONFIG_VALUE_${index}`] = value;
+  env.GIT_CONFIG_COUNT = String(index + 1);
+}
+
+function withSshBatchMode(command: string | undefined): string {
+  const base = command?.trim() || 'ssh';
+  if (/\bBatchMode\s*=\s*yes\b/i.test(base)) {
+    return base;
+  }
+  if (/\bBatchMode\s*=\s*\S+\b/i.test(base)) {
+    return base.replace(/\bBatchMode\s*=\s*\S+\b/i, 'BatchMode=yes');
+  }
+  return `${base} -o BatchMode=yes`;
+}
+
+export function getNonInteractiveGitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    // Credential prompts can hang workflow execution, so TAKT-managed pushes must fail fast instead.
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_ASKPASS: '',
+    SSH_ASKPASS: '',
+    GCM_INTERACTIVE: 'never',
+    GIT_SSH_COMMAND: withSshBatchMode(process.env.GIT_SSH_COMMAND),
+  };
+  appendGitConfigEnv(env, 'core.askPass', '');
+  return env;
+}
+
 /**
  * Throws on failure.
  */
@@ -135,6 +168,7 @@ export function pushBranch(cwd: string, branch: string): void {
     execFileSync('git', ['push', 'origin', branch], {
       cwd,
       stdio: 'pipe',
+      env: getNonInteractiveGitEnv(),
     });
   } catch (err) {
     throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
@@ -162,6 +196,7 @@ export function pushHeadToOriginBranch(cwd: string, branch: string): void {
     execFileSync('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], {
       cwd,
       stdio: 'pipe',
+      env: getNonInteractiveGitEnv(),
     });
   } catch (err) {
     throwPushFailureWithStderr(err, NON_FAST_FORWARD_PUSH_HINT);
@@ -174,7 +209,11 @@ export function relayPushCloneToOrigin(cloneCwd: string, rootCwd: string, branch
   try {
     execFileSync('git', ['fetch', cloneCwd, `HEAD:${tempRef}`], { cwd: rootCwd, stdio: 'pipe' });
     log.info('Relay push: pushing to origin', { rootCwd, branch });
-    execFileSync('git', ['push', 'origin', `${tempRef}:refs/heads/${branch}`], { cwd: rootCwd, stdio: 'pipe' });
+    execFileSync('git', ['push', 'origin', `${tempRef}:refs/heads/${branch}`], {
+      cwd: rootCwd,
+      stdio: 'pipe',
+      env: getNonInteractiveGitEnv(),
+    });
     log.info('Relay push: succeeded', { rootCwd, branch });
   } finally {
     try {

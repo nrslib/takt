@@ -101,6 +101,32 @@ describe('autoCommitAndPush', () => {
     );
   });
 
+  it('runs fallback direct push without terminal credential prompts', () => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (includesCommand(argsArr, 'status')) {
+        return 'M src/index.ts\n';
+      }
+      if (includesCommand(argsArr, 'rev-parse')) {
+        return 'abc1234\n';
+      }
+      if (includesCommand(argsArr, 'config')) {
+        return '';
+      }
+      return Buffer.from('');
+    });
+
+    autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['push', '/project', 'HEAD'],
+      expect.objectContaining({
+        env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+      }),
+    );
+  });
+
   it('should return success with no commit when there are no changes', () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];

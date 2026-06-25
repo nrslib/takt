@@ -26,6 +26,30 @@ const ORIGIN_PUSH_FAILURE_MESSAGE = 'Failed to push branch to origin.';
 const PR_COMMENT_FAILURE_MESSAGE = 'Failed to update pull request comment.';
 const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
 
+function isCredentialPromptFailure(message: string): boolean {
+  return /could not read (Username|Password)|terminal prompts disabled|authentication failed|GIT_TERMINAL_PROMPT/i.test(message);
+}
+
+function formatOriginPushFailure(detail: string, branch: string, commitHash: string): string {
+  const base = `${ORIGIN_PUSH_FAILURE_MESSAGE} ${detail}`.trim();
+  if (!isCredentialPromptFailure(detail)) {
+    return base;
+  }
+
+  return [
+    base,
+    '',
+    'Workflow completed, but publishing failed.',
+    '',
+    'Local result is preserved:',
+    `  branch: ${branch}`,
+    `  commit: ${commitHash}`,
+    '',
+    'Git credentials are unavailable for non-interactive push.',
+    'TAKT does not prompt for credentials during task execution.',
+    'Fix authentication, then retry publishing from takt list.',
+  ].join('\n');
+}
 
 export interface PostExecutionOptions {
   execCwd: string;
@@ -100,7 +124,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
         outcome: ORIGIN_PUSH_FAILURE_MESSAGE,
         error: pushDetail,
       });
-      const pushFailureMessage = `${ORIGIN_PUSH_FAILURE_MESSAGE} ${pushDetail}`.trim();
+      const pushFailureMessage = formatOriginPushFailure(pushDetail, branch, commitResult.commitHash);
       error(pushFailureMessage);
       return { prFailed: true, prError: pushFailureMessage };
     }
