@@ -214,14 +214,59 @@ describe('exec preset store', () => {
         '    policy: []',
         'loop:',
         '  threshold: 4',
+        '  large_threshold: 3',
         '  max_steps: 20',
       ].join('\n'));
 
       const preset = loadExecPreset('threshold-team', { projectDir });
 
       expect(preset.config.loop.smallThreshold).toBe(4);
-      expect(preset.config.loop.largeThreshold).toBe(2);
+      expect(preset.config.loop.largeThreshold).toBe(3);
       expect(preset.config.loop.maxSteps).toBe(20);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject preset yaml when large_threshold is missing', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-missing-large-'));
+    const presetDir = join(projectDir, '.takt', 'exec', 'presets');
+    try {
+      writeRawPreset(presetDir, 'missing-large', [
+        'name: missing-large',
+        'description: Missing large threshold',
+        'session:',
+        '  provider: claude',
+        '  model: opus',
+        '  effort: high',
+        'replan:',
+        '  instruction: exec-replan',
+        '  knowledge: []',
+        '  policy: []',
+        'workers:',
+        '  - name: worker-1',
+        '    provider: claude',
+        '    model: sonnet',
+        '    effort: high',
+        '    instruction: exec-worker',
+        '    knowledge: []',
+        '    policy: []',
+        'judges:',
+        '  - name: judge-1',
+        '    provider: claude',
+        '    model: opus',
+        '    effort: high',
+        '    instruction: exec-judge',
+        '    knowledge: []',
+        '    policy: []',
+        'loop:',
+        '  threshold: 4',
+        '  max_steps: 20',
+      ].join('\n'));
+
+      expect(() => loadExecPreset('missing-large', { projectDir })).toThrow(
+        'exec.loop.large_threshold',
+      );
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
@@ -471,6 +516,23 @@ describe('exec preset store', () => {
       writePreset(presetDir, 'valid', createExecConfig('valid-worker'), 'Valid preset');
 
       const presets = listExecPresets({ projectDir, builtinPresetsDir });
+      expect(presets.find((p) => p.name === 'valid')).toBeDefined();
+      expect(presets.find((p) => p.name === 'invalid-name')).toBeUndefined();
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(builtinPresetsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should skip invalid presets and list valid presets when listing by source', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-skip-invalid-by-source-'));
+    const builtinPresetsDir = mkdtempSync(join(tmpdir(), 'takt-exec-skip-invalid-by-source-builtin-'));
+    const presetDir = join(projectDir, '.takt', 'exec', 'presets');
+    try {
+      writeRawPreset(presetDir, 'invalid-name', 'name: wrong-name\n');
+      writePreset(presetDir, 'valid', createExecConfig('valid-worker'), 'Valid preset');
+
+      const presets = listExecPresetsBySource('project', { projectDir, builtinPresetsDir });
       expect(presets.find((p) => p.name === 'valid')).toBeDefined();
       expect(presets.find((p) => p.name === 'invalid-name')).toBeUndefined();
     } finally {

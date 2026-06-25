@@ -107,6 +107,7 @@ export async function runGeneratedWorkflow(
     interactiveMetadata: { confirmed: true, task },
     reportDirName: runSlug,
     providerProfileOverrides: buildExecReadonlyProviderProfileOverrides(config),
+    exitOnFailure: false,
   }, agentOverrides);
   const context = loadCompletedExecRun(cwd, runSlug, config.judges.map((judge) => buildJudgeReportName(judge.name)));
   try {

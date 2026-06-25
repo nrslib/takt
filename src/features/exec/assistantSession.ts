@@ -2,28 +2,17 @@ import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
-import {
-  CLAUDE_EFFORT_VALUES,
-  CODEX_REASONING_EFFORT_VALUES,
-  COPILOT_EFFORT_VALUES,
-  type ClaudeEffort,
-  type CodexReasoningEffort,
-  type CopilotEffort,
+import type {
+  ClaudeEffort,
+  CodexReasoningEffort,
+  CopilotEffort,
 } from '../../core/models/workflow-types.js';
 import { callAIWithRetry, type SessionContext } from '../interactive/aiCaller.js';
 import type { ExecConfig, ExecSessionConfig } from './types.js';
 import { assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidation.js';
-import type { ExecEffort } from './types.js';
 
 interface AskExecAssistantOptions {
   readonly permissionMode?: PermissionMode;
-}
-
-function requireProviderEffort<T extends string>(values: readonly T[], effort: ExecEffort): T {
-  if (!values.includes(effort as T)) {
-    throw new Error(`Unsupported exec effort "${effort}" for provider session options.`);
-  }
-  return effort as T;
 }
 
 function buildSessionProviderOptions(session: ExecSessionConfig): StepProviderOptions | undefined {
@@ -32,13 +21,13 @@ function buildSessionProviderOptions(session: ExecSessionConfig): StepProviderOp
     return undefined;
   }
   if (CLAUDE_TOOL_PROVIDERS.has(session.provider)) {
-    return { claude: { effort: requireProviderEffort<ClaudeEffort>(CLAUDE_EFFORT_VALUES, session.effort) } };
+    return { claude: { effort: session.effort as ClaudeEffort } };
   }
   if (session.provider === 'codex') {
-    return { codex: { reasoningEffort: requireProviderEffort<CodexReasoningEffort>(CODEX_REASONING_EFFORT_VALUES, session.effort) } };
+    return { codex: { reasoningEffort: session.effort as CodexReasoningEffort } };
   }
   if (session.provider === 'copilot') {
-    return { copilot: { effort: requireProviderEffort<CopilotEffort>(COPILOT_EFFORT_VALUES, session.effort) } };
+    return { copilot: { effort: session.effort as CopilotEffort } };
   }
   throw new Error(`Unreachable: assertExecProviderEffort should have rejected provider "${session.provider}" with effort "${session.effort}"`);
 }

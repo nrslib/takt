@@ -3,11 +3,12 @@ import { basename, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { getResourcesDir } from '../../infra/resources/index.js';
+import { debugLog } from '../../shared/utils/index.js';
 import { assertExecActorName, assertExecConfig, EXEC_EFFORTS, EXEC_PROVIDERS } from './configValidation.js';
-import { DEFAULT_EXEC_CONFIG } from './defaults.js';
 import {
   deleteProjectLocalFile,
   listProjectLocalDirectoryEntries,
+  ProjectBoundaryError,
   projectLocalFileExists,
   readProjectLocalTextFile,
   writeProjectLocalTextFile,
@@ -113,13 +114,6 @@ function asPositiveInteger(value: unknown, path: string): number {
   return value as number;
 }
 
-function asOptionalPositiveInteger(value: unknown, path: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return asPositiveInteger(value, path);
-}
-
 function parseActor(value: unknown, path: string): ExecActorConfig {
   const actor = asRecord(value, path);
   const name = asString(actor.name, `${path}.name`);
@@ -145,10 +139,7 @@ function parseActorList(value: unknown, path: string): ExecActorConfig[] {
 function parseLoopConfig(loop: RawRecord): ExecConfig['loop'] {
   return {
     smallThreshold: asPositiveInteger(loop.threshold, 'exec.loop.threshold'),
-    largeThreshold: asOptionalPositiveInteger(
-      loop.large_threshold,
-      'exec.loop.large_threshold',
-    ) ?? DEFAULT_EXEC_CONFIG.loop.largeThreshold,
+    largeThreshold: asPositiveInteger(loop.large_threshold, 'exec.loop.large_threshold'),
     maxSteps: asPositiveInteger(loop.max_steps, 'exec.loop.max_steps'),
   };
 }
@@ -292,9 +283,10 @@ export function listExecPresets(options: ExecPresetStoreOptions): ExecPreset[] {
         );
         presets.set(preset.name, preset);
       } catch (error) {
-        if (error instanceof Error && error.message.startsWith('Project-local ')) {
+        if (error instanceof ProjectBoundaryError) {
           throw error;
         }
+        debugLog('exec', 'Failed to load preset', { entry, error: error instanceof Error ? error.message : String(error) });
       }
     }
   }
@@ -315,9 +307,10 @@ export function listExecPresetsBySource(
       const presetName = validateExecPresetName(basename(entry, '.yaml'));
       presets.push(readPresetFile(join(dir, entry), source, presetName, source === 'project' ? options.projectDir : undefined));
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith('Project-local ')) {
+      if (error instanceof ProjectBoundaryError) {
         throw error;
       }
+      debugLog('exec', 'Failed to load preset', { entry, error: error instanceof Error ? error.message : String(error) });
     }
   }
   return presets.sort((a, b) => a.name.localeCompare(b.name));

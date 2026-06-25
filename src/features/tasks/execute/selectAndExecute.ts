@@ -190,6 +190,9 @@ export async function selectAndExecuteTask(
   }
 
   if (!taskSuccess) {
+    if (options?.exitOnFailure === false) {
+      throw new Error('Task failed');
+    }
     process.exit(1);
   }
 }

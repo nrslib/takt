@@ -38,17 +38,6 @@ const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
   '_loop_judge_replan_execute_judge',
 ]);
 
-function assertEffortValue<T extends string>(
-  values: readonly T[],
-  effort: ExecEffort,
-  provider: ProviderType,
-  path: string,
-): asserts effort is ExecEffort & T {
-  if (!values.includes(effort as T)) {
-    throw new Error(`Invalid exec config at ${path}: provider "${provider}" does not support effort "${effort}"`);
-  }
-}
-
 export function providerSupportsExecEffort(provider: ProviderType, effort: ExecEffort): boolean {
   if (CLAUDE_TOOL_PROVIDERS.has(provider)) {
     return CLAUDE_EFFORT_VALUES.includes(effort as typeof CLAUDE_EFFORT_VALUES[number]);
@@ -85,20 +74,12 @@ export function assertExecProviderEffort(
     }
     return;
   }
+  if (!providerSupportsExecEffort(provider, effort)) {
+    throw new Error(`Invalid exec config at ${path}: provider "${provider}" does not support effort "${effort}"`);
+  }
   if (CLAUDE_TOOL_PROVIDERS.has(provider)) {
-    assertEffortValue(CLAUDE_EFFORT_VALUES, effort, provider, path);
     validateClaudeEffortCompatibility(model, effort as ClaudeEffort);
-    return;
   }
-  if (provider === 'codex') {
-    assertEffortValue(CODEX_REASONING_EFFORT_VALUES, effort, provider, path);
-    return;
-  }
-  if (provider === 'copilot') {
-    assertEffortValue(COPILOT_EFFORT_VALUES, effort, provider, path);
-    return;
-  }
-  throw new Error(`Invalid exec config at ${path}: provider "${provider}" does not support effort "${effort}"`);
 }
 
 function assertUniqueActorSessionKeys(actors: ExecActorConfig[]): void {

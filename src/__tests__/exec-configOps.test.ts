@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { applyExecOverrides, resolveEffortAfterProviderOverride } from '../features/exec/configOps.js';
+import { applyExecOverrides } from '../features/exec/configOps.js';
 import type { ExecConfig } from '../features/exec/types.js';
 
 function createTestConfig(): ExecConfig {
@@ -51,11 +51,10 @@ describe('applyExecOverrides', () => {
 
     const result = applyExecOverrides(config, { provider: 'codex' });
 
-    // codex supports effort; effort should be re-resolved for codex
-    const expectedEffort = resolveEffortAfterProviderOverride('claude', 'codex', 'high');
-    expect(result.session.effort).toBe(expectedEffort);
-    expect(result.workers[0]!.effort).toBe(expectedEffort);
-    expect(result.judges[0]!.effort).toBe(expectedEffort);
+    // codex supports 'high' effort — verify with a fixed literal, not the function under test
+    expect(result.session.effort).toBe('high');
+    expect(result.workers[0]!.effort).toBe('high');
+    expect(result.judges[0]!.effort).toBe('high');
   });
 
   it('should return original config when no overrides provided', () => {

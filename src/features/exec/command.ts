@@ -115,17 +115,20 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
       continue;
     }
 
-    history = [...history, { role: 'user', content: trimmed }];
-    const response = await askExecAssistant(
-      cwd,
-      ctx,
-      trimmed,
-      'You are the TAKT exec assistant. Help clarify the task before /go.',
-    );
-    ctx = { ...ctx, sessionId: response.sessionId };
-    history = [...history, { role: 'assistant', content: response.content }];
-    info(sanitizeTerminalText(response.content));
-    blankLine();
+    try {
+      const response = await askExecAssistant(
+        cwd,
+        ctx,
+        trimmed,
+        'You are the TAKT exec assistant. Help clarify the task before /go.',
+      );
+      ctx = { ...ctx, sessionId: response.sessionId };
+      history = [...history, { role: 'user', content: trimmed }, { role: 'assistant', content: response.content }];
+      info(sanitizeTerminalText(response.content));
+      blankLine();
+    } catch (error) {
+      info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+    }
   }
 }
 

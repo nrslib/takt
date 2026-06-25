@@ -195,10 +195,25 @@ describe('resolveRefToContent with layer resolution', () => {
       symlinkSync(secretPath, join(instructionsDir, 'exec-worker.md'));
 
       expect(() => resolveRefToContent('exec-worker', undefined, tempDir, 'instructions', context))
-        .toThrow(/Project facet file must be a regular file/);
+        .toThrow(/Project facet file must stay inside the project and must not use symlinks/);
     } finally {
       rmSync(externalDir, { recursive: true, force: true });
     }
+  });
+
+  it('should reject project facet type directory symlinks even when target is within project', () => {
+    // Given: .takt/facets/instructions is a symlink to another directory within the project
+    // The existing realpathSync check would pass because the resolved path is inside the project.
+    // The assertPathSegmentsAreSafe check should catch the intermediate symlink.
+    const realDir = join(tempDir, 'internal-instructions');
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'exec-worker.md'), 'Internal instruction content');
+    mkdirSync(join(tempDir, '.takt', 'facets'), { recursive: true });
+    symlinkSync(realDir, join(tempDir, '.takt', 'facets', 'instructions'));
+
+    // When/Then: the intermediate symlink should be rejected
+    expect(() => resolveRefToContent('exec-worker', undefined, tempDir, 'instructions', context))
+      .toThrow(/symlink/);
   });
 
   it('should reject project facet directory symlinks for every named facet type', () => {
@@ -532,7 +547,7 @@ describe('resolvePersona with layer resolution', () => {
       symlinkSync(secretPath, join(projectPersonasDir, 'custom-persona.md'));
 
       expect(() => resolvePersona('custom-persona', emptySections, tempDir, context))
-        .toThrow(/Project facet file must be a regular file/);
+        .toThrow(/Project facet file must stay inside the project and must not use symlinks/);
     } finally {
       rmSync(externalDir, { recursive: true, force: true });
     }

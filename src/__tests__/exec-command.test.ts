@@ -1034,6 +1034,37 @@ describe('exec command setup', () => {
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
   });
 
+  it('should display error and continue loop when assistant call fails during conversation', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('Clarify this task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry.mockRejectedValueOnce(new Error('Provider connection failed'));
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+  });
+
+  it('should not add user message to history when assistant call fails', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('Broken message')
+      .mockResolvedValueOnce('Working message')
+      .mockResolvedValueOnce('/go')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockRejectedValueOnce(new Error('Provider connection failed'))
+      .mockResolvedValueOnce({ result: { success: true, content: 'OK' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Task instruction' }, sessionId: 'session-2' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Summary' }, sessionId: 'session-3' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    // The third call is the /go summary prompt (callAIWithRetry(prompt, systemPrompt, ...)).
+    // Verify the conversation in prompt[0] does not contain the failed "Broken message".
+    const summaryCall = mockCallAIWithRetry.mock.calls[2]!;
+    const summaryPrompt = summaryCall[0] as string;
+    expect(summaryPrompt).not.toContain('Broken message');
+    expect(summaryPrompt).toContain('Working message');
+  });
+
   it('should display error and continue loop when completed judge reports are missing', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/go Implement a small task')
@@ -1229,6 +1260,31 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const workerNames = execute.parallel.map((step: { name: string }) => step.name);
     expect(workerNames).toEqual(['worker-1', 'worker-3', 'worker-2']);
+  });
+
+  it('should keep actor list unchanged when delete selection returns null', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'add',
+      'delete',
+      null,
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    const workerNames = execute.parallel.map((step: { name: string }) => step.name);
+    expect(workerNames).toEqual(['worker-1', 'worker-2']);
   });
 
   it('should apply replan clear and worker facet toggle branches to the generated workflow', async () => {

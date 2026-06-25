@@ -12,9 +12,26 @@ import {
 } from '../features/exec/workflowRunner.js';
 import type { ExecConfig } from '../features/exec/types.js';
 
+const { saveExecConfigControl } = vi.hoisted(() => ({
+  saveExecConfigControl: { shouldThrow: false },
+}));
+
 vi.mock('../features/tasks/index.js', () => ({
   selectAndExecuteTask: vi.fn(),
 }));
+
+vi.mock('../features/exec/presetStore.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../features/exec/presetStore.js')>();
+  return {
+    ...original,
+    saveLastUsedExecConfig: (...args: Parameters<typeof original.saveLastUsedExecConfig>) => {
+      if (saveExecConfigControl.shouldThrow) {
+        throw new Error('Simulated save failure');
+      }
+      return original.saveLastUsedExecConfig(...args);
+    },
+  };
+});
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 
@@ -171,20 +188,21 @@ describe('runGeneratedWorkflow integration', () => {
       }
       writeCompletedRun(cwd, options.reportDirName, executedTask);
     });
-    // Make the global config dir unwritable to trigger a save failure
-    rmSync(globalConfigDir, { recursive: true, force: true });
-    mkdirSync(globalConfigDir, { recursive: true, mode: 0o444 });
 
-    const context = await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+    // Given: saveLastUsedExecConfig is configured to throw
+    saveExecConfigControl.shouldThrow = true;
 
-    expect(context.reports.map((report) => report.filename)).toEqual([
-      'judge-1-judge-result.md',
-      'judge-2-judge-result.md',
-    ]);
-    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
-    // Restore permissions for cleanup
-    rmSync(globalConfigDir, { recursive: true, force: true });
-    mkdirSync(globalConfigDir, { recursive: true });
+    try {
+      const context = await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+
+      expect(context.reports.map((report) => report.filename)).toEqual([
+        'judge-1-judge-result.md',
+        'judge-2-judge-result.md',
+      ]);
+      expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
+    } finally {
+      saveExecConfigControl.shouldThrow = false;
+    }
   });
 
   it('should read back the exact generated run slug instead of searching by task text', async () => {
@@ -248,6 +266,24 @@ describe('runGeneratedWorkflow integration', () => {
       skipTaskList: true,
       interactiveMetadata: { confirmed: true, task },
     }));
+  });
+
+  it('should pass exitOnFailure: false to selectAndExecuteTask so REPL continues on /go failure', async () => {
+    const task = 'Executable task with exitOnFailure';
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask);
+    });
+
+    await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
+
+    // Given: REPL calls runGeneratedWorkflow which delegates to selectAndExecuteTask
+    // When: the call is made
+    // Then: exitOnFailure should be false so that task failure throws instead of process.exit(1)
+    const options = mockSelectAndExecuteTask.mock.calls[0]?.[2];
+    expect(options?.exitOnFailure).toBe(false);
   });
 
   it('should build a task instruction prompt from conversation history and inline /go text', () => {

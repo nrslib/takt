@@ -19,8 +19,15 @@ import { assertPathSegmentsAreSafe, isRealPathInside, lstatIfExists } from '../.
 
 const OPEN_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
-function buildBoundaryError(label: string, path: string): Error {
-  return new Error(`Project-local ${label} must stay inside the project and must not use symlinks: ${path}`);
+export class ProjectBoundaryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProjectBoundaryError';
+  }
+}
+
+function buildBoundaryError(label: string, path: string): ProjectBoundaryError {
+  return new ProjectBoundaryError(`Project-local ${label} must stay inside the project and must not use symlinks: ${path}`);
 }
 
 function assertExistingSegmentsAreSafe(cwd: string, targetPath: string, label: string): void {

@@ -16,6 +16,7 @@ import { DEFAULT_EXEC_CONFIG } from './defaults.js';
 import { editFacetRefList, editInstructionFacetRef } from './facetEditor.js';
 import { editPresetSetup } from './presetSetup.js';
 import { promptInteger, promptText } from './promptUtils.js';
+import { ProjectBoundaryError } from './projectLocalFiles.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ExecSessionConfig } from './types.js';
 
 type SetupSection = 'assistant' | 'workers' | 'judges' | 'replan' | 'loop' | 'preset' | 'back';
@@ -125,7 +126,7 @@ async function editSessionConfig(session: ExecSessionConfig, lang: SessionContex
     }
     options.push({ label: 'Back', value: 'back' });
     const field = await selectOption<'provider' | 'model' | 'effort' | 'back'>('Assistant settings', options);
-    if (field === null || field === undefined || field === 'back') {
+    if (field === null || field === 'back') {
       return current;
     }
     if (field === 'provider') {
@@ -178,7 +179,7 @@ async function editActor(
       `${current.name} settings`,
       options,
     );
-    if (field === null || field === undefined || field === 'back') {
+    if (field === null || field === 'back') {
       return current;
     }
     if (field === 'name') {
@@ -237,7 +238,7 @@ async function editActorList(
       { label: 'Delete', value: 'delete' },
       { label: 'Back', value: 'back' },
     ]);
-    if (action === null || action === undefined || action === 'back') {
+    if (action === null || action === 'back') {
       return current;
     }
     if (action === 'add') {
@@ -252,7 +253,7 @@ async function editActorList(
           label: sanitizeTerminalText(actor.name),
           value: String(index),
         })));
-        if (selected !== null && selected !== undefined) {
+        if (selected !== null) {
           current = current.filter((_, index) => index !== Number(selected));
         }
       }
@@ -280,7 +281,7 @@ async function editReplanConfig(cwd: string, config: ExecConfig, ctx: SessionCon
       { label: `Policy: ${formatFacetListForTerminal(current.replan.policy)}`, value: 'policy' },
       { label: 'Back', value: 'back' },
     ]);
-    if (field === null || field === undefined || field === 'back') {
+    if (field === null || field === 'back') {
       return current;
     }
     if (field === 'instruction') {
@@ -313,7 +314,7 @@ async function editLoopConfig(config: ExecConfig, lang: SessionContext['lang']):
       { label: `Max steps: ${current.loop.maxSteps}`, value: 'max' },
       { label: 'Back', value: 'back' },
     ]);
-    if (field === null || field === undefined || field === 'back') {
+    if (field === null || field === 'back') {
       return current;
     }
     if (field === 'small') {
@@ -344,7 +345,7 @@ export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: Session
   }
   while (true) {
     const section = await selectOption<SetupSection>('Team Configuration', buildSetupSectionOptions(current));
-    if (section === null || section === undefined || section === 'back') {
+    if (section === null || section === 'back') {
       return current;
     }
     try {
@@ -352,7 +353,7 @@ export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: Session
       assertExecConfig(next);
       current = next;
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith('Project-local ')) {
+      if (error instanceof ProjectBoundaryError) {
         throw error;
       }
       info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));

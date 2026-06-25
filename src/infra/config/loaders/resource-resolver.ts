@@ -10,6 +10,7 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { getProjectFacetDir, type FacetType } from '../paths.js';
+import { assertPathSegmentsAreSafe } from '../../../shared/utils/pathBoundary.js';
 import {
   resolveFacetPath as resolveFacetPathGeneric,
   resolvePersona as resolvePersonaGeneric,
@@ -233,6 +234,12 @@ function assertProjectFacetFileIsSafe(
   }
   // isProjectFacetFile returned true → context.projectDir is guaranteed to be defined
   const projectDir = context!.projectDir!;
+
+  assertPathSegmentsAreSafe(
+    projectDir,
+    filePath,
+    (_violation, segmentPath) => new Error(`Project facet file must stay inside the project and must not use symlinks: ${segmentPath}`),
+  );
 
   const stats = lstatSync(filePath);
   if (stats.isSymbolicLink() || !stats.isFile()) {
