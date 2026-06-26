@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env';
-import { createTestRepo, type TestRepo } from '../helpers/test-repo';
+import { createOfflineTestRepo, type TestRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
 import { runTakt } from '../helpers/takt-runner';
 import { unexpectedWorkflowDirName } from '../../test/helpers/unknown-contract-test-keys.js';
@@ -76,7 +76,7 @@ describe('E2E: Workflow selection branch coverage', () => {
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
-    testRepo = createTestRepo();
+    testRepo = createOfflineTestRepo();
 
     updateIsolatedConfig(isolatedEnv.taktDir, {
       provider: 'mock',

@@ -58,6 +58,14 @@ describe('parseFacetType', () => {
   });
 });
 
+describe('catalog module exports', () => {
+  it('should keep facet lookup resolution internal', async () => {
+    const catalog = await import('../features/catalog/catalogFacets.js');
+
+    expect(Object.keys(catalog)).not.toContain('resolveFacetLookupConfig');
+  });
+});
+
 describe('extractDescription', () => {
   let tempDir: string;
 

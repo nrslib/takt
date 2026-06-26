@@ -85,4 +85,22 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
       assertExecProviderEffort('codex', 'o3', 'max', 'test'),
     ).toThrow('does not support effort "max"');
   });
+
+  it('should reject codex provider when effort is undefined', () => {
+    expect(() =>
+      assertExecProviderEffort('codex', 'o3', undefined, 'test'),
+    ).toThrow('requires effort');
+  });
+
+  it('should reject copilot provider when effort is undefined', () => {
+    expect(() =>
+      assertExecProviderEffort('copilot', 'gpt-4', undefined, 'test'),
+    ).toThrow('requires effort');
+  });
+
+  it('should reject claude provider with incompatible model-effort combination', () => {
+    expect(() =>
+      assertExecProviderEffort('claude', 'claude-sonnet-4-5-20250929', 'xhigh', 'test'),
+    ).toThrow("'xhigh' is not supported by model");
+  });
 });

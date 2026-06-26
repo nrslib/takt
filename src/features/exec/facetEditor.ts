@@ -2,16 +2,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { resolveConfigValue } from '../../infra/config/index.js';
-import { getBuiltinFacetDir, getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
-import type { WorkflowSource } from '../../infra/config/loaders/workflowResolver.js';
-import { scanFacets, type FacetType } from '../catalog/catalogFacets.js';
-import type { SessionContext } from '../interactive/aiCaller.js';
+import { getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
+import { getFacetDirs, scanFacets, type FacetLookupConfig, type FacetType } from '../catalog/catalogFacets.js';
 import { readInteractiveInput } from '../interactive/interactiveInput.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
-import { askExecAssistant } from './assistantSession.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
+import { askExecAssistant, type ExecSessionContext } from './assistantSession.js';
 import { promptText } from './promptUtils.js';
 import {
   projectLocalFileExists,
@@ -32,35 +30,42 @@ function validateFacetName(name: string): string {
   return name;
 }
 
-function normalizeFacetEntries(kind: FacetType, cwd: string): ReturnType<typeof scanFacets> {
+function normalizeFacetEntries(
+  kind: FacetType,
+  cwd: string,
+  lookupConfig: FacetLookupConfig,
+): ReturnType<typeof scanFacets> {
   const effective = new Map<string, ReturnType<typeof scanFacets>[number]>();
-  for (const entry of scanFacets(kind, cwd)) {
+  for (const entry of scanFacets(kind, cwd, lookupConfig)) {
     effective.set(entry.name, entry);
   }
   return [...effective.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function getFacetDir(cwd: string, kind: FacetType, source: WorkflowSource | WritableFacetScope): string {
-  if (source === 'project') {
-    return getProjectFacetDir(cwd, kind);
+function getWritableFacetDir(cwd: string, kind: FacetType, source: WritableFacetScope): string {
+  switch (source) {
+    case 'project':
+      return getProjectFacetDir(cwd, kind);
+    case 'global':
+      return getGlobalFacetDir(kind);
   }
-  if (source === 'global' || source === 'user') {
-    return getGlobalFacetDir(kind);
-  }
-  if (source === 'builtin') {
-    const language = resolveConfigValue(cwd, 'language');
-    return getBuiltinFacetDir(language === 'ja' ? 'ja' : 'en', kind);
-  }
-  throw new Error(`Unsupported facet source for exec editing: ${source}`);
+  const exhaustive: never = source;
+  throw new Error(`Unsupported facet write scope: ${exhaustive}`);
 }
 
-function readEffectiveFacetContent(cwd: string, kind: FacetType, name: string): string {
+function readEffectiveFacetContent(
+  cwd: string,
+  kind: FacetType,
+  name: string,
+  lookupConfig: FacetLookupConfig,
+): string {
   const facetName = validateFacetName(name);
-  const candidates: Array<{ source: WorkflowSource; path: string }> = [
-    { source: 'project', path: join(getFacetDir(cwd, kind, 'project'), `${facetName}.md`) },
-    { source: 'user', path: join(getFacetDir(cwd, kind, 'user'), `${facetName}.md`) },
-    { source: 'builtin', path: join(getFacetDir(cwd, kind, 'builtin'), `${facetName}.md`) },
-  ];
+  const candidates = [...getFacetDirs(kind, cwd, lookupConfig)]
+    .reverse()
+    .map((entry) => ({
+      source: entry.source,
+      path: join(entry.dir, `${facetName}.md`),
+    }));
 
   for (const candidate of candidates) {
     if (candidate.source === 'project') {
@@ -78,7 +83,7 @@ function readEffectiveFacetContent(cwd: string, kind: FacetType, name: string): 
 
 function writeFacetFile(cwd: string, kind: FacetType, scope: WritableFacetScope, name: string, content: string): string {
   const facetName = validateFacetName(name);
-  const facetDir = getFacetDir(cwd, kind, scope);
+  const facetDir = getWritableFacetDir(cwd, kind, scope);
   const facetPath = join(facetDir, `${facetName}.md`);
   const alreadyExists = scope === 'project'
     ? projectLocalFileExists(cwd, facetPath, `${kind} facet`)
@@ -100,7 +105,7 @@ function writeFacetFile(cwd: string, kind: FacetType, scope: WritableFacetScope,
 
 function overwriteFacetFile(cwd: string, kind: FacetType, scope: WritableFacetScope, name: string, content: string): string {
   const facetName = validateFacetName(name);
-  const facetDir = getFacetDir(cwd, kind, scope);
+  const facetDir = getWritableFacetDir(cwd, kind, scope);
   if (content.trim().length === 0) {
     throw new Error(`${kind} facet content is required.`);
   }
@@ -113,8 +118,8 @@ function overwriteFacetFile(cwd: string, kind: FacetType, scope: WritableFacetSc
   return facetName;
 }
 
-async function selectExistingFacet(kind: FacetType, cwd: string): Promise<string | null> {
-  const entries = normalizeFacetEntries(kind, cwd);
+async function selectExistingFacet(kind: FacetType, cwd: string, lookupConfig: FacetLookupConfig): Promise<string | null> {
+  const entries = normalizeFacetEntries(kind, cwd, lookupConfig);
   const selected = await selectOption<string>(`Select ${kind} facet`, entries.map((entry) => ({
     label: sanitizeTerminalText(entry.name),
     value: entry.name,
@@ -165,7 +170,7 @@ async function confirmGeneratedFacet(kind: FacetType, name: string, content: str
   return approved === 'save';
 }
 
-async function promptFacetConsultation(kind: FacetType, name: string, ctx: SessionContext): Promise<string | null> {
+async function promptFacetConsultation(kind: FacetType, name: string, ctx: ExecSessionContext): Promise<string | null> {
   const input = await readInteractiveInput(
     `Describe the ${kind} facet changes for ${sanitizeTerminalText(name)}: `,
     ctx.lang,
@@ -183,7 +188,7 @@ async function createFacetWithAI(
   kind: FacetType,
   scope: WritableFacetScope,
   name: string,
-  ctx: SessionContext,
+  ctx: ExecSessionContext,
 ): Promise<string | null> {
   const request = await promptFacetConsultation(kind, name, ctx);
   if (request === null) {
@@ -199,7 +204,7 @@ async function createFacetWithAI(
       '',
       'Return only markdown content for the facet.',
     ].join('\n'),
-    'You create concise TAKT facet markdown. Return only the markdown file content.',
+    loadTemplate('exec_facet_create', ctx.lang),
   );
   if (!await confirmGeneratedFacet(kind, name, generated.content)) {
     return null;
@@ -207,7 +212,7 @@ async function createFacetWithAI(
   return writeFacetFile(cwd, kind, scope, name, generated.content);
 }
 
-async function createFacetRef(cwd: string, kind: FacetType, ctx: SessionContext, useAI: boolean): Promise<string | null> {
+async function createFacetRef(cwd: string, kind: FacetType, ctx: ExecSessionContext, useAI: boolean): Promise<string | null> {
   const scope = await selectFacetScope('Facet save scope');
   if (scope === null) {
     return null;
@@ -226,13 +231,13 @@ async function editFacetWithAI(
   cwd: string,
   kind: FacetType,
   current: string,
-  ctx: SessionContext,
+  ctx: ExecSessionContext,
 ): Promise<string | null> {
   const scope = await selectFacetScope('Edited facet save scope');
   if (scope === null) {
     return null;
   }
-  const content = readEffectiveFacetContent(cwd, kind, current);
+  const content = readEffectiveFacetContent(cwd, kind, current, ctx.facetLookupConfig);
   const request = await promptFacetConsultation(kind, current, ctx);
   if (request === null) {
     return null;
@@ -249,7 +254,7 @@ async function editFacetWithAI(
       '',
       content,
     ].join('\n'),
-    'You edit TAKT facet markdown. Return only the markdown file content.',
+    loadTemplate('exec_facet_edit', ctx.lang),
   );
   if (!await confirmGeneratedFacet(kind, current, generated.content)) {
     return null;
@@ -261,12 +266,13 @@ async function editFacetWithEditor(
   cwd: string,
   kind: FacetType,
   current: string,
+  lookupConfig: FacetLookupConfig,
 ): Promise<string | null> {
   const scope = await selectFacetScope('Edited facet save scope');
   if (scope === null) {
     return null;
   }
-  const edited = runEditor(readEffectiveFacetContent(cwd, kind, current), current);
+  const edited = runEditor(readEffectiveFacetContent(cwd, kind, current, lookupConfig), current);
   return overwriteFacetFile(cwd, kind, scope, current, edited);
 }
 
@@ -274,7 +280,7 @@ export async function editInstructionFacetRef(
   cwd: string,
   current: string,
   defaultRef: string,
-  ctx: SessionContext,
+  ctx: ExecSessionContext,
 ): Promise<string> {
   const action = await selectOption<InstructionFacetAction>('Instruction facet', [
     { label: `Select existing (${sanitizeTerminalText(current)})`, value: 'select' },
@@ -285,7 +291,7 @@ export async function editInstructionFacetRef(
     { label: 'Back', value: 'back' },
   ]);
   if (action === 'select') {
-    return await selectExistingFacet('instructions', cwd) ?? current;
+    return await selectExistingFacet('instructions', cwd, ctx.facetLookupConfig) ?? current;
   }
   if (action === 'ai_edit') {
     return await editFacetWithAI(cwd, 'instructions', current, ctx) ?? current;
@@ -294,7 +300,7 @@ export async function editInstructionFacetRef(
     return await createFacetRef(cwd, 'instructions', ctx, true) ?? current;
   }
   if (action === 'edit_editor') {
-    return await editFacetWithEditor(cwd, 'instructions', current) ?? current;
+    return await editFacetWithEditor(cwd, 'instructions', current, ctx.facetLookupConfig) ?? current;
   }
   if (action === 'default') {
     return defaultRef;
@@ -302,8 +308,13 @@ export async function editInstructionFacetRef(
   return current;
 }
 
-async function selectFacetToToggle(kind: FacetType, cwd: string, current: string[]): Promise<string | null> {
-  const entries = normalizeFacetEntries(kind, cwd);
+async function selectFacetToToggle(
+  kind: FacetType,
+  cwd: string,
+  current: string[],
+  lookupConfig: FacetLookupConfig,
+): Promise<string | null> {
+  const entries = normalizeFacetEntries(kind, cwd, lookupConfig);
   return await selectOption<string>(`Toggle ${kind} facet`, entries.map((entry) => ({
     label: `${current.includes(entry.name) ? '[x]' : '[ ]'} ${sanitizeTerminalText(entry.name)}`,
     value: entry.name,
@@ -315,7 +326,7 @@ export async function editFacetRefList(
   cwd: string,
   kind: Extract<FacetType, 'knowledge' | 'policies'>,
   current: string[],
-  ctx: SessionContext,
+  ctx: ExecSessionContext,
 ): Promise<string[]> {
   const action = await selectOption<FacetListAction>(`${kind} facets`, [
     { label: 'Toggle existing', value: 'toggle', description: current.map((name) => sanitizeTerminalText(name)).join(', ') || 'none' },
@@ -325,7 +336,7 @@ export async function editFacetRefList(
     { label: 'Back', value: 'back' },
   ]);
   if (action === 'toggle') {
-    const selected = await selectFacetToToggle(kind, cwd, current);
+    const selected = await selectFacetToToggle(kind, cwd, current, ctx.facetLookupConfig);
     if (selected === null) {
       return current;
     }

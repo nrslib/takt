@@ -162,6 +162,11 @@ describe('template file existence', () => {
     'perform_phase3_message',
     'perform_agent_system_prompt',
     'perform_judge_message',
+    'exec_assistant_instruct',
+    'exec_assistant_summary',
+    'exec_assistant_clarify',
+    'exec_facet_create',
+    'exec_facet_edit',
   ];
 
   for (const name of allTemplates) {
@@ -273,6 +278,46 @@ describe('template content integrity', () => {
     expect(summaryJa).toContain('ワークフロー実行用の具体的なタスク指示書');
     expect(summaryJa).toContain('ワークフローの内容: {{workflowDescription}}');
     expect(findDeprecatedTerms(summaryJa)).toEqual([]);
+  });
+
+  it('exec assistant templates contain TAKT exec assistant identity in both languages', () => {
+    const instructEn = loadTemplate('exec_assistant_instruct', 'en');
+    expect(instructEn).toContain('TAKT exec assistant');
+    expect(instructEn).toContain('task instruction');
+
+    const instructJa = loadTemplate('exec_assistant_instruct', 'ja');
+    expect(instructJa).toContain('TAKT execアシスタント');
+    expect(instructJa).toContain('タスク指示');
+
+    const summaryEn = loadTemplate('exec_assistant_summary', 'en');
+    expect(summaryEn).toContain('TAKT exec assistant');
+    expect(summaryEn).toContain('Summarize');
+
+    const summaryJa = loadTemplate('exec_assistant_summary', 'ja');
+    expect(summaryJa).toContain('TAKT execアシスタント');
+    expect(summaryJa).toContain('要約');
+
+    const clarifyEn = loadTemplate('exec_assistant_clarify', 'en');
+    expect(clarifyEn).toContain('TAKT exec assistant');
+    expect(clarifyEn).toContain('clarify');
+
+    const clarifyJa = loadTemplate('exec_assistant_clarify', 'ja');
+    expect(clarifyJa).toContain('TAKT execアシスタント');
+    expect(clarifyJa).toContain('明確化');
+  });
+
+  it('exec facet templates contain facet-specific instructions in both languages', () => {
+    const createEn = loadTemplate('exec_facet_create', 'en');
+    expect(createEn).toContain('TAKT facet markdown');
+
+    const createJa = loadTemplate('exec_facet_create', 'ja');
+    expect(createJa).toContain('Markdown');
+
+    const editEn = loadTemplate('exec_facet_edit', 'en');
+    expect(editEn).toContain('TAKT facet markdown');
+
+    const editJa = loadTemplate('exec_facet_edit', 'ja');
+    expect(editJa).toContain('Markdown');
   });
 
   it('score_slug_system_prompt contains format specification', () => {

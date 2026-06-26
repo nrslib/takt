@@ -3,7 +3,6 @@ import { selectOption } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
-import type { SessionContext } from '../interactive/aiCaller.js';
 import {
   assertExecActorName,
   assertExecConfig,
@@ -17,6 +16,11 @@ import { editFacetRefList, editInstructionFacetRef } from './facetEditor.js';
 import { editPresetSetup } from './presetSetup.js';
 import { promptInteger, promptText } from './promptUtils.js';
 import { ProjectBoundaryError } from './projectLocalFiles.js';
+import {
+  createExecSessionContext,
+  shouldKeepExecSession,
+  type ExecSessionContext,
+} from './assistantSession.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ExecSessionConfig } from './types.js';
 
 type SetupSection = 'assistant' | 'workers' | 'judges' | 'replan' | 'loop' | 'preset' | 'back';
@@ -96,7 +100,7 @@ async function selectEffort(provider: ProviderType, current: ExecEffort | undefi
   return selected;
 }
 
-async function selectModel(provider: ProviderType, current: string, lang: SessionContext['lang']): Promise<string> {
+async function selectModel(provider: ProviderType, current: string, lang: ExecSessionContext['lang']): Promise<string> {
   const candidates = [...new Set([...(MODEL_CANDIDATES[provider] ?? []), current])];
   const selected = await selectOption<string>('Model', [
     ...candidates.map((model) => ({
@@ -114,7 +118,7 @@ async function selectModel(provider: ProviderType, current: string, lang: Sessio
   return selected;
 }
 
-async function editSessionConfig(session: ExecSessionConfig, lang: SessionContext['lang']): Promise<ExecSessionConfig> {
+async function editSessionConfig(session: ExecSessionConfig, lang: ExecSessionContext['lang']): Promise<ExecSessionConfig> {
   let current = session;
   while (true) {
     const options: Array<{ label: string; value: 'provider' | 'model' | 'effort' | 'back' }> = [
@@ -154,7 +158,7 @@ async function editActor(
   cwd: string,
   actor: ExecActorConfig,
   defaultActor: ExecActorConfig,
-  ctx: SessionContext,
+  ctx: ExecSessionContext,
 ): Promise<ExecActorConfig> {
   let current = actor;
   while (true) {
@@ -225,7 +229,7 @@ async function editActorList(
   label: string,
   actors: ExecActorConfig[],
   template: ExecActorConfig,
-  ctx: SessionContext,
+  ctx: ExecSessionContext,
 ): Promise<ExecActorConfig[]> {
   let current = actors;
   while (true) {
@@ -272,7 +276,7 @@ async function editActorList(
   }
 }
 
-async function editReplanConfig(cwd: string, config: ExecConfig, ctx: SessionContext): Promise<ExecConfig> {
+async function editReplanConfig(cwd: string, config: ExecConfig, ctx: ExecSessionContext): Promise<ExecConfig> {
   let current = config;
   while (true) {
     const field = await selectOption<'instruction' | 'knowledge' | 'policy' | 'back'>('Replan settings', [
@@ -305,7 +309,7 @@ async function editReplanConfig(cwd: string, config: ExecConfig, ctx: SessionCon
   }
 }
 
-async function editLoopConfig(config: ExecConfig, lang: SessionContext['lang']): Promise<ExecConfig> {
+async function editLoopConfig(config: ExecConfig, lang: ExecSessionContext['lang']): Promise<ExecConfig> {
   let current = config;
   while (true) {
     const field = await selectOption<'small' | 'large' | 'max' | 'back'>('Loop settings', [
@@ -332,13 +336,14 @@ async function editLoopConfig(config: ExecConfig, lang: SessionContext['lang']):
   }
 }
 
-export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: SessionContext): Promise<ExecConfig> {
+export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: ExecSessionContext): Promise<ExecConfig> {
   const workerTemplate = DEFAULT_EXEC_CONFIG.workers[0];
   const judgeTemplate = DEFAULT_EXEC_CONFIG.judges[0];
   if (!workerTemplate || !judgeTemplate) {
     throw new Error('Default exec actor templates are missing.');
   }
   let current = config;
+  let setupCtx = ctx;
   if (!shouldKeepSetupMenuOpen()) {
     await selectOption<SetupSection>('Team Configuration', buildSetupSectionOptions(current));
     return current;
@@ -349,8 +354,10 @@ export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: Session
       return current;
     }
     try {
-      const next = await resolveSetupSection(cwd, section, current, workerTemplate, judgeTemplate, ctx);
+      const next = await resolveSetupSection(cwd, section, current, workerTemplate, judgeTemplate, setupCtx);
       assertExecConfig(next);
+      const nextSessionId = shouldKeepExecSession(current.session, next.session) ? setupCtx.sessionId : undefined;
+      setupCtx = createExecSessionContext(cwd, next, nextSessionId);
       current = next;
     } catch (error) {
       if (error instanceof ProjectBoundaryError) {
@@ -370,7 +377,7 @@ async function resolveSetupSection(
   config: ExecConfig,
   workerTemplate: ExecActorConfig,
   judgeTemplate: ExecActorConfig,
-  ctx: SessionContext,
+  ctx: ExecSessionContext,
 ): Promise<ExecConfig> {
   if (section === 'assistant') {
     return { ...config, session: await editSessionConfig(config.session, ctx.lang) };

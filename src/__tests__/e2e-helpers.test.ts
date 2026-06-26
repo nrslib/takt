@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { injectProviderArgs } from '../../e2e/helpers/takt-runner.js';
 import { cleanupChildProcess, cleanupTestResource, waitForClose } from '../../e2e/helpers/wait.js';
@@ -8,6 +10,7 @@ import {
   createIsolatedEnv,
   updateIsolatedConfig,
 } from '../../e2e/helpers/isolated-env.js';
+import { createOfflineTestRepo } from '../../e2e/helpers/test-repo.js';
 
 describe('injectProviderArgs', () => {
   it('should prepend --provider when provider is specified', () => {
@@ -187,6 +190,39 @@ describe('createIsolatedEnv', () => {
     expect(() => {
       updateIsolatedConfig(isolated.taktDir, { provider: 'mock' });
     }).toThrow('Invalid notification_sound_events in current config: expected object');
+  });
+});
+
+describe('createOfflineTestRepo', () => {
+  const originalEnv = process.env;
+  let cleanups: Array<() => void> = [];
+
+  afterEach(() => {
+    process.env = originalEnv;
+    for (const cleanup of cleanups) {
+      cleanup();
+    }
+    cleanups = [];
+  });
+
+  it('should create an offline repository without probing GitHub', () => {
+    const fakeBinDir = mkdtempSync(join(tmpdir(), 'takt-fake-gh-'));
+    cleanups.push(() => rmSync(fakeBinDir, { recursive: true, force: true }));
+    const markerPath = join(fakeBinDir, 'gh-called');
+    const ghPath = join(fakeBinDir, 'gh');
+    writeFileSync(ghPath, `#!/bin/sh\ntouch "${markerPath}"\nexit 42\n`, 'utf-8');
+    chmodSync(ghPath, 0o755);
+    process.env = {
+      ...originalEnv,
+      PATH: `${fakeBinDir}:${originalEnv.PATH ?? ''}`,
+      TAKT_E2E_PROVIDER: 'mock',
+    };
+
+    const repo = createOfflineTestRepo();
+    cleanups.push(repo.cleanup);
+
+    expect(repo.repoName).toBe('local/takt-testing');
+    expect(existsSync(markerPath)).toBe(false);
   });
 });
 

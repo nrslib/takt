@@ -8,6 +8,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import chalk from 'chalk';
+import type { Language } from '../../core/models/index.js';
 import type { WorkflowSource } from '../../infra/config/loaders/workflowResolver.js';
 import { getBuiltinFacetDir, getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
@@ -29,6 +30,11 @@ export interface FacetEntry {
   description: string;
   source: WorkflowSource;
   overriddenBy?: WorkflowSource;
+}
+
+export interface FacetLookupConfig {
+  enableBuiltinWorkflows: boolean | undefined;
+  language: Language;
 }
 
 /** Validate a string as a FacetType. Returns the type or null. */
@@ -61,17 +67,24 @@ export function extractDescription(filePath: string): string {
   return firstNonEmpty;
 }
 
+function resolveFacetLookupConfig(cwd: string): FacetLookupConfig {
+  const config = resolveWorkflowConfigValues(cwd, ['enableBuiltinWorkflows', 'language']);
+  return {
+    enableBuiltinWorkflows: config.enableBuiltinWorkflows,
+    language: config.language,
+  };
+}
+
 /** Build the 3-layer directory list for a given facet type. */
-function getFacetDirs(
+export function getFacetDirs(
   facetType: FacetType,
   cwd: string,
+  config: FacetLookupConfig = resolveFacetLookupConfig(cwd),
 ): { dir: string; source: WorkflowSource }[] {
-  const config = resolveWorkflowConfigValues(cwd, ['enableBuiltinWorkflows', 'language']);
   const dirs: { dir: string; source: WorkflowSource }[] = [];
 
   if (config.enableBuiltinWorkflows !== false) {
-    const lang = config.language;
-    dirs.push({ dir: getBuiltinFacetDir(lang, facetType), source: 'builtin' });
+    dirs.push({ dir: getBuiltinFacetDir(config.language, facetType), source: 'builtin' });
   }
 
   dirs.push({ dir: getGlobalFacetDir(facetType), source: 'user' });
@@ -107,8 +120,12 @@ function scanDirectory(dir: string, boundaryDir?: string): string[] {
  * When a facet name appears in a higher-priority layer, the lower-priority
  * entry gets `overriddenBy` set to the overriding layer.
  */
-export function scanFacets(facetType: FacetType, cwd: string): FacetEntry[] {
-  const dirs = getFacetDirs(facetType, cwd);
+export function scanFacets(
+  facetType: FacetType,
+  cwd: string,
+  config?: FacetLookupConfig,
+): FacetEntry[] {
+  const dirs = getFacetDirs(facetType, cwd, config);
   const entriesByName = new Map<string, FacetEntry>();
   const allEntries: FacetEntry[] = [];
 

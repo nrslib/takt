@@ -13,6 +13,7 @@ import { selectInitialExecConfig } from './presetSelection.js';
 import { runSetupMenu } from './setupMenu.js';
 import type { ExecConfig } from './types.js';
 import { buildTaskInstructionPrompt, runGeneratedWorkflow } from './workflowRunner.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
 
 interface RunExecCommandOptions {
   list?: boolean;
@@ -42,7 +43,7 @@ async function runGoCommand(
     cwd,
     ctx,
     summaryPrompt,
-    'You are the TAKT exec assistant. Return only the executable task instruction.',
+    loadTemplate('exec_assistant_instruct', ctx.lang),
   );
   const summaryCtx = { ...ctx, sessionId: summary.sessionId };
   const runContext = await runGeneratedWorkflow(cwd, config, summary.content, agentOverrides);
@@ -65,7 +66,7 @@ async function runGoCommand(
       '',
       'Summarize the result for the user.',
     ].join('\n'),
-    'You are the TAKT exec assistant. Summarize completed exec workflow results concisely.',
+    loadTemplate('exec_assistant_summary', ctx.lang),
     { permissionMode: 'readonly' },
   );
   info(sanitizeTerminalText(completion.content));
@@ -120,7 +121,7 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
         cwd,
         ctx,
         trimmed,
-        'You are the TAKT exec assistant. Help clarify the task before /go.',
+        loadTemplate('exec_assistant_clarify', ctx.lang),
       );
       ctx = { ...ctx, sessionId: response.sessionId };
       history = [...history, { role: 'user', content: trimmed }, { role: 'assistant', content: response.content }];

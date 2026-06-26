@@ -32,6 +32,8 @@ interface ExecPresetWriteOptions {
 }
 
 type RawRecord = Record<string, unknown>;
+type PresetLocation = { source: ExecPresetScope; filePath: string };
+type PresetDirectory = { source: ExecPresetScope; dir: string };
 
 function resolveGlobalConfigDir(options?: LastUsedExecConfigOptions): string {
   return options?.globalConfigDir ?? getGlobalConfigDir();
@@ -197,24 +199,45 @@ function presetFileExists(source: ExecPresetScope, filePath: string, projectDir:
   return existsSync(filePath);
 }
 
+function getPresetDirectories(options: ExecPresetStoreOptions): PresetDirectory[] {
+  const globalConfigDir = resolveGlobalConfigDir(options);
+  return [
+    { source: 'project', dir: getProjectPresetDir(options.projectDir) },
+    { source: 'global', dir: getGlobalPresetDir(globalConfigDir) },
+    { source: 'builtin', dir: resolveBuiltinPresetsDir(options) },
+  ];
+}
+
+function getPresetLocations(name: string, options: ExecPresetStoreOptions): PresetLocation[] {
+  const presetName = validateExecPresetName(name);
+  return getPresetDirectories(options).map((directory) => ({
+    source: directory.source,
+    filePath: join(directory.dir, `${presetName}.yaml`),
+  }));
+}
+
+function readPresetLocation(location: PresetLocation, presetName: string, projectDir: string): ExecPreset {
+  return readPresetFile(
+    location.filePath,
+    location.source,
+    presetName,
+    location.source === 'project' ? projectDir : undefined,
+  );
+}
+
+function findFirstExistingPresetLocation(name: string, options: ExecPresetStoreOptions): PresetLocation | null {
+  const candidates = getPresetLocations(name, options);
+  const match = candidates.find((candidate) => presetFileExists(candidate.source, candidate.filePath, options.projectDir));
+  return match ?? null;
+}
+
 export function loadExecPreset(name: string, options: ExecPresetStoreOptions): ExecPreset {
   const presetName = validateExecPresetName(name);
-  const globalConfigDir = resolveGlobalConfigDir(options);
-  const candidates: Array<{ source: ExecPresetScope; filePath: string }> = [
-    { source: 'project', filePath: join(getProjectPresetDir(options.projectDir), `${presetName}.yaml`) },
-    { source: 'global', filePath: join(getGlobalPresetDir(globalConfigDir), `${presetName}.yaml`) },
-    { source: 'builtin', filePath: join(resolveBuiltinPresetsDir(options), `${presetName}.yaml`) },
-  ];
-  const match = candidates.find((candidate) => presetFileExists(candidate.source, candidate.filePath, options.projectDir));
-  if (!match) {
+  const match = findFirstExistingPresetLocation(presetName, options);
+  if (match === null) {
     throw new Error(`Exec preset not found: ${presetName}`);
   }
-  return readPresetFile(
-    match.filePath,
-    match.source,
-    presetName,
-    match.source === 'project' ? options.projectDir : undefined,
-  );
+  return readPresetLocation(match, presetName, options.projectDir);
 }
 
 function getPresetDirForSource(
@@ -258,13 +281,9 @@ function listPresetFiles(source: ExecPresetScope, dir: string, projectDir: strin
 }
 
 export function listExecPresets(options: ExecPresetStoreOptions): ExecPreset[] {
-  const globalConfigDir = resolveGlobalConfigDir(options);
-  const dirs: Array<{ source: ExecPresetScope; dir: string }> = [
-    { source: 'project', dir: getProjectPresetDir(options.projectDir) },
-    { source: 'global', dir: getGlobalPresetDir(globalConfigDir) },
-    { source: 'builtin', dir: resolveBuiltinPresetsDir(options) },
-  ];
+  const dirs = getPresetDirectories(options);
   const presets = new Map<string, ExecPreset>();
+  const shadowedNames = new Set<string>();
   for (const { source, dir } of dirs) {
     for (const entry of listPresetFiles(source, dir, options.projectDir)) {
       if (!entry.endsWith('.yaml')) {
@@ -272,15 +291,11 @@ export function listExecPresets(options: ExecPresetStoreOptions): ExecPreset[] {
       }
       try {
         const presetName = validateExecPresetName(basename(entry, '.yaml'));
-        if (presets.has(presetName)) {
+        if (shadowedNames.has(presetName)) {
           continue;
         }
-        const preset = readPresetFile(
-          join(dir, entry),
-          source,
-          presetName,
-          source === 'project' ? options.projectDir : undefined,
-        );
+        shadowedNames.add(presetName);
+        const preset = readPresetLocation({ source, filePath: join(dir, entry) }, presetName, options.projectDir);
         presets.set(preset.name, preset);
       } catch (error) {
         if (error instanceof ProjectBoundaryError) {

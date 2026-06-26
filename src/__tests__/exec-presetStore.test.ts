@@ -159,6 +159,26 @@ describe('exec preset store', () => {
     }
   });
 
+  it('should not list a lower-priority preset shadowed by an invalid higher-priority preset', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-shadow-project-'));
+    const builtinPresetsDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-shadow-builtin-'));
+    try {
+      writeRawPreset(join(projectDir, '.takt', 'exec', 'presets'), 'backend', 'name: wrong-name\n');
+      writePreset(join(builtinPresetsDir), 'backend', createExecConfig('builtin-worker'), 'builtin');
+      writePreset(join(builtinPresetsDir), 'frontend', createExecConfig('frontend-worker'), 'frontend');
+
+      const presets = listExecPresets({ projectDir, builtinPresetsDir });
+
+      expect(presets.map((preset) => preset.name)).toEqual(['frontend']);
+      expect(() => loadExecPreset('backend', { projectDir, builtinPresetsDir })).toThrow(
+        /name "wrong-name" must match filename "backend"/,
+      );
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(builtinPresetsDir, { recursive: true, force: true });
+    }
+  });
+
   it('should list and load duplicate preset names by explicit source', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-source-project-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-source-global-'));

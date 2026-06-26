@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveWorkflowConfigValues } from '../infra/config/index.js';
 import { getProvider } from '../infra/providers/index.js';
 import { readInteractiveInput } from '../features/interactive/interactiveInput.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
@@ -13,6 +14,7 @@ import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import { saveExecPreset } from '../features/exec/presetStore.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({ setup: vi.fn() })),
@@ -61,6 +63,7 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 const mockReadInteractiveInput = vi.mocked(readInteractiveInput);
 const mockSelectOption = vi.mocked(selectOption);
+const mockResolveWorkflowConfigValues = vi.mocked(resolveWorkflowConfigValues);
 const mockGetProvider = vi.mocked(getProvider);
 const mockCallAIWithRetry = vi.mocked(callAIWithRetry);
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
@@ -108,11 +111,16 @@ describe('exec command setup', () => {
     process.env.TAKT_CONFIG_DIR = globalConfigDir;
     mockReadInteractiveInput.mockReset();
     mockSelectOption.mockReset();
+    mockResolveWorkflowConfigValues.mockReset();
     mockGetProvider.mockReset();
     mockCallAIWithRetry.mockReset();
     mockSelectAndExecuteTask.mockReset();
     mockLoadRunSessionContext.mockReset();
     mockFormatRunSessionForPrompt.mockReset();
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'en',
+    });
     mockGetProvider.mockReturnValue({ setup: vi.fn() });
     mockSelectAndExecuteTask.mockResolvedValue(undefined);
     mockLoadRunSessionContext.mockReturnValue({
@@ -243,6 +251,44 @@ describe('exec command setup', () => {
       model: 'gpt-5',
     }));
     expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual({ permissionMode: 'readonly' });
+  });
+
+  it('should route exec assistant conversation prompts through runtime templates', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('Clarify this task')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Clarified task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-2' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-3' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(loadTemplate('exec_assistant_clarify', 'en'));
+    expect(mockCallAIWithRetry.mock.calls[1]?.[1]).toBe(loadTemplate('exec_assistant_instruct', 'en'));
+    expect(mockCallAIWithRetry.mock.calls[2]?.[1]).toBe(loadTemplate('exec_assistant_summary', 'en'));
+  });
+
+  it('should route Japanese exec assistant conversation prompts through runtime templates', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'ja',
+    });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('このタスクを確認して')
+      .mockResolvedValueOnce('/go 小さなタスクを実装して')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: '確認しました' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: '実行タスク' }, sessionId: 'session-2' })
+      .mockResolvedValueOnce({ result: { success: true, content: '完了しました' }, sessionId: 'session-3' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(loadTemplate('exec_assistant_clarify', 'ja'));
+    expect(mockCallAIWithRetry.mock.calls[1]?.[1]).toBe(loadTemplate('exec_assistant_instruct', 'ja'));
+    expect(mockCallAIWithRetry.mock.calls[2]?.[1]).toBe(loadTemplate('exec_assistant_summary', 'ja'));
   });
 
   it('should sanitize exec preset metadata when listing presets', async () => {
@@ -557,9 +603,39 @@ describe('exec command setup', () => {
     } finally {
       consoleLogSpy.mockRestore();
     }
+    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(loadTemplate('exec_facet_create', 'en'));
     expect(output).toContain('# Generated\\n\\ncontent');
     expect(output).not.toContain('\x1b');
     expect(output).not.toContain('secret');
+  });
+
+  it('should route Japanese AI facet creation prompts through runtime templates', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'ja',
+    });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('generated-knowledge')
+      .mockResolvedValueOnce('ローカル知識を作成して')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'knowledge',
+      'create_ai',
+      'project',
+      'discard',
+      'back',
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: '# 生成された知識' }, sessionId: 'ai-facet-session' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(loadTemplate('exec_facet_create', 'ja'));
   });
 
   it('should clear unsupported session effort when setup changes provider', async () => {
@@ -759,6 +835,41 @@ describe('exec command setup', () => {
         },
       },
     });
+  });
+
+  it('should apply assistant effort changes from setup to AI facet calls in the same setup session', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('generated-knowledge')
+      .mockResolvedValueOnce('Create knowledge after effort update')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'assistant',
+      'effort',
+      'medium',
+      'back',
+      'workers',
+      'edit:0',
+      'knowledge',
+      'create_ai',
+      'project',
+      'discard',
+      'back',
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: '# Generated knowledge' }, sessionId: 'ai-facet-session' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(loadTemplate('exec_facet_create', 'en'));
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+      providerType: 'claude',
+      model: 'opus',
+      providerOptions: { claude: { effort: 'medium' } },
+      sessionId: undefined,
+    }));
   });
 
   it('should apply assistant provider and model changes from setup to the replan workflow step', async () => {
@@ -1038,31 +1149,54 @@ describe('exec command setup', () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('Clarify this task')
       .mockResolvedValueOnce('/cancel');
-    mockCallAIWithRetry.mockRejectedValueOnce(new Error('Provider connection failed'));
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, sessionId: undefined });
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
   });
 
-  it('should not add user message to history when assistant call fails', async () => {
+  it('should preserve exec assistant session and history when assistant call fails', async () => {
     mockReadInteractiveInput
+      .mockResolvedValueOnce('Seed message')
       .mockResolvedValueOnce('Broken message')
       .mockResolvedValueOnce('Working message')
       .mockResolvedValueOnce('/go')
       .mockResolvedValueOnce('/cancel');
     mockCallAIWithRetry
-      .mockRejectedValueOnce(new Error('Provider connection failed'))
-      .mockResolvedValueOnce({ result: { success: true, content: 'OK' }, sessionId: 'session-1' })
-      .mockResolvedValueOnce({ result: { success: true, content: 'Task instruction' }, sessionId: 'session-2' })
-      .mockResolvedValueOnce({ result: { success: true, content: 'Summary' }, sessionId: 'session-3' });
+      .mockResolvedValueOnce({ result: { success: true, content: 'Seed response' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: null, sessionId: undefined })
+      .mockResolvedValueOnce({ result: { success: true, content: 'OK' }, sessionId: 'session-2' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Task instruction' }, sessionId: 'session-3' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Summary' }, sessionId: 'session-4' });
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    // The third call is the /go summary prompt (callAIWithRetry(prompt, systemPrompt, ...)).
-    // Verify the conversation in prompt[0] does not contain the failed "Broken message".
-    const summaryCall = mockCallAIWithRetry.mock.calls[2]!;
-    const summaryPrompt = summaryCall[0] as string;
-    expect(summaryPrompt).not.toContain('Broken message');
-    expect(summaryPrompt).toContain('Working message');
+    expect(mockCallAIWithRetry.mock.calls[1]?.[4]).toEqual(expect.objectContaining({
+      sessionId: 'session-1',
+    }));
+    expect(mockCallAIWithRetry.mock.calls[2]?.[4]).toEqual(expect.objectContaining({
+      sessionId: 'session-1',
+    }));
+    expect(mockCallAIWithRetry.mock.calls[3]?.[4]).toEqual(expect.objectContaining({
+      sessionId: 'session-2',
+    }));
+
+    const instructionCall = mockCallAIWithRetry.mock.calls[3]!;
+    const instructionPrompt = instructionCall[0] as string;
+    expect(instructionPrompt).not.toContain('Broken message');
+    expect(instructionPrompt).toContain('Seed message');
+    expect(instructionPrompt).toContain('Working message');
+  });
+
+  it('should display error and continue loop when assistant call returns blocked status', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('Clarify this task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: { success: false, content: 'Provider returned blocked status' },
+      sessionId: undefined,
+    });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
   });
 
   it('should display error and continue loop when completed judge reports are missing', async () => {
@@ -1426,7 +1560,121 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(mockCallAIWithRetry.mock.calls[0]?.[0]).toContain('Make the worker require tests');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(loadTemplate('exec_facet_edit', 'en'));
     expect(readFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'exec-worker.md'), 'utf-8')).toBe('# Edited worker instruction');
+  });
+
+  it('should route Japanese AI facet edit prompts through runtime templates', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'ja',
+    });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('ワーカーにテストを要求して')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'instruction',
+      'ai_edit',
+      'project',
+      'save',
+      'back',
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: '# 編集済みワーカー指示' }, sessionId: 'ai-facet-session' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    expect(mockCallAIWithRetry.mock.calls[0]?.[1]).toBe(loadTemplate('exec_facet_edit', 'ja'));
+    expect(readFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'exec-worker.md'), 'utf-8')).toBe('# 編集済みワーカー指示');
+  });
+
+  it('should exclude builtin instruction facets from select existing when builtin facets are disabled', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: false,
+      language: 'en',
+    });
+    mkdirSync(join(projectDir, '.takt', 'facets', 'instructions'), { recursive: true });
+    mkdirSync(join(globalConfigDir, 'facets', 'instructions'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'project-instruction.md'), '# Project Instruction\n');
+    writeFileSync(join(globalConfigDir, 'facets', 'instructions', 'user-instruction.md'), '# User Instruction\n');
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'instruction',
+      'select',
+      'project-instruction',
+      'back',
+      'back',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const selectOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Select instructions facet')?.[1] ?? [];
+    expect(selectOptions.map((option) => option.value).sort()).toEqual(['project-instruction', 'user-instruction']);
+    expect(selectOptions.some((option) => option.value === 'exec-worker')).toBe(false);
+    expect(selectOptions.some((option) => option.description?.startsWith('builtin'))).toBe(false);
+  });
+
+  it('should exclude builtin knowledge facets from toggle existing when builtin facets are disabled', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: false,
+      language: 'en',
+    });
+    mkdirSync(join(projectDir, '.takt', 'facets', 'knowledge'), { recursive: true });
+    mkdirSync(join(globalConfigDir, 'facets', 'knowledge'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'facets', 'knowledge', 'project-knowledge.md'), '# Project Knowledge\n');
+    writeFileSync(join(globalConfigDir, 'facets', 'knowledge', 'user-knowledge.md'), '# User Knowledge\n');
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'knowledge',
+      'toggle',
+      'project-knowledge',
+      'back',
+      'back',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const toggleOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Toggle knowledge facet')?.[1] ?? [];
+    expect(toggleOptions.map((option) => option.value).sort()).toEqual(['project-knowledge', 'user-knowledge']);
+    expect(toggleOptions.some((option) => ['architecture', 'backend', 'security'].includes(option.value))).toBe(false);
+    expect(toggleOptions.some((option) => option.description?.startsWith('builtin'))).toBe(false);
+  });
+
+  it('should not read builtin facet content from setup when builtin facets are disabled', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: false,
+      language: 'en',
+    });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'workers',
+      'edit:0',
+      'instruction',
+      'ai_edit',
+      'project',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
   it('should reject project instruction symlinks before AI facet edit content is sent', async () => {
