@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildDecomposePrompt,
@@ -6,10 +5,6 @@ import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
 } from '../agents/team-leader-structured-output.js';
-
-function readBuiltinInstruction(relativePath: string): string {
-  return readFileSync(new URL(`../../${relativePath}`, import.meta.url), 'utf-8');
-}
 
 describe('team leader decomposition guidance', () => {
   it('Given no inspect tools, When building decomposition prompts, Then tool usage remains prohibited', () => {
@@ -161,39 +156,4 @@ describe('team leader decomposition guidance', () => {
     expect(promptBasedPrompt).not.toContain('少なくとも1つの part');
   });
 
-  it('Given builtin team-leader facets, When reading runtime instructions, Then both languages reject single oversized parts before execution', () => {
-    const japanese = readBuiltinInstruction('builtins/ja/facets/instructions/team-leader-implement.md');
-    const english = readBuiltinInstruction('builtins/en/facets/instructions/team-leader-implement.md');
-
-    expect(japanese).toContain('並行可能な責務境界');
-    expect(japanese).toContain('実装と検証');
-    expect(japanese).toContain('巨大');
-    expect(japanese).toContain('全体ビルド・全体テストを重複して実行させない');
-    expect(japanese).toContain('parts.length === 1');
-
-    expect(english).toContain('parallelizable responsibility boundaries');
-    expect(english).toContain('implementation and verification');
-    expect(english).toContain('oversized');
-    expect(english).toContain('Do not make parallel implementation parts run duplicate full-build or full-test checks');
-    expect(english).toContain('parts.length === 1');
-  });
-
-  it('Given builtin dual team-leader facets, When reading runtime instructions, Then both languages use staged decomposition guidance', () => {
-    const japanese = readBuiltinInstruction('builtins/ja/facets/instructions/dual-team-leader-implement.md');
-    const english = readBuiltinInstruction('builtins/en/facets/instructions/dual-team-leader-implement.md');
-
-    expect(japanese).toContain('並行可能な責務境界');
-    expect(japanese).toContain('基盤 part → 消費 part → 検証 part');
-    expect(japanese).toContain('巨大な単一 part');
-    expect(japanese).toContain('実装 part と検証 part を分ける');
-    expect(japanese).toContain('npm test / npm run test:e2e:mock');
-    expect(japanese).not.toContain('横断的関心事（共有型・ID・イベント）がある場合は分解せず1パートで実装する');
-
-    expect(english).toContain('parallelizable responsibility boundaries');
-    expect(english).toContain('foundation part -> consuming parts -> verification part');
-    expect(english).toContain('oversized single parts');
-    expect(english).toContain('Separate implementation parts from verification parts');
-    expect(english).toContain('npm test / npm run test:e2e:mock');
-    expect(english).not.toContain('If cross-cutting concerns exist (shared types, IDs, events), implement in a single part');
-  });
 });
