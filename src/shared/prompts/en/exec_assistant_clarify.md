@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: exec_assistant_clarify
   role: system prompt for exec assistant task clarification

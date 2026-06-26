@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)

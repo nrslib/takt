@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: perform_phase2_message
   phase: 2 (report output)

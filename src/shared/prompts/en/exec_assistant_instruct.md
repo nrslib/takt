@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: exec_assistant_instruct
   role: system prompt for exec assistant task instruction extraction

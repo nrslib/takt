@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: exec_assistant_instruct
   role: exec アシスタントのタスク指示抽出用システムプロンプト

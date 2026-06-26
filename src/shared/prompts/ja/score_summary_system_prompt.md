@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: score_summary_system_prompt
   role: system prompt for conversation-to-task summarization

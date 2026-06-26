@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: exec_assistant_summary
   role: exec アシスタントのワークフロー結果要約用システムプロンプト

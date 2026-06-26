@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: sync_conflict_resolver_system_prompt
   role: sync コンフリクト解決エージェントのシステムプロンプト

@@ -2,9 +2,35 @@
  * Tests for Markdown template loader (src/shared/prompts/index.ts)
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { loadTemplate, renderTemplate, _resetCache } from '../shared/prompts/index.js';
 import { findDeprecatedTerms } from '../../test/helpers/deprecated-terminology.js';
+
+const promptLanguages = ['en', 'ja'] as const;
+type PromptLanguage = (typeof promptLanguages)[number];
+
+const md041RuntimeTemplates = [
+  'exec_assistant_clarify',
+  'exec_assistant_instruct',
+  'exec_assistant_summary',
+  'exec_facet_create',
+  'exec_facet_edit',
+  'perform_phase1_message',
+  'perform_phase2_message',
+  'perform_phase3_message',
+  'provider_runtime_system_prompt',
+  'score_slug_system_prompt',
+  'score_slug_user_prompt',
+  'score_summary_system_prompt',
+  'sync_conflict_resolver_message',
+  'sync_conflict_resolver_system_prompt',
+] as const;
+
+function readPromptTemplate(name: string, lang: PromptLanguage): string {
+  return readFileSync(join(process.cwd(), 'src', 'shared', 'prompts', lang, `${name}.md`), 'utf-8');
+}
 
 beforeEach(() => {
   _resetCache();
@@ -512,6 +538,27 @@ describe('template content integrity', () => {
     const en = loadTemplate('perform_phase3_message', 'en');
     expect(en).toContain('{{criteriaTable}}');
     expect(en).toContain('{{outputList}}');
+  });
+
+  it('runtime prompts suppress MD041 without adding metadata to loaded prompt bodies', () => {
+    for (const lang of promptLanguages) {
+      for (const name of md041RuntimeTemplates) {
+        const raw = readPromptTemplate(name, lang);
+        expect(raw.startsWith('<!-- markdownlint-disable MD041 -->\n<!--\n')).toBe(true);
+        expect(raw).toContain(`template: ${name}`);
+
+        const expectedLoaded = raw
+          .replace(/^<!-- markdownlint-disable MD041 -->\r?\n/, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        const loaded = loadTemplate(name, lang);
+        expect(loaded).toBe(expectedLoaded);
+        expect(loaded.trim().length).toBeGreaterThan(0);
+        expect(loaded).not.toContain('markdownlint-disable');
+        expect(loaded).not.toContain(`template: ${name}`);
+        expect(loaded).not.toContain('<!--');
+        expect(loaded).not.toContain('-->');
+      }
+    }
   });
 
   it('MD files contain only prompt body (no front matter)', () => {

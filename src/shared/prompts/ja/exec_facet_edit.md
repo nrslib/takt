@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: exec_facet_edit
   role: AI駆動ファセット編集用システムプロンプト

@@ -161,20 +161,51 @@ describe('exec preset store', () => {
 
   it('should not list a lower-priority preset shadowed by an invalid higher-priority preset', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-shadow-project-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-shadow-global-'));
     const builtinPresetsDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-shadow-builtin-'));
     try {
       writeRawPreset(join(projectDir, '.takt', 'exec', 'presets'), 'backend', 'name: wrong-name\n');
       writePreset(join(builtinPresetsDir), 'backend', createExecConfig('builtin-worker'), 'builtin');
       writePreset(join(builtinPresetsDir), 'frontend', createExecConfig('frontend-worker'), 'frontend');
 
-      const presets = listExecPresets({ projectDir, builtinPresetsDir });
+      const presets = listExecPresets({ projectDir, globalConfigDir, builtinPresetsDir });
 
       expect(presets.map((preset) => preset.name)).toEqual(['frontend']);
-      expect(() => loadExecPreset('backend', { projectDir, builtinPresetsDir })).toThrow(
+      expect(() => loadExecPreset('backend', { projectDir, globalConfigDir, builtinPresetsDir })).toThrow(
         /name "wrong-name" must match filename "backend"/,
       );
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+      rmSync(builtinPresetsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should resolve presets from the provided global config dir instead of the ambient config dir', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-ambient-project-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-ambient-global-'));
+    const ambientConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-ambient-real-global-'));
+    const builtinPresetsDir = mkdtempSync(join(tmpdir(), 'takt-exec-preset-ambient-builtin-'));
+    const originalConfigDir = process.env.TAKT_CONFIG_DIR;
+    try {
+      process.env.TAKT_CONFIG_DIR = ambientConfigDir;
+      writePreset(join(globalConfigDir, 'exec', 'presets'), 'backend', createExecConfig('isolated-global-worker'), 'global');
+      writePreset(join(ambientConfigDir, 'exec', 'presets'), 'backend', createExecConfig('ambient-global-worker'), 'ambient');
+      writePreset(join(builtinPresetsDir), 'backend', createExecConfig('builtin-worker'), 'builtin');
+
+      const result = loadExecPreset('backend', { projectDir, globalConfigDir, builtinPresetsDir });
+
+      expect(result.source).toBe('global');
+      expect(result.config.workers[0]?.instruction).toBe('isolated-global-worker');
+    } finally {
+      if (originalConfigDir === undefined) {
+        delete process.env.TAKT_CONFIG_DIR;
+      } else {
+        process.env.TAKT_CONFIG_DIR = originalConfigDir;
+      }
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+      rmSync(ambientConfigDir, { recursive: true, force: true });
       rmSync(builtinPresetsDir, { recursive: true, force: true });
     }
   });
@@ -511,35 +542,39 @@ describe('exec preset store', () => {
 
   it('should reject preset files whose YAML name does not match the filename', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-mismatch-preset-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-mismatch-global-'));
     const builtinPresetsDir = mkdtempSync(join(tmpdir(), 'takt-exec-mismatch-builtin-'));
     const presetDir = join(projectDir, '.takt', 'exec', 'presets');
     try {
       writeRawPreset(presetDir, 'custom', 'name: backend\n');
 
-      expect(() => loadExecPreset('custom', { projectDir, builtinPresetsDir })).toThrow(
+      expect(() => loadExecPreset('custom', { projectDir, globalConfigDir, builtinPresetsDir })).toThrow(
         /name "backend" must match filename "custom"/,
       );
-      const presets = listExecPresets({ projectDir, builtinPresetsDir });
+      const presets = listExecPresets({ projectDir, globalConfigDir, builtinPresetsDir });
       expect(presets.find((p) => p.name === 'custom')).toBeUndefined();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
       rmSync(builtinPresetsDir, { recursive: true, force: true });
     }
   });
 
   it('should skip invalid presets and list valid presets when listing', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-skip-invalid-preset-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-skip-invalid-global-'));
     const builtinPresetsDir = mkdtempSync(join(tmpdir(), 'takt-exec-skip-invalid-builtin-'));
     const presetDir = join(projectDir, '.takt', 'exec', 'presets');
     try {
       writeRawPreset(presetDir, 'invalid-name', 'name: wrong-name\n');
       writePreset(presetDir, 'valid', createExecConfig('valid-worker'), 'Valid preset');
 
-      const presets = listExecPresets({ projectDir, builtinPresetsDir });
+      const presets = listExecPresets({ projectDir, globalConfigDir, builtinPresetsDir });
       expect(presets.find((p) => p.name === 'valid')).toBeDefined();
       expect(presets.find((p) => p.name === 'invalid-name')).toBeUndefined();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
       rmSync(builtinPresetsDir, { recursive: true, force: true });
     }
   });
@@ -563,13 +598,15 @@ describe('exec preset store', () => {
 
   it('should define the builtin research preset with three workers and one judge', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-research-preset-'));
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-research-preset-global-'));
     try {
-      const preset = loadExecPreset('research', { projectDir });
+      const preset = loadExecPreset('research', { projectDir, globalConfigDir });
       expect(preset.source).toBe('builtin');
       expect(preset.config.workers).toHaveLength(3);
       expect(preset.config.judges).toHaveLength(1);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
     }
   });
 

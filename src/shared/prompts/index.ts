@@ -46,7 +46,9 @@ function resolveTemplatePath(name: string, lang: Language): string {
  * Strip HTML meta comments (<!-- ... -->) from template content.
  */
 function stripMetaComments(content: string): string {
-  return content.replace(/<!--[\s\S]*?-->/g, '');
+  return content
+    .replace(/^<!-- markdownlint-disable MD041 -->\r?\n/, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
 }
 
 /**

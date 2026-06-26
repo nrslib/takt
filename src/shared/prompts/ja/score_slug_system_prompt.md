@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD041 -->
 <!--
   template: score_slug_system_prompt
   role: system prompt for task name slug generation
