@@ -35,8 +35,6 @@ interface ProviderOptionsPresetRaw {
 
 const REVIEW_READONLY_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
 const REVIEW_READONLY_OPENCODE_TOOLS = ['read', 'glob', 'grep', 'bash', 'websearch', 'webfetch'];
-const REVIEW_WEB_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
-const REVIEW_WEB_OPENCODE_TOOLS = ['read', 'glob', 'grep', 'websearch', 'webfetch'];
 const REVIEW_FILES_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'];
 const REVIEW_FILES_OPENCODE_TOOLS = ['read', 'glob', 'grep'];
 const EDIT_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch'];
@@ -44,10 +42,6 @@ const EDIT_OPENCODE_TOOLS = ['read', 'glob', 'grep', 'edit', 'write', 'bash', 't
 const REVIEW_READONLY_PROVIDER_OPTIONS = {
   claude: { allowedTools: REVIEW_READONLY_CLAUDE_TOOLS },
   opencode: { allowedTools: REVIEW_READONLY_OPENCODE_TOOLS },
-};
-const REVIEW_WEB_PROVIDER_OPTIONS = {
-  claude: { allowedTools: REVIEW_WEB_CLAUDE_TOOLS },
-  opencode: { allowedTools: REVIEW_WEB_OPENCODE_TOOLS },
 };
 const REVIEW_FILES_PROVIDER_OPTIONS = {
   claude: { allowedTools: REVIEW_FILES_CLAUDE_TOOLS },
@@ -58,7 +52,6 @@ const EDIT_PROVIDER_OPTIONS = {
   opencode: { allowedTools: EDIT_OPENCODE_TOOLS },
 };
 const REVIEW_READONLY_EXTENDS = { extends: 'review-readonly' };
-const REVIEW_WEB_EXTENDS = { extends: 'review-web' };
 const REVIEW_FILES_EXTENDS = { extends: 'review-files' };
 const EDIT_EXTENDS = { extends: 'edit' };
 const PEER_REVIEW_OUTPUT_CONTRACTS = [
@@ -143,10 +136,6 @@ describe('builtin takt-default provider_options refs', () => {
         claude: { allowed_tools: REVIEW_READONLY_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_READONLY_OPENCODE_TOOLS },
       });
-      expect(loadProviderOptionsPreset(locale, 'review-web.yaml')).toEqual({
-        claude: { allowed_tools: REVIEW_WEB_CLAUDE_TOOLS },
-        opencode: { allowed_tools: REVIEW_WEB_OPENCODE_TOOLS },
-      });
       expect(loadProviderOptionsPreset(locale, 'review-files.yaml')).toEqual({
         claude: { allowed_tools: REVIEW_FILES_CLAUDE_TOOLS },
         opencode: { allowed_tools: REVIEW_FILES_OPENCODE_TOOLS },
@@ -170,12 +159,12 @@ describe('builtin takt-default provider_options refs', () => {
       const normalizedSteps = new Map(normalized.steps.map((step) => [step.name, step]));
 
       expect(steps.get('implement')?.provider_options).toEqual(EDIT_EXTENDS);
-      expect(steps.get('ai-antipattern-review-1st')?.provider_options).toEqual(REVIEW_WEB_EXTENDS);
+      expect(steps.get('ai-antipattern-review-1st')?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
       expect(steps.get('ai-antipattern-fix')?.provider_options).toEqual(EDIT_EXTENDS);
       expect(steps.get('ai-antipattern-no-fix')?.provider_options).toEqual(REVIEW_FILES_EXTENDS);
       expect(normalizedSteps.get('implement')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('ai-antipattern-review-1st')?.providerOptions).toMatchObject(
-        REVIEW_WEB_PROVIDER_OPTIONS,
+        REVIEW_READONLY_PROVIDER_OPTIONS,
       );
       expect(normalizedSteps.get('ai-antipattern-fix')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
       expect(normalizedSteps.get('ai-antipattern-no-fix')?.providerOptions).toMatchObject(
@@ -224,9 +213,9 @@ describe('builtin takt-default provider_options refs', () => {
           REVIEW_READONLY_PROVIDER_OPTIONS,
         );
       }
-      expect(reviewerSteps.get('ai-antipattern-review-2nd')?.provider_options).toEqual(REVIEW_WEB_EXTENDS);
+      expect(reviewerSteps.get('ai-antipattern-review-2nd')?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
       expect(normalizedReviewerSteps.get('ai-antipattern-review-2nd')?.providerOptions).toMatchObject(
-        REVIEW_WEB_PROVIDER_OPTIONS,
+        REVIEW_READONLY_PROVIDER_OPTIONS,
       );
       expect(steps.get('fix')?.provider_options).toEqual(EDIT_EXTENDS);
       expect(normalizedSteps.get('fix')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);

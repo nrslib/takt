@@ -39,6 +39,20 @@ import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-
 
 export type { OpenCodeCallOptions } from './types.js';
 
+const TAKT_AGENT = 'takt';
+const TAKT_AGENT_NO_BASH = 'takt-no-bash';
+const TAKT_AGENT_REPORT = 'takt-report';
+
+function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
+  if (allowedTools !== undefined && allowedTools.length === 0) {
+    return TAKT_AGENT_REPORT;
+  }
+  if (allowedTools === undefined || allowedTools.some((t) => t.toLowerCase() === 'bash')) {
+    return TAKT_AGENT;
+  }
+  return TAKT_AGENT_NO_BASH;
+}
+
 const log = createLogger('opencode-sdk');
 const OPENCODE_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
@@ -157,23 +171,31 @@ async function createSharedServer(
         small_model: model,
         ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
         agent: {
-          takt: {
+          [TAKT_AGENT]: {
             prompt: loadTemplate('opencode_agent_prompt', 'en', {
               listFilesMethod: 'runs bash ls to list files in the directory',
             }),
             tools: { task: false },
           },
-          'takt-no-bash': {
+          [TAKT_AGENT_NO_BASH]: {
             prompt: loadTemplate('opencode_agent_prompt', 'en', {
               listFilesMethod: 'uses read tool on the directory to list files',
             }),
             tools: { task: false },
+          },
+          [TAKT_AGENT_REPORT]: {
+            prompt: loadTemplate('opencode_report_agent_prompt', 'en'),
           },
         },
       },
       timeout: OPENCODE_SERVER_START_TIMEOUT_MS,
     })
   );
+  log.debug('OpenCode server started with TAKT agents', {
+    agents: ['takt', 'takt-no-bash'],
+    model,
+    port,
+  });
 
   const closeServer = (): void => {
     try {
@@ -654,13 +676,16 @@ export class OpenCodeClient {
           });
         }
 
-        const hasBash = options.allowedTools === undefined
-          || options.allowedTools.some((t) => t.toLowerCase() === 'bash');
+        const agentName = selectTaktAgent(options.allowedTools);
+        log.debug('Selecting OpenCode agent', {
+          agentName,
+          allowedTools: options.allowedTools,
+        });
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
           model: parsedModel,
-          agent: hasBash ? 'takt' : 'takt-no-bash',
+          ...(agentName !== undefined ? { agent: agentName } : {}),
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
           parts: [{ type: 'text' as const, text: prompt }],
