@@ -1,5 +1,7 @@
 # Exec ループモニター指示
 
+TAKT exec は、対話で整理されたユーザータスクを一時 TAKT workflow に変換する。workflow 内では worker step が担当タスクを実装し、judge step が結果をレビューし、replan がユーザー判断を要する方針変更を扱い、loop monitor が非生産的な反復を検出する。
+
 繰り返されている exec ループが生産的か判定する。
 
 このループは {cycle_count} 回繰り返されています。
