@@ -10,7 +10,7 @@ export function selectInitialExecConfig(cwd: string, preset: string | undefined)
 
   const lastUsed = loadLastUsedExecConfig();
   if (lastUsed !== null) {
-    info('Starting with previous exec configuration');
+    info('Previous configuration loaded');
     return lastUsed;
   }
 
