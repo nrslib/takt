@@ -189,7 +189,7 @@ describe('PromptBasedStructuredCaller', () => {
         provider: 'cursor',
         model: 'cursor-fast',
         personaPath: '/tmp/personas/team-leader.md',
-        maxTurns: 5,
+        maxTurns: 15,
       }),
     );
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];

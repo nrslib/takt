@@ -38,7 +38,7 @@ export interface MorePartsResponse {
   parts: PartDefinition[];
 }
 
-export const TEAM_LEADER_MAX_TURNS = 5;
+export const TEAM_LEADER_MAX_TURNS = 15;
 
 export async function decomposeTask(
   instruction: string,

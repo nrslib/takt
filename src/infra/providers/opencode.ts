@@ -4,15 +4,29 @@
 
 import { callOpenCode, callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
 import { keepsOpenCodeAllowedToolWithoutEdit } from '../opencode/allowedTools.js';
+import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
+import type { PermissionMode } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
-const OPENCODE_TOOL_NAMING_ADDENDUM = [
+const OPENCODE_TOOL_NAMING_FALLBACK = [
   'OpenCode tool names are lowercase.',
   'Use bash for shell commands, glob for file discovery, grep for search, read for file reads, edit/write for changes, and todowrite for todos.',
   'Do not call run, list, todo, or todo_write.',
 ].join(' ');
+
+function buildToolNamingInstruction(
+  allowedTools: string[],
+  mode: PermissionMode | undefined,
+  networkAccess: boolean | undefined,
+): string | null {
+  const names = resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools);
+  if (names.length === 0) {
+    return null;
+  }
+  return `You have ONLY these tools: ${names.join(', ')}. No other tools exist. Do not attempt to call any tool not in this list.`;
+}
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
   if (!options.model) {
@@ -42,11 +56,14 @@ export class OpenCodeProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
 
-  getRuntimeInstructions(allowedTools?: string[]): string | null {
-    if (allowedTools !== undefined && allowedTools.length === 0) {
+  getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null {
+    if (allowedTools === undefined) {
+      return OPENCODE_TOOL_NAMING_FALLBACK;
+    }
+    if (allowedTools.length === 0) {
       return null;
     }
-    return OPENCODE_TOOL_NAMING_ADDENDUM;
+    return buildToolNamingInstruction(allowedTools, permissionMode, networkAccess);
   }
 
   keepsAllowedToolWithoutEdit(tool: string): boolean {

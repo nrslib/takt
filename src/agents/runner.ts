@@ -178,17 +178,25 @@ export class AgentRunner {
       ...options,
       allowedTools: options.allowedTools ?? agentConfig.allowedTools,
     };
-    const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools);
-    const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
-      ...customOptions,
-      providerRuntimeInstructions,
-    });
     const resolvedProviderOptions = AgentRunner.resolveProviderOptions(
       options.cwd,
       agentConfig.name,
       customOptions,
       resolved.personaProviders,
     );
+    const callOptions = AgentRunner.buildCallOptions(
+      resolved.model,
+      providerType,
+      resolvedProviderOptions,
+      customOptions,
+      resolved.localConfig,
+      resolved.globalConfig,
+    );
+    const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
+    const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
+      ...customOptions,
+      providerRuntimeInstructions,
+    });
 
     options.onPromptResolved?.({
       systemPrompt,
@@ -200,14 +208,7 @@ export class AgentRunner {
       systemPrompt,
     });
 
-    return agent.call(task, AgentRunner.buildCallOptions(
-      resolved.model,
-      providerType,
-      resolvedProviderOptions,
-      customOptions,
-      resolved.localConfig,
-      resolved.globalConfig,
-    ));
+    return agent.call(task, callOptions);
   }
 
   async run(
@@ -253,7 +254,7 @@ export class AgentRunner {
       );
       const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
         ...options,
-        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools),
+        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
       });
       options.onPromptResolved?.({
         systemPrompt,
@@ -272,7 +273,7 @@ export class AgentRunner {
 
       const systemPrompt = buildWrappedSystemPrompt(personaSpec, {
         ...options,
-        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools),
+        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
       });
 
       options.onPromptResolved?.({
@@ -285,7 +286,7 @@ export class AgentRunner {
 
     const systemPrompt = buildWrappedSystemPrompt('', {
       ...options,
-      providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools),
+      providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
     });
     options.onPromptResolved?.({
       systemPrompt,

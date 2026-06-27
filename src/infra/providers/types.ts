@@ -45,7 +45,7 @@ export interface ProviderAgent {
 export interface Provider {
   supportsStructuredOutput: boolean;
   supportsNativeImageInput: boolean;
-  getRuntimeInstructions(allowedTools?: string[]): string | null;
+  getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   setup(config: AgentSetup): ProviderAgent;
 }
