@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
+import { SlashCommand } from '../shared/constants.js';
 
 // =================================================================
 // Start-of-line detection (existing behavior)
@@ -173,6 +174,20 @@ describe('edge cases', () => {
       command: '/setup',
       text: 'configure team',
     });
+  });
+
+  it('should only match commands included in an explicit availability allowlist', () => {
+    const execAvailability = {
+      enableSetupCommand: true,
+      enabledCommands: [SlashCommand.Setup, SlashCommand.Go, SlashCommand.Cancel],
+    };
+
+    expect(matchSlashCommand('/go run it', execAvailability)).toEqual({ command: '/go', text: 'run it' });
+    expect(matchSlashCommand('/setup', execAvailability)).toEqual({ command: '/setup', text: '' });
+    expect(matchSlashCommand('/cancel', execAvailability)).toEqual({ command: '/cancel', text: '' });
+    expect(matchSlashCommand('/play run it', execAvailability)).toBeNull();
+    expect(matchSlashCommand('/accept', execAvailability)).toBeNull();
+    expect(matchSlashCommand('/resume', execAvailability)).toBeNull();
   });
 
   it('should not match unknown slash command at end', () => {

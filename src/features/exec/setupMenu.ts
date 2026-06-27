@@ -1,5 +1,4 @@
 import type { ProviderType } from '../../infra/providers/index.js';
-import { selectOption } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
@@ -19,8 +18,9 @@ import {
 } from './configOps.js';
 import { DEFAULT_EXEC_CONFIG } from './defaults.js';
 import { editFacetRefList, editInstructionFacetRef } from './facetEditor.js';
+import { execCurrentLabel, execLabel, type ExecLanguage } from './labels.js';
 import { editPresetSetup } from './presetSetup.js';
-import { promptInteger, promptText } from './promptUtils.js';
+import { promptInteger, promptText, selectExecOption } from './promptUtils.js';
 import { ProjectBoundaryError } from './projectLocalFiles.js';
 import {
   createExecSessionContext,
@@ -31,6 +31,7 @@ import type { ExecActorConfig, ExecConfig, ExecEffort, ExecSessionConfig } from 
 
 type SetupSection = 'assistant' | 'workers' | 'judges' | 'replan' | 'loop' | 'preset' | 'back';
 type SetupSectionOption = { label: string; value: SetupSection };
+type ActorListKind = 'workers' | 'judges';
 const CUSTOM_MODEL_VALUE = '__custom_model__';
 
 function supportsAnyExecEffort(provider: ProviderType): boolean {
@@ -41,31 +42,35 @@ function shouldKeepSetupMenuOpen(): boolean {
   return resolveTtyPolicy().useTty && !process.stdin.readableEnded;
 }
 
-function buildSetupSectionOptions(current: ExecConfig): SetupSectionOption[] {
+function buildSetupSectionOptions(current: ExecConfig, lang: ExecLanguage): SetupSectionOption[] {
   return [
     {
-      label: [
-        'Assistant: ',
-        formatProviderModel(current.session.provider, current.session.model),
-        `/${sanitizeTerminalText(current.session.effort ?? 'none')}`,
-      ].join(''),
+      label: execLabel(lang, 'setup.assistantSummary', {
+        summary: `${formatProviderModel(current.session.provider, current.session.model, lang)}/${sanitizeTerminalText(current.session.effort ?? execLabel(lang, 'common.none'))}`,
+      }),
       value: 'assistant',
     },
-    { label: `Workers: ${current.workers.length}`, value: 'workers' },
-    { label: `Judges: ${current.judges.length}`, value: 'judges' },
-    { label: `Replan: ${sanitizeTerminalText(current.replan.instruction)}`, value: 'replan' },
-    { label: `Loop: ${current.loop.smallThreshold}/${current.loop.largeThreshold}/${current.loop.maxSteps}`, value: 'loop' },
-    { label: 'Preset', value: 'preset' },
-    { label: 'Back', value: 'back' },
+    { label: execLabel(lang, 'setup.workersSummary', { count: String(current.workers.length) }), value: 'workers' },
+    { label: execLabel(lang, 'setup.judgesSummary', { count: String(current.judges.length) }), value: 'judges' },
+    { label: execLabel(lang, 'setup.replanSummary', { instruction: sanitizeTerminalText(current.replan.instruction) }), value: 'replan' },
+    {
+      label: execLabel(lang, 'setup.loopSummary', {
+        small: String(current.loop.smallThreshold),
+        large: String(current.loop.largeThreshold),
+        max: String(current.loop.maxSteps),
+      }),
+      value: 'loop',
+    },
+    { label: execLabel(lang, 'setup.preset'), value: 'preset' },
+    { label: execLabel(lang, 'common.back'), value: 'back' },
   ];
 }
 
-function formatFacetListForTerminal(values: string[]): string {
-  return values.length > 0 ? values.map((value) => sanitizeTerminalText(value)).join(', ') : 'none';
+function formatFacetListForTerminal(values: string[], lang: ExecLanguage): string {
+  return values.length > 0 ? values.map((value) => sanitizeTerminalText(value)).join(', ') : execLabel(lang, 'common.none');
 }
 
-function buildNextActorName(label: string, actors: ExecActorConfig[]): string {
-  const prefix = label.toLowerCase().slice(0, -1);
+function buildNextActorName(prefix: 'worker' | 'judge', actors: ExecActorConfig[]): string {
   const existingNames = new Set(actors.map((actor) => actor.name));
   for (let index = 1; index <= actors.length + 1; index += 1) {
     const candidate = `${prefix}-${index}`;
@@ -73,24 +78,24 @@ function buildNextActorName(label: string, actors: ExecActorConfig[]): string {
       return candidate;
     }
   }
-  throw new Error(`Unable to allocate ${label} actor name.`);
+  throw new Error(`Unable to allocate ${prefix} actor name.`);
 }
 
-async function selectProvider(current: ProviderType): Promise<ProviderType> {
-  const selected = await selectOption<ProviderType>('Provider', EXEC_PROVIDERS.map((provider) => ({
-    label: provider === current ? `${provider} (current)` : provider,
+async function selectProvider(current: ProviderType, lang: ExecLanguage): Promise<ProviderType> {
+  const selected = await selectExecOption<ProviderType>(lang, execLabel(lang, 'settings.provider'), EXEC_PROVIDERS.map((provider) => ({
+    label: provider === current ? execCurrentLabel(lang, provider) : provider,
     value: provider,
   })));
   return selected ?? current;
 }
 
-async function selectEffort(provider: ProviderType, current: ExecEffort | undefined): Promise<ExecEffort | undefined> {
+async function selectEffort(provider: ProviderType, current: ExecEffort | undefined, lang: ExecLanguage): Promise<ExecEffort | undefined> {
   const efforts = getSupportedExecEfforts(provider);
   if (efforts.length === 0) {
     throw new Error(`Provider "${provider}" does not support exec effort selection.`);
   }
-  const selected = await selectOption<ExecEffort>('Effort', efforts.map((effort) => ({
-    label: effort === current ? `${effort} (current)` : effort,
+  const selected = await selectExecOption<ExecEffort>(lang, execLabel(lang, 'settings.effort'), efforts.map((effort) => ({
+    label: effort === current ? execCurrentLabel(lang, effort) : effort,
     value: effort,
   })));
   if (selected === null) {
@@ -99,56 +104,59 @@ async function selectEffort(provider: ProviderType, current: ExecEffort | undefi
   return selected;
 }
 
-function formatModelValue(model: string | undefined): string {
-  return model === undefined ? 'provider default' : sanitizeTerminalText(model);
+function formatModelValue(model: string | undefined, lang: ExecLanguage): string {
+  return model === undefined ? execLabel(lang, 'common.providerDefault') : sanitizeTerminalText(model);
 }
 
-function requireCustomModelInput(model: string): string {
+function requireCustomModelInput(model: string, lang: ExecLanguage): string {
   if (model.trim().length === 0) {
-    throw new Error('Custom model must be a non-empty string.');
+    throw new Error(execLabel(lang, 'settings.customModelRequired'));
   }
   return model;
 }
 
-async function selectModel(provider: ProviderType, current: string | undefined, lang: ExecSessionContext['lang']): Promise<string | undefined> {
+async function selectModel(provider: ProviderType, current: string | undefined, lang: ExecLanguage): Promise<string | undefined> {
   const candidates = [...new Set([
     ...getExecModelCandidates(provider),
     ...(current !== undefined ? [current] : []),
   ])];
-  const selected = await selectOption<string>('Model', [
+  const selected = await selectExecOption<string>(lang, execLabel(lang, 'settings.model'), [
     ...candidates.map((model) => ({
-      label: model === current ? `${sanitizeTerminalText(model)} (current)` : sanitizeTerminalText(model),
+      label: model === current ? execCurrentLabel(lang, sanitizeTerminalText(model)) : sanitizeTerminalText(model),
       value: model,
     })),
-    { label: 'Custom input...', value: CUSTOM_MODEL_VALUE },
+    { label: execLabel(lang, 'settings.customModel'), value: CUSTOM_MODEL_VALUE },
   ]);
   if (selected === null) {
     return current;
   }
   if (selected === CUSTOM_MODEL_VALUE) {
-    const model = await promptText('Custom model', current ?? '', lang);
-    return requireCustomModelInput(model);
+    const model = await promptText(execLabel(lang, 'settings.customModelPrompt'), current ?? '', lang);
+    return requireCustomModelInput(model, lang);
   }
   return selected;
 }
 
-async function editSessionConfig(session: ExecSessionConfig, lang: ExecSessionContext['lang']): Promise<ExecSessionConfig> {
+async function editSessionConfig(session: ExecSessionConfig, lang: ExecLanguage): Promise<ExecSessionConfig> {
   let current = session;
   while (true) {
     const options: Array<{ label: string; value: 'provider' | 'model' | 'effort' | 'back' }> = [
-      { label: `Provider: ${sanitizeTerminalText(current.provider)}`, value: 'provider' },
-      { label: `Model: ${formatModelValue(current.model)}`, value: 'model' },
+      { label: execLabel(lang, 'fields.provider', { value: sanitizeTerminalText(current.provider) }), value: 'provider' },
+      { label: execLabel(lang, 'fields.model', { value: formatModelValue(current.model, lang) }), value: 'model' },
     ];
     if (supportsAnyExecEffort(current.provider)) {
-      options.push({ label: `Effort: ${sanitizeTerminalText(current.effort ?? 'none')}`, value: 'effort' });
+      options.push({
+        label: execLabel(lang, 'fields.effort', { value: sanitizeTerminalText(current.effort ?? execLabel(lang, 'common.none')) }),
+        value: 'effort',
+      });
     }
-    options.push({ label: 'Back', value: 'back' });
-    const field = await selectOption<'provider' | 'model' | 'effort' | 'back'>('Assistant settings', options);
+    options.push({ label: execLabel(lang, 'common.back'), value: 'back' });
+    const field = await selectExecOption<'provider' | 'model' | 'effort' | 'back'>(lang, execLabel(lang, 'settings.assistant'), options);
     if (field === null || field === 'back') {
       return current;
     }
     if (field === 'provider') {
-      const provider = await selectProvider(current.provider);
+      const provider = await selectProvider(current.provider, lang);
       current = {
         ...current,
         provider,
@@ -160,7 +168,7 @@ async function editSessionConfig(session: ExecSessionConfig, lang: ExecSessionCo
       current = { ...current, model: await selectModel(current.provider, current.model, lang) };
     }
     if (field === 'effort') {
-      current = { ...current, effort: await selectEffort(current.provider, current.effort) };
+      current = { ...current, effort: await selectEffort(current.provider, current.effort, lang) };
     }
     assertExecProviderEffort(current.provider, current.model, current.effort, 'exec.session.effort');
     if (!shouldKeepSetupMenuOpen()) {
@@ -181,33 +189,37 @@ async function editActor(
       label: string;
       value: 'name' | 'provider' | 'model' | 'effort' | 'instruction' | 'knowledge' | 'policy' | 'back';
     }> = [
-      { label: `Name: ${sanitizeTerminalText(current.name)}`, value: 'name' },
-      { label: `Provider: ${sanitizeTerminalText(current.provider)}`, value: 'provider' },
-      { label: `Model: ${formatModelValue(current.model)}`, value: 'model' },
+      { label: execLabel(ctx.lang, 'fields.name', { value: sanitizeTerminalText(current.name) }), value: 'name' },
+      { label: execLabel(ctx.lang, 'fields.provider', { value: sanitizeTerminalText(current.provider) }), value: 'provider' },
+      { label: execLabel(ctx.lang, 'fields.model', { value: formatModelValue(current.model, ctx.lang) }), value: 'model' },
     ];
     if (supportsAnyExecEffort(current.provider)) {
-      options.push({ label: `Effort: ${sanitizeTerminalText(current.effort ?? 'none')}`, value: 'effort' });
+      options.push({
+        label: execLabel(ctx.lang, 'fields.effort', { value: sanitizeTerminalText(current.effort ?? execLabel(ctx.lang, 'common.none')) }),
+        value: 'effort',
+      });
     }
     options.push(
-      { label: `Instruction: ${sanitizeTerminalText(current.instruction)}`, value: 'instruction' },
-      { label: `Knowledge: ${formatFacetListForTerminal(current.knowledge)}`, value: 'knowledge' },
-      { label: `Policy: ${formatFacetListForTerminal(current.policy)}`, value: 'policy' },
-      { label: 'Back', value: 'back' },
+      { label: execLabel(ctx.lang, 'fields.instruction', { value: sanitizeTerminalText(current.instruction) }), value: 'instruction' },
+      { label: execLabel(ctx.lang, 'fields.knowledge', { value: formatFacetListForTerminal(current.knowledge, ctx.lang) }), value: 'knowledge' },
+      { label: execLabel(ctx.lang, 'fields.policy', { value: formatFacetListForTerminal(current.policy, ctx.lang) }), value: 'policy' },
+      { label: execLabel(ctx.lang, 'common.back'), value: 'back' },
     );
-    const field = await selectOption<'name' | 'provider' | 'model' | 'effort' | 'instruction' | 'knowledge' | 'policy' | 'back'>(
-      `${current.name} settings`,
+    const field = await selectExecOption<'name' | 'provider' | 'model' | 'effort' | 'instruction' | 'knowledge' | 'policy' | 'back'>(
+      ctx.lang,
+      execLabel(ctx.lang, 'settings.actor', { name: sanitizeTerminalText(current.name) }),
       options,
     );
     if (field === null || field === 'back') {
       return current;
     }
     if (field === 'name') {
-      const name = await promptText('Name', current.name, ctx.lang);
+      const name = await promptText(execLabel(ctx.lang, 'settings.name'), current.name, ctx.lang);
       assertExecActorName(name, `exec.${current.name}.name`);
       current = { ...current, name };
     }
     if (field === 'provider') {
-      const provider = await selectProvider(current.provider);
+      const provider = await selectProvider(current.provider, ctx.lang);
       current = {
         ...current,
         provider,
@@ -219,7 +231,7 @@ async function editActor(
       current = { ...current, model: await selectModel(current.provider, current.model, ctx.lang) };
     }
     if (field === 'effort') {
-      current = { ...current, effort: await selectEffort(current.provider, current.effort) };
+      current = { ...current, effort: await selectEffort(current.provider, current.effort, ctx.lang) };
     }
     if (field === 'instruction') {
       current = {
@@ -242,34 +254,36 @@ async function editActor(
 
 async function editActorList(
   cwd: string,
-  label: string,
+  kind: ActorListKind,
   actors: ExecActorConfig[],
   template: ExecActorConfig,
   ctx: ExecSessionContext,
 ): Promise<ExecActorConfig[]> {
+  const label = execLabel(ctx.lang, `actors.${kind}`);
+  const actorNamePrefix = kind === 'workers' ? 'worker' : 'judge';
   let current = actors;
   while (true) {
-    const action = await selectOption<string>(label, [
+    const action = await selectExecOption<string>(ctx.lang, label, [
       ...current.map((actor, index) => ({
-        label: `${sanitizeTerminalText(actor.name)}: ${formatActorDetails(actor)}`,
+        label: `${sanitizeTerminalText(actor.name)}: ${formatActorDetails(actor, ctx.lang)}`,
         value: `edit:${index}`,
       })),
-      { label: 'Add', value: 'add' },
-      { label: 'Delete', value: 'delete' },
-      { label: 'Back', value: 'back' },
+      { label: execLabel(ctx.lang, 'common.add'), value: 'add' },
+      { label: execLabel(ctx.lang, 'common.delete'), value: 'delete' },
+      { label: execLabel(ctx.lang, 'common.back'), value: 'back' },
     ]);
     if (action === null || action === 'back') {
       return current;
     }
     if (action === 'add') {
-      const actorName = buildNextActorName(label, current);
+      const actorName = buildNextActorName(actorNamePrefix, current);
       assertExecActorName(actorName, `${label}.name`);
       current = [...current, { ...template, name: actorName }];
     } else if (action === 'delete') {
       if (current.length === 1) {
-        info(`${label} must contain at least one entry.`);
+        info(execLabel(ctx.lang, 'actors.mustContainOne', { label }));
       } else {
-        const selected = await selectOption<string>(`Delete ${label}`, current.map((actor, index) => ({
+        const selected = await selectExecOption<string>(ctx.lang, execLabel(ctx.lang, 'actors.deletePrompt', { label }), current.map((actor, index) => ({
           label: sanitizeTerminalText(actor.name),
           value: String(index),
         })));
@@ -281,7 +295,7 @@ async function editActorList(
       const index = Number(action.slice('edit:'.length));
       const actor = current[index];
       if (!actor) {
-        throw new Error(`Invalid ${label} index: ${index}`);
+        throw new Error(execLabel(ctx.lang, 'actors.invalidIndex', { label, index: String(index) }));
       }
       const updated = await editActor(cwd, actor, template, ctx);
       current = current.map((entry, entryIndex) => entryIndex === index ? updated : entry);
@@ -295,11 +309,11 @@ async function editActorList(
 async function editReplanConfig(cwd: string, config: ExecConfig, ctx: ExecSessionContext): Promise<ExecConfig> {
   let current = config;
   while (true) {
-    const field = await selectOption<'instruction' | 'knowledge' | 'policy' | 'back'>('Replan settings', [
-      { label: `Instruction: ${sanitizeTerminalText(current.replan.instruction)}`, value: 'instruction' },
-      { label: `Knowledge: ${formatFacetListForTerminal(current.replan.knowledge)}`, value: 'knowledge' },
-      { label: `Policy: ${formatFacetListForTerminal(current.replan.policy)}`, value: 'policy' },
-      { label: 'Back', value: 'back' },
+    const field = await selectExecOption<'instruction' | 'knowledge' | 'policy' | 'back'>(ctx.lang, execLabel(ctx.lang, 'replan.settings'), [
+      { label: execLabel(ctx.lang, 'fields.instruction', { value: sanitizeTerminalText(current.replan.instruction) }), value: 'instruction' },
+      { label: execLabel(ctx.lang, 'fields.knowledge', { value: formatFacetListForTerminal(current.replan.knowledge, ctx.lang) }), value: 'knowledge' },
+      { label: execLabel(ctx.lang, 'fields.policy', { value: formatFacetListForTerminal(current.replan.policy, ctx.lang) }), value: 'policy' },
+      { label: execLabel(ctx.lang, 'common.back'), value: 'back' },
     ]);
     if (field === null || field === 'back') {
       return current;
@@ -325,26 +339,26 @@ async function editReplanConfig(cwd: string, config: ExecConfig, ctx: ExecSessio
   }
 }
 
-async function editLoopConfig(config: ExecConfig, lang: ExecSessionContext['lang']): Promise<ExecConfig> {
+async function editLoopConfig(config: ExecConfig, lang: ExecLanguage): Promise<ExecConfig> {
   let current = config;
   while (true) {
-    const field = await selectOption<'small' | 'large' | 'max' | 'back'>('Loop settings', [
-      { label: `Small loop threshold: ${current.loop.smallThreshold}`, value: 'small' },
-      { label: `Large loop threshold: ${current.loop.largeThreshold}`, value: 'large' },
-      { label: `Max steps: ${current.loop.maxSteps}`, value: 'max' },
-      { label: 'Back', value: 'back' },
+    const field = await selectExecOption<'small' | 'large' | 'max' | 'back'>(lang, execLabel(lang, 'loop.settings'), [
+      { label: execLabel(lang, 'fields.smallLoopThreshold', { value: String(current.loop.smallThreshold) }), value: 'small' },
+      { label: execLabel(lang, 'fields.largeLoopThreshold', { value: String(current.loop.largeThreshold) }), value: 'large' },
+      { label: execLabel(lang, 'fields.maxSteps', { value: String(current.loop.maxSteps) }), value: 'max' },
+      { label: execLabel(lang, 'common.back'), value: 'back' },
     ]);
     if (field === null || field === 'back') {
       return current;
     }
     if (field === 'small') {
-      current = { ...current, loop: { ...current.loop, smallThreshold: await promptInteger('Small loop threshold', current.loop.smallThreshold, lang) } };
+      current = { ...current, loop: { ...current.loop, smallThreshold: await promptInteger(execLabel(lang, 'loop.smallThresholdPrompt'), current.loop.smallThreshold, lang) } };
     }
     if (field === 'large') {
-      current = { ...current, loop: { ...current.loop, largeThreshold: await promptInteger('Large loop threshold', current.loop.largeThreshold, lang) } };
+      current = { ...current, loop: { ...current.loop, largeThreshold: await promptInteger(execLabel(lang, 'loop.largeThresholdPrompt'), current.loop.largeThreshold, lang) } };
     }
     if (field === 'max') {
-      current = { ...current, loop: { ...current.loop, maxSteps: await promptInteger('Max steps', current.loop.maxSteps, lang) } };
+      current = { ...current, loop: { ...current.loop, maxSteps: await promptInteger(execLabel(lang, 'loop.maxStepsPrompt'), current.loop.maxSteps, lang) } };
     }
     if (!shouldKeepSetupMenuOpen()) {
       return current;
@@ -361,11 +375,11 @@ export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: ExecSes
   let current = config;
   let setupCtx = ctx;
   if (!shouldKeepSetupMenuOpen()) {
-    await selectOption<SetupSection>('Team Configuration', buildSetupSectionOptions(current));
+    await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(current, setupCtx.lang));
     return current;
   }
   while (true) {
-    const section = await selectOption<SetupSection>('Team Configuration', buildSetupSectionOptions(current));
+    const section = await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(current, setupCtx.lang));
     if (section === null || section === 'back') {
       return current;
     }
@@ -399,10 +413,10 @@ async function resolveSetupSection(
     return { ...config, session: await editSessionConfig(config.session, ctx.lang) };
   }
   if (section === 'workers') {
-    return { ...config, workers: await editActorList(cwd, 'Workers', config.workers, workerTemplate, ctx) };
+    return { ...config, workers: await editActorList(cwd, 'workers', config.workers, workerTemplate, ctx) };
   }
   if (section === 'judges') {
-    return { ...config, judges: await editActorList(cwd, 'Judges', config.judges, judgeTemplate, ctx) };
+    return { ...config, judges: await editActorList(cwd, 'judges', config.judges, judgeTemplate, ctx) };
   }
   if (section === 'replan') {
     return editReplanConfig(cwd, config, ctx);

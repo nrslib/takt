@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
+import { SlashCommand } from '../shared/constants.js';
 
 describe('filterSlashCommands', () => {
   it('should return all commands when prefix is "/"', () => {
@@ -92,5 +93,14 @@ describe('filterSlashCommands', () => {
     const execCommands = filterSlashCommands('/set', { enableSetupCommand: true }).map((entry) => entry.command);
     expect(normalCommands).toEqual([]);
     expect(execCommands).toEqual(['/setup']);
+  });
+
+  it('should restrict commands to an explicit availability allowlist', () => {
+    const commands = filterSlashCommands('/', {
+      enableSetupCommand: true,
+      enabledCommands: [SlashCommand.Setup, SlashCommand.Go, SlashCommand.Cancel],
+    }).map((entry) => entry.command);
+
+    expect(commands).toEqual(['/go', '/cancel', '/setup']);
   });
 });

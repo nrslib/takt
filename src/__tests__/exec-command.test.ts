@@ -11,7 +11,7 @@ import { formatRunSessionForPrompt, loadRunSessionContext } from '../features/in
 import { selectAndExecuteTask } from '../features/tasks/index.js';
 import { runExecCommand } from '../features/exec/index.js';
 import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
-import { saveExecPreset } from '../features/exec/presetStore.js';
+import { saveExecPreset, saveLastUsedExecConfig } from '../features/exec/presetStore.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { selectOption, type SelectOptionItem } from '../shared/prompt/index.js';
 
@@ -188,8 +188,107 @@ describe('exec command setup', () => {
     expect(mockReadInteractiveInput).toHaveBeenCalledWith(
       'Assistant> ',
       expect.any(String),
-      { enableSetupCommand: true },
+      {
+        enableSetupCommand: true,
+        enabledCommands: ['/setup', '/go', '/cancel'],
+      },
     );
+  });
+
+  it('should start with the default config without prompting when user presets exist and no previous config exists', async () => {
+    saveExecPreset('project-team', 'Project team', {
+      ...DEFAULT_EXEC_CONFIG,
+      loop: {
+        ...DEFAULT_EXEC_CONFIG.loop,
+        smallThreshold: 8,
+      },
+    }, { projectDir, scope: 'project' });
+    saveExecPreset('global-team', 'Global team', {
+      ...DEFAULT_EXEC_CONFIG,
+      loop: {
+        ...DEFAULT_EXEC_CONFIG.loop,
+        smallThreshold: 9,
+      },
+    }, { projectDir, scope: 'global' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
+    expect(workflow).toContain(`threshold: ${DEFAULT_EXEC_CONFIG.loop.smallThreshold}`);
+  });
+
+  it('should start with the previous config without prompting when it exists', async () => {
+    saveLastUsedExecConfig({
+      ...DEFAULT_EXEC_CONFIG,
+      loop: {
+        ...DEFAULT_EXEC_CONFIG.loop,
+        smallThreshold: 7,
+      },
+    }, { globalConfigDir });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
+    expect(workflow).toContain('threshold: 7');
+  });
+
+  it('should localize setup and preset menus for Japanese language', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'ja',
+    });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'preset',
+      'load',
+      'default',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const teamCall = mockSelectOption.mock.calls.find((call) => call[0] === 'チーム設定');
+    const teamOptions = teamCall?.[1] ?? [];
+    expect(teamCall?.[2]).toEqual({ cancelLabel: 'キャンセル' });
+    expect(teamOptions.map((option) => option.label)).toEqual(expect.arrayContaining([
+      'アシスタント: claude/opus/high',
+      'ワーカー: 1',
+      'ジャッジ: 1',
+      '再計画: exec-replan',
+      'ループ: 3/2/20',
+      'プリセット',
+      '戻る',
+    ]));
+    const presetOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'プリセット')?.[1] ?? [];
+    expect(presetOptions.map((option) => option.label)).toEqual([
+      'プリセットを読み込む',
+      '現在のプリセットを保存',
+      'プリセットを削除',
+      '戻る',
+    ]);
+    const sourceOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'プリセット読み込み元')?.[1] ?? [];
+    expect(sourceOptions.map((option) => option.label)).toEqual([
+      'デフォルト',
+      'ビルトイン',
+      'プロジェクト',
+      'グローバル',
+    ]);
   });
 
   it('should apply CLI provider and model overrides to saved config and generated workflow', async () => {
@@ -330,60 +429,6 @@ describe('exec command setup', () => {
     }
     expect(output).toContain('unsafe');
     expect(output).toContain('description after');
-    expect(output).not.toContain('\x1b');
-    expect(output).not.toContain('secret');
-  });
-
-  it('should sanitize preset selection metadata and startup summary before terminal output', async () => {
-    const presetDir = join(projectDir, '.takt', 'exec', 'presets');
-    mkdirSync(presetDir, { recursive: true });
-    writeFileSync(join(presetDir, 'unsafe.yaml'), stringifyYaml({
-      name: 'unsafe',
-      description: 'team \x1b]52;c;secret\x07description',
-      session: {
-        provider: 'mock',
-        model: 'unsafe\x1b[2J-model',
-      },
-      replan: DEFAULT_EXEC_CONFIG.replan,
-      workers: [
-        {
-          ...DEFAULT_EXEC_CONFIG.workers[0],
-          provider: 'mock',
-          model: 'worker\x1b]52;c;secret\x07-model',
-          effort: undefined,
-        },
-      ],
-      judges: [
-        {
-          ...DEFAULT_EXEC_CONFIG.judges[0],
-          provider: 'mock',
-          model: 'judge\x1b[2J-model',
-          effort: undefined,
-        },
-      ],
-      loop: {
-        threshold: DEFAULT_EXEC_CONFIG.loop.smallThreshold,
-        large_threshold: DEFAULT_EXEC_CONFIG.loop.largeThreshold,
-        max_steps: DEFAULT_EXEC_CONFIG.loop.maxSteps,
-      },
-    }));
-    mockSelectOption.mockResolvedValueOnce('preset:unsafe');
-    mockReadInteractiveInput.mockResolvedValueOnce('/cancel');
-    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    let output = '';
-    try {
-      await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
-      output = consoleLogSpy.mock.calls.map((call) => call.join(' ')).join('\n');
-    } finally {
-      consoleLogSpy.mockRestore();
-    }
-
-    const startupOptions = mockSelectOption.mock.calls[0]?.[1] ?? [];
-    const unsafeOption = startupOptions.find((option) => option.value === 'preset:unsafe');
-    expect(unsafeOption?.description).toBe('project · team description');
-    expect(output).toContain('unsafe-model');
-    expect(output).toContain('worker-model');
-    expect(output).toContain('judge-model');
     expect(output).not.toContain('\x1b');
     expect(output).not.toContain('secret');
   });
@@ -559,7 +604,7 @@ describe('exec command setup', () => {
       .flat()
       .find((option) => option.value === 'unsafe');
     expect(unsafeFacetOption?.label).toBe('[ ] unsafe');
-    expect(unsafeFacetOption?.description).toBe('project · Unsafe Knowledge');
+    expect(unsafeFacetOption?.description).toBe('Project · Unsafe Knowledge');
     expect(unsafeFacetOption?.description).not.toContain('\x1b');
     expect(unsafeFacetOption?.description).not.toContain('secret');
   });
@@ -1782,6 +1827,34 @@ describe('exec command setup', () => {
 
     const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
     expect(workflow).toContain('threshold: 9');
+  });
+
+  it('should load the default configuration from setup before generating workflow', async () => {
+    saveExecPreset('start-team', 'Start team', {
+      ...DEFAULT_EXEC_CONFIG,
+      loop: {
+        ...DEFAULT_EXEC_CONFIG.loop,
+        smallThreshold: 8,
+      },
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'preset',
+      'load',
+      'default',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'start-team' })).resolves.toBeUndefined();
+
+    const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
+    expect(workflow).toContain(`threshold: ${DEFAULT_EXEC_CONFIG.loop.smallThreshold}`);
   });
 
   it('should save approved AI edits for existing instruction facets', async () => {

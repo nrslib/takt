@@ -1,6 +1,7 @@
 import type { ProviderType } from '../../infra/providers/index.js';
 import type { TaskExecutionOptions } from '../tasks/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
+import { execLabel, type ExecLanguage } from './labels.js';
 import {
   assertExecConfig,
   assertExecProviderModel,
@@ -11,10 +12,11 @@ import {
 } from './configValidation.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort } from './types.js';
 
-export function formatProviderModel(provider: ProviderType, model: string | undefined): string {
+export function formatProviderModel(provider: ProviderType, model: string | undefined, lang?: ExecLanguage): string {
   const formattedProvider = sanitizeTerminalText(provider);
   if (model === undefined) {
-    return `${formattedProvider}/(provider default)`;
+    const providerDefault = lang === undefined ? 'provider default' : execLabel(lang, 'common.providerDefault');
+    return `${formattedProvider}/(${providerDefault})`;
   }
   const formattedModel = sanitizeTerminalText(model);
   if (model.startsWith(`${provider}/`)) {
@@ -92,7 +94,10 @@ export function formatExecConfigSummary(config: ExecConfig): string {
   ].join('  |  ');
 }
 
-export function formatActorDetails(actor: ExecActorConfig): string {
+export function formatActorDetails(actor: ExecActorConfig, lang?: ExecLanguage): string {
   const effort = actor.effort ? `/${sanitizeTerminalText(actor.effort)}` : '';
-  return `${formatProviderModel(actor.provider, actor.model)}${effort} · instruction: ${sanitizeTerminalText(actor.instruction)}`;
+  const instruction = lang === undefined
+    ? `instruction: ${sanitizeTerminalText(actor.instruction)}`
+    : execLabel(lang, 'fields.actorInstruction', { value: sanitizeTerminalText(actor.instruction) });
+  return `${formatProviderModel(actor.provider, actor.model, lang)}${effort} · ${instruction}`;
 }

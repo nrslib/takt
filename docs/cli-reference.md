@@ -112,7 +112,7 @@ takt --task "Add authentication" --workflow dual
 `takt exec` starts an Assistant + Worker(s) + Judge(s) session without writing workflow YAML by hand.
 
 ```bash
-takt exec          # choose previous config, preset, or default
+takt exec          # use previous config, or default on first run
 takt exec backend  # start from a named preset
 takt exec --list   # list available exec presets
 ```

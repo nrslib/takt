@@ -247,7 +247,7 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
 ### Instant exec mode
 
-`takt exec` starts a temporary multi-agent session from a preset or the previous exec configuration. Use `/setup` during the conversation to edit the assistant, workers, judges, loop thresholds, presets, and referenced instruction/knowledge/policy facets. Use `/go` after the task is clear; inline text after `/go` is treated as an additional note.
+`takt exec` starts a temporary multi-agent session from the previous exec configuration, or the default configuration on first run. Pass a preset name to start from that preset. Use `/setup` during the conversation to edit the assistant, workers, judges, loop thresholds, presets, and referenced instruction/knowledge/policy facets. Use `/go` after the task is clear; inline text after `/go` is treated as an additional note. Use `/cancel` to exit without running.
 
 Exec presets resolve in this order: project `.takt/exec/presets/` → global `~/.takt/exec/presets/` → builtin `builtins/exec/presets/`. The last successful exec configuration is saved to `~/.takt/exec.yaml`. `/setup` can save or delete project/global presets, and created facets are stored under `.takt/facets/` or `~/.takt/facets/`.
 

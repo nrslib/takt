@@ -5,12 +5,13 @@ import { spawnSync } from 'node:child_process';
 import { getGlobalFacetDir, getProjectFacetDir } from '../../infra/config/paths.js';
 import { getFacetDirs, scanFacets, type FacetLookupConfig, type FacetType } from '../catalog/catalogFacets.js';
 import { readInteractiveInput } from '../interactive/interactiveInput.js';
-import { selectOption } from '../../shared/prompt/index.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { askExecAssistant, type ExecSessionContext } from './assistantSession.js';
-import { promptText } from './promptUtils.js';
+import { EXEC_TEXT_INPUT_COMMAND_AVAILABILITY } from './commandAvailability.js';
+import { execFacetKindLabel, execLabel, execScopeLabel, execSourceLabel, type ExecLanguage } from './labels.js';
+import { promptText, selectExecOption } from './promptUtils.js';
 import {
   projectLocalFileExists,
   readProjectLocalTextFile,
@@ -118,20 +119,20 @@ function overwriteFacetFile(cwd: string, kind: FacetType, scope: WritableFacetSc
   return facetName;
 }
 
-async function selectExistingFacet(kind: FacetType, cwd: string, lookupConfig: FacetLookupConfig): Promise<string | null> {
+async function selectExistingFacet(kind: FacetType, cwd: string, lookupConfig: FacetLookupConfig, lang: ExecLanguage): Promise<string | null> {
   const entries = normalizeFacetEntries(kind, cwd, lookupConfig);
-  const selected = await selectOption<string>(`Select ${kind} facet`, entries.map((entry) => ({
+  const selected = await selectExecOption<string>(lang, execLabel(lang, 'facets.selectPrompt', { kind: execFacetKindLabel(lang, kind) }), entries.map((entry) => ({
     label: sanitizeTerminalText(entry.name),
     value: entry.name,
-    description: `${sanitizeTerminalText(entry.source)} · ${sanitizeTerminalText(entry.description)}`,
+    description: `${sanitizeTerminalText(execSourceLabel(lang, entry.source))} · ${sanitizeTerminalText(entry.description)}`,
   })));
   return selected;
 }
 
-async function selectFacetScope(message: string): Promise<WritableFacetScope | null> {
-  return await selectOption<WritableFacetScope>(message, [
-    { label: 'Project', value: 'project', description: '.takt/facets' },
-    { label: 'Global', value: 'global', description: '~/.takt/facets' },
+async function selectFacetScope(message: string, lang: ExecLanguage): Promise<WritableFacetScope | null> {
+  return await selectExecOption<WritableFacetScope>(lang, message, [
+    { label: execScopeLabel(lang, 'project'), value: 'project', description: execLabel(lang, 'scope.projectDescription') },
+    { label: execScopeLabel(lang, 'global'), value: 'global', description: execLabel(lang, 'scope.globalDescription') },
   ]);
 }
 
@@ -160,21 +161,27 @@ function runEditor(initialContent: string, name: string): string {
   }
 }
 
-async function confirmGeneratedFacet(kind: FacetType, name: string, content: string): Promise<boolean> {
-  info(`Generated ${kind} facet "${sanitizeTerminalText(name)}":`);
+async function confirmGeneratedFacet(kind: FacetType, name: string, content: string, lang: ExecLanguage): Promise<boolean> {
+  info(execLabel(lang, 'facets.generated', {
+    kind: execFacetKindLabel(lang, kind),
+    name: sanitizeTerminalText(name),
+  }));
   info(sanitizeTerminalText(content));
-  const approved = await selectOption<'save' | 'discard'>('Save generated facet?', [
-    { label: 'Save', value: 'save' },
-    { label: 'Discard', value: 'discard' },
+  const approved = await selectExecOption<'save' | 'discard'>(lang, execLabel(lang, 'facets.saveGenerated'), [
+    { label: execLabel(lang, 'common.save'), value: 'save' },
+    { label: execLabel(lang, 'common.discard'), value: 'discard' },
   ]);
   return approved === 'save';
 }
 
 async function promptFacetConsultation(kind: FacetType, name: string, ctx: ExecSessionContext): Promise<string | null> {
   const input = await readInteractiveInput(
-    `Describe the ${kind} facet changes for ${sanitizeTerminalText(name)}: `,
+    execLabel(ctx.lang, 'facets.consultationPrompt', {
+      kind: execFacetKindLabel(ctx.lang, kind),
+      name: sanitizeTerminalText(name),
+    }),
     ctx.lang,
-    { enableSetupCommand: false },
+    EXEC_TEXT_INPUT_COMMAND_AVAILABILITY,
   );
   if (input === null) {
     return null;
@@ -206,23 +213,27 @@ async function createFacetWithAI(
     ].join('\n'),
     loadTemplate('exec_facet_create', ctx.lang),
   );
-  if (!await confirmGeneratedFacet(kind, name, generated.content)) {
+  if (!await confirmGeneratedFacet(kind, name, generated.content, ctx.lang)) {
     return null;
   }
   return writeFacetFile(cwd, kind, scope, name, generated.content);
 }
 
 async function createFacetRef(cwd: string, kind: FacetType, ctx: ExecSessionContext, useAI: boolean): Promise<string | null> {
-  const scope = await selectFacetScope('Facet save scope');
+  const scope = await selectFacetScope(execLabel(ctx.lang, 'facets.saveScope'), ctx.lang);
   if (scope === null) {
     return null;
   }
-  const name = await promptText('Facet name', 'custom', ctx.lang);
+  const name = await promptText(execLabel(ctx.lang, 'facets.namePrompt'), 'custom', ctx.lang);
   const ref = useAI
     ? await createFacetWithAI(cwd, kind, scope, name, ctx)
     : writeFacetFile(cwd, kind, scope, name, runEditor(`# ${name}\n\n`, name));
   if (ref !== null) {
-    info(`Created ${sanitizeTerminalText(scope)} ${kind} facet: ${sanitizeTerminalText(ref)}`);
+    info(execLabel(ctx.lang, 'facets.created', {
+      scope: sanitizeTerminalText(execScopeLabel(ctx.lang, scope)),
+      kind: execFacetKindLabel(ctx.lang, kind),
+      name: sanitizeTerminalText(ref),
+    }));
   }
   return ref;
 }
@@ -233,7 +244,7 @@ async function editFacetWithAI(
   current: string,
   ctx: ExecSessionContext,
 ): Promise<string | null> {
-  const scope = await selectFacetScope('Edited facet save scope');
+  const scope = await selectFacetScope(execLabel(ctx.lang, 'facets.editedSaveScope'), ctx.lang);
   if (scope === null) {
     return null;
   }
@@ -256,7 +267,7 @@ async function editFacetWithAI(
     ].join('\n'),
     loadTemplate('exec_facet_edit', ctx.lang),
   );
-  if (!await confirmGeneratedFacet(kind, current, generated.content)) {
+  if (!await confirmGeneratedFacet(kind, current, generated.content, ctx.lang)) {
     return null;
   }
   return overwriteFacetFile(cwd, kind, scope, current, generated.content);
@@ -266,13 +277,13 @@ async function editFacetWithEditor(
   cwd: string,
   kind: FacetType,
   current: string,
-  lookupConfig: FacetLookupConfig,
+  ctx: ExecSessionContext,
 ): Promise<string | null> {
-  const scope = await selectFacetScope('Edited facet save scope');
+  const scope = await selectFacetScope(execLabel(ctx.lang, 'facets.editedSaveScope'), ctx.lang);
   if (scope === null) {
     return null;
   }
-  const edited = runEditor(readEffectiveFacetContent(cwd, kind, current, lookupConfig), current);
+  const edited = runEditor(readEffectiveFacetContent(cwd, kind, current, ctx.facetLookupConfig), current);
   return overwriteFacetFile(cwd, kind, scope, current, edited);
 }
 
@@ -282,16 +293,16 @@ export async function editInstructionFacetRef(
   defaultRef: string,
   ctx: ExecSessionContext,
 ): Promise<string> {
-  const action = await selectOption<InstructionFacetAction>('Instruction facet', [
-    { label: `Select existing (${sanitizeTerminalText(current)})`, value: 'select' },
-    { label: 'Edit with AI', value: 'ai_edit' },
-    { label: 'Create with AI', value: 'create_ai' },
-    { label: 'Open in editor', value: 'edit_editor' },
-    { label: `Restore default (${sanitizeTerminalText(defaultRef)})`, value: 'default' },
-    { label: 'Back', value: 'back' },
+  const action = await selectExecOption<InstructionFacetAction>(ctx.lang, execLabel(ctx.lang, 'facets.instructionMenu'), [
+    { label: execLabel(ctx.lang, 'facets.selectExisting', { current: sanitizeTerminalText(current) }), value: 'select' },
+    { label: execLabel(ctx.lang, 'facets.editWithAI'), value: 'ai_edit' },
+    { label: execLabel(ctx.lang, 'facets.createWithAI'), value: 'create_ai' },
+    { label: execLabel(ctx.lang, 'facets.openInEditor'), value: 'edit_editor' },
+    { label: execLabel(ctx.lang, 'facets.restoreDefault', { defaultRef: sanitizeTerminalText(defaultRef) }), value: 'default' },
+    { label: execLabel(ctx.lang, 'common.back'), value: 'back' },
   ]);
   if (action === 'select') {
-    return await selectExistingFacet('instructions', cwd, ctx.facetLookupConfig) ?? current;
+    return await selectExistingFacet('instructions', cwd, ctx.facetLookupConfig, ctx.lang) ?? current;
   }
   if (action === 'ai_edit') {
     return await editFacetWithAI(cwd, 'instructions', current, ctx) ?? current;
@@ -300,7 +311,7 @@ export async function editInstructionFacetRef(
     return await createFacetRef(cwd, 'instructions', ctx, true) ?? current;
   }
   if (action === 'edit_editor') {
-    return await editFacetWithEditor(cwd, 'instructions', current, ctx.facetLookupConfig) ?? current;
+    return await editFacetWithEditor(cwd, 'instructions', current, ctx) ?? current;
   }
   if (action === 'default') {
     return defaultRef;
@@ -313,12 +324,13 @@ async function selectFacetToToggle(
   cwd: string,
   current: string[],
   lookupConfig: FacetLookupConfig,
+  lang: ExecLanguage,
 ): Promise<string | null> {
   const entries = normalizeFacetEntries(kind, cwd, lookupConfig);
-  return await selectOption<string>(`Toggle ${kind} facet`, entries.map((entry) => ({
+  return await selectExecOption<string>(lang, execLabel(lang, 'facets.togglePrompt', { kind: execFacetKindLabel(lang, kind) }), entries.map((entry) => ({
     label: `${current.includes(entry.name) ? '[x]' : '[ ]'} ${sanitizeTerminalText(entry.name)}`,
     value: entry.name,
-    description: `${sanitizeTerminalText(entry.source)} · ${sanitizeTerminalText(entry.description)}`,
+    description: `${sanitizeTerminalText(execSourceLabel(lang, entry.source))} · ${sanitizeTerminalText(entry.description)}`,
   })));
 }
 
@@ -328,15 +340,20 @@ export async function editFacetRefList(
   current: string[],
   ctx: ExecSessionContext,
 ): Promise<string[]> {
-  const action = await selectOption<FacetListAction>(`${kind} facets`, [
-    { label: 'Toggle existing', value: 'toggle', description: current.map((name) => sanitizeTerminalText(name)).join(', ') || 'none' },
-    { label: 'Create with editor', value: 'create_editor' },
-    { label: 'Create with AI', value: 'create_ai' },
-    { label: 'Clear all', value: 'clear' },
-    { label: 'Back', value: 'back' },
+  const kindLabel = execFacetKindLabel(ctx.lang, kind);
+  const action = await selectExecOption<FacetListAction>(ctx.lang, execLabel(ctx.lang, 'facets.listPrompt', { kind: kindLabel }), [
+    {
+      label: execLabel(ctx.lang, 'facets.toggleExisting'),
+      value: 'toggle',
+      description: current.map((name) => sanitizeTerminalText(name)).join(', ') || execLabel(ctx.lang, 'common.none'),
+    },
+    { label: execLabel(ctx.lang, 'facets.createWithEditor'), value: 'create_editor' },
+    { label: execLabel(ctx.lang, 'facets.createWithAI'), value: 'create_ai' },
+    { label: execLabel(ctx.lang, 'facets.clearAll'), value: 'clear' },
+    { label: execLabel(ctx.lang, 'common.back'), value: 'back' },
   ]);
   if (action === 'toggle') {
-    const selected = await selectFacetToToggle(kind, cwd, current, ctx.facetLookupConfig);
+    const selected = await selectFacetToToggle(kind, cwd, current, ctx.facetLookupConfig, ctx.lang);
     if (selected === null) {
       return current;
     }

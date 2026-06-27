@@ -1,4 +1,3 @@
-import { selectOption } from '../../shared/prompt/index.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import type { SessionContext } from '../interactive/aiCaller.js';
@@ -8,35 +7,41 @@ import {
   listExecPresetsBySource,
   saveExecPreset,
 } from './presetStore.js';
-import { promptText } from './promptUtils.js';
+import { DEFAULT_EXEC_CONFIG } from './defaults.js';
+import { execLabel, execScopeLabel, type ExecLanguage } from './labels.js';
+import { promptText, selectExecOption } from './promptUtils.js';
 import type { ExecConfig, ExecPresetScope } from './types.js';
 
 type PresetSetupAction = 'load' | 'save' | 'delete' | 'back';
 type WritablePresetScope = 'project' | 'global';
-type LoadablePresetScope = ExecPresetScope;
+type LoadablePresetScope = ExecPresetScope | 'default';
 
-async function selectPresetScope(message: string): Promise<WritablePresetScope | null> {
-  return await selectOption<WritablePresetScope>(message, [
-    { label: 'Project', value: 'project', description: '.takt/exec/presets' },
-    { label: 'Global', value: 'global', description: '~/.takt/exec/presets' },
+async function selectPresetScope(message: string, lang: ExecLanguage): Promise<WritablePresetScope | null> {
+  return await selectExecOption<WritablePresetScope>(lang, message, [
+    { label: execScopeLabel(lang, 'project'), value: 'project', description: execLabel(lang, 'preset.projectDescription') },
+    { label: execScopeLabel(lang, 'global'), value: 'global', description: execLabel(lang, 'preset.globalDescription') },
   ]);
 }
 
-async function selectLoadPresetScope(): Promise<LoadablePresetScope | null> {
-  return await selectOption<LoadablePresetScope>('Preset load source', [
-    { label: 'Builtin', value: 'builtin', description: 'builtins/exec/presets' },
-    { label: 'Project', value: 'project', description: '.takt/exec/presets' },
-    { label: 'Global', value: 'global', description: '~/.takt/exec/presets' },
+async function selectLoadPresetScope(lang: ExecLanguage): Promise<LoadablePresetScope | null> {
+  return await selectExecOption<LoadablePresetScope>(lang, execLabel(lang, 'preset.loadSource'), [
+    { label: execScopeLabel(lang, 'default'), value: 'default', description: execLabel(lang, 'preset.defaultDescription') },
+    { label: execScopeLabel(lang, 'builtin'), value: 'builtin', description: execLabel(lang, 'preset.builtinDescription') },
+    { label: execScopeLabel(lang, 'project'), value: 'project', description: execLabel(lang, 'preset.projectDescription') },
+    { label: execScopeLabel(lang, 'global'), value: 'global', description: execLabel(lang, 'preset.globalDescription') },
   ]);
 }
 
-async function selectPresetConfig(cwd: string): Promise<ExecConfig | null> {
-  const source = await selectLoadPresetScope();
+async function selectPresetConfig(cwd: string, lang: ExecLanguage): Promise<ExecConfig | null> {
+  const source = await selectLoadPresetScope(lang);
   if (source === null) {
     return null;
   }
+  if (source === 'default') {
+    return DEFAULT_EXEC_CONFIG;
+  }
   const presets = listExecPresetsBySource(source, { projectDir: cwd });
-  const selected = await selectOption<string>(`Load ${source} preset`, presets.map((preset) => ({
+  const selected = await selectExecOption<string>(lang, execLabel(lang, 'preset.loadFromSource', { source: execScopeLabel(lang, source) }), presets.map((preset) => ({
     label: sanitizeTerminalText(preset.name),
     value: preset.name,
     description: sanitizeTerminalText(preset.description),
@@ -45,23 +50,26 @@ async function selectPresetConfig(cwd: string): Promise<ExecConfig | null> {
 }
 
 async function saveCurrentConfigAsPreset(cwd: string, config: ExecConfig, lang: SessionContext['lang']): Promise<void> {
-  const scope = await selectPresetScope('Preset save scope');
+  const scope = await selectPresetScope(execLabel(lang, 'preset.saveScope'), lang);
   if (scope === null) {
     return;
   }
-  const name = await promptText('Preset name', 'custom', lang);
-  const description = await promptText('Preset description', 'Custom exec preset', lang);
+  const name = await promptText(execLabel(lang, 'preset.namePrompt'), 'custom', lang);
+  const description = await promptText(execLabel(lang, 'preset.descriptionPrompt'), execLabel(lang, 'preset.descriptionDefault'), lang);
   saveExecPreset(name, description, config, { projectDir: cwd, scope });
-  info(`Saved ${sanitizeTerminalText(scope)} exec preset: ${sanitizeTerminalText(name)}`);
+  info(execLabel(lang, 'preset.saved', {
+    scope: sanitizeTerminalText(execScopeLabel(lang, scope)),
+    name: sanitizeTerminalText(name),
+  }));
 }
 
-async function deleteWritablePreset(cwd: string): Promise<void> {
-  const scope = await selectPresetScope('Preset delete scope');
+async function deleteWritablePreset(cwd: string, lang: ExecLanguage): Promise<void> {
+  const scope = await selectPresetScope(execLabel(lang, 'preset.deleteScope'), lang);
   if (scope === null) {
     return;
   }
   const presets = listExecPresetsBySource(scope, { projectDir: cwd });
-  const selected = await selectOption<string>(`Delete ${scope} preset`, presets.map((preset) => ({
+  const selected = await selectExecOption<string>(lang, execLabel(lang, 'preset.deleteFromSource', { source: execScopeLabel(lang, scope) }), presets.map((preset) => ({
     label: sanitizeTerminalText(preset.name),
     value: preset.name,
     description: sanitizeTerminalText(preset.description),
@@ -70,25 +78,28 @@ async function deleteWritablePreset(cwd: string): Promise<void> {
     return;
   }
   deleteExecPreset(selected, { projectDir: cwd, scope });
-  info(`Deleted ${sanitizeTerminalText(scope)} exec preset: ${sanitizeTerminalText(selected)}`);
+  info(execLabel(lang, 'preset.deleted', {
+    scope: sanitizeTerminalText(execScopeLabel(lang, scope)),
+    name: sanitizeTerminalText(selected),
+  }));
 }
 
 export async function editPresetSetup(cwd: string, config: ExecConfig, lang: SessionContext['lang']): Promise<ExecConfig> {
-  const action = await selectOption<PresetSetupAction>('Preset', [
-    { label: 'Load preset', value: 'load' },
-    { label: 'Save current preset', value: 'save' },
-    { label: 'Delete preset', value: 'delete' },
-    { label: 'Back', value: 'back' },
+  const action = await selectExecOption<PresetSetupAction>(lang, execLabel(lang, 'preset.menu'), [
+    { label: execLabel(lang, 'preset.load'), value: 'load' },
+    { label: execLabel(lang, 'preset.saveCurrent'), value: 'save' },
+    { label: execLabel(lang, 'preset.delete'), value: 'delete' },
+    { label: execLabel(lang, 'common.back'), value: 'back' },
   ]);
   if (action === 'load') {
-    return await selectPresetConfig(cwd) ?? config;
+    return await selectPresetConfig(cwd, lang) ?? config;
   }
   if (action === 'save') {
     await saveCurrentConfigAsPreset(cwd, config, lang);
     return config;
   }
   if (action === 'delete') {
-    await deleteWritablePreset(cwd);
+    await deleteWritablePreset(cwd, lang);
   }
   return config;
 }

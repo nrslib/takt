@@ -4,6 +4,9 @@ import type { CommandAvailability } from './slashCommandRegistry.js';
 const SLASH_COMMAND_VALUES = Object.values(SlashCommand);
 
 function isCommandMatchEnabled(command: SlashCommand, availability?: CommandAvailability): boolean {
+  if (availability?.enabledCommands && !availability.enabledCommands.includes(command)) {
+    return false;
+  }
   if (command === SlashCommand.Setup) {
     return availability?.enableSetupCommand === true;
   }

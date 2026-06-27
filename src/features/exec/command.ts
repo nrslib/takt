@@ -8,6 +8,7 @@ import { blankLine, info, success } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import { askExecAssistant, createExecSessionContext, shouldKeepExecSession } from './assistantSession.js';
 import { applyExecOverrides, formatExecConfigSummary } from './configOps.js';
+import { EXEC_CONVERSATION_COMMAND_AVAILABILITY } from './commandAvailability.js';
 import { listExecPresets } from './presetStore.js';
 import { selectInitialExecConfig } from './presetSelection.js';
 import { runSetupMenu } from './setupMenu.js';
@@ -84,7 +85,7 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
   blankLine();
 
   while (true) {
-    const input = await readInteractiveInput('Assistant> ', ctx.lang, { enableSetupCommand: true });
+    const input = await readInteractiveInput('Assistant> ', ctx.lang, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
     if (input === null) {
       info('Cancelled');
       return;
@@ -93,7 +94,7 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
     if (!trimmed) {
       continue;
     }
-    const match = matchSlashCommand(trimmed, { enableSetupCommand: true });
+    const match = matchSlashCommand(trimmed, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
     if (match?.command === SlashCommand.Setup) {
       const previousSessionConfig = currentConfig.session;
       currentConfig = await runSetupMenu(cwd, currentConfig, ctx);
@@ -146,11 +147,7 @@ export async function runExecCommand(cwd: string, options: RunExecCommandOptions
     return;
   }
 
-  const baseConfig = await selectInitialExecConfig(cwd, options.preset);
-  if (baseConfig === null) {
-    info('Cancelled');
-    return;
-  }
+  const baseConfig = selectInitialExecConfig(cwd, options.preset);
   const config = applyExecOverrides(baseConfig, options.agentOverrides);
   await runExecConversation(cwd, config, options.agentOverrides);
   success('Exec session ended');
