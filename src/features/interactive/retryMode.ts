@@ -21,7 +21,10 @@ import {
   type PostSummaryAction,
 } from './interactive-summary.js';
 import { resolveLanguage } from './interactive.js';
-import { prependSourceContext } from './promptSections.js';
+import {
+  prependSourceContext,
+  prependSourceContextGuardToSystemPrompt,
+} from './promptSections.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
@@ -152,7 +155,10 @@ async function runRetryConversation(
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
 
   const templateVars = buildRetryTemplateVars(retryContext, lang);
-  const systemPrompt = loadTemplate('score_retry_system_prompt', ctx.lang, templateVars);
+  const systemPrompt = prependSourceContextGuardToSystemPrompt(
+    ctx.lang,
+    loadTemplate('score_retry_system_prompt', ctx.lang, templateVars),
+  );
 
   const retryIntro = getLabel('retry.ui.intro', ctx.lang);
   const subjectLabel = formatRetrySubjectLabel(retryContext.subject.kind, ctx.lang);

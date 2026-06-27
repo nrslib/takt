@@ -164,6 +164,31 @@ describe('resolveRefToContent with layer resolution', () => {
     expect(content).toBe('Inline policy');
   });
 
+  it('should reject workflow resource paths outside the workflow directory when facet type is omitted', () => {
+    const workflowDir = join(tempDir, 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(tempDir, 'secret.md'), 'Secret content');
+
+    expect(() => resolveRefToContent('../secret.md', undefined, workflowDir))
+      .toThrow(/Workflow resource file must stay inside the workflow directory and must not use symlinks/);
+  });
+
+  it('should reject workflow resource symlinks when facet type is omitted', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-workflow-resource-secret-'));
+    try {
+      const workflowDir = join(tempDir, 'workflows');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret content');
+      symlinkSync(secretPath, join(workflowDir, 'linked.md'));
+
+      expect(() => resolveRefToContent('./linked.md', undefined, workflowDir))
+        .toThrow(/Workflow resource file must stay inside the workflow directory and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
   it('should fall back to path resolution when no context', () => {
     const content = resolveRefToContent('some-name', undefined, tempDir);
     // No context, no file — returns the spec as-is (inline content behavior)

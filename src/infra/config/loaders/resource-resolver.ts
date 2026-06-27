@@ -130,7 +130,7 @@ export function resolveResourceContentWithSource(
     const resolved = resolveResourcePath(spec, workflowDir);
     if (existsSync(resolved)) {
       return {
-        content: readResourceFile(resolved, facetType, context),
+        content: readResourceFile(resolved, facetType, workflowDir, context),
         sourcePath: resolved,
         facetType,
         refName,
@@ -330,9 +330,27 @@ function readScopedFacetFile(
 function readResourceFile(
   filePath: string,
   facetType: FacetType | undefined,
+  workflowDir: string,
   context: FacetResolutionContext | undefined,
 ): string {
   if (facetType === undefined) {
+    const stats = assertPathSegmentsAreSafe(
+      workflowDir,
+      filePath,
+      (_violation, segmentPath) => new Error(`Workflow resource file must stay inside the workflow directory and must not use symlinks: ${segmentPath}`),
+    );
+    if (!stats) {
+      throw new Error(`Workflow resource file not found: ${filePath}`);
+    }
+    if (!stats.isFile()) {
+      throw new Error(`Workflow resource file must be a regular file and must not be a symlink: ${filePath}`);
+    }
+
+    const resolvedWorkflowDir = realpathSync(workflowDir);
+    const realFilePath = realpathSync(filePath);
+    if (!isPathInside(resolvedWorkflowDir, realFilePath)) {
+      throw new Error(`Workflow resource file must stay inside the workflow directory and must not use symlinks: ${filePath}`);
+    }
     return readFileSync(filePath, 'utf-8');
   }
   return readFacetFile(filePath, facetType, context);

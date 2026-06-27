@@ -268,6 +268,9 @@ describe('LoopMonitorJudgeSchema', () => {
     const result = LoopMonitorJudgeSchema.safeParse(raw);
 
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.includes('model'))).toBe(true);
+    }
   });
 
   it('should reject judge configuration when instruction_template exists', () => {

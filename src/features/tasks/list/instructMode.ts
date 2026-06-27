@@ -18,7 +18,10 @@ import {
   type InteractiveModeResult,
   type WorkflowContext,
 } from '../../interactive/interactive.js';
-import { prependSourceContext } from '../../interactive/promptSections.js';
+import {
+  prependSourceContext,
+  prependSourceContextGuardToSystemPrompt,
+} from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
@@ -112,7 +115,10 @@ export async function runInstructMode(
     branchContext, branchName, taskName, taskContent, retryNote, lang,
     workflowContext, runSessionContext, previousOrderContent,
   );
-  const systemPrompt = loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars);
+  const systemPrompt = prependSourceContextGuardToSystemPrompt(
+    ctx.lang,
+    loadTemplate('score_instruct_system_prompt', ctx.lang, templateVars),
+  );
 
   const replayHint = buildReplayHint(ctx.lang, !!previousOrderContent);
 

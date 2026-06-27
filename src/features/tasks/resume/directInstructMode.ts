@@ -12,7 +12,10 @@ import {
   type WorkflowContext,
 } from '../../interactive/interactive-summary.js';
 import { resolveLanguage } from '../../interactive/interactive.js';
-import { prependSourceContext } from '../../interactive/promptSections.js';
+import {
+  prependSourceContext,
+  prependSourceContextGuardToSystemPrompt,
+} from '../../interactive/promptSections.js';
 import { formatRunSessionForPrompt, type RunSessionContext } from '../../interactive/runSessionReader.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
@@ -83,10 +86,13 @@ export async function runDirectInstructMode(
   displayAndClearSessionState(options.cwd, ctx.lang);
 
   const ui = getLabelObject<InstructUIText>('instruct.ui', ctx.lang);
-  const systemPrompt = loadTemplate(
-    'score_direct_instruct_system_prompt',
+  const systemPrompt = prependSourceContextGuardToSystemPrompt(
     ctx.lang,
-    buildDirectInstructTemplateVars(options, ctx.lang),
+    loadTemplate(
+      'score_direct_instruct_system_prompt',
+      ctx.lang,
+      buildDirectInstructTemplateVars(options, ctx.lang),
+    ),
   );
   const replayHint = buildReplayHint(ctx.lang, options.previousOrderContent !== null);
 
