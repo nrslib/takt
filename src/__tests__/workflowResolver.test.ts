@@ -307,7 +307,69 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
-    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read', 'Bash']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read']);
+  });
+
+  it('should resolve preview tools for edit false steps without output contracts using readonly filtering', () => {
+    const workflowYaml = `name: preview-edit-false-tools
+initial_step: plan
+max_steps: 1
+workflow_config:
+  provider: claude
+
+steps:
+  - name: plan
+    persona: planner
+    instruction: "Plan the task"
+    edit: false
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - bash
+          - " Bash "
+`;
+
+    const workflowPath = join(tempDir, 'preview-edit-false-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['Read']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['Read']);
+  });
+
+  it('should remove OpenCode command tools from edit false preview steps without output contracts', () => {
+    writeProjectConfig(tempDir, `provider: opencode
+model: opencode/big-pickle
+`);
+
+    const workflowYaml = `name: preview-opencode-edit-false-tools
+initial_step: plan
+max_steps: 1
+
+steps:
+  - name: plan
+    persona: planner
+    instruction: "Plan the task"
+    edit: false
+    provider_options:
+      opencode:
+        allowed_tools:
+          - read
+          - bash
+          - " Bash "
+          - edit
+          - grep
+`;
+
+    const workflowPath = join(tempDir, 'preview-opencode-edit-false-tools.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 1);
+
+    expect(result.firstStep?.allowedTools).toEqual(['read', 'grep']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['read', 'grep']);
   });
 
   it('should resolve preview tools from persona_providers provider_options', () => {
@@ -1048,7 +1110,7 @@ steps:
     const result = getWorkflowSummary(workflowPath, tempDir);
 
     expect(result.firstStep).toBeDefined();
-    expect(result.firstStep!.allowedTools).toEqual(['Read', 'Bash']);
+    expect(result.firstStep!.allowedTools).toEqual(['Read']);
   });
 
   it('should return firstStep with persona file content', () => {

@@ -6,7 +6,12 @@ import type {
 } from '../../../core/models/index.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
-import { isResourcePath, resolveFacetPath, resolveSectionMap } from './resource-resolver.js';
+import {
+  isResourcePath,
+  resolveFacetPath,
+  resolveSectionMapWithSource,
+  unwrapResolvedSectionMap,
+} from './resource-resolver.js';
 import { isWorkflowParamReference, type WorkflowParamReference } from './workflowCallableParamRef.js';
 import { assertNoParamReferences, validateReturnRules } from './workflowCallableRuleValidation.js';
 
@@ -33,12 +38,34 @@ export function isMissingWorkflowCallArgError(error: unknown): boolean {
     && /^Step ".+" requires workflow_call arg ".+" for .+$/.test(error.message);
 }
 
-function createWorkflowSections(raw: RawWorkflowConfig, workflowDir: string): WorkflowSections {
+function createWorkflowSections(
+  raw: RawWorkflowConfig,
+  workflowDir: string,
+  context: FacetResolutionContext | undefined,
+): WorkflowSections {
+  const resolvedPoliciesWithSource = resolveSectionMapWithSource(raw.policies, workflowDir, 'policies', context);
+  const resolvedKnowledgeWithSource = resolveSectionMapWithSource(raw.knowledge, workflowDir, 'knowledge', context);
+  const resolvedInstructionsWithSource = resolveSectionMapWithSource(
+    raw.instructions,
+    workflowDir,
+    'instructions',
+    context,
+  );
+  const resolvedReportFormatsWithSource = resolveSectionMapWithSource(
+    raw.report_formats,
+    workflowDir,
+    'output-contracts',
+    context,
+  );
   return {
-    resolvedPolicies: resolveSectionMap(raw.policies, workflowDir),
-    resolvedKnowledge: resolveSectionMap(raw.knowledge, workflowDir),
-    resolvedInstructions: resolveSectionMap(raw.instructions, workflowDir),
-    resolvedReportFormats: resolveSectionMap(raw.report_formats, workflowDir),
+    resolvedPolicies: unwrapResolvedSectionMap(resolvedPoliciesWithSource),
+    resolvedPoliciesWithSource,
+    resolvedKnowledge: unwrapResolvedSectionMap(resolvedKnowledgeWithSource),
+    resolvedKnowledgeWithSource,
+    resolvedInstructions: unwrapResolvedSectionMap(resolvedInstructionsWithSource),
+    resolvedInstructionsWithSource,
+    resolvedReportFormats: unwrapResolvedSectionMap(resolvedReportFormatsWithSource),
+    resolvedReportFormatsWithSource,
   };
 }
 
@@ -122,7 +149,7 @@ function resolveCallableArgs(
   argPolicy: WorkflowCallArgResolutionPolicy | undefined,
 ): Record<string, WorkflowCallArgValue> {
   const params = raw.subworkflow?.params ?? {};
-  const sections = createWorkflowSections(raw, workflowDir);
+  const sections = createWorkflowSections(raw, workflowDir, context);
   const resolvedArgs = new Map<string, WorkflowCallArgValue>();
 
   for (const [name, value] of Object.entries(args ?? {})) {

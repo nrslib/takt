@@ -259,6 +259,7 @@ function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
   raw: Record<string, RawProviderRoutingEntry> | undefined,
   pathPrefix: string,
   options: NormalizeProviderOptionsOptions,
+  allowProviderOnlyOpenCode = false,
 ): Record<string, TEntry> | undefined {
   if (!raw) return undefined;
   const entries = Object.entries(raw);
@@ -295,14 +296,19 @@ function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
         `Configuration error: ${path} must include at least one of 'provider', 'model', or 'provider_options'`,
       );
     }
-    validateProviderModelCompatibility(
-      normalizedEntry.provider,
-      normalizedEntry.model,
-      {
-        modelFieldName: `Configuration error: ${path}.model`,
-        requireProviderQualifiedModelForOpencode: false,
-      },
-    );
+    if (
+      !allowProviderOnlyOpenCode
+      || normalizedEntry.provider !== 'opencode'
+      || normalizedEntry.model !== undefined
+    ) {
+      validateProviderModelCompatibility(
+        normalizedEntry.provider,
+        normalizedEntry.model,
+        {
+          modelFieldName: `Configuration error: ${path}.model`,
+        },
+      );
+    }
     return [key, normalizedEntry as TEntry];
   }));
 }
@@ -358,9 +364,9 @@ export function normalizeProviderRouting(
 ): ProviderRoutingConfig | undefined {
   if (!raw) return undefined;
   const result: ProviderRoutingConfig = {
-    personas: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.personas, 'provider_routing.personas', options),
-    tags: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.tags, 'provider_routing.tags', options),
-    steps: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.steps, 'provider_routing.steps', options),
+    personas: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.personas, 'provider_routing.personas', options, true),
+    tags: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.tags, 'provider_routing.tags', options, true),
+    steps: normalizeProviderRoutingEntries<ProviderRoutingEntry>(raw.steps, 'provider_routing.steps', options, true),
   };
   return result.personas || result.tags || result.steps ? result : undefined;
 }

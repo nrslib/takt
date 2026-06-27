@@ -8,9 +8,15 @@ import {
   assertExecConfig,
   assertExecProviderEffort,
   EXEC_PROVIDERS,
+  getExecModelCandidates,
   getSupportedExecEfforts,
 } from './configValidation.js';
-import { formatActorDetails, resolveEffortAfterProviderOverride } from './configOps.js';
+import {
+  formatProviderModel,
+  formatActorDetails,
+  resolveEffortAfterProviderOverride,
+  resolveModelAfterProviderOverride,
+} from './configOps.js';
 import { DEFAULT_EXEC_CONFIG } from './defaults.js';
 import { editFacetRefList, editInstructionFacetRef } from './facetEditor.js';
 import { editPresetSetup } from './presetSetup.js';
@@ -26,13 +32,6 @@ import type { ExecActorConfig, ExecConfig, ExecEffort, ExecSessionConfig } from 
 type SetupSection = 'assistant' | 'workers' | 'judges' | 'replan' | 'loop' | 'preset' | 'back';
 type SetupSectionOption = { label: string; value: SetupSection };
 const CUSTOM_MODEL_VALUE = '__custom_model__';
-const MODEL_CANDIDATES: Partial<Record<ProviderType, readonly string[]>> = {
-  claude: ['opus', 'sonnet', 'haiku'],
-  'claude-sdk': ['opus', 'sonnet', 'haiku'],
-  'claude-terminal': ['opus', 'sonnet', 'haiku'],
-  codex: ['gpt-5'],
-  mock: ['mock-model'],
-};
 
 function supportsAnyExecEffort(provider: ProviderType): boolean {
   return getSupportedExecEfforts(provider).length > 0;
@@ -47,7 +46,7 @@ function buildSetupSectionOptions(current: ExecConfig): SetupSectionOption[] {
     {
       label: [
         'Assistant: ',
-        `${sanitizeTerminalText(current.session.provider)}/${sanitizeTerminalText(current.session.model)}`,
+        formatProviderModel(current.session.provider, current.session.model),
         `/${sanitizeTerminalText(current.session.effort ?? 'none')}`,
       ].join(''),
       value: 'assistant',
@@ -100,8 +99,22 @@ async function selectEffort(provider: ProviderType, current: ExecEffort | undefi
   return selected;
 }
 
-async function selectModel(provider: ProviderType, current: string, lang: ExecSessionContext['lang']): Promise<string> {
-  const candidates = [...new Set([...(MODEL_CANDIDATES[provider] ?? []), current])];
+function formatModelValue(model: string | undefined): string {
+  return model === undefined ? 'provider default' : sanitizeTerminalText(model);
+}
+
+function requireCustomModelInput(model: string): string {
+  if (model.trim().length === 0) {
+    throw new Error('Custom model must be a non-empty string.');
+  }
+  return model;
+}
+
+async function selectModel(provider: ProviderType, current: string | undefined, lang: ExecSessionContext['lang']): Promise<string | undefined> {
+  const candidates = [...new Set([
+    ...getExecModelCandidates(provider),
+    ...(current !== undefined ? [current] : []),
+  ])];
   const selected = await selectOption<string>('Model', [
     ...candidates.map((model) => ({
       label: model === current ? `${sanitizeTerminalText(model)} (current)` : sanitizeTerminalText(model),
@@ -113,7 +126,8 @@ async function selectModel(provider: ProviderType, current: string, lang: ExecSe
     return current;
   }
   if (selected === CUSTOM_MODEL_VALUE) {
-    return await promptText('Custom model', current, lang);
+    const model = await promptText('Custom model', current ?? '', lang);
+    return requireCustomModelInput(model);
   }
   return selected;
 }
@@ -123,7 +137,7 @@ async function editSessionConfig(session: ExecSessionConfig, lang: ExecSessionCo
   while (true) {
     const options: Array<{ label: string; value: 'provider' | 'model' | 'effort' | 'back' }> = [
       { label: `Provider: ${sanitizeTerminalText(current.provider)}`, value: 'provider' },
-      { label: `Model: ${sanitizeTerminalText(current.model)}`, value: 'model' },
+      { label: `Model: ${formatModelValue(current.model)}`, value: 'model' },
     ];
     if (supportsAnyExecEffort(current.provider)) {
       options.push({ label: `Effort: ${sanitizeTerminalText(current.effort ?? 'none')}`, value: 'effort' });
@@ -138,6 +152,7 @@ async function editSessionConfig(session: ExecSessionConfig, lang: ExecSessionCo
       current = {
         ...current,
         provider,
+        model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
         effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
       };
     }
@@ -168,7 +183,7 @@ async function editActor(
     }> = [
       { label: `Name: ${sanitizeTerminalText(current.name)}`, value: 'name' },
       { label: `Provider: ${sanitizeTerminalText(current.provider)}`, value: 'provider' },
-      { label: `Model: ${sanitizeTerminalText(current.model)}`, value: 'model' },
+      { label: `Model: ${formatModelValue(current.model)}`, value: 'model' },
     ];
     if (supportsAnyExecEffort(current.provider)) {
       options.push({ label: `Effort: ${sanitizeTerminalText(current.effort ?? 'none')}`, value: 'effort' });
@@ -196,6 +211,7 @@ async function editActor(
       current = {
         ...current,
         provider,
+        model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
         effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
       };
     }

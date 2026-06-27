@@ -1,15 +1,6 @@
-/**
- * Tests for exec config validation functions.
- *
- * Regression tests:
- * - copy-paste: assertExecProviderEffort delegates to providerSupportsExecEffort
- *   (single source of truth for provider-effort support)
- * - dead-code: assertExecProviderEffort is sufficient for type narrowing —
- *   no redundant re-validation is needed after it passes
- */
-
 import { describe, it, expect } from 'vitest';
 import {
+  assertExecProviderModel,
   assertExecProviderEffort,
   EXEC_EFFORTS,
   providerSupportsExecEffort,
@@ -58,8 +49,6 @@ describe('assertExecProviderEffort and providerSupportsExecEffort consistency', 
 describe('assertExecProviderEffort sufficiency for type narrowing', () => {
   it('should pass validation for claude provider with valid effort — no redundant check needed', () => {
     const effort: ExecEffort = 'high';
-    // After assertExecProviderEffort passes, the effort is guaranteed valid
-    // for the provider. Type assertions (as ClaudeEffort) are safe.
     expect(() =>
       assertExecProviderEffort('claude', 'opus', effort, 'test'),
     ).not.toThrow();
@@ -80,7 +69,6 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
   });
 
   it('should reject provider with unsupported effort before any downstream code runs', () => {
-    // codex does not support 'max'
     expect(() =>
       assertExecProviderEffort('codex', 'o3', 'max', 'test'),
     ).toThrow('does not support effort "max"');
@@ -103,4 +91,46 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
       assertExecProviderEffort('claude', 'claude-sonnet-4-5-20250929', 'xhigh', 'test'),
     ).toThrow("'xhigh' is not supported by model");
   });
+});
+
+describe('assertExecProviderModel', () => {
+  it('should reject Claude model aliases for codex and opencode providers', () => {
+    expect(() => assertExecProviderModel('codex', 'sonnet', 'exec.session.model'))
+      .toThrow(/Claude model alias/);
+    expect(() => assertExecProviderModel('opencode', 'opus', 'exec.session.model'))
+      .toThrow(/Claude model alias/);
+  });
+
+  it('should reject bare opencode models before workflow execution', () => {
+    expect(() => assertExecProviderModel('opencode', 'big-pickle', 'exec.session.model'))
+      .toThrow(/provider\/model/);
+  });
+
+  it.each(['', '   '] as const)(
+    'should reject blank exec models before workflow execution',
+    (model) => {
+      expect(() => assertExecProviderModel('cursor', model, 'exec.session.model'))
+        .toThrow(/expected non-empty string/);
+    },
+  );
+
+  it('should accept provider-compatible exec models', () => {
+    expect(() => assertExecProviderModel('codex', 'gpt-5', 'exec.session.model')).not.toThrow();
+    expect(() => assertExecProviderModel('opencode', 'opencode/big-pickle', 'exec.session.model')).not.toThrow();
+  });
+
+  it.each(['cursor', 'copilot', 'kiro'] as const)(
+    'should allow omitted model for %s',
+    (provider) => {
+      expect(() => assertExecProviderModel(provider, undefined, 'exec.session.model')).not.toThrow();
+    },
+  );
+
+  it.each(['claude', 'codex', 'mock'] as const)(
+    'should reject omitted model for %s',
+    (provider) => {
+      expect(() => assertExecProviderModel(provider, undefined, 'exec.session.model'))
+        .toThrow(`provider "${provider}" requires model`);
+    },
+  );
 });

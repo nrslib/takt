@@ -189,7 +189,6 @@ describe('runGeneratedWorkflow integration', () => {
       writeCompletedRun(cwd, options.reportDirName, executedTask);
     });
 
-    // Given: saveLastUsedExecConfig is configured to throw
     saveExecConfigControl.shouldThrow = true;
 
     try {
@@ -279,9 +278,6 @@ describe('runGeneratedWorkflow integration', () => {
 
     await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
 
-    // Given: REPL calls runGeneratedWorkflow which delegates to selectAndExecuteTask
-    // When: the call is made
-    // Then: exitOnFailure should be false so that task failure throws instead of process.exit(1)
     const options = mockSelectAndExecuteTask.mock.calls[0]?.[2];
     expect(options?.exitOnFailure).toBe(false);
   });

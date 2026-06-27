@@ -88,6 +88,22 @@ In TAKT, workflow runtime is not the only user-visible contract entry. Preview, 
 | Doctor or validation accepts config that fails at runtime due to different conditions | Warning |
 | Runtime and auxiliary entries share the same normalized input or resolver | OK |
 
+## Runtime Asset Consumption Boundaries
+
+TAKT runtime assets get their meaning from the entry point that consumes them, not only from their location or name. The same string can be an asset reference, session identifier, display name, or directly supplied body, and each is a separate contract.
+
+| Criteria | Judgment |
+|----------|----------|
+| Treating an entry that resolves asset references and an entry that only uses identifiers as equivalent | REJECT |
+| Adding a same-named facet and assuming it affects an entry that receives body content directly | REJECT |
+| Workflow-derived runtime assets and feature-local runtime assets share the same responsibility name | Warning |
+| Each entry point confirms which resolver or loader consumes which asset type before placing the asset | OK |
+| Shared body content is centralized behind the existing runtime asset loader | OK |
+
+### Reference Names and Identity Names
+
+Strings such as `persona`, `session_key`, and `name` mean different things depending on whether they are reference names or identity names. A reference name causes the corresponding resolver to load an asset. An identity name is a key for sessions, logs, state, or display, and a same-named file is not used unless that entry reads it. When adding a new asset, trace the loader that reads it and the call site that consumes it.
+
 ## Facet Assembly
 
 The faceted-prompting module is independent from TAKT core.

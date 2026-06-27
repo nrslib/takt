@@ -1,13 +1,3 @@
-/**
- * Tests for ProjectBoundaryError.
- *
- * Covers:
- * - ProjectBoundaryError is an instance of Error
- * - Boundary violations throw ProjectBoundaryError (not plain Error)
- * - instanceof check works for catch-and-rethrow patterns
- * - Error message retains the "Project-local" prefix for back-compat
- */
-
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -57,14 +47,12 @@ describe('ProjectBoundaryError thrown from boundary violations', () => {
   });
 
   it('should throw ProjectBoundaryError when reading a file with a symlink in the path', () => {
-    // Given: a symlink in the path chain pointing outside the project
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-boundary-external-'));
     try {
       const symlinkPath = join(tmpDir, 'linked-dir');
       symlinkSync(externalDir, symlinkPath);
       const filePath = join(symlinkPath, 'file.txt');
 
-      // When/Then: readProjectLocalTextFile should throw ProjectBoundaryError
       expect(() => readProjectLocalTextFile(tmpDir, filePath, 'test resource'))
         .toThrow(ProjectBoundaryError);
     } finally {
@@ -73,23 +61,19 @@ describe('ProjectBoundaryError thrown from boundary violations', () => {
   });
 
   it('should throw ProjectBoundaryError when reading a file outside the project boundary', () => {
-    // Given: a file path that traverses outside the project
     const outsidePath = join(tmpDir, '..', 'outside-file.txt');
 
-    // When/Then: readProjectLocalTextFile should throw ProjectBoundaryError
     expect(() => readProjectLocalTextFile(tmpDir, outsidePath, 'test resource'))
       .toThrow(ProjectBoundaryError);
   });
 
   it('should throw ProjectBoundaryError when writing to a path with a symlink', () => {
-    // Given: a symlink in the path chain
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-boundary-write-'));
     try {
       const symlinkPath = join(tmpDir, 'linked-dir');
       symlinkSync(externalDir, symlinkPath);
       const filePath = join(symlinkPath, 'file.txt');
 
-      // When/Then: writeProjectLocalTextFile should throw ProjectBoundaryError
       expect(() => writeProjectLocalTextFile(tmpDir, filePath, 'content', 'test resource'))
         .toThrow(ProjectBoundaryError);
     } finally {
@@ -98,10 +82,8 @@ describe('ProjectBoundaryError thrown from boundary violations', () => {
   });
 
   it('should retain "Project-local" prefix in error message for existing catch patterns', () => {
-    // Given: a boundary violation
     const outsidePath = join(tmpDir, '..', 'outside-file.txt');
 
-    // When: the error is caught
     let caughtError: Error | undefined;
     try {
       readProjectLocalTextFile(tmpDir, outsidePath, 'exec config');
@@ -109,7 +91,6 @@ describe('ProjectBoundaryError thrown from boundary violations', () => {
       caughtError = error as Error;
     }
 
-    // Then: message starts with "Project-local" and instanceof works
     expect(caughtError).toBeInstanceOf(ProjectBoundaryError);
     expect(caughtError?.message).toMatch(/^Project-local /);
   });

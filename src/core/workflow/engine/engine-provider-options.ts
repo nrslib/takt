@@ -7,6 +7,7 @@ import {
   providerSupportsMcpServers,
   providerSupportsOpenCodeAllowedTools,
 } from '../../../infra/providers/provider-capabilities.js';
+import { splitClaudeAllowedToolSpecs } from '../../../infra/providers/allowed-tool-edit-policy.js';
 import {
   isTeamLeaderInspectTool,
   type TeamLeaderInspectTool,
@@ -35,6 +36,22 @@ function keepWhenProviderSupports<T>(
   return probe(provider) === true ? value : undefined;
 }
 
+function filterAllowedToolsForEditPolicy(
+  allowedTools: string[],
+  hasOutputContracts: boolean,
+  edit: boolean | undefined,
+  provider: ProviderType | undefined,
+): string[] {
+  const normalizedAllowedTools = providerSupportsClaudeAllowedTools(provider) === true
+    ? allowedTools.flatMap(splitClaudeAllowedToolSpecs)
+    : allowedTools;
+  const shouldFilterEditTools = edit === false || (hasOutputContracts && edit !== true);
+  if (!shouldFilterEditTools) {
+    return normalizedAllowedTools;
+  }
+  return normalizedAllowedTools.filter((tool) => providerKeepsAllowedToolWithoutEdit(provider, tool));
+}
+
 export function resolveAllowedToolsForProvider(
   providerOptions: StepProviderOptions | undefined,
   hasOutputContracts: boolean,
@@ -53,10 +70,7 @@ export function resolveAllowedToolsForProvider(
   if (!allowedTools) {
     return undefined;
   }
-  if (!hasOutputContracts || edit === true) {
-    return allowedTools;
-  }
-  return allowedTools.filter((tool) => providerKeepsAllowedToolWithoutEdit(provider, tool));
+  return filterAllowedToolsForEditPolicy(allowedTools, hasOutputContracts, edit, provider);
 }
 
 export function resolveMcpServersForProvider(
@@ -68,9 +82,14 @@ export function resolveMcpServersForProvider(
 
 export function resolvePartAllowedToolsForProvider(
   partAllowedTools: string[] | undefined,
+  edit: boolean | undefined,
   provider: ProviderType | undefined,
 ): string[] | undefined {
-  return keepWhenProviderSupports(partAllowedTools, provider, providerSupportsAllowedTools);
+  const allowedTools = keepWhenProviderSupports(partAllowedTools, provider, providerSupportsAllowedTools);
+  if (!allowedTools) {
+    return undefined;
+  }
+  return filterAllowedToolsForEditPolicy(allowedTools, false, edit, provider);
 }
 
 export function resolveInspectToolsForProvider(

@@ -1,6 +1,11 @@
 import { stringify as stringifyYaml } from 'yaml';
 import type { ProviderType } from '../../infra/providers/index.js';
-import { assertExecConfig, assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidation.js';
+import {
+  assertExecConfig,
+  assertExecProviderEffort,
+  CLAUDE_TOOL_PROVIDERS,
+  providerAllowsOmittedExecModel,
+} from './configValidation.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort } from './types.js';
 
 interface BuildExecWorkflowOptions {
@@ -22,10 +27,21 @@ type ProviderOptions = {
 };
 
 const WORKER_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'];
-const JUDGE_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash'];
+const JUDGE_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'];
+
+function buildModelEntry(provider: ProviderType, model: string | undefined): { model?: string | null } {
+  if (model !== undefined) {
+    return { model };
+  }
+  if (providerAllowsOmittedExecModel(provider)) {
+    return { model: null };
+  }
+  return {};
+}
+
 function buildProviderOptions(
   provider: ProviderType,
-  model: string,
+  model: string | undefined,
   effort: ExecEffort | undefined,
   claudeAllowedTools: string[],
 ): ProviderOptions | undefined {
@@ -47,6 +63,20 @@ function buildProviderOptions(
   return undefined;
 }
 
+function buildSessionJudgeProviderFields(config: ExecConfig): Record<string, unknown> {
+  const providerOptions = buildProviderOptions(
+    config.session.provider,
+    config.session.model,
+    config.session.effort,
+    JUDGE_CLAUDE_TOOLS,
+  );
+  return {
+    provider: config.session.provider,
+    ...buildModelEntry(config.session.provider, config.session.model),
+    ...(providerOptions !== undefined ? { provider_options: providerOptions } : {}),
+  };
+}
+
 export function buildJudgeReportName(actorName: string): string {
   return `${actorName}-judge-result.md`;
 }
@@ -63,7 +93,7 @@ function buildActorStep(actor: ExecActorConfig, edit: boolean, claudeAllowedTool
     ...(actor.knowledge.length > 0 ? { knowledge: actor.knowledge } : {}),
     ...(actor.policy.length > 0 ? { policy: actor.policy } : {}),
     provider: actor.provider,
-    model: actor.model,
+    ...buildModelEntry(actor.provider, actor.model),
     ...(providerOptions !== undefined ? { provider_options: providerOptions } : {}),
     ...(edit ? { required_permission_mode: 'edit' } : {}),
     ...(!edit ? {
@@ -84,7 +114,6 @@ function buildActorStep(actor: ExecActorConfig, edit: boolean, claudeAllowedTool
 }
 
 function buildReplanStep(config: ExecConfig): Record<string, unknown> {
-  const providerOptions = buildProviderOptions(config.session.provider, config.session.model, config.session.effort, JUDGE_CLAUDE_TOOLS);
   return {
     name: 'replan',
     session_key: 'exec-replan',
@@ -95,9 +124,7 @@ function buildReplanStep(config: ExecConfig): Record<string, unknown> {
     instruction: config.replan.instruction,
     ...(config.replan.knowledge.length > 0 ? { knowledge: config.replan.knowledge } : {}),
     ...(config.replan.policy.length > 0 ? { policy: config.replan.policy } : {}),
-    provider: config.session.provider,
-    model: config.session.model,
-    ...(providerOptions !== undefined ? { provider_options: providerOptions } : {}),
+    ...buildSessionJudgeProviderFields(config),
     rules: [
       {
         condition: 'User input needed for clarification',
@@ -126,6 +153,7 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
           session_key: 'exec-loop-monitor-small',
           persona: 'exec-assistant',
           instruction: 'exec-loop-monitor',
+          ...buildSessionJudgeProviderFields(config),
           rules: [
             { condition: 'Healthy (progress being made)', next: 'execute' },
             { condition: 'Unproductive (same rework repeating)', next: 'replan' },
@@ -139,6 +167,7 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
           session_key: 'exec-loop-monitor-large',
           persona: 'exec-assistant',
           instruction: 'exec-loop-monitor',
+          ...buildSessionJudgeProviderFields(config),
           rules: [
             { condition: 'Healthy (progress being made)', next: 'replan' },
             { condition: 'Unproductive (no convergence)', next: 'COMPLETE' },

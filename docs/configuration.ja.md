@@ -360,6 +360,8 @@ TAKT のモデル選択は 2 段階で解決されます。
 1. **入力 `model` の解決** - workflow 実行前に、入力 `model` が CLI `--model`、次に config `model`、最後に provider デフォルトの順で解決されます。
 2. **Workflow step の `model` 解決** - 各 step では、実効モデルが step YAML の `model`、次に `provider_routing.steps.<step.name>`、step に書かれた順の `provider_routing.tags`、`provider_routing.personas.<raw persona key>`、deprecated の `persona_providers.<persona display name>`、`workflow_config.model`、最後に解決済みの入力 `model` の順で決まります。
 
+workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` の `model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定の場合は routing、workflow、loop monitor judge のトリガー元 step、入力由来の値など、適用可能な下位優先度のソースへフォールバックしますが、`model: null` はその entry で model 解決を止め、実効 model を未定義のままにします。解決済み provider に CLI または provider 側のデフォルトを使わせたい場合に指定します。明示 model が必須の provider では、model が供給されないため検証エラーになります。
+
 ### Provider 固有のモデルに関する注意
 
 **Claude Code** はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`default`）と完全なモデル名（例: `claude-sonnet-4-5-20250929`）をサポートしています。`model` フィールドは provider CLI にそのまま渡されます。利用可能なモデルについては [Claude Code ドキュメント](https://docs.anthropic.com/en/docs/claude-code) を参照してください。
@@ -493,6 +495,8 @@ step YAML provider/model
 ```
 
 解決済みの入力は workflow 実行前に CLI フラグ、次に project `.takt/config.yaml`、global `~/.takt/config.yaml`、最後に provider デフォルトの順で決まります。promotion が有効な場合は、step YAML の値よりもさらに高い優先順位になります。
+
+workflow YAML の `model: null` は、明示的な entry レベル値として扱われます。step、parallel sub-step、`loop_monitors.judge` で model 解決を止めるため、下位優先度のソースやトリガー元 step 継承は `model` には使われません。`model` フィールドを省略した場合は通常どおりフォールバックします。
 
 `provider_options` の優先順位は leaf ごとに解決されます。多くの leaf では env または CLI 起源の config leaf が他のすべてのソースより優先されます。例外は `base_url` です。workflow が特定の provider だけを明示的に proxy へ向けられるよう、`base_url` は step / workflow routing の設定を TAKT env override より優先します。`base_url` の順序は step `provider_options` > `provider_routing.steps` > `provider_routing.tags` > `provider_routing.personas` > deprecated の `persona_providers` > `workflow_config.provider_options` > project `.takt/config.yaml` > global `~/.takt/config.yaml` > TAKT env override です。preview、doctor、validation、summary、report などの補助入口も、workflow 実行と同じ `base_url` 優先順位を使います。他の leaf は env / CLI config override の後に同じ step-to-global 順序で解決されます。
 

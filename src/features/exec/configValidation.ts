@@ -5,6 +5,7 @@ import {
   type ClaudeEffort,
 } from '../../core/models/workflow-types.js';
 import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
+import { validateProviderModelCompatibility } from '../../core/workflow/provider-model-compatibility.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort } from './types.js';
 
@@ -22,6 +23,15 @@ export const EXEC_PROVIDERS: readonly ProviderType[] = [
 
 export const EXEC_EFFORTS: readonly ExecEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const DEFAULT_EXEC_EFFORT: ExecEffort = 'high';
+const EXEC_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly string[]>> = {
+  claude: ['opus', 'sonnet', 'haiku'],
+  'claude-sdk': ['opus', 'sonnet', 'haiku'],
+  'claude-terminal': ['opus', 'sonnet', 'haiku'],
+  codex: ['gpt-5'],
+  opencode: ['opencode/big-pickle'],
+  mock: ['mock-model'],
+};
+const EXEC_OPTIONAL_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['cursor', 'copilot', 'kiro']);
 
 export const CLAUDE_TOOL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['claude', 'claude-sdk', 'claude-terminal']);
 
@@ -62,9 +72,37 @@ export function getDefaultExecEffort(provider: ProviderType): ExecEffort | undef
   return getSupportedExecEfforts(provider)[0];
 }
 
+export function getExecModelCandidates(provider: ProviderType): readonly string[] {
+  return EXEC_MODEL_CANDIDATES[provider] ?? [];
+}
+
+export function getDefaultExecModel(provider: ProviderType): string | undefined {
+  return getExecModelCandidates(provider)[0];
+}
+
+export function providerAllowsOmittedExecModel(provider: ProviderType): boolean {
+  return EXEC_OPTIONAL_MODEL_PROVIDERS.has(provider);
+}
+
+export function assertExecProviderModel(provider: ProviderType, model: string | undefined, path: string): void {
+  if (model === undefined && !providerAllowsOmittedExecModel(provider)) {
+    throw new Error(`Invalid exec config at ${path}: provider "${provider}" requires model`);
+  }
+  if (model !== undefined && model.trim().length === 0) {
+    throw new Error(`Invalid exec config at ${path}: expected non-empty string`);
+  }
+  try {
+    validateProviderModelCompatibility(provider, model, {
+      modelFieldName: `Invalid exec config at ${path}`,
+    });
+  } catch (error) {
+    throw new Error(`Invalid exec config at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function assertExecProviderEffort(
   provider: ProviderType,
-  model: string,
+  model: string | undefined,
   effort: ExecEffort | undefined,
   path: string,
 ): void {
@@ -78,6 +116,9 @@ export function assertExecProviderEffort(
     throw new Error(`Invalid exec config at ${path}: provider "${provider}" does not support effort "${effort}"`);
   }
   if (CLAUDE_TOOL_PROVIDERS.has(provider)) {
+    if (model === undefined) {
+      throw new Error(`Invalid exec config at ${path}: provider "${provider}" requires model for effort validation`);
+    }
     validateClaudeEffortCompatibility(model, effort as ClaudeEffort);
   }
 }
@@ -103,12 +144,15 @@ export function assertExecActorName(name: string, path: string): void {
 }
 
 export function assertExecConfig(config: ExecConfig): void {
+  assertExecProviderModel(config.session.provider, config.session.model, 'exec.session.model');
   assertExecProviderEffort(config.session.provider, config.session.model, config.session.effort, 'exec.session.effort');
   assertUniqueActorSessionKeys([...config.workers, ...config.judges]);
   config.workers.forEach((worker, index) => {
+    assertExecProviderModel(worker.provider, worker.model, `exec.workers[${index}].model`);
     assertExecProviderEffort(worker.provider, worker.model, worker.effort, `exec.workers[${index}].effort`);
   });
   config.judges.forEach((judge, index) => {
+    assertExecProviderModel(judge.provider, judge.model, `exec.judges[${index}].model`);
     assertExecProviderEffort(judge.provider, judge.model, judge.effort, `exec.judges[${index}].effort`);
   });
 }

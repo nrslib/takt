@@ -463,42 +463,79 @@ describe('resolveAgentProviderModel', () => {
 });
 
 describe('resolveLoopMonitorJudgeProviderModel', () => {
-  it('should inherit provider and model resolved from personaProviders on the triggering step', () => {
+  it('should inherit the resolved triggering provider and override only the judge model', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
       judge: { provider: undefined, model: 'opencode/model-b' },
-      triggeringStep: {
-        provider: undefined,
-        model: undefined,
-        personaDisplayName: 'reviewer',
-      },
-      provider: 'claude',
-      personaProviders: {
-        reviewer: {
-          provider: 'opencode',
-          model: 'opencode/model-a',
-        },
+      triggeringProviderInfo: {
+        provider: 'opencode',
+        providerSource: 'persona_providers',
+        model: 'opencode/model-a',
+        modelSource: 'persona_providers',
       },
     });
 
     expect(result).toEqual({
       provider: 'opencode',
+      providerSource: 'persona_providers',
       model: 'opencode/model-b',
+      modelSource: 'step',
+    });
+  });
+
+  it('should inherit fallback-resolved triggering provider info without re-resolving the triggering step', () => {
+    const result = resolveLoopMonitorJudgeProviderModel({
+      judge: { provider: undefined, model: undefined },
+      triggeringProviderInfo: {
+        provider: 'codex',
+        providerSource: 'step',
+        model: 'gpt-5',
+        modelSource: 'step',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'step',
+      model: 'gpt-5',
+      modelSource: 'step',
     });
   });
 
   it('should clear inherited model when judge overrides only the provider', () => {
     const result = resolveLoopMonitorJudgeProviderModel({
       judge: { provider: 'codex', model: undefined },
-      triggeringStep: {
+      triggeringProviderInfo: {
         provider: 'opencode',
+        providerSource: 'step',
         model: 'opencode/model-a',
-        personaDisplayName: 'reviewer',
+        modelSource: 'step',
       },
     });
 
     expect(result).toEqual({
       provider: 'codex',
+      providerSource: 'step',
       model: undefined,
+      modelSource: 'step',
+    });
+  });
+
+  it('should not inherit the triggering model when judge model is explicitly omitted', () => {
+    const result = resolveLoopMonitorJudgeProviderModel({
+      judge: { provider: undefined, model: undefined, modelSpecified: true },
+      triggeringProviderInfo: {
+        provider: 'cursor',
+        providerSource: 'step',
+        model: 'configured-model',
+        modelSource: 'step',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'cursor',
+      providerSource: 'step',
+      model: undefined,
+      modelSource: 'step',
     });
   });
 });

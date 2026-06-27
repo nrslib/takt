@@ -114,8 +114,13 @@ describe('workflow step normalizer helpers', () => {
         cycle: ['review', 'fix'],
         threshold: 2,
         judge: {
+          sessionKey: undefined,
           persona: 'supervisor',
           personaPath: undefined,
+          provider: undefined,
+          model: undefined,
+          modelSpecified: false,
+          providerOptions: undefined,
           instruction: '{task}',
           rules: [{ condition: 'continue', next: 'review' }],
         },

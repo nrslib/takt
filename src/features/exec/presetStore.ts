@@ -109,6 +109,13 @@ function asEffort(value: unknown, path: string): ExecEffort | undefined {
   return effort as ExecEffort;
 }
 
+function asModel(value: unknown, path: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return asString(value, path);
+}
+
 function asPositiveInteger(value: unknown, path: string): number {
   if (!Number.isInteger(value) || (value as number) <= 0) {
     throw new Error(`Invalid exec config at ${path}: expected positive integer`);
@@ -123,7 +130,7 @@ function parseActor(value: unknown, path: string): ExecActorConfig {
   return {
     name,
     provider: asProvider(actor.provider, `${path}.provider`),
-    model: asString(actor.model, `${path}.model`),
+    model: asModel(actor.model, `${path}.model`),
     effort: asEffort(actor.effort, `${path}.effort`),
     instruction: asString(actor.instruction, `${path}.instruction`),
     knowledge: asStringArray(actor.knowledge, `${path}.knowledge`),
@@ -154,7 +161,7 @@ function parseExecConfig(raw: unknown): ExecConfig {
   const config = {
     session: {
       provider: asProvider(session.provider, 'exec.session.provider'),
-      model: asString(session.model, 'exec.session.model'),
+      model: asModel(session.model, 'exec.session.model'),
       effort: asEffort(session.effort, 'exec.session.effort'),
     },
     replan: {

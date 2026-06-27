@@ -5,6 +5,7 @@ import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/index.js';
 import { InstructionBuilder, type InstructionContext } from '../core/workflow/index.js';
+import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { buildExecWorkflowYaml } from '../features/exec/workflowTemplate.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -16,6 +17,11 @@ type ExecConfigOverrides = Omit<Partial<ExecConfig>, 'session' | 'replan' | 'loo
 };
 
 type RawWorkflow = {
+  loop_monitors?: Array<{
+    cycle: string[];
+    threshold: number;
+    judge: Record<string, unknown>;
+  }>;
   report_formats?: Record<string, string>;
   steps: Array<Record<string, unknown>>;
 };
@@ -156,7 +162,23 @@ describe('exec workflow template', () => {
       expect(judgeActor?.sessionKey).toBe('judge-1');
       expect(rawJudge).toMatchObject({
         pass_previous_response: false,
-        parallel: [{ pass_previous_response: false }],
+        parallel: [
+          {
+            pass_previous_response: false,
+            provider_options: {
+              claude: {
+                allowed_tools: ['Read', 'Glob', 'Grep'],
+              },
+            },
+          },
+        ],
+      });
+      expect(rawReplan).toMatchObject({
+        provider_options: {
+          claude: {
+            allowed_tools: ['Read', 'Glob', 'Grep'],
+          },
+        },
       });
       expect(judge?.passPreviousResponse).toBe(false);
       expect(judgeActor?.passPreviousResponse).toBe(false);
@@ -183,6 +205,114 @@ describe('exec workflow template', () => {
         expect.objectContaining({ condition: 'New plan ready', next: 'execute' }),
         expect.objectContaining({ condition: 'Cannot proceed', next: 'ABORT' }),
       ]);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should load generated parallel sub-steps with explicit model omission', () => {
+    const yaml = buildExecWorkflowYaml(createExecConfig({
+      session: {
+        provider: 'cursor',
+        model: undefined,
+        effort: undefined,
+      },
+      workers: [
+        {
+          name: 'cursor-worker',
+          provider: 'cursor',
+          model: undefined,
+          effort: undefined,
+          instruction: 'exec-worker',
+          knowledge: ['architecture'],
+          policy: ['coding', 'testing'],
+        },
+      ],
+      judges: [
+        {
+          name: 'cursor-judge',
+          provider: 'cursor',
+          model: undefined,
+          effort: undefined,
+          instruction: 'exec-judge',
+          knowledge: ['architecture'],
+          policy: ['review'],
+        },
+      ],
+    }), {
+      workflowName: 'exec-omitted-model-test',
+      taskDescription: 'Implement optional model workflow',
+    });
+    const raw = parseRawWorkflow(yaml);
+    const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
+    try {
+      const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
+      const judge = workflow.steps.find((step) => step.name === 'judge') as AgentWorkflowStep | undefined;
+      const replan = workflow.steps.find((step) => step.name === 'replan') as AgentWorkflowStep | undefined;
+      const cursorWorker = execute?.parallel?.[0];
+      const cursorJudge = judge?.parallel?.[0];
+      if (!cursorWorker || !cursorJudge || !replan || !judge) {
+        throw new Error('Generated exec workflow must include cursor worker, judge, and replan steps');
+      }
+
+      expect(raw.steps.find((step) => step.name === 'execute')).toMatchObject({
+        parallel: [{ provider: 'cursor', model: null }],
+      });
+      expect(raw.steps.find((step) => step.name === 'judge')).toMatchObject({
+        parallel: [{ provider: 'cursor', model: null }],
+      });
+      expect(raw.steps.find((step) => step.name === 'replan')).toMatchObject({
+        provider: 'cursor',
+        model: null,
+      });
+      expect(raw.loop_monitors?.map((monitor) => monitor.judge)).toEqual([
+        expect.objectContaining({ provider: 'cursor', model: null }),
+        expect.objectContaining({ provider: 'cursor', model: null }),
+      ]);
+      expect(cursorWorker).toMatchObject({
+        provider: 'cursor',
+        model: undefined,
+        modelSpecified: true,
+      });
+      expect(cursorJudge).toMatchObject({
+        provider: 'cursor',
+        model: undefined,
+        modelSpecified: true,
+      });
+      expect(replan).toMatchObject({
+        provider: 'cursor',
+        model: undefined,
+        modelSpecified: true,
+      });
+      for (const monitor of workflow.loopMonitors ?? []) {
+        expect(monitor.judge.provider).toBe('cursor');
+        expect(monitor.judge.model).toBeUndefined();
+        expect(monitor.judge.modelSpecified).toBe(true);
+        expect(resolveLoopMonitorJudgeProviderModel({
+          judge: monitor.judge,
+          triggeringProviderInfo: {
+            provider: 'cursor',
+            providerSource: 'step',
+            model: 'global-model',
+            modelSource: 'step',
+          },
+        })).toEqual({
+          provider: 'cursor',
+          providerSource: 'step',
+          model: undefined,
+          modelSource: 'step',
+        });
+      }
+      expect(resolveStepProviderModel({
+        step: cursorWorker,
+        provider: 'cursor',
+        model: 'global-model',
+      })).toEqual(expect.objectContaining({
+        provider: 'cursor',
+        model: undefined,
+        modelSource: 'step',
+      }));
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
@@ -264,7 +394,33 @@ describe('exec workflow template', () => {
       const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
     try {
       const judge = workflow.steps.find((step) => step.name === 'judge') as AgentWorkflowStep | undefined;
+      const loopMonitorJudges = raw.loop_monitors?.map((monitor) => monitor.judge);
+      if (!judge) {
+        throw new Error('Generated exec workflow must include judge step');
+      }
       expect(workflow.maxSteps).toBe(30);
+      expect(loopMonitorJudges).toEqual([
+        expect.objectContaining({
+          provider: 'claude',
+          model: 'opus',
+          provider_options: {
+            claude: {
+              effort: 'high',
+              allowed_tools: ['Read', 'Glob', 'Grep'],
+            },
+          },
+        }),
+        expect.objectContaining({
+          provider: 'claude',
+          model: 'opus',
+          provider_options: {
+            claude: {
+              effort: 'high',
+              allowed_tools: ['Read', 'Glob', 'Grep'],
+            },
+          },
+        }),
+      ]);
       expect(workflow.loopMonitors).toEqual([
         expect.objectContaining({
           cycle: ['execute', 'judge'],
@@ -304,6 +460,26 @@ describe('exec workflow template', () => {
           format: 'Exec judge result output contract',
         }),
       ]);
+      for (const monitor of workflow.loopMonitors ?? []) {
+        expect(monitor.judge.providerOptions).toEqual({
+          claude: {
+            effort: 'high',
+            allowedTools: ['Read', 'Glob', 'Grep'],
+          },
+        });
+        expect(resolveLoopMonitorJudgeProviderModel({
+          judge: monitor.judge,
+          triggeringProviderInfo: {
+            provider: 'mock',
+            model: 'global-model',
+          },
+        })).toEqual({
+          provider: 'claude',
+          providerSource: 'step',
+          model: 'opus',
+          modelSource: 'step',
+        });
+      }
       expect(judge?.outputContracts).toBeUndefined();
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
@@ -389,7 +565,7 @@ describe('exec workflow template', () => {
       expect(terminalJudge?.providerOptions).toEqual({
         claude: {
           effort: 'medium',
-          allowedTools: ['Read', 'Glob', 'Grep', 'Bash'],
+          allowedTools: ['Read', 'Glob', 'Grep'],
         },
       });
       expect(copilotJudge?.providerOptions).toEqual({

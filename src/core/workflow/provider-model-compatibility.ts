@@ -4,7 +4,6 @@ const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
 
 type ProviderModelCompatibilityOptions = {
   modelFieldName?: string;
-  requireProviderQualifiedModelForOpencode?: boolean;
 };
 
 export function validateProviderModelCompatibility(
@@ -12,10 +11,7 @@ export function validateProviderModelCompatibility(
   model: string | undefined,
   options: ProviderModelCompatibilityOptions = {},
 ): void {
-  const {
-    modelFieldName = 'Configuration error: model',
-    requireProviderQualifiedModelForOpencode = true,
-  } = options;
+  const { modelFieldName = 'Configuration error: model' } = options;
 
   if (!provider) return;
 
@@ -34,7 +30,7 @@ export function validateProviderModelCompatibility(
     );
   }
 
-  if (provider === 'opencode' && requireProviderQualifiedModelForOpencode) {
+  if (provider === 'opencode') {
     parseProviderModel(model, modelFieldName);
   }
 }

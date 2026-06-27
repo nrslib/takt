@@ -19,7 +19,7 @@ interface LoopMonitorJudgeRunnerDeps {
   language?: string;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
-  onStepStart: (step: WorkflowStep, iteration: number, instruction: string) => void;
+  onStepStart: (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo | undefined) => void;
   onStepComplete: (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   emitCollectedReports: () => void;
   resetCycleDetector: () => void;
@@ -34,8 +34,8 @@ export class LoopMonitorJudgeRunner {
     triggeringStep: WorkflowStep,
     triggeringRuntime?: RuntimeStepResolution,
   ): Promise<string> {
-    const runtime = this.resolveJudgeRuntime(monitor, triggeringStep, triggeringRuntime);
-    const judgeStep = this.createJudgeStep(monitor, cycleCount, runtime.providerInfo);
+    const resolvedRuntime = this.resolveJudgeRuntime(monitor, triggeringStep, triggeringRuntime);
+    const judgeStep = this.createJudgeStep(monitor, cycleCount, resolvedRuntime.providerInfo);
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
       cycleCount,
@@ -53,7 +53,8 @@ export class LoopMonitorJudgeRunner {
       maxSteps,
     );
 
-    this.deps.onStepStart(judgeStep, this.deps.state.iteration, prebuiltInstruction);
+    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
+    this.deps.onStepStart(judgeStep, this.deps.state.iteration, prebuiltInstruction, providerInfo);
 
     const { response, instruction } = await this.deps.stepExecutor.runNormalStep(
       judgeStep,
@@ -62,7 +63,7 @@ export class LoopMonitorJudgeRunner {
       maxSteps,
       this.deps.updatePersonaSession,
       prebuiltInstruction,
-      runtime,
+      resolvedRuntime,
     );
 
     this.deps.emitCollectedReports();
@@ -95,6 +96,7 @@ export class LoopMonitorJudgeRunner {
       personaDisplayName: 'loop-judge',
       provider: monitor.judge.provider,
       model: monitor.judge.model,
+      modelSpecified: monitor.judge.modelSpecified,
       edit: false,
       providerOptions: mergeProviderOptions(
         defaultProviderOptions,
@@ -120,9 +122,7 @@ export class LoopMonitorJudgeRunner {
     );
     const providerInfo = resolveLoopMonitorJudgeProviderModel({
       judge: monitor.judge,
-      triggeringStep,
-      provider: triggeringProviderInfo.provider,
-      model: triggeringProviderInfo.model,
+      triggeringProviderInfo,
     });
     return { providerInfo };
   }

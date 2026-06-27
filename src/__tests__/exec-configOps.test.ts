@@ -1,15 +1,45 @@
-/**
- * Tests for exec config override logic (applyExecOverrides).
- *
- * Covers:
- * - Provider/model overrides apply consistently to session, workers, and judges
- * - Effort is re-resolved when provider changes
- * - No-op when overrides are empty
- */
-
 import { describe, it, expect } from 'vitest';
-import { applyExecOverrides } from '../features/exec/configOps.js';
+import { parse as parseYaml } from 'yaml';
+import { applyExecOverrides, formatActorDetails, formatExecConfigSummary } from '../features/exec/configOps.js';
 import type { ExecConfig } from '../features/exec/types.js';
+import { buildExecWorkflowYaml } from '../features/exec/workflowTemplate.js';
+
+type RawExecWorkflowStep = {
+  name?: string;
+  provider?: unknown;
+  model?: unknown;
+  parallel?: Array<{ provider?: unknown; model?: unknown }>;
+};
+
+type RawExecWorkflow = {
+  steps: RawExecWorkflowStep[];
+  loop_monitors?: Array<{
+    judge: {
+      provider?: unknown;
+      model?: unknown;
+    };
+  }>;
+};
+
+function parseExecWorkflowYaml(yaml: string): RawExecWorkflow {
+  const raw = parseYaml(yaml) as unknown;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Generated exec workflow YAML must be an object');
+  }
+  const workflow = raw as Partial<RawExecWorkflow>;
+  if (!Array.isArray(workflow.steps)) {
+    throw new Error('Generated exec workflow YAML must include steps');
+  }
+  return workflow as RawExecWorkflow;
+}
+
+function findRawStep(workflow: RawExecWorkflow, name: string): RawExecWorkflowStep {
+  const step = workflow.steps.find((candidate) => candidate.name === name);
+  if (!step) {
+    throw new Error(`Generated exec workflow must include ${name} step`);
+  }
+  return step;
+}
 
 function createTestConfig(): ExecConfig {
   return {
@@ -34,6 +64,9 @@ describe('applyExecOverrides', () => {
     expect(result.session.provider).toBe('codex');
     expect(result.workers[0]!.provider).toBe('codex');
     expect(result.judges[0]!.provider).toBe('codex');
+    expect(result.session.model).toBe('gpt-5');
+    expect(result.workers[0]!.model).toBe('gpt-5');
+    expect(result.judges[0]!.model).toBe('gpt-5');
   });
 
   it('should apply model override consistently to session, workers, and judges', () => {
@@ -51,11 +84,129 @@ describe('applyExecOverrides', () => {
 
     const result = applyExecOverrides(config, { provider: 'codex' });
 
-    // codex supports 'high' effort — verify with a fixed literal, not the function under test
     expect(result.session.effort).toBe('high');
     expect(result.workers[0]!.effort).toBe('high');
     expect(result.judges[0]!.effort).toBe('high');
   });
+
+  it('should use the opencode default model when provider override changes from Claude', () => {
+    const config = createTestConfig();
+
+    const result = applyExecOverrides(config, { provider: 'opencode' });
+
+    expect(result.session).toMatchObject({ provider: 'opencode', model: 'opencode/big-pickle' });
+    expect(result.workers[0]).toMatchObject({ provider: 'opencode', model: 'opencode/big-pickle' });
+    expect(result.judges[0]).toMatchObject({ provider: 'opencode', model: 'opencode/big-pickle' });
+  });
+
+  it('should display provider-qualified opencode models without duplicating the provider', () => {
+    const config: ExecConfig = {
+      ...createTestConfig(),
+      session: { provider: 'opencode', model: 'opencode/big-pickle' },
+      workers: [
+        {
+          name: 'w1',
+          provider: 'opencode',
+          model: 'opencode/big-pickle',
+          instruction: 'exec-worker',
+          knowledge: [],
+          policy: [],
+        },
+      ],
+      judges: [
+        {
+          name: 'j1',
+          provider: 'opencode',
+          model: 'opencode/big-pickle',
+          instruction: 'exec-judge',
+          knowledge: [],
+          policy: [],
+        },
+      ],
+    };
+
+    const summary = formatExecConfigSummary(config);
+    const workerDetails = formatActorDetails(config.workers[0]!);
+
+    expect(summary).toContain('Session: opencode/big-pickle');
+    expect(summary).toContain('Worker x1: opencode/big-pickle');
+    expect(summary).toContain('Judge x1: opencode/big-pickle');
+    expect(workerDetails).toContain('opencode/big-pickle · instruction: exec-worker');
+    expect(summary).not.toContain('opencode/opencode/big-pickle');
+    expect(workerDetails).not.toContain('opencode/opencode/big-pickle');
+  });
+
+  it('should reject explicit Claude model aliases for codex overrides', () => {
+    const config = createTestConfig();
+
+    expect(() => applyExecOverrides(config, { provider: 'codex', model: 'opus' }))
+      .toThrow(/Claude model alias/);
+  });
+
+  it('should reject explicit bare opencode model overrides', () => {
+    const config = createTestConfig();
+
+    expect(() => applyExecOverrides(config, { provider: 'opencode', model: 'big-pickle' }))
+      .toThrow(/provider\/model/);
+  });
+
+  it.each(['', '   '] as const)(
+    'should reject blank model override "%s"',
+    (model) => {
+      const config = createTestConfig();
+
+      expect(() => applyExecOverrides(config, { model }))
+        .toThrow(/exec\.session\.model: expected non-empty string/);
+    },
+  );
+
+  it.each(['cursor', 'copilot', 'kiro'] as const)(
+    'should display and emit provider defaults when overriding provider to %s without an explicit model',
+    (provider) => {
+      const config = createTestConfig();
+
+      const result = applyExecOverrides(config, { provider });
+      const summary = formatExecConfigSummary(result);
+      const rawWorkflow = parseExecWorkflowYaml(buildExecWorkflowYaml(result, {
+        workflowName: 'exec-provider-default-test',
+        taskDescription: 'Verify provider defaults',
+      }));
+
+      expect(result.session).toMatchObject({ provider });
+      expect(result.workers[0]).toMatchObject({ provider });
+      expect(result.judges[0]).toMatchObject({ provider });
+      expect(result.session.model).toBeUndefined();
+      expect(result.workers[0]!.model).toBeUndefined();
+      expect(result.judges[0]!.model).toBeUndefined();
+      expect(summary).toContain(`Session: ${provider}/(provider default)`);
+      expect(summary).toContain(`Worker x1: ${provider}/(provider default)`);
+      expect(summary).toContain(`Judge x1: ${provider}/(provider default)`);
+      expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).toMatchObject({ provider, model: null });
+      expect(findRawStep(rawWorkflow, 'judge').parallel?.[0]).toMatchObject({ provider, model: null });
+      expect(findRawStep(rawWorkflow, 'replan')).toMatchObject({ provider, model: null });
+      expect(rawWorkflow.loop_monitors?.map((monitor) => monitor.judge)).toEqual([
+        expect.objectContaining({ provider, model: null }),
+        expect.objectContaining({ provider, model: null }),
+      ]);
+    },
+  );
+
+  it.each([
+    ['cursor', 'cursor/gpt-5'],
+    ['copilot', 'gpt-4.1'],
+    ['kiro', 'kiro-model'],
+  ] as const)(
+    'should use explicit model when overriding provider to %s',
+    (provider, model) => {
+      const config = createTestConfig();
+
+      const result = applyExecOverrides(config, { provider, model });
+
+      expect(result.session).toMatchObject({ provider, model });
+      expect(result.workers[0]).toMatchObject({ provider, model });
+      expect(result.judges[0]).toMatchObject({ provider, model });
+    },
+  );
 
   it('should return original config when no overrides provided', () => {
     const config = createTestConfig();

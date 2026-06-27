@@ -258,6 +258,18 @@ describe('LoopMonitorJudgeSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('should reject empty judge model values', () => {
+    const raw = {
+      provider: 'codex',
+      model: '',
+      rules: [{ condition: 'continue', next: 'ai_fix' }],
+    };
+
+    const result = LoopMonitorJudgeSchema.safeParse(raw);
+
+    expect(result.success).toBe(false);
+  });
+
   it('should reject judge configuration when instruction_template exists', () => {
     const raw = {
       persona: 'reviewer',

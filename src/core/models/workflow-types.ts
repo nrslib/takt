@@ -290,6 +290,7 @@ export interface LoopMonitorJudge {
   personaPath?: string;
   provider?: ProviderType;
   model?: string;
+  modelSpecified?: boolean;
   providerOptions?: StepProviderOptions;
   instruction?: string;
   rules: LoopMonitorRule[];

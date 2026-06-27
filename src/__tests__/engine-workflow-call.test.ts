@@ -932,7 +932,7 @@ steps:
           kind: 'workflow_call',
           call: 'takt/coding',
           overrides: {
-            model: 'override-model',
+            model: 'opencode/override-model',
           },
           rules: [
             {
@@ -956,7 +956,7 @@ steps:
       personaProviders: {
         reviewer: {
           provider: 'opencode',
-          model: 'reviewer-model',
+          model: 'opencode/reviewer-model',
         },
       },
     }));
@@ -966,7 +966,75 @@ steps:
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
 
     expect(options?.resolvedProvider).toBe('opencode');
-    expect(options?.resolvedModel).toBe('override-model');
+    expect(options?.resolvedModel).toBe('opencode/override-model');
+  });
+
+  it.each([
+    {
+      name: 'provider only',
+      overrides: { provider: 'opencode' },
+      engineOptions: { provider: 'claude', model: 'parent-model' },
+    },
+    {
+      name: 'provider with bare model',
+      overrides: { provider: 'opencode', model: 'big-pickle' },
+      engineOptions: { provider: 'claude', model: 'parent-model' },
+    },
+    {
+      name: 'inherited opencode provider with bare model',
+      overrides: { model: 'big-pickle' },
+      engineOptions: { provider: 'opencode', model: 'opencode/parent-model' },
+    },
+  ])('workflow_call overrides は OpenCode の不正 model 契約を拒否する: $name', async ({ overrides, engineOptions }) => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 10,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          overrides,
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+      ],
+    });
+
+    engine = new WorkflowEngine(
+      config,
+      tmpDir,
+      'Reject invalid OpenCode workflow_call override',
+      createWorkflowCallOptions(tmpDir, engineOptions),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
   it('workflow_call が provider_options だけ override した場合は親 provider/model を維持する', async () => {

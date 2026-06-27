@@ -216,7 +216,9 @@ export function bindWorkflowExecutionEvents(
     deps.out.info(`[${iteration}/${deps.workflowConfig.maxSteps}] ${safeStepName} (${safePersonaDisplayName})`);
 
     const stepProvider = providerInfo.provider ?? deps.currentProvider;
-    const stepModel = providerInfo.model ?? (stepProvider === deps.currentProvider ? deps.configuredModel : undefined) ?? '(default)';
+    const stepModel = providerInfo.modelSource !== undefined
+      ? providerInfo.model ?? '(default)'
+      : providerInfo.model ?? (stepProvider === deps.currentProvider ? deps.configuredModel : undefined) ?? '(default)';
     deps.providerEventLogger.setStep(step.name);
     deps.providerEventLogger.setProvider(stepProvider);
     deps.usageEventLogger.setStep(step.name, detectStepType(step));

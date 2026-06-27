@@ -201,17 +201,60 @@ describe('resolveRefToContent with layer resolution', () => {
     }
   });
 
+  it('should reject project facet file symlinks during path-like ref resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-path-secret-'));
+    try {
+      const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(instructionsDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret instruction content');
+      symlinkSync(secretPath, join(instructionsDir, 'exec-worker.md'));
+
+      expect(() => resolveRefToContent('./.takt/facets/instructions/exec-worker.md', undefined, tempDir, 'instructions', context))
+        .toThrow(/Project facet file must stay inside the project and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should reject project facet file symlinks during section map path resolution', () => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'takt-ref-section-secret-'));
+    try {
+      const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+      const secretPath = join(externalDir, 'secret.md');
+      mkdirSync(instructionsDir, { recursive: true });
+      writeFileSync(secretPath, 'Secret instruction content');
+      symlinkSync(secretPath, join(instructionsDir, 'exec-worker.md'));
+
+      expect(() => normalizeWorkflowConfig(
+        {
+          name: 'section-map-symlink-workflow',
+          instructions: {
+            implement: './.takt/facets/instructions/exec-worker.md',
+          },
+          steps: [
+            {
+              name: 'step1',
+              persona: 'coder',
+              instruction: 'implement',
+            },
+          ],
+        },
+        tempDir,
+        context,
+      )).toThrow(/Project facet file must stay inside the project and must not use symlinks/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
   it('should reject project facet type directory symlinks even when target is within project', () => {
-    // Given: .takt/facets/instructions is a symlink to another directory within the project
-    // The existing realpathSync check would pass because the resolved path is inside the project.
-    // The assertPathSegmentsAreSafe check should catch the intermediate symlink.
     const realDir = join(tempDir, 'internal-instructions');
     mkdirSync(realDir, { recursive: true });
     writeFileSync(join(realDir, 'exec-worker.md'), 'Internal instruction content');
     mkdirSync(join(tempDir, '.takt', 'facets'), { recursive: true });
     symlinkSync(realDir, join(tempDir, '.takt', 'facets', 'instructions'));
 
-    // When/Then: the intermediate symlink should be rejected
     expect(() => resolveRefToContent('exec-worker', undefined, tempDir, 'instructions', context))
       .toThrow(/symlink/);
   });
@@ -588,7 +631,6 @@ describe('resolvePersona with layer resolution', () => {
     writeFileSync(personaFile, 'Path persona');
 
     const result = resolvePersona('../personas/coder.md', emptySections, tempDir);
-    // Path-like spec should be resolved as resource path, not name
     expect(result.personaSpec).toBe('../personas/coder.md');
   });
 
@@ -598,9 +640,6 @@ describe('resolvePersona with layer resolution', () => {
   });
 
   it('should resolve valid project persona without unreachable guard (dead-code prevention)', () => {
-    // Verifies that assertProjectFacetFileIsSafe works correctly after removing the
-    // unreachable `if (!context?.projectDir)` guard — when isProjectFacetFile returns true,
-    // context.projectDir is guaranteed to be defined.
     const projectPersonasDir = join(projectDir, '.takt', 'facets', 'personas');
     mkdirSync(projectPersonasDir, { recursive: true });
     const personaPath = join(projectPersonasDir, 'valid-persona.md');
@@ -612,8 +651,6 @@ describe('resolvePersona with layer resolution', () => {
   });
 
   it('should return resolved object with same structure whether personaPath exists or not (redundant-branch prevention)', () => {
-    // Verifies that resolvePersona returns the resolved object unconditionally,
-    // not via a redundant early return inside the personaPath check.
     const withPath = resolvePersona('coder', emptySections, tempDir, context);
     expect(withPath.personaSpec).toBe('coder');
     expect(withPath.personaPath).toBeDefined();

@@ -407,6 +407,46 @@ describe('loadRunSessionContext', () => {
     })).toThrow(/symbolic link/);
   });
 
+  it('should reject session log files that resolve through a symbolic link', () => {
+    const slug = 'symlink-log-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: 'Symlink log task',
+      workflow: 'exec',
+      status: 'completed',
+      startTime: '2026-02-01T00:00:00.000Z',
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      runSlug: slug,
+    });
+    const outsideLog = join(tmpDir, 'outside-session.jsonl');
+    writeFileSync(outsideLog, '{}', 'utf-8');
+    symlinkSync(outsideLog, join(runDir, 'logs', 'session-001.jsonl'));
+
+    expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(/symbolic link/);
+    expect(mockLoadNdjsonLog).not.toHaveBeenCalled();
+  });
+
+  it('should reject session logs under a symbolic link logs directory', () => {
+    const slug = 'symlink-logs-dir-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: 'Symlink logs dir task',
+      workflow: 'exec',
+      status: 'completed',
+      startTime: '2026-02-01T00:00:00.000Z',
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      runSlug: slug,
+    });
+    const externalLogsDir = join(tmpDir, 'external-logs');
+    mkdirSync(externalLogsDir, { recursive: true });
+    writeFileSync(join(externalLogsDir, 'session-001.jsonl'), '{}', 'utf-8');
+    rmSync(join(runDir, 'logs'), { recursive: true, force: true });
+    symlinkSync(externalLogsDir, join(runDir, 'logs'), 'dir');
+
+    expect(() => loadRunSessionContext(tmpDir, slug)).toThrow(/symbolic link/);
+    expect(mockLoadNdjsonLog).not.toHaveBeenCalled();
+  });
+
   it('should ignore path traversal values in run meta and use canonical run directories', () => {
     const slug = 'safe-run';
     const runDir = createRunDir(tmpDir, slug, {

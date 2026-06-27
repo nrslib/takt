@@ -1,17 +1,5 @@
-/**
- * WorkflowEngine integration tests: error handling scenarios.
- *
- * Covers:
- * - No rule matched (abort)
- * - runAgent throws (abort)
- * - Loop detection (abort)
- * - Iteration limit (abort and extend)
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
-
-// --- Mock setup (must be before imports that use these modules) ---
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -31,8 +19,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
-
-// --- Imports (after mocks) ---
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
@@ -64,9 +50,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     }
   });
 
-  // =====================================================
-  // 1. No rule matched
-  // =====================================================
   describe('No rule matched', () => {
     it('should abort when detectMatchedRule returns undefined', async () => {
       const config = buildDefaultWorkflowConfig();
@@ -90,9 +73,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
-  // =====================================================
-  // 1.5 User input runtime requirements
-  // =====================================================
   describe('User input runtime requirements', () => {
     it('should abort before running a user-input step when workflow interactive mode is disabled', async () => {
       const config = buildDefaultWorkflowConfig({
@@ -364,9 +344,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
-  // =====================================================
-  // 2. runAgent throws
-  // =====================================================
   describe('runAgent throws', () => {
     it('should abort when runAgent throws an error', async () => {
       const config = buildDefaultWorkflowConfig();
@@ -387,9 +364,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
 
   });
 
-  // =====================================================
-  // 2.5 Phase 3 fallback
-  // =====================================================
   describe('Phase 3 fallback', () => {
     it('should continue with phase1 rule evaluation when status judgment throws', async () => {
       const config = buildDefaultWorkflowConfig({
@@ -426,9 +400,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
-  // =====================================================
-  // 3. Interrupted status routing
-  // =====================================================
   describe('Error status', () => {
     it('should abort immediately and skip report phase when step returns error', async () => {
       const config = buildDefaultWorkflowConfig({
@@ -591,9 +562,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
-  // =====================================================
-  // 4. Loop detection
-  // =====================================================
   describe('Loop detection', () => {
     it('should abort when loop detected with action: abort', async () => {
       const config = buildDefaultWorkflowConfig({
@@ -635,9 +603,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
-  // =====================================================
-  // 5. Iteration limit
-  // =====================================================
   describe('Iteration limit', () => {
     it('should abort when max iterations reached without onIterationLimit callback', async () => {
       const config = buildDefaultWorkflowConfig({ maxSteps: 2 });
@@ -650,9 +615,9 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       ]);
 
       mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers (won't be reached)
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
       ]);
 
       const limitFn = vi.fn();
@@ -682,7 +647,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
         makeResponse({ persona: 'implement', content: 'Impl done' }),
-        // After hitting limit at iteration 2, onIterationLimit extends to 12
         makeResponse({ persona: 'ai_review', content: 'OK' }),
         makeResponse({ persona: 'arch-review', content: 'OK' }),
         makeResponse({ persona: 'security-review', content: 'OK' }),
@@ -690,13 +654,13 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       ]);
 
       mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },  // plan → implement
-        { index: 0, method: 'phase1_tag' },  // implement → ai_review
-        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
-        { index: 0, method: 'phase1_tag' },  // arch-review → approved
-        { index: 0, method: 'phase1_tag' },  // security-review → approved
-        { index: 0, method: 'aggregate' },   // reviewers → supervise
-        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 0, method: 'phase1_tag' },
       ]);
 
       const state = await engine.run();

@@ -213,7 +213,7 @@ function buildOpenCodeAllowedToolsRuleset(
     .filter((permission): permission is string => (
       permission !== null
       && isOpenCodePermissionKey(permission)
-      && (permission !== 'edit' || isAllowedByPermissionMode(permission, mode))
+      && isAllowedByPermissionMode(permission, mode)
       && (networkAccess !== false || !isOpenCodeWebPermission(permission))
     ));
   const uniqueAllowed = Array.from(new Set(allowed));

@@ -51,6 +51,8 @@ export function normalizeProviderReference(
   providerSpecified: boolean;
   modelSpecified: boolean;
 } {
+  const modelSpecified = model !== undefined;
+  const normalizedModel = model ?? undefined;
   const normalizedProviderOptions = resolveWorkflowProviderOptions(
     providerOptions as (Record<string, unknown> & { extends?: string }) | undefined,
     workflowDir,
@@ -60,22 +62,22 @@ export function normalizeProviderReference(
   if (typeof providerReference === 'string' || providerReference === undefined) {
     return {
       provider: providerReference,
-      model,
+      model: normalizedModel,
       providerOptions: normalizedProviderOptions,
       providerSpecified: providerReference !== undefined,
-      modelSpecified: model !== undefined,
+      modelSpecified,
     };
   }
 
   return {
     provider: providerReference.type,
-    model: providerReference.model ?? model,
+    model: providerReference.model ?? normalizedModel,
     providerOptions: mergeProviderOptions(
       normalizeProviderBlockOptions(providerReference),
       normalizedProviderOptions,
     ),
     providerSpecified: true,
-    modelSpecified: providerReference.model !== undefined || model !== undefined,
+    modelSpecified: providerReference.model !== undefined || modelSpecified,
   };
 }
 
@@ -139,6 +141,7 @@ export function normalizeStepFromRaw(
   workflowSchemas: Record<string, string> | undefined,
   inheritedProvider?: WorkflowStep['provider'],
   inheritedModel?: WorkflowStep['model'],
+  inheritedModelSpecified = inheritedModel !== undefined,
   inheritedDirectProviderOptions?: WorkflowStep['providerOptions'],
   inheritedWorkflowProviderOptions?: WorkflowStep['providerOptions'],
   inheritedAllowGitCommit?: boolean,
@@ -271,6 +274,12 @@ export function normalizeStepFromRaw(
 
   const directProviderOptions = mergeProviderOptions(inheritedDirectProviderOptions, normalizedProvider.providerOptions);
   const providerOptions = mergeProviderOptions(inheritedWorkflowProviderOptions, directProviderOptions);
+  const resolvedModel = normalizedProvider.modelSpecified
+    ? normalizedProvider.model
+    : (normalizedProvider.providerSpecified ? undefined : inheritedModel);
+  const inheritsDirectModel = inheritedModelSpecified
+    && !inheritedModelIsWorkflowFallback
+    && !normalizedProvider.providerSpecified;
 
   const normalizedStep: AgentWorkflowStep = {
     name: step.name,
@@ -288,13 +297,9 @@ export function normalizeStepFromRaw(
     provider: normalizedProvider.provider ?? inheritedProvider,
     providerSpecified: normalizedProvider.providerSpecified
       || (inheritedProvider !== undefined && !inheritedProviderIsWorkflowFallback),
-    model: normalizedProvider.model ?? (normalizedProvider.providerSpecified ? undefined : inheritedModel),
+    model: resolvedModel,
     modelSpecified: normalizedProvider.modelSpecified
-      || (
-        inheritedModel !== undefined
-        && !inheritedModelIsWorkflowFallback
-        && !normalizedProvider.providerSpecified
-      ),
+      || inheritsDirectModel,
     promotion,
     requiredPermissionMode: step.required_permission_mode,
     providerOptions,
@@ -329,6 +334,7 @@ export function normalizeStepFromRaw(
         workflowSchemas,
         normalizedStep.provider,
         normalizedStep.model,
+        normalizedStep.modelSpecified,
         normalizedStep.directProviderOptions,
         normalizedStep.workflowProviderOptions,
         normalizedStep.allowGitCommit,

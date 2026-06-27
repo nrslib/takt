@@ -65,7 +65,14 @@ export class OptionsBuilder {
 
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
     if (runtime?.providerInfo) {
-      return runtime.providerInfo;
+      const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
+      const providerOptionsSources = runtime.providerInfo.providerOptionsSources
+        ?? this.resolveProviderOptionsSourcesForStep(step);
+      return {
+        ...runtime.providerInfo,
+        ...(providerOptions !== undefined ? { providerOptions } : {}),
+        ...(providerOptionsSources !== undefined ? { providerOptionsSources } : {}),
+      };
     }
 
     const engineProviderInfo = this.resolveEngineProviderModel();
@@ -79,7 +86,20 @@ export class OptionsBuilder {
       personaProviders: this.engineOptions.personaProviders,
     });
     const provider = resolved.provider ?? engineProviderInfo.provider;
+    const modelWasResolved = resolved.modelSource !== undefined;
     const providerOptions = this.resolveMergedProviderOptions(step, provider, runtime);
+    const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step);
+    return {
+      provider,
+      providerSource: resolved.providerSource ?? engineProviderInfo.providerSource,
+      model: modelWasResolved ? resolved.model : resolved.model ?? engineProviderInfo.model,
+      modelSource: modelWasResolved ? resolved.modelSource : resolved.modelSource ?? engineProviderInfo.modelSource,
+      providerOptions,
+      providerOptionsSources,
+    };
+  }
+
+  private resolveProviderOptionsSourcesForStep(step: WorkflowStep) {
     const providerOptionsSources = resolveProviderOptionsSources(
       resolveDirectStepProviderOptions(step),
       resolveStepProviderOptionsLayers(step, {
@@ -90,16 +110,9 @@ export class OptionsBuilder {
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptionsSource,
     );
-    return {
-      provider,
-      providerSource: resolved.providerSource ?? engineProviderInfo.providerSource,
-      model: resolved.model ?? engineProviderInfo.model,
-      modelSource: resolved.modelSource ?? engineProviderInfo.modelSource,
-      providerOptions,
-      providerOptionsSources: Object.keys(providerOptionsSources).length > 0
-        ? providerOptionsSources
-        : undefined,
-    };
+    return Object.keys(providerOptionsSources).length > 0
+      ? providerOptionsSources
+      : undefined;
   }
 
   private resolveMergedProviderOptions(
@@ -224,6 +237,7 @@ export class OptionsBuilder {
     const hasOutputContracts = step.outputContracts !== undefined && step.outputContracts.length > 0;
     const resolvedPartAllowedTools = resolvePartAllowedToolsForProvider(
       runtime?.teamLeaderPart?.partAllowedTools,
+      step.edit,
       resolvedProvider,
     );
     const allowedTools = resolvedPartAllowedTools

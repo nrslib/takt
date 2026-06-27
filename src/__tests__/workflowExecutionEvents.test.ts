@@ -72,6 +72,11 @@ function createBridgeHarness(options?: {
     onFindingLedgerUpdated: vi.fn(),
     seedFindingContractFindingIds: vi.fn(),
   };
+  const usageEventLogger = {
+    setStep: vi.fn(),
+    setProvider: vi.fn(),
+    logUsage: vi.fn(),
+  };
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
     workflowConfig: {
@@ -91,11 +96,7 @@ function createBridgeHarness(options?: {
       setStep: vi.fn(),
       setProvider: vi.fn(),
     } as never,
-    usageEventLogger: {
-      setStep: vi.fn(),
-      setProvider: vi.fn(),
-      logUsage: vi.fn(),
-    } as never,
+    usageEventLogger: usageEventLogger as never,
     analyticsEmitter: analyticsEmitter as never,
     sessionLogger: {
       onPhaseStart: vi.fn(),
@@ -126,7 +127,7 @@ function createBridgeHarness(options?: {
     },
   });
 
-  return { bridge, engine, out, runMetaManager, resumePoint, analyticsEmitter };
+  return { bridge, engine, out, runMetaManager, resumePoint, analyticsEmitter, usageEventLogger };
 }
 
 describe('bindWorkflowExecutionEvents', () => {
@@ -257,6 +258,50 @@ describe('bindWorkflowExecutionEvents', () => {
     const { analyticsEmitter } = createBridgeHarness({ findingIds: ['F-0001', 'F-0002'] });
 
     expect(analyticsEmitter.seedFindingContractFindingIds).toHaveBeenCalledWith(['F-0001', 'F-0002']);
+  });
+
+  it('step model が明示省略された場合は configured model へ戻さず default として記録する', () => {
+    const { engine, out, usageEventLogger, analyticsEmitter } = createBridgeHarness({
+      currentProvider: 'cursor',
+      configuredModel: 'global-model',
+    });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', {
+      provider: 'cursor',
+      model: undefined,
+      modelSource: 'step',
+    });
+
+    expect(out.info).toHaveBeenCalledWith('Model: (default)');
+    expect(usageEventLogger.setProvider).toHaveBeenCalledWith('cursor', '(default)');
+    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'cursor', '(default)');
+  });
+
+  it('loop monitor judge model が明示省略された場合は usage に default として記録する', () => {
+    const { engine, out, usageEventLogger, analyticsEmitter } = createBridgeHarness({
+      currentProvider: 'codex',
+      configuredModel: 'configured-model',
+    });
+    const step = {
+      name: '_loop_judge_ai_review_ai_fix',
+      personaDisplayName: 'loop-judge',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', {
+      provider: 'codex',
+      model: undefined,
+      modelSource: 'step',
+    });
+
+    expect(out.info).toHaveBeenCalledWith('Model: (default)');
+    expect(usageEventLogger.setProvider).toHaveBeenCalledWith('codex', '(default)');
+    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'codex', '(default)');
   });
 
   it('OpenCode variant を step start の provider option 表示に含める', () => {

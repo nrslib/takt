@@ -279,8 +279,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     language: params.options.language,
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
-    onStepStart: (step, iteration, instruction) => {
-      params.emitEvent('step:start', step, iteration, instruction, optionsBuilder.resolveStepProviderModel(step));
+    onStepStart: (step, iteration, instruction, providerInfo) => {
+      params.emitEvent('step:start', step, iteration, instruction, providerInfo);
     },
     onStepComplete: (step, response, instruction) => {
       params.emitEvent('step:complete', step, response, instruction);

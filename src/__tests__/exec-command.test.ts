@@ -233,6 +233,58 @@ describe('exec command setup', () => {
     }
   });
 
+  it.each(['cursor', 'copilot', 'kiro'] as const)(
+    'should allow CLI provider override to %s without explicit model',
+    async (provider) => {
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/go Implement a small task')
+        .mockResolvedValueOnce('/cancel');
+      mockCallAIWithRetry
+        .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+        .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+      await expect(runExecCommand(projectDir, {
+        preset: 'backend',
+        agentOverrides: { provider },
+      })).resolves.toBeUndefined();
+
+      const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+      const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+      expect(execute.parallel[0]).toMatchObject({ provider });
+      expect(judge.parallel[0]).toMatchObject({ provider });
+      expect(replan).toMatchObject({ provider });
+      expect(execute.parallel[0].model).toBeNull();
+      expect(judge.parallel[0].model).toBeNull();
+      expect(replan.model).toBeNull();
+
+      const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+      expect(saved.session).toMatchObject({ provider });
+      expect(saved.workers[0]).toMatchObject({ provider });
+      expect(saved.judges[0]).toMatchObject({ provider });
+      expect(saved.session).not.toHaveProperty('model');
+      expect(saved.workers[0]).not.toHaveProperty('model');
+      expect(saved.judges[0]).not.toHaveProperty('model');
+
+      for (const call of mockCallAIWithRetry.mock.calls) {
+        const ctx = call[4];
+        expect(ctx.providerType).toBe(provider);
+        expect(ctx.model).toBeUndefined();
+      }
+    },
+  );
+
+  it('should reject CLI opencode override with a bare model', async () => {
+    await expect(runExecCommand(projectDir, {
+      preset: 'backend',
+      agentOverrides: { provider: 'opencode', model: 'big-pickle' },
+    })).rejects.toThrow(/provider\/model/);
+
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+  });
+
   it('should call the codex exec assistant completion summary with readonly permission mode', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/go Implement a small task')
@@ -659,13 +711,13 @@ describe('exec command setup', () => {
       ...DEFAULT_EXEC_CONFIG,
       session: {
         provider: 'opencode',
-        model: 'opencode-session',
+        model: 'opencode/session',
       },
       workers: [
         {
           ...DEFAULT_EXEC_CONFIG.workers[0],
           provider: 'opencode',
-          model: 'opencode-worker',
+          model: 'opencode/worker',
           effort: undefined,
         },
       ],
@@ -673,7 +725,7 @@ describe('exec command setup', () => {
         {
           ...DEFAULT_EXEC_CONFIG.judges[0],
           provider: 'opencode',
-          model: 'opencode-judge',
+          model: 'opencode/judge',
           effort: undefined,
         },
       ],
@@ -722,13 +774,13 @@ describe('exec command setup', () => {
       ...DEFAULT_EXEC_CONFIG,
       session: {
         provider: 'opencode',
-        model: 'opencode-model',
+        model: 'opencode/model',
       },
       workers: [
         {
           ...DEFAULT_EXEC_CONFIG.workers[0],
           provider: 'opencode',
-          model: 'opencode-worker',
+          model: 'opencode/worker',
           effort: undefined,
         },
       ],
@@ -736,7 +788,7 @@ describe('exec command setup', () => {
         {
           ...DEFAULT_EXEC_CONFIG.judges[0],
           provider: 'opencode',
-          model: 'opencode-judge',
+          model: 'opencode/judge',
           effort: undefined,
         },
       ],
@@ -904,6 +956,273 @@ describe('exec command setup', () => {
       },
     });
   });
+
+  it('should replace assistant model when setup changes provider without selecting a model', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'assistant',
+      'provider',
+      'codex',
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+      providerType: 'codex',
+      model: 'gpt-5',
+    }));
+    expect(replan).toMatchObject({ provider: 'codex', model: 'gpt-5' });
+  });
+
+  it.each(['cursor', 'copilot', 'kiro'] as const)(
+    'should allow setup assistant provider change to %s without model input',
+    async (provider) => {
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup')
+        .mockResolvedValueOnce('/go Implement a small task')
+        .mockResolvedValueOnce('/cancel');
+      mockSelectOptionQueue(
+        'assistant',
+        'provider',
+        provider,
+        'back',
+        'back',
+      );
+      mockCallAIWithRetry
+        .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+        .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+      const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+      const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+      expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+        providerType: provider,
+        model: undefined,
+      }));
+      expect(replan).toMatchObject({ provider });
+      expect(replan.model).toBeNull();
+    },
+  );
+
+  it.each([
+    { target: 'assistant', selectQueue: ['assistant', 'provider', 'cursor', 'back', 'back'] },
+    { target: 'worker', selectQueue: ['workers', 'edit:0', 'provider', 'cursor', 'back', 'back', 'back'] },
+    { target: 'judge', selectQueue: ['judges', 'edit:0', 'provider', 'cursor', 'back', 'back', 'back'] },
+  ] as const)(
+    'should omit model when $target provider changes without model input',
+    async ({ target, selectQueue }) => {
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup')
+        .mockResolvedValueOnce('/go Implement a small task')
+        .mockResolvedValueOnce('/cancel');
+      mockSelectOptionQueue(...selectQueue);
+      mockCallAIWithRetry
+        .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+        .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+      const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+      const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+      if (target === 'assistant') {
+        expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+          providerType: 'cursor',
+          model: undefined,
+        }));
+        expect(replan).toMatchObject({ provider: 'cursor' });
+        expect(replan.model).toBeNull();
+      }
+      if (target === 'worker') {
+        expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+          providerType: 'claude',
+          model: 'opus',
+        }));
+        expect(execute.parallel[0]).toMatchObject({ provider: 'cursor' });
+        expect(execute.parallel[0].model).toBeNull();
+      }
+      if (target === 'judge') {
+        expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+          providerType: 'claude',
+          model: 'opus',
+        }));
+        expect(judge.parallel[0]).toMatchObject({ provider: 'cursor' });
+        expect(judge.parallel[0].model).toBeNull();
+      }
+    },
+  );
+
+  it('should reject setup opencode custom model without provider qualifier and keep the existing config', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('big-pickle')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'assistant',
+      'provider',
+      'opencode',
+      'model',
+      '__custom_model__',
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+      providerType: 'claude',
+      model: 'opus',
+    }));
+    expect(replan).toMatchObject({ provider: 'claude', model: 'opus' });
+  });
+
+  it.each([
+    ['cursor', ''],
+    ['cursor', '   '],
+    ['copilot', ''],
+    ['copilot', '   '],
+    ['kiro', ''],
+    ['kiro', '   '],
+  ] as const)(
+    'should reject blank setup assistant custom model for %s and keep the existing config',
+    async (provider, modelInput) => {
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup')
+        .mockResolvedValueOnce(modelInput)
+        .mockResolvedValueOnce('/go Implement a small task')
+        .mockResolvedValueOnce('/cancel');
+      mockSelectOptionQueue(
+        'assistant',
+        'provider',
+        provider,
+        'model',
+        '__custom_model__',
+        'back',
+      );
+      mockCallAIWithRetry
+        .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+        .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+      const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+      const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+      expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+        providerType: 'claude',
+        model: 'opus',
+      }));
+      expect(replan).toMatchObject({ provider: 'claude', model: 'opus' });
+    },
+  );
+
+  it.each([
+    { target: 'worker', section: 'workers', provider: 'cursor', modelInput: '' },
+    { target: 'worker', section: 'workers', provider: 'cursor', modelInput: '   ' },
+    { target: 'worker', section: 'workers', provider: 'copilot', modelInput: '' },
+    { target: 'worker', section: 'workers', provider: 'copilot', modelInput: '   ' },
+    { target: 'worker', section: 'workers', provider: 'kiro', modelInput: '' },
+    { target: 'worker', section: 'workers', provider: 'kiro', modelInput: '   ' },
+    { target: 'judge', section: 'judges', provider: 'cursor', modelInput: '' },
+    { target: 'judge', section: 'judges', provider: 'cursor', modelInput: '   ' },
+    { target: 'judge', section: 'judges', provider: 'copilot', modelInput: '' },
+    { target: 'judge', section: 'judges', provider: 'copilot', modelInput: '   ' },
+    { target: 'judge', section: 'judges', provider: 'kiro', modelInput: '' },
+    { target: 'judge', section: 'judges', provider: 'kiro', modelInput: '   ' },
+  ] as const)(
+    'should reject blank setup $target custom model for $provider and keep the existing config',
+    async ({ target, section, provider, modelInput }) => {
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup')
+        .mockResolvedValueOnce(modelInput)
+        .mockResolvedValueOnce('/go Implement a small task')
+        .mockResolvedValueOnce('/cancel');
+      mockSelectOptionQueue(
+        section,
+        'edit:0',
+        'provider',
+        provider,
+        'model',
+        '__custom_model__',
+        'back',
+      );
+      mockCallAIWithRetry
+        .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+        .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+      const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+      const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const actor = target === 'worker' ? execute.parallel[0] : judge.parallel[0];
+      expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
+        providerType: 'claude',
+        model: 'opus',
+      }));
+      expect(actor).toMatchObject({
+        provider: 'claude',
+        model: target === 'worker' ? 'sonnet' : 'opus',
+      });
+    },
+  );
+
+  it.each([
+    { target: 'worker', section: 'workers', provider: 'cursor', model: 'cursor/gpt-5' },
+    { target: 'worker', section: 'workers', provider: 'copilot', model: 'gpt-4.1' },
+    { target: 'worker', section: 'workers', provider: 'kiro', model: 'kiro-model' },
+    { target: 'judge', section: 'judges', provider: 'cursor', model: 'cursor/gpt-5' },
+    { target: 'judge', section: 'judges', provider: 'copilot', model: 'gpt-4.1' },
+    { target: 'judge', section: 'judges', provider: 'kiro', model: 'kiro-model' },
+  ] as const)(
+    'should use explicit setup model input when $target provider changes to $provider',
+    async ({ target, section, provider, model }) => {
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup')
+        .mockResolvedValueOnce(model)
+        .mockResolvedValueOnce('/go Implement a small task')
+        .mockResolvedValueOnce('/cancel');
+      mockSelectOptionQueue(
+        section,
+        'edit:0',
+        'provider',
+        provider,
+        'model',
+        '__custom_model__',
+        'back',
+        'back',
+        'back',
+      );
+      mockCallAIWithRetry
+        .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+        .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+      const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+      const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const actor = target === 'worker' ? execute.parallel[0] : judge.parallel[0];
+      expect(actor).toMatchObject({ provider, model });
+    },
+  );
 
   it('should keep setup open across submenus until the main menu returns', async () => {
     mockReadInteractiveInput

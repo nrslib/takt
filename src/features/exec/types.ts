@@ -4,14 +4,14 @@ export type ExecEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface ExecSessionConfig {
   provider: ProviderType;
-  model: string;
+  model?: string;
   effort?: ExecEffort;
 }
 
 export interface ExecActorConfig {
   name: string;
   provider: ProviderType;
-  model: string;
+  model?: string;
   effort?: ExecEffort;
   instruction: string;
   knowledge: string[];

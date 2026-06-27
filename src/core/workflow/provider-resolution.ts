@@ -44,17 +44,15 @@ export interface WorkflowCallProviderModelOutput {
 }
 
 export interface LoopMonitorJudgeProviderModelInput {
-  judge: Pick<LoopMonitorJudge, 'provider' | 'model'>;
-  triggeringStep: StepProviderModelInput['step'];
-  provider?: ProviderType;
-  model?: string;
-  providerRouting?: ProviderRoutingConfig;
-  personaProviders?: Record<string, PersonaProviderEntry>;
+  judge: Pick<LoopMonitorJudge, 'provider' | 'model' | 'modelSpecified'>;
+  triggeringProviderInfo: StepProviderModelOutput;
 }
 
 export interface LoopMonitorJudgeProviderModelOutput {
   provider: ProviderType | undefined;
   model: string | undefined;
+  providerSource?: ProviderResolutionSource;
+  modelSource?: ProviderResolutionSource;
 }
 
 export interface AgentProviderModelInput {
@@ -128,7 +126,8 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     : undefined;
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
   const stepProviderIsDirect = input.step.provider !== undefined && input.step.providerSpecified !== false;
-  const stepModelIsDirect = input.step.model !== undefined && input.step.modelSpecified !== false;
+  const stepModelIsDirect = input.step.modelSpecified === true
+    || (input.step.model !== undefined && input.step.modelSpecified !== false);
   const workflowProvider = input.step.providerSpecified === false ? input.step.provider : undefined;
   const workflowModel = input.step.modelSpecified === false ? input.step.model : undefined;
 
@@ -202,17 +201,25 @@ export function resolveWorkflowCallProviderModel(
 export function resolveLoopMonitorJudgeProviderModel(
   input: LoopMonitorJudgeProviderModelInput,
 ): LoopMonitorJudgeProviderModelOutput {
-  const triggeringStep = resolveStepProviderModel({
-    step: input.triggeringStep,
-    provider: input.provider,
-    model: input.model,
-    providerRouting: input.providerRouting,
-    personaProviders: input.personaProviders,
-  });
+  const judgeProviderIsDirect = input.judge.provider !== undefined;
+  const judgeModelIsDirect = input.judge.modelSpecified === true
+    || (input.judge.model !== undefined && input.judge.modelSpecified !== false);
+
+  const provider = judgeProviderIsDirect
+    ? input.judge.provider
+    : input.triggeringProviderInfo.provider;
+  const providerSource = judgeProviderIsDirect ? 'step' : input.triggeringProviderInfo.providerSource;
+  const model = judgeModelIsDirect
+    ? input.judge.model
+    : (judgeProviderIsDirect ? undefined : input.triggeringProviderInfo.model);
+  const modelSource = judgeModelIsDirect || judgeProviderIsDirect
+    ? 'step'
+    : input.triggeringProviderInfo.modelSource;
 
   return {
-    provider: input.judge.provider ?? triggeringStep.provider,
-    model: input.judge.model
-      ?? (input.judge.provider !== undefined ? undefined : triggeringStep.model),
+    provider,
+    ...(providerSource !== undefined ? { providerSource } : {}),
+    model,
+    ...(modelSource !== undefined ? { modelSource } : {}),
   };
 }

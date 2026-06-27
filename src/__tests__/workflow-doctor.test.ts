@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
@@ -461,6 +461,78 @@ steps:
 
     expect(messages).toContain(
       'Workflow "callable-invalid-default.yaml" failed to load: workflow_call arg "review_knowledge" references unknown knowledge facet "strict-review"',
+    );
+  });
+
+  it('reports callable default section map project facet symlinks as workflow load diagnostics', () => {
+    const instructionsDir = join(projectDir, '.takt/facets/instructions');
+    const outsideDir = join(projectDir, 'outside');
+    mkdirSync(instructionsDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'secret.md'), 'Secret instruction', 'utf-8');
+    symlinkSync(join(outsideDir, 'secret.md'), join(instructionsDir, 'linked.md'));
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/callable-default-symlink.yaml', `name: callable-default-symlink
+subworkflow:
+  callable: true
+  params:
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: linked
+max_steps: 1
+initial_step: review
+instructions:
+  linked: ../facets/instructions/linked.md
+steps:
+  - name: review
+    instruction:
+      $param: review_instruction
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(
+      /^Workflow "callable-default-symlink\.yaml" failed to load: Project facet file must stay inside the project and must not use symlinks:/,
+    );
+  });
+
+  it('reports callable default section map package parent symlinks as workflow load diagnostics', () => {
+    const ownerDir = join(process.env.TAKT_CONFIG_DIR!, 'repertoire', '@nrslib');
+    const packageLink = join(ownerDir, 'pkg');
+    const outsidePackageDir = join(projectDir, 'outside-package');
+    const workflowsDir = join(outsidePackageDir, 'workflows');
+    const instructionsDir = join(outsidePackageDir, 'facets/instructions');
+    mkdirSync(ownerDir, { recursive: true });
+    mkdirSync(workflowsDir, { recursive: true });
+    mkdirSync(instructionsDir, { recursive: true });
+    writeFileSync(join(instructionsDir, 'linked.md'), 'Secret instruction', 'utf-8');
+    writeFileSync(join(workflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  params:
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: linked
+max_steps: 1
+initial_step: review
+instructions:
+  linked: ../facets/instructions/linked.md
+steps:
+  - name: review
+    instruction:
+      $param: review_instruction
+`);
+    symlinkSync(outsidePackageDir, packageLink, 'dir');
+
+    const messages = inspectWorkflowFile(join(packageLink, 'workflows/child.yaml'), projectDir, {
+      source: 'repertoire',
+    }).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(
+      /^Workflow "child\.yaml" failed to load: Scoped facet file must stay inside the repertoire and must not use symlinks:/,
     );
   });
 

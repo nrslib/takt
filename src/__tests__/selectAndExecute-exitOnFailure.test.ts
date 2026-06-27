@@ -1,13 +1,3 @@
-/**
- * Tests for exitOnFailure option in selectAndExecuteTask.
- *
- * Covers:
- * - exitOnFailure: false throws Error instead of calling process.exit(1)
- * - exitOnFailure: undefined (default) calls process.exit(1)
- * - exitOnFailure: true calls process.exit(1)
- * - exitOnFailure: false with successful task completes normally
- */
-
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const {

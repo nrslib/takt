@@ -1,4 +1,4 @@
-import type { LoopMonitorRule, WorkflowConfig, WorkflowRule } from '../../models/types.js';
+import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule } from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
@@ -49,8 +49,9 @@ function validateAgentStepProviderModel(
   if (getWorkflowStepKind(step) !== 'agent') {
     return;
   }
+  const agentStep = step as AgentWorkflowStep;
   const providerInfo = resolveStepProviderModel({
-    step,
+    step: agentStep,
     provider: options.provider,
     providerSource: options.providerSource,
     model: options.model,
@@ -63,9 +64,31 @@ function validateAgentStepProviderModel(
     providerInfo.model,
     {
       modelFieldName: `${source}.model`,
-      requireProviderQualifiedModelForOpencode: false,
     },
   );
+  validatePromotionProviderModels(agentStep, providerInfo, source);
+}
+
+function validatePromotionProviderModels(
+  step: AgentWorkflowStep,
+  baseProviderInfo: ReturnType<typeof resolveStepProviderModel>,
+  source: string,
+): void {
+  for (const [index, promotion] of (step.promotion ?? []).entries()) {
+    const provider = promotion.provider ?? baseProviderInfo.provider;
+    const model = promotion.model !== undefined
+      ? promotion.model
+      : promotion.providerSpecified
+        ? undefined
+        : baseProviderInfo.model;
+    validateProviderModelCompatibility(
+      provider,
+      model,
+      {
+        modelFieldName: `${source}.promotion[${index}].model`,
+      },
+    );
+  }
 }
 
 function hasInvalidManagerOutputRule(rules: readonly WorkflowRule[] | undefined): boolean {
@@ -172,11 +195,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     });
     const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
       judge: monitor.judge,
-      triggeringStep,
-      provider: triggeringProviderInfo.provider,
-      model: triggeringProviderInfo.model,
-      providerRouting: options.providerRouting,
-      personaProviders: options.personaProviders,
+      triggeringProviderInfo,
     });
     validateProviderModelCompatibility(
       judgeProviderInfo.provider,

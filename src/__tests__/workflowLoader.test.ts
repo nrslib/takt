@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -161,6 +161,63 @@ describe('loadWorkflowByIdentifier', () => {
     const workflow = loadWorkflowByIdentifier(filePath, tempDir);
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('test-workflow');
+  });
+
+  it('should preserve explicit model omission from model null', () => {
+    const filePath = join(tempDir, 'model-null.yaml');
+    writeFileSync(filePath, `name: model-null
+initial_step: step1
+max_steps: 1
+
+steps:
+  - name: step1
+    persona: coder
+    provider: cursor
+    model: null
+    instruction: "{task}"
+`);
+
+    const workflow = loadWorkflowByIdentifier(filePath, tempDir);
+
+    expect(workflow).not.toBeNull();
+    expect(workflow!.steps[0]).toMatchObject({
+      provider: 'cursor',
+      model: undefined,
+      modelSpecified: true,
+    });
+  });
+
+  it('should reject callable section map project facet symlinks before expanding workflow_call defaults', () => {
+    const workflowsDir = join(tempDir, '.takt', 'workflows');
+    const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+    const outsideDir = join(tempDir, 'outside');
+    mkdirSync(workflowsDir, { recursive: true });
+    mkdirSync(instructionsDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'secret.md'), 'Secret instruction', 'utf-8');
+    symlinkSync(join(outsideDir, 'secret.md'), join(instructionsDir, 'linked.md'));
+    const filePath = join(workflowsDir, 'callable-default.yaml');
+    writeFileSync(filePath, `name: callable-default
+subworkflow:
+  callable: true
+  params:
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: linked
+max_steps: 1
+initial_step: review
+instructions:
+  linked: ../facets/instructions/linked.md
+steps:
+  - name: review
+    instruction:
+      $param: review_instruction
+`);
+
+    expect(() => loadWorkflowByIdentifier(filePath, tempDir)).toThrow(
+      /Project facet file must stay inside the project and must not use symlinks/,
+    );
   });
 
   it('should load privileged system workflows from arbitrary project paths', () => {
@@ -1324,6 +1381,40 @@ describe('loadWorkflowByIdentifier with @scope ref (repertoire)', () => {
     const workflow = loadWorkflowByIdentifier('@nrslib/takt-ensemble/no-such-workflow', tempDir);
 
     expect(workflow).toBeNull();
+  });
+
+  it('should reject callable section map package parent symlinks before expanding workflow_call defaults', () => {
+    const ownerDir = join(configDir, 'repertoire', '@nrslib');
+    const packageLink = join(ownerDir, 'pkg');
+    const outsidePackageDir = join(tempDir, 'outside-package');
+    const workflowsDir = join(outsidePackageDir, 'workflows');
+    const instructionsDir = join(outsidePackageDir, 'facets', 'instructions');
+    mkdirSync(ownerDir, { recursive: true });
+    mkdirSync(workflowsDir, { recursive: true });
+    mkdirSync(instructionsDir, { recursive: true });
+    writeFileSync(join(instructionsDir, 'linked.md'), 'Secret instruction', 'utf-8');
+    writeFileSync(join(workflowsDir, 'child.yaml'), `name: child
+subworkflow:
+  callable: true
+  params:
+    review_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: linked
+max_steps: 1
+initial_step: review
+instructions:
+  linked: ../facets/instructions/linked.md
+steps:
+  - name: review
+    instruction:
+      $param: review_instruction
+`);
+    symlinkSync(outsidePackageDir, packageLink, 'dir');
+
+    expect(() => loadWorkflowByIdentifier('@nrslib/pkg/child', tempDir)).toThrow(
+      /Scoped facet file must stay inside the repertoire and must not use symlinks/,
+    );
   });
 });
 

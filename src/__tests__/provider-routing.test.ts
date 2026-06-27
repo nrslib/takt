@@ -754,14 +754,25 @@ describe('provider_routing config normalization', () => {
     })).toThrow(/provider_routing\.personas\.coder\.provider_options/);
   });
 
-  it('Given provider_routing entry uses opencode without provider-qualified model, When normalizing, Then provider/model validation fails', () => {
-    expect(() => normalizeProviderRouting({
+  it('Given provider_routing entry uses opencode without a local model, When normalizing, Then provider-only routing is preserved', () => {
+    expect(normalizeProviderRouting({
       steps: {
         review: {
           provider: 'opencode',
         },
       },
-    })).toThrow(/provider 'opencode' requires model in 'provider\/model' format/);
+    })?.steps?.review).toEqual({ provider: 'opencode' });
+  });
+
+  it('Given provider_routing entry uses opencode with a bare model, When normalizing, Then provider/model validation fails', () => {
+    expect(() => normalizeProviderRouting({
+      steps: {
+        review: {
+          provider: 'opencode',
+          model: 'big-pickle',
+        },
+      },
+    })).toThrow(/provider\/model/);
   });
 });
 
@@ -1140,6 +1151,95 @@ describe('workflow step tags', () => {
       codex: { networkAccess: true },
     });
   });
+
+  it('Given parallel sub-step omits model explicitly while inheriting provider, When resolving sub-step, Then parent model is not inherited', () => {
+    const workflowPath = join(tempDir, 'provider-inherited-model-null.yaml');
+    writeFileSync(workflowPath, [
+      'name: provider-inherited-model-null',
+      'initial_step: implement',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    provider: claude',
+      '    model: parent-model',
+      '    instruction: "{task}"',
+      '    parallel:',
+      '      - name: implement-api',
+      '        persona: coder',
+      '        model: null',
+      '        instruction: "{task}"',
+    ].join('\n'));
+
+    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
+    const subStep = workflow.steps[0].parallel?.[0];
+    if (!subStep) {
+      throw new Error('parallel sub-step must be normalized');
+    }
+
+    expect(subStep).toMatchObject({
+      provider: 'claude',
+      providerSpecified: true,
+      model: undefined,
+      modelSpecified: true,
+    });
+    expect(resolveStepProviderModel({
+      step: subStep,
+      provider: 'claude',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
+    })).toMatchObject({
+      provider: 'claude',
+      model: undefined,
+      providerSource: 'step',
+      modelSource: 'step',
+    });
+  });
+
+  it('Given parallel parent omits model explicitly, When sub-step omits model, Then engine model is not inherited', () => {
+    const workflowPath = join(tempDir, 'provider-parent-model-null.yaml');
+    writeFileSync(workflowPath, [
+      'name: provider-parent-model-null',
+      'initial_step: implement',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    provider: cursor',
+      '    model: null',
+      '    instruction: "{task}"',
+      '    parallel:',
+      '      - name: implement-api',
+      '        persona: coder',
+      '        instruction: "{task}"',
+    ].join('\n'));
+
+    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
+    const subStep = workflow.steps[0].parallel?.[0];
+    if (!subStep) {
+      throw new Error('parallel sub-step must be normalized');
+    }
+
+    expect(subStep).toMatchObject({
+      provider: 'cursor',
+      providerSpecified: true,
+      model: undefined,
+      modelSpecified: true,
+    });
+    expect(resolveStepProviderModel({
+      step: subStep,
+      provider: 'cursor',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
+    })).toMatchObject({
+      provider: 'cursor',
+      model: undefined,
+      providerSource: 'step',
+      modelSource: 'step',
+    });
+  });
 });
 
 describe('provider_routing provider/model validation', () => {
@@ -1186,6 +1286,137 @@ describe('provider_routing provider/model validation', () => {
     } as WorkflowEngineOptions)).toThrow(/provider 'opencode' requires model/);
   });
 
+  it('Given routing resolves opencode and the input model is provider-qualified, When validating workflow, Then it passes', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'provider-routing-opencode-input-model-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          tags: ['opencode-provider'],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+      model: 'opencode/big-pickle',
+      modelSource: 'project',
+      providerRouting: {
+        tags: {
+          'opencode-provider': { provider: 'opencode' },
+        },
+      },
+    } as WorkflowEngineOptions)).not.toThrow();
+  });
+
+  it('Given a workflow step uses opencode with a bare model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'workflow-step-opencode-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          provider: 'opencode',
+          model: 'big-pickle',
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+  });
+
+  it('Given promotion switches to opencode without a model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'promotion-opencode-missing-model-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          provider: 'codex',
+          model: 'gpt-5',
+          promotion: [
+            {
+              at: 1,
+              provider: 'opencode',
+              providerSpecified: true,
+            },
+          ],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+    } as WorkflowEngineOptions)).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('Given promotion switches to opencode with a bare model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'promotion-opencode-bare-model-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          provider: 'codex',
+          model: 'gpt-5',
+          promotion: [
+            {
+              at: 1,
+              provider: 'opencode',
+              providerSpecified: true,
+              model: 'big-pickle',
+            },
+          ],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+  });
+
+  it('Given promotion model inherits an opencode provider, When the promotion model is bare, Then validation fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'promotion-opencode-inherited-provider-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          provider: 'opencode',
+          model: 'opencode/base-model',
+          promotion: [
+            {
+              at: 1,
+              model: 'big-pickle',
+            },
+          ],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+  });
+
+  it('Given persona_providers resolves opencode with a bare model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'persona-providers-opencode-validation',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          personaDisplayName: 'reviewer',
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+      personaProviders: {
+        reviewer: { provider: 'opencode', model: 'big-pickle' },
+      },
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
+  });
+
   it('Given parallel sub-step routing composes an incompatible provider/model, When validating workflow, Then it fails fast', () => {
     expect(() => validateWorkflowConfig({
       name: 'provider-routing-parallel-validation',
@@ -1209,5 +1440,27 @@ describe('provider_routing provider/model validation', () => {
         },
       },
     } as WorkflowEngineOptions)).toThrow(/model 'sonnet' is a Claude model alias but provider is 'codex'/);
+  });
+
+  it('Given parallel sub-step uses opencode with a bare model, When validating workflow, Then it fails fast', () => {
+    expect(() => validateWorkflowConfig({
+      name: 'parallel-opencode-validation',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'implement',
+          parallel: [
+            createStep({
+              name: 'implement-api',
+              provider: 'opencode',
+              model: 'big-pickle',
+            }),
+          ],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+    } as WorkflowEngineOptions)).toThrow(/provider\/model/);
   });
 });

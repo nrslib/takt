@@ -3,7 +3,7 @@
  */
 
 import { callOpenCode, callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
-import { mapsToOpenCodeEditPermission } from '../opencode/allowedTools.js';
+import { keepsOpenCodeAllowedToolWithoutEdit } from '../opencode/allowedTools.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
@@ -50,7 +50,7 @@ export class OpenCodeProvider implements Provider {
   }
 
   keepsAllowedToolWithoutEdit(tool: string): boolean {
-    return !mapsToOpenCodeEditPermission(tool);
+    return keepsOpenCodeAllowedToolWithoutEdit(tool);
   }
 
   setup(config: AgentSetup): ProviderAgent {

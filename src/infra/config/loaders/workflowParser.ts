@@ -174,10 +174,10 @@ export function normalizeWorkflowConfig(
       context,
     },
   );
-  const resolvedPoliciesWithSource = resolveSectionMapWithSource(parsed.policies, workflowDir, 'policies');
-  const resolvedKnowledgeWithSource = resolveSectionMapWithSource(parsed.knowledge, workflowDir, 'knowledge');
-  const resolvedInstructionsWithSource = resolveSectionMapWithSource(parsed.instructions, workflowDir, 'instructions');
-  const resolvedReportFormatsWithSource = resolveSectionMapWithSource(parsed.report_formats, workflowDir, 'output-contracts');
+  const resolvedPoliciesWithSource = resolveSectionMapWithSource(parsed.policies, workflowDir, 'policies', context);
+  const resolvedKnowledgeWithSource = resolveSectionMapWithSource(parsed.knowledge, workflowDir, 'knowledge', context);
+  const resolvedInstructionsWithSource = resolveSectionMapWithSource(parsed.instructions, workflowDir, 'instructions', context);
+  const resolvedReportFormatsWithSource = resolveSectionMapWithSource(parsed.report_formats, workflowDir, 'output-contracts', context);
   const sections: WorkflowSections = {
     personas: parsed.personas,
     resolvedPolicies: unwrapResolvedSectionMap(resolvedPoliciesWithSource),
@@ -208,6 +208,7 @@ export function normalizeWorkflowConfig(
       parsed.schemas,
       normalizedWorkflowProvider.provider,
       normalizedWorkflowProvider.model,
+      normalizedWorkflowProvider.modelSpecified,
       undefined,
       normalizedWorkflowProvider.providerOptions,
       undefined,
@@ -234,9 +235,7 @@ export function normalizeWorkflowConfig(
     });
     const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
       judge: monitor.judge,
-      triggeringStep,
-      provider: triggeringProviderInfo.provider,
-      model: triggeringProviderInfo.model,
+      triggeringProviderInfo,
     });
     validateProviderModelCompatibility(
       judgeProviderInfo.provider,

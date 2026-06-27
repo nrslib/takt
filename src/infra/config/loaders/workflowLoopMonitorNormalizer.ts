@@ -8,7 +8,8 @@ function normalizeLoopMonitorJudge(
     session_key?: string;
     persona?: string;
     provider?: unknown;
-    model?: string;
+    model?: string | null;
+    provider_options?: unknown;
     instruction?: string;
     rules: Array<{ condition: string; next: string }>;
   },
@@ -20,8 +21,9 @@ function normalizeLoopMonitorJudge(
   const normalizedProvider = normalizeProviderReference(
     raw.provider as Parameters<typeof normalizeProviderReference>[0],
     raw.model,
-    undefined,
+    raw.provider_options as Parameters<typeof normalizeProviderReference>[2],
     workflowDir,
+    context,
   );
   return {
     sessionKey: raw.session_key,
@@ -29,6 +31,7 @@ function normalizeLoopMonitorJudge(
     personaPath,
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
+    modelSpecified: normalizedProvider.modelSpecified,
     providerOptions: normalizedProvider.providerOptions,
     instruction: raw.instruction
       ? resolveRefToContent(
@@ -51,7 +54,8 @@ export function normalizeLoopMonitors(
       session_key?: string;
       persona?: string;
       provider?: unknown;
-      model?: string;
+      model?: string | null;
+      provider_options?: unknown;
       instruction?: string;
       rules: Array<{ condition: string; next: string }>;
     };

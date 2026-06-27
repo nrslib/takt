@@ -13,6 +13,7 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | State consistency | For side effects and state changes, verify that success, failure, and interruption paths have no missing, duplicated, or inconsistent effects |
 | Contract coverage | Verify new contracts across normal entries, derived conditions, validation, evaluation, output, and re-injection paths |
 | Contract consistency | Verify that contracts carried by consolidation or abstraction are applied to existing equivalent branches by the same standard |
+| External contract verification | Verify semantic contracts of external services, SDKs, and generated artifacts from primary evidence or actual types |
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
 | Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
@@ -57,6 +58,7 @@ REJECT without exception if any of the following apply.
 - User-facing contract changes for configuration, CLI, or file formats where documentation or examples omit priority, first-match/merge behavior, inline overrides, scoped/special references, or failure conditions
 - Existing branches with the same contract remain on the old implementation after adding or changing a shared helper, normalizer, builder, or adapter
 - Fields, attributes, outputs, settings, or identifiers requested by the task are treated as optional, unset, out of scope, or missing for some entry point or execution mode without explicit evidence
+- Operation-specific error types, statuses, return values, or idempotency of an external service, SDK, or generated artifact are not verified, and another operation's contract or mock success is used instead
 - Missing, duplicated, or incorrectly ordered effects in side-effect or state-change paths
 - Sensitive data exposed in logs, error responses, or test output
 

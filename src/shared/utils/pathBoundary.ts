@@ -38,13 +38,6 @@ export function isRealPathInside(basePath: string, candidatePath: string): boole
 
 export type BoundaryViolation = 'outside' | 'symlink' | 'not_directory';
 
-/**
- * Walk each path segment from rootDir to targetPath and assert none is a
- * symlink and every intermediate segment is a directory.
- *
- * Returns the Stats of the final segment (or null when a segment does not
- * exist yet).
- */
 export function assertPathSegmentsAreSafe(
   rootDir: string,
   targetPath: string,

@@ -57,7 +57,6 @@ describe('lstatIfExists', () => {
     const brokenLink = join(tmpDir, 'broken-link');
     symlinkSync(join(tmpDir, 'nonexistent-target'), brokenLink);
 
-    // lstat does NOT follow symlinks, so it returns the symlink stats
     const stats = lstatIfExists(brokenLink);
     expect(stats).not.toBeNull();
     expect(stats?.isSymbolicLink()).toBe(true);

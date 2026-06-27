@@ -123,7 +123,7 @@ describe('config resolution defaults and project-local priority', () => {
           'persona_providers:',
           '  coder:',
           '    provider: opencode',
-          '    model: project-model',
+          '    model: opencode/project-model',
         ].join('\n'),
         'utf-8',
       );
@@ -133,7 +133,7 @@ describe('config resolution defaults and project-local priority', () => {
       expect(result.value).toEqual({
         coder: {
           provider: 'opencode',
-          model: 'project-model',
+          model: 'opencode/project-model',
         },
       });
     });

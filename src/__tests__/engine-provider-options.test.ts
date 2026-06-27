@@ -307,7 +307,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     expect(result).toBeUndefined();
   });
 
-  it('should remove opencode edit permission aliases from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
+  it('should remove opencode edit and command permissions from phase 1 allowedTools when outputContracts exist and edit is not true', async () => {
     const step = makeStep('review', {
       provider: 'opencode',
       model: 'opencode/zai-coding-plan/glm-5.1',
@@ -350,7 +350,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.allowedTools).toEqual(['read', 'bash']);
+    expect(options?.allowedTools).toEqual(['read']);
   });
 
   it('should keep claude allowedTools when the provider is mock', async () => {

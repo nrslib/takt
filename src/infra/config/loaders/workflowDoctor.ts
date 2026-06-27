@@ -20,7 +20,8 @@ import type { WorkflowTrustSource } from './workflowTrustSource.js';
 import {
   type FacetResolutionContext,
   type WorkflowSections,
-  resolveSectionMap,
+  resolveSectionMapWithSource,
+  unwrapResolvedSectionMap,
 } from './resource-resolver.js';
 
 export type { WorkflowDiagnostic, WorkflowDoctorReport } from './workflowDoctorTypes.js';
@@ -146,13 +147,35 @@ function buildContext(projectDir: string, filePath: string): FacetResolutionCont
   };
 }
 
-function buildSections(raw: RawWorkflow, workflowDir: string): WorkflowSections {
+function buildSections(raw: RawWorkflow, context: FacetResolutionContext): WorkflowSections {
+  const workflowDir = context.workflowDir;
+  if (!workflowDir) {
+    throw new Error('Workflow doctor facet resolution requires workflowDir');
+  }
+  const resolvedInstructionsWithSource = resolveSectionMapWithSource(
+    raw.instructions,
+    workflowDir,
+    'instructions',
+    context,
+  );
+  const resolvedKnowledgeWithSource = resolveSectionMapWithSource(raw.knowledge, workflowDir, 'knowledge', context);
+  const resolvedPoliciesWithSource = resolveSectionMapWithSource(raw.policies, workflowDir, 'policies', context);
+  const resolvedReportFormatsWithSource = resolveSectionMapWithSource(
+    raw.report_formats,
+    workflowDir,
+    'output-contracts',
+    context,
+  );
   return {
     personas: raw.personas,
-    resolvedInstructions: resolveSectionMap(raw.instructions, workflowDir),
-    resolvedKnowledge: resolveSectionMap(raw.knowledge, workflowDir),
-    resolvedPolicies: resolveSectionMap(raw.policies, workflowDir),
-    resolvedReportFormats: resolveSectionMap(raw.report_formats, workflowDir),
+    resolvedInstructions: unwrapResolvedSectionMap(resolvedInstructionsWithSource),
+    resolvedInstructionsWithSource,
+    resolvedKnowledge: unwrapResolvedSectionMap(resolvedKnowledgeWithSource),
+    resolvedKnowledgeWithSource,
+    resolvedPolicies: unwrapResolvedSectionMap(resolvedPoliciesWithSource),
+    resolvedPoliciesWithSource,
+    resolvedReportFormats: unwrapResolvedSectionMap(resolvedReportFormatsWithSource),
+    resolvedReportFormatsWithSource,
   };
 }
 
@@ -211,7 +234,7 @@ export function inspectWorkflowFile(
     }
 
     const context = buildContext(projectDir, filePath);
-    const sections = buildSections(raw, context.workflowDir!);
+    const sections = buildSections(raw, context);
     const diagnostics: WorkflowDiagnostic[] = [];
     validateWorkflowReferences(raw, sections, context, diagnostics);
     validateDoctorGraph(raw, diagnostics);

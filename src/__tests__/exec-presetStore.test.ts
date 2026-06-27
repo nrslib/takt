@@ -106,6 +106,63 @@ function writeRawPreset(dir: string, name: string, yaml: string): void {
   writeFileSync(join(dir, `${name}.yaml`), yaml);
 }
 
+type PresetYamlSections = Partial<Record<'session' | 'replan' | 'workers' | 'judges' | 'loop', readonly string[]>>;
+
+function buildPresetYaml(name: string, sections: PresetYamlSections): string {
+  const session = sections.session ?? [
+    'session:',
+    '  provider: claude',
+    '  model: opus',
+    '  effort: high',
+  ];
+  const replan = sections.replan ?? [
+    'replan:',
+    '  instruction: exec-replan',
+    '  knowledge: []',
+    '  policy: []',
+  ];
+  const workers = sections.workers ?? [
+    'workers:',
+    '  - name: worker-1',
+    '    provider: claude',
+    '    model: sonnet',
+    '    effort: high',
+    '    instruction: exec-worker',
+    '    knowledge: []',
+    '    policy: []',
+  ];
+  const judges = sections.judges ?? [
+    'judges:',
+    '  - name: judge-1',
+    '    provider: claude',
+    '    model: opus',
+    '    effort: high',
+    '    instruction: exec-judge',
+    '    knowledge: []',
+    '    policy: []',
+  ];
+  const loop = sections.loop ?? [
+    'loop:',
+    '  threshold: 3',
+    '  large_threshold: 2',
+    '  max_steps: 20',
+  ];
+
+  return [
+    `name: ${name}`,
+    'description: invalid',
+    ...session,
+    ...replan,
+    ...workers,
+    ...judges,
+    ...loop,
+  ].join('\n');
+}
+
+function buildExecYaml(sections: PresetYamlSections): string {
+  return buildPresetYaml('last-used', sections).split('\n').slice(2).join('\n');
+}
+
 describe('exec preset store', () => {
   it('should reject preset names that are not bare names', () => {
     const invalidNames = ['', '../backend', 'nested/backend', 'nested\\backend', '/tmp/backend', 'backend.yaml'];
@@ -510,30 +567,296 @@ describe('exec preset store', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-invalid-preset-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-invalid-last-used-'));
     const presetDir = join(projectDir, '.takt', 'exec', 'presets');
-    const invalidPresetCases = [
-      ['workers-object', 'workers: {}\n'],
-      ['workers-empty', 'workers: []\n'],
-      ['knowledge-object', 'workers:\n  - name: worker-1\n    provider: claude\n    model: sonnet\n    instruction: exec-worker\n    knowledge: {}\n    policy: []\n'],
-      ['policy-null', 'workers:\n  - name: worker-1\n    provider: claude\n    model: sonnet\n    instruction: exec-worker\n    knowledge: []\n    policy: null\n'],
-      ['blank-string', 'session:\n  provider: " "\n'],
-      ['string-threshold', 'loop:\n  threshold: "3"\n'],
-      ['zero-threshold', 'loop:\n  threshold: 0\n'],
-      ['bad-provider', 'session:\n  provider: unknown\n'],
-      ['bad-effort', 'session:\n  provider: claude\n  model: opus\n  effort: impossible\n'],
-      ['bad-actor-name', 'workers:\n  - name: ../worker\n    provider: claude\n    model: sonnet\n    instruction: exec-worker\n    knowledge: []\n    policy: []\n'],
-      ['reserved-actor-name', 'workers:\n  - name: exec-replan\n    provider: claude\n    model: sonnet\n    instruction: exec-worker\n    knowledge: []\n    policy: []\n'],
-      ['reserved-top-level-step-name', 'workers:\n  - name: replan\n    provider: claude\n    model: sonnet\n    instruction: exec-worker\n    knowledge: []\n    policy: []\n'],
-      ['reserved-loop-judge-step-name', 'workers:\n  - name: _loop_judge_execute_judge\n    provider: claude\n    model: sonnet\n    instruction: exec-worker\n    knowledge: []\n    policy: []\n'],
+    const invalidPresetCases: readonly [string, string, RegExp][] = [
+      [
+        'workers-object',
+        buildPresetYaml('workers-object', { workers: ['workers: {}'] }),
+        /exec\.workers: expected non-empty array/,
+      ],
+      [
+        'workers-empty',
+        buildPresetYaml('workers-empty', { workers: ['workers: []'] }),
+        /exec\.workers: expected non-empty array/,
+      ],
+      [
+        'knowledge-object',
+        buildPresetYaml('knowledge-object', {
+          workers: [
+            'workers:',
+            '  - name: worker-1',
+            '    provider: claude',
+            '    model: sonnet',
+            '    effort: high',
+            '    instruction: exec-worker',
+            '    knowledge: {}',
+            '    policy: []',
+          ],
+        }),
+        /exec\.workers\[0\]\.knowledge: expected array/,
+      ],
+      [
+        'policy-null',
+        buildPresetYaml('policy-null', {
+          workers: [
+            'workers:',
+            '  - name: worker-1',
+            '    provider: claude',
+            '    model: sonnet',
+            '    effort: high',
+            '    instruction: exec-worker',
+            '    knowledge: []',
+            '    policy: null',
+          ],
+        }),
+        /exec\.workers\[0\]\.policy: expected array/,
+      ],
+      [
+        'blank-string',
+        buildPresetYaml('blank-string', {
+          session: [
+            'session:',
+            '  provider: " "',
+            '  model: opus',
+            '  effort: high',
+          ],
+        }),
+        /exec\.session\.provider: expected non-empty string/,
+      ],
+      [
+        'blank-session-model',
+        buildPresetYaml('blank-session-model', {
+          session: [
+            'session:',
+            '  provider: cursor',
+            '  model: " "',
+          ],
+        }),
+        /exec\.session\.model: expected non-empty string/,
+      ],
+      [
+        'blank-worker-model',
+        buildPresetYaml('blank-worker-model', {
+          workers: [
+            'workers:',
+            '  - name: worker-1',
+            '    provider: cursor',
+            '    model: " "',
+            '    instruction: exec-worker',
+            '    knowledge: []',
+            '    policy: []',
+          ],
+        }),
+        /exec\.workers\[0\]\.model: expected non-empty string/,
+      ],
+      [
+        'blank-judge-model',
+        buildPresetYaml('blank-judge-model', {
+          judges: [
+            'judges:',
+            '  - name: judge-1',
+            '    provider: cursor',
+            '    model: " "',
+            '    instruction: exec-judge',
+            '    knowledge: []',
+            '    policy: []',
+          ],
+        }),
+        /exec\.judges\[0\]\.model: expected non-empty string/,
+      ],
+      [
+        'string-threshold',
+        buildPresetYaml('string-threshold', {
+          loop: [
+            'loop:',
+            '  threshold: "3"',
+            '  large_threshold: 2',
+            '  max_steps: 20',
+          ],
+        }),
+        /exec\.loop\.threshold: expected positive integer/,
+      ],
+      [
+        'zero-threshold',
+        buildPresetYaml('zero-threshold', {
+          loop: [
+            'loop:',
+            '  threshold: 0',
+            '  large_threshold: 2',
+            '  max_steps: 20',
+          ],
+        }),
+        /exec\.loop\.threshold: expected positive integer/,
+      ],
+      [
+        'bad-provider',
+        buildPresetYaml('bad-provider', {
+          session: [
+            'session:',
+            '  provider: unknown',
+            '  model: opus',
+            '  effort: high',
+          ],
+        }),
+        /exec\.session\.provider: unsupported provider/,
+      ],
+      [
+        'bad-session-model',
+        buildPresetYaml('bad-session-model', {
+          session: [
+            'session:',
+            '  provider: codex',
+            '  model: opus',
+            '  effort: high',
+          ],
+        }),
+        /exec\.session\.model.*Claude model alias/,
+      ],
+      [
+        'bad-effort',
+        buildPresetYaml('bad-effort', {
+          session: [
+            'session:',
+            '  provider: claude',
+            '  model: opus',
+            '  effort: impossible',
+          ],
+        }),
+        /exec\.session\.effort: unsupported effort/,
+      ],
+      [
+        'bad-actor-name',
+        buildPresetYaml('bad-actor-name', {
+          workers: [
+            'workers:',
+            '  - name: ../worker',
+            '    provider: claude',
+            '    model: sonnet',
+            '    effort: high',
+            '    instruction: exec-worker',
+            '    knowledge: []',
+            '    policy: []',
+          ],
+        }),
+        /exec\.workers\[0\]\.name: actor name must match/,
+      ],
+      [
+        'reserved-actor-name',
+        buildPresetYaml('reserved-actor-name', {
+          workers: [
+            'workers:',
+            '  - name: exec-replan',
+            '    provider: claude',
+            '    model: sonnet',
+            '    effort: high',
+            '    instruction: exec-worker',
+            '    knowledge: []',
+            '    policy: []',
+          ],
+        }),
+        /exec\.workers\[0\]\.name: actor name "exec-replan" is reserved/,
+      ],
+      [
+        'reserved-top-level-step-name',
+        buildPresetYaml('reserved-top-level-step-name', {
+          workers: [
+            'workers:',
+            '  - name: replan',
+            '    provider: claude',
+            '    model: sonnet',
+            '    effort: high',
+            '    instruction: exec-worker',
+            '    knowledge: []',
+            '    policy: []',
+          ],
+        }),
+        /exec\.workers\[0\]\.name: actor name "replan" is reserved/,
+      ],
+      [
+        'reserved-loop-judge-step-name',
+        buildPresetYaml('reserved-loop-judge-step-name', {
+          workers: [
+            'workers:',
+            '  - name: _loop_judge_execute_judge',
+            '    provider: claude',
+            '    model: sonnet',
+            '    effort: high',
+            '    instruction: exec-worker',
+            '    knowledge: []',
+            '    policy: []',
+          ],
+        }),
+        /exec\.workers\[0\]\.name: actor name "_loop_judge_execute_judge" is reserved/,
+      ],
+      [
+        'opencode-bare-session-model',
+        buildPresetYaml('opencode-bare-session-model', {
+          session: [
+            'session:',
+            '  provider: opencode',
+            '  model: big-pickle',
+          ],
+        }),
+        /exec\.session\.model.*provider\/model/,
+      ],
     ] as const;
     try {
-      for (const [name, yaml] of invalidPresetCases) {
-        writeRawPreset(presetDir, name, `name: ${name}\ndescription: invalid\n${yaml}`);
-        expect(() => loadExecPreset(name, { projectDir })).toThrow(/Invalid exec config/);
+      for (const [name, yaml, expectedError] of invalidPresetCases) {
+        writeRawPreset(presetDir, name, yaml);
+        expect(() => loadExecPreset(name, { projectDir })).toThrow(expectedError);
       }
 
       mkdirSync(globalConfigDir, { recursive: true });
-      writeFileSync(join(globalConfigDir, 'exec.yaml'), 'workers: {}\n');
-      expect(() => loadLastUsedExecConfig({ globalConfigDir })).toThrow(/Invalid exec config/);
+      writeFileSync(join(globalConfigDir, 'exec.yaml'), buildExecYaml({ workers: ['workers: {}'] }));
+      expect(() => loadLastUsedExecConfig({ globalConfigDir }))
+        .toThrow(/exec\.workers: expected non-empty array/);
+
+      writeFileSync(join(globalConfigDir, 'exec.yaml'), buildExecYaml({
+        session: [
+          'session:',
+          '  provider: opencode',
+          '  model: big-pickle',
+        ],
+      }));
+      expect(() => loadLastUsedExecConfig({ globalConfigDir }))
+        .toThrow(/exec\.session\.model.*provider\/model/);
+
+      writeFileSync(join(globalConfigDir, 'exec.yaml'), buildExecYaml({
+        session: [
+          'session:',
+          '  provider: cursor',
+          '  model: " "',
+        ],
+      }));
+      expect(() => loadLastUsedExecConfig({ globalConfigDir }))
+        .toThrow(/exec\.session\.model: expected non-empty string/);
+
+      writeFileSync(join(globalConfigDir, 'exec.yaml'), buildExecYaml({
+        workers: [
+          'workers:',
+          '  - name: worker-1',
+          '    provider: cursor',
+          '    model: " "',
+          '    instruction: exec-worker',
+          '    knowledge: []',
+          '    policy: []',
+        ],
+      }));
+      expect(() => loadLastUsedExecConfig({ globalConfigDir }))
+        .toThrow(/exec\.workers\[0\]\.model: expected non-empty string/);
+
+      writeFileSync(join(globalConfigDir, 'exec.yaml'), buildExecYaml({
+        judges: [
+          'judges:',
+          '  - name: judge-1',
+          '    provider: cursor',
+          '    model: " "',
+          '    instruction: exec-judge',
+          '    knowledge: []',
+          '    policy: []',
+        ],
+      }));
+      expect(() => loadLastUsedExecConfig({ globalConfigDir }))
+        .toThrow(/exec\.judges\[0\]\.model: expected non-empty string/);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });

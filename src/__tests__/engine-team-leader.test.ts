@@ -680,6 +680,97 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(partCall?.[2]?.providerOptions?.claude?.allowedTools).toBeUndefined();
   });
 
+  it('Claude part では part_edit false の part_allowed_tools から編集系ツールを除去する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.partAllowedTools = ['Read', 'Bash', 'Edit', 'Write', 'Grep'];
+    step.teamLeader.partEdit = false;
+    step.teamLeader.partPermissionMode = 'readonly';
+
+    const engine = new WorkflowEngine(config, tmpDir, 'review feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'Review', instruction: 'Review implementation' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'Review done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const partCall = vi.mocked(runAgent).mock.calls.find(([persona, , options]) => (
+      persona === '../personas/coder.md' && options?.resolvedProvider === 'claude'
+    ));
+    expect(partCall).toBeDefined();
+    expect(partCall?.[2]?.allowedTools).toEqual(['Read', 'Grep']);
+  });
+
+  it('OpenCode part では part_edit false の part_allowed_tools から編集系ツールを除去する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.partPersona = 'coder';
+    step.teamLeader.partAllowedTools = ['read', 'bash', 'edit', 'write', 'grep'];
+    step.teamLeader.partEdit = false;
+    step.teamLeader.partPermissionMode = 'readonly';
+
+    const engine = new WorkflowEngine(config, tmpDir, 'review feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      personaProviders: {
+        coder: {
+          provider: 'opencode',
+          model: 'opencode/zai-coding-plan/glm-5.1',
+        },
+      },
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'Review', instruction: 'Review implementation' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'Review done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const partCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.resolvedProvider === 'opencode');
+    expect(partCall).toBeDefined();
+    expect(partCall?.[2]?.allowedTools).toEqual(['read', 'grep']);
+  });
+
   it('config 層の claude.allowed_tools は opencode part 実行時に再注入されない', async () => {
     const config = buildTeamLeaderConfig();
     const step = config.steps[0];

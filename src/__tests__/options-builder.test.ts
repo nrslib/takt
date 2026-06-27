@@ -374,6 +374,25 @@ describe('OptionsBuilder.resolveStepProviderModel', () => {
     expect(result.provider).toBe('opencode');
   });
 
+  it('should keep explicit step model omission instead of falling back to engine model', () => {
+    const step = createStep({
+      provider: 'cursor',
+      model: undefined,
+      modelSpecified: true,
+    });
+    const builder = createBuilder(step, { provider: 'cursor', model: 'global-model' });
+
+    const result = builder.resolveStepProviderModel(step);
+    const baseOptions = builder.buildBaseOptions(step);
+
+    expect(result).toEqual(expect.objectContaining({
+      provider: 'cursor',
+      model: undefined,
+      modelSource: 'step',
+    }));
+    expect(baseOptions.resolvedModel).toBeUndefined();
+  });
+
   it('should prioritize step-level provider over persona providers', () => {
     const step = createStep({ personaDisplayName: 'coder', provider: 'claude' as 'claude' });
     const builder = createBuilder(step, {
@@ -571,7 +590,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     expect(options.allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
-  it('removes Write when output contracts exist and edit is not enabled', () => {
+  it('removes write and command tools when output contracts exist and edit is not enabled', () => {
     // Given
     const step = createStep({
       outputContracts: [{ name: 'report.md', format: 'markdown', useJudge: true }],
@@ -586,7 +605,37 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     const options = builder.buildAgentOptions(step);
 
     // Then
-    expect(options.allowedTools).toEqual(['Read', 'Bash']);
+    expect(options.allowedTools).toEqual(['Read']);
+  });
+
+  it('removes command tools when edit is false without output contracts', () => {
+    const step = createStep({
+      providerOptions: {
+        claude: { allowedTools: ['Read', 'bash', ' Bash '] },
+      },
+      edit: false,
+    });
+    const builder = createBuilder(step, { provider: 'claude' });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.allowedTools).toEqual(['Read']);
+  });
+
+  it('removes OpenCode command tools when edit is false without output contracts', () => {
+    const step = createStep({
+      provider: 'opencode',
+      model: 'opencode/big-pickle',
+      providerOptions: {
+        opencode: { allowedTools: ['read', 'bash', ' Bash ', 'edit', 'grep'] },
+      },
+      edit: false,
+    });
+    const builder = createBuilder(step, { provider: 'opencode' });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.allowedTools).toEqual(['read', 'grep']);
   });
 
   it('silently drops claude allowedTools when configured for a non-claude provider', () => {
