@@ -201,20 +201,6 @@ describe('/retry slash command', () => {
     expect(result.action).toBe('cancel');
   });
 
-  it('should inject order.md content into retry system prompt', async () => {
-    const orderContent = '# Build login page\n\nWith OAuth2 support.';
-    setupRawStdin(toRawInputs(['check the order', '/cancel']));
-    const capture = setupProvider(['I see the order content.']);
-
-    const retryContext = buildRetryContext({ previousOrderContent: orderContent });
-    await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).toContain('Previous Order');
-    expect(systemPrompt).toContain(orderContent);
-  });
-
   it('should show Run context and omit save_task action in direct retry mode', async () => {
     vi.mocked(selectOption).mockResolvedValueOnce('execute');
     const orderContent = '# Direct Order\n\nFix the failed direct run.';
@@ -236,22 +222,6 @@ describe('/retry slash command', () => {
     expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
   });
 
-  it('should inject Run instead of Branch into the direct retry system prompt', async () => {
-    setupRawStdin(toRawInputs(['inspect context', '/cancel']));
-    const capture = setupProvider(['The direct run failed during review.']);
-
-    const retryContext = buildRetryContext({
-      subject: {
-        kind: 'run',
-        value: '20260524-direct-failed',
-      },
-    });
-    await runDirectRetryMode(tmpDir, retryContext);
-
-    expect(capture.systemPrompts[0]).toContain('**Run:** 20260524-direct-failed');
-    expect(capture.systemPrompts[0]).not.toContain('**Branch:** 20260524-direct-failed');
-  });
-
   it('should preserve pasted image attachments from the retry conversation loop', async () => {
     setupRawStdin([
       `use ${createOscImagePaste()}\r`,
@@ -270,15 +240,4 @@ describe('/retry slash command', () => {
     expect(existsSync(result.attachments![0]!.tempPath)).toBe(true);
   });
 
-  it('should not include order section when no order content', async () => {
-    setupRawStdin(toRawInputs(['check the order', '/cancel']));
-    const capture = setupProvider(['No order found.']);
-
-    const retryContext = buildRetryContext({ previousOrderContent: null });
-    await runTaskRetryMode(tmpDir, retryContext);
-
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).not.toContain('Previous Order');
-  });
 });

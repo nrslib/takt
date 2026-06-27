@@ -147,7 +147,7 @@ export class InstructionBuilder {
     const hasRetryNote = !!this.context.retryNote;
     const retryNote = hasRetryNote ? escapeTemplateChars(this.context.retryNote!) : '';
 
-    // Policy injection (top + bottom reminder per "Lost in the Middle" research)
+    // Policy facet content
     const policyContents = this.context.policyContents ?? this.step.policyContents;
     const hasPolicy = !!(policyContents && policyContents.length > 0);
     const policyJoined = hasPolicy && policyContents ? policyContents.join('\n\n---\n\n') : '';

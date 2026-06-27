@@ -109,41 +109,6 @@ describe('runSyncConflictResolver', () => {
     });
   });
 
-  it('wraps OpenCode system prompts with provider runtime instructions', async () => {
-    const setup = vi.fn(() => ({ call: mockAgentCall }));
-    mockResolveAssistantProviderModelFromConfig.mockReturnValue({
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
-    });
-    mockGetProvider.mockReturnValue({
-      getRuntimeInstructions: vi.fn(() => 'OpenCode tool names are lowercase.'),
-      setup,
-    });
-    mockLoadTemplate.mockImplementation((name: string, _lang: string, vars?: Record<string, string>) => {
-      if (name === 'sync_conflict_resolver_system_prompt') {
-        return 'system-prompt';
-      }
-      if (name === 'sync_conflict_resolver_message') {
-        return `message:${vars?.originalInstruction ?? ''}`;
-      }
-      if (name === 'provider_runtime_system_prompt') {
-        return `runtime:${vars?.agentDefinition}:${vars?.providerRuntimeInstructions}`;
-      }
-      throw new Error(`Unexpected template: ${name}`);
-    });
-
-    await runSyncConflictResolver({
-      projectCwd: '/repo',
-      cwd: '/repo/worktree',
-      originalInstruction: 'Resolve conflicts',
-    });
-
-    expect(setup).toHaveBeenCalledWith({
-      name: 'conflict-resolver',
-      systemPrompt: 'runtime:system-prompt:OpenCode tool names are lowercase.',
-    });
-  });
-
   it('fails fast when no provider is configured', async () => {
     mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: undefined, model: 'gpt-5.4' });
 

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { detectJudgeIndex, buildJudgePrompt, isValidRuleIndex, buildJudgeConditions } from '../agents/judge-utils.js';
+import { detectJudgeIndex, isValidRuleIndex, buildJudgeConditions } from '../agents/judge-utils.js';
 
 describe('detectJudgeIndex', () => {
   it('should detect [JUDGE:1] as index 0', () => {
@@ -24,31 +24,6 @@ describe('detectJudgeIndex', () => {
 
   it('should be case-insensitive', () => {
     expect(detectJudgeIndex('[judge:2]')).toBe(1);
-  });
-});
-
-describe('buildJudgePrompt', () => {
-  it('should build a well-structured judge prompt', () => {
-    const agentOutput = 'Code implementation complete.\n\nAll tests pass.';
-    const conditions = [
-      { index: 0, text: 'No issues found' },
-      { index: 1, text: 'Issues detected that need fixing' },
-    ];
-
-    const prompt = buildJudgePrompt(agentOutput, conditions);
-
-    expect(prompt).toContain('# Judge Task');
-    expect(prompt).toContain('Code implementation complete.');
-    expect(prompt).toContain('All tests pass.');
-    expect(prompt).toContain('| 1 | No issues found |');
-    expect(prompt).toContain('| 2 | Issues detected that need fixing |');
-    expect(prompt).toContain('[JUDGE:N]');
-  });
-
-  it('should handle single condition', () => {
-    const prompt = buildJudgePrompt('output', [{ index: 0, text: 'Always true' }]);
-
-    expect(prompt).toContain('| 1 | Always true |');
   });
 });
 

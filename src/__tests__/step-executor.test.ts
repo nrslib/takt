@@ -134,15 +134,14 @@ describe('StepExecutor', () => {
       undefined,
     );
 
-    expect(instruction).toContain('Return exactly one fenced JSON block');
     expect(onPhaseStart).toHaveBeenCalledWith(
       step,
       1,
       'execute',
-      expect.stringContaining('Return exactly one fenced JSON block'),
+      instruction,
       {
         systemPrompt: 'system prompt',
-        userInstruction: expect.stringContaining('Return exactly one fenced JSON block'),
+        userInstruction: instruction,
       },
       'implement:3:1:1',
       3,

@@ -17,15 +17,7 @@ export function parseLastJsonBlock(content: string): unknown {
 }
 
 export function buildPromptBasedStructuredInstruction(baseInstruction: string): string {
-  return [
-    baseInstruction,
-    '',
-    'Return exactly one fenced JSON block with this shape:',
-    '```json',
-    '{"step": 1}',
-    '```',
-    'Do not include any text before or after the JSON block.',
-  ].join('\n');
+  return loadTemplate('structured_json_step_instruction', 'en', { baseInstruction });
 }
 
 export function resolveStructuredStep(json: unknown): number {
@@ -40,3 +32,4 @@ export function resolveStructuredStep(json: unknown): number {
 export function getErrorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+import { loadTemplate } from '../../shared/prompts/index.js';

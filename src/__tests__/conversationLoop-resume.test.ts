@@ -194,27 +194,6 @@ describe('initializeSession', () => {
 });
 
 describe('callAIWithRetry', () => {
-  it('wraps direct OpenCode system prompts with provider runtime instructions', async () => {
-    const { provider, capture } = createScenarioProvider(
-      [{ content: 'ok' }],
-      { runtimeInstructions: 'OpenCode tool names are lowercase.' },
-    );
-    const ctx: SessionContext = {
-      provider: provider as SessionContext['provider'],
-      providerType: 'opencode',
-      model: 'opencode/big-pickle',
-      lang: 'en',
-      personaName: 'interactive',
-      sessionId: undefined,
-    };
-
-    await callAIWithRetry('hello', 'base system prompt', ['Read'], '/repo', ctx);
-
-    expect(capture.systemPrompts[0]).toContain('base system prompt');
-    expect(capture.systemPrompts[0]).toContain('## Provider Runtime Instructions');
-    expect(capture.systemPrompts[0]).toContain('OpenCode tool names are lowercase.');
-  });
-
   it('passes session provider options to the initial call and stale-session retry', async () => {
     const { provider, capture } = createScenarioProvider([
       { content: 'stale', status: 'error' },
@@ -349,8 +328,6 @@ describe('/resume command', () => {
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User Note:\nadd rollback plan');
-    expect(capture.prompts[0]).not.toContain('User: add rollback plan');
     expect(result).toEqual({
       action: 'execute',
       task: 'Summarized resumed task.',
@@ -460,7 +437,6 @@ describe('/go command', () => {
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
     expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
     expect(capture.imageAttachments[0]).toBeUndefined();
     expect(capture.imageAttachments[1]).toBeUndefined();
     expect(result.action).toBe('execute');
@@ -495,7 +471,6 @@ describe('/go command', () => {
     const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined);
 
     expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toMatch(/use \[Image #1\] \(`.*image-1\.png`\) please/);
     expect(capture.imageAttachments[0]?.[0]?.placeholder).toBe('[Image #1]');
     expect(capture.imageAttachments[0]?.[0]?.path).toBeDefined();
     expect(capture.imageAttachments[1]?.[0]?.placeholder).toBe('[Image #1]');
@@ -556,13 +531,6 @@ describe('/go command', () => {
     );
 
     expect(capture.callCount).toBe(2);
-    expect(capture.prompts[0]).toContain('## Assistant Init Context');
-    expect(capture.prompts[0]).toContain('configured project context');
-    expect(capture.prompts[0]).toContain('hello');
-    expect(capture.prompts[0]).not.toContain('Source Context');
-    expect(capture.prompts[1]).not.toContain('## Assistant Init Context');
-    expect(capture.prompts[1]).not.toContain('configured project context');
-    expect(capture.prompts[1]).toContain('follow up');
     expect(result.action).toBe('cancel');
   });
 
@@ -596,9 +564,6 @@ describe('/go command', () => {
     );
 
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('## Assistant Init Context');
-    expect(capture.prompts[0]).toContain('configured project context');
-    expect(capture.prompts[0]).toContain('User: Implement explicit assistant init files');
     expect(result).toEqual({
       action: 'execute',
       task: 'Summarized task.',

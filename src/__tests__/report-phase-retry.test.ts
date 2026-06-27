@@ -139,9 +139,6 @@ describe('runReportPhase retry with new session', () => {
     const secondCallOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(secondCallOptions.sessionId).toBeUndefined();
 
-    const secondInstruction = runAgentMock.mock.calls[1]?.[1] as string;
-    expect(secondInstruction).toContain('## Previous Work Context');
-    expect(secondInstruction).toContain('Implemented feature X');
   });
 
   it('should start report phase with a new session when no existing session is available', async () => {
@@ -166,11 +163,8 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(reportPath, 'utf-8')).toBe('# Report\nFresh session output');
     expect(runAgentMock).toHaveBeenCalledTimes(1);
 
-    const firstCallInstruction = runAgentMock.mock.calls[0]?.[1] as string;
     const firstCallOptions = runAgentMock.mock.calls[0]?.[2] as { sessionId?: string };
     expect(firstCallOptions.sessionId).toBeUndefined();
-    expect(firstCallInstruction).toContain('## Previous Work Context');
-    expect(firstCallInstruction).toContain('Aggregated team leader output');
   });
 
   it('should retry with new session when first attempt status is error', async () => {

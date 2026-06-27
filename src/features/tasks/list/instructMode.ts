@@ -18,7 +18,7 @@ import {
   type InteractiveModeResult,
   type WorkflowContext,
 } from '../../interactive/interactive.js';
-import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
+import { prependSourceContext } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
@@ -120,7 +120,7 @@ export async function runInstructMode(
     systemPrompt,
     allowedTools: INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
-      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
+      prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createSelectActionWithoutExecute(ui),
     previousOrderContent: previousOrderContent ?? undefined,

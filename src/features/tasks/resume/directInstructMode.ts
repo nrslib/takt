@@ -12,7 +12,7 @@ import {
   type WorkflowContext,
 } from '../../interactive/interactive-summary.js';
 import { resolveLanguage } from '../../interactive/interactive.js';
-import { buildInteractivePolicyPrompt } from '../../interactive/policyPrompt.js';
+import { prependSourceContext } from '../../interactive/promptSections.js';
 import { formatRunSessionForPrompt, type RunSessionContext } from '../../interactive/runSessionReader.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
@@ -94,7 +94,7 @@ export async function runDirectInstructMode(
     systemPrompt,
     allowedTools: DIRECT_INSTRUCT_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
-      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
+      prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: `${ui.intro}${replayHint}`,
     selectAction: createDirectSelectAction(ui),
     previousOrderContent: options.previousOrderContent ?? undefined,

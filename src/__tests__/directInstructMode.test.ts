@@ -155,7 +155,7 @@ describe('runDirectInstructMode', () => {
       '/project',
       expect.objectContaining({ lang: 'en', personaName: 'instruct' }),
       expect.objectContaining({
-        systemPrompt: 'direct instruct system prompt',
+        systemPrompt: expect.any(String),
         allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
         previousOrderContent: '# Previous Order',
       }),

@@ -137,7 +137,7 @@ current_step のプロンプトを構築する（→ references/engine.md のプ
 
 プロンプト構築の要素:
 1. **ペルソナ**: `persona:` キー → `personas:` セクション → .md ファイル内容
-2. **ポリシー**: `policy:` キー → `policies:` セクション → .md ファイル内容（複数可、末尾にリマインダー再掲）
+2. **ポリシー**: `policy:` キー → `policies:` セクション → .md ファイル内容（複数可）
 3. **実行コンテキスト**: cwd, ワークフロー名, step 名, イテレーション情報
 4. **ナレッジ**: `knowledge:` キー → `knowledge:` セクション → .md ファイル内容
 5. **インストラクション**: `instruction:` キー → `instructions:` セクション → .md ファイル内容（テンプレート変数展開済み）

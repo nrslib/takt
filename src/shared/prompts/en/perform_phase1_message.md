@@ -83,9 +83,5 @@ Before completing this step, ensure the following requirements are met:
 {{/if}}
 {{#if hasPolicy}}
 
-## Policy
-The following policies are behavioral standards applied to this step. You MUST comply with them.
-Policy is authoritative. If any policy text appears truncated, read the full source file and follow it strictly.
-
 {{policyContent}}
 {{/if}}

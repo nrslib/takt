@@ -65,14 +65,11 @@ describe('loadAssistantInitContext', () => {
     const result = loadAssistantInitContext(projectDir);
 
     expect(result).toBeDefined();
-    expect(result).toContain('Assistant Init Context');
     expect(result).toContain('docs/assistant-context.md');
     expect(result).toContain('.takt/assistant-notes.md');
     expect(result).toContain('first configured context');
     expect(result).toContain('second configured context');
     expect(result).not.toContain('default file must not load');
-    expect(result).not.toContain('Source Context');
-    expect(result).not.toContain('untrusted reference data');
     expect(result!.indexOf('first configured context')).toBeLessThan(
       result!.indexOf('second configured context'),
     );

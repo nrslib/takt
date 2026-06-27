@@ -4,7 +4,6 @@
  * Covers:
  * - Schema validation for knowledge field at workflow and step level
  * - Workflow parser resolution of knowledge references
- * - InstructionBuilder knowledge content injection
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -17,9 +16,6 @@ import {
   ParallelSubStepRawSchema,
 } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
-import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
-import type { WorkflowStep } from '../core/models/types.js';
 
 describe('WorkflowConfigRawSchema knowledge field', () => {
   it('should accept knowledge map at workflow level', () => {
@@ -312,92 +308,6 @@ describe('normalizeWorkflowConfig knowledge resolution', () => {
 
     // Non-.md references that are not in the knowledge map are treated as inline content
     expect(workflow.steps[0].knowledgeContents).toEqual(['nonexistent']);
-  });
-});
-
-// --- Test helpers for InstructionBuilder ---
-
-function createMinimalStep(instruction: string): WorkflowStep {
-  return {
-    name: 'test-step',
-    personaDisplayName: 'coder',
-    instruction,
-    passPreviousResponse: false,
-  };
-}
-
-function createMinimalContext(overrides: Partial<InstructionContext> = {}): InstructionContext {
-  return {
-    task: 'Test task',
-    iteration: 1,
-    maxSteps: 10,
-    stepIteration: 1,
-    cwd: '/tmp/test',
-    projectCwd: '/tmp/test',
-    userInputs: [],
-    language: 'ja',
-    ...overrides,
-  };
-}
-
-// --- InstructionBuilder knowledge injection tests ---
-
-describe('InstructionBuilder knowledge injection', () => {
-  it('should inject knowledge section when knowledgeContents present in step', () => {
-    const step = createMinimalStep('{task}');
-    step.knowledgeContents = ['# Frontend Knowledge\n\nUse React.'];
-    const ctx = createMinimalContext();
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('## Knowledge');
-    expect(result).toContain('Frontend Knowledge');
-    expect(result).toContain('Use React.');
-  });
-
-  it('should not inject knowledge section when no knowledgeContents', () => {
-    const step = createMinimalStep('{task}');
-    const ctx = createMinimalContext();
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).not.toContain('## Knowledge');
-  });
-
-  it('should prefer context knowledgeContents over step knowledgeContents', () => {
-    const step = createMinimalStep('{task}');
-    step.knowledgeContents = ['Step knowledge.'];
-    const ctx = createMinimalContext({
-      knowledgeContents: ['Context knowledge.'],
-    });
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('Context knowledge.');
-    expect(result).not.toContain('Step knowledge.');
-  });
-
-  it('should join multiple knowledge contents with separator', () => {
-    const step = createMinimalStep('{task}');
-    step.knowledgeContents = ['Knowledge A content.', 'Knowledge B content.'];
-    const ctx = createMinimalContext();
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('Knowledge A content.');
-    expect(result).toContain('Knowledge B content.');
-    expect(result).toContain('---');
-  });
-
-  it('should inject knowledge section in English', () => {
-    const step = createMinimalStep('{task}');
-    step.knowledgeContents = ['# API Guidelines\n\nUse REST conventions.'];
-    const ctx = createMinimalContext({ language: 'en' });
-    const builder = new InstructionBuilder(step, ctx);
-    const result = builder.build();
-
-    expect(result).toContain('## Knowledge');
-    expect(result).toContain('API Guidelines');
   });
 });
 

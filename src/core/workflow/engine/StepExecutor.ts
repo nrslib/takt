@@ -38,6 +38,7 @@ import { providerSupportsStructuredOutput } from '../../../infra/providers/provi
 import { resolveReportHandles } from '../instruction/report-handles.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
+import { loadTemplate } from '../../../shared/prompts/index.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
@@ -213,15 +214,10 @@ export class StepExecutor {
       return instruction;
     }
 
-    return [
+    return loadTemplate('structured_json_schema_instruction', 'en', {
       instruction,
-      '',
-      'Return exactly one fenced JSON block that matches this JSON schema:',
-      '```json',
-      JSON.stringify(step.structuredOutput.schema, null, 2),
-      '```',
-      'Do not include any text before or after the JSON block.',
-    ].join('\n');
+      schemaJson: JSON.stringify(step.structuredOutput.schema, null, 2),
+    });
   }
 
   normalizeStructuredOutput(

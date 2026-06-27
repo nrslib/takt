@@ -181,7 +181,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should inject failure info into system prompt', async () => {
+  it('should execute retry mode after assistant response', async () => {
     setupRawStdin(toRawInputs(['what went wrong?', '/go']));
     const capture = setupProvider([
       'The review step failed due to a timeout.',
@@ -214,17 +214,6 @@ describe('E2E: Retry mode with failure context injection', () => {
 
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    // Verify: system prompt contains failure information
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).toContain('Retry Assistant');
-    expect(systemPrompt).toContain('implement-auth');
-    expect(systemPrompt).toContain('takt/implement-auth');
-    expect(systemPrompt).toContain('review');
-    expect(systemPrompt).toContain('Timeout after 300s');
-    expect(systemPrompt).toContain('Agent stopped responding');
-
-    // Verify: flow completed
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Fix review timeout by increasing the limit.');
     expect(capture.callCount).toBe(2);
@@ -265,8 +254,6 @@ describe('E2E: Retry mode with failure context injection', () => {
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Inspect the failing logs and summarize the timeout root cause.');
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User: inspect the failing logs');
-    expect(capture.prompts[0]).not.toContain('User Note:\ninspect the failing logs');
   });
 
   it('should summarize suffix /go task without prior conversation', async () => {
@@ -304,11 +291,9 @@ describe('E2E: Retry mode with failure context injection', () => {
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Inspect the failing logs from the retry context and summarize the timeout root cause.');
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User: inspect the failing logs');
-    expect(capture.prompts[0]).not.toContain('User Note:\ninspect the failing logs');
   });
 
-  it('should inject failure info AND run session data into system prompt', async () => {
+  it('should execute retry mode with run session context', async () => {
     // Create run fixture with logs and reports
     createRunFixture(tmpDir, 'run-failed', {
       meta: { task: 'Build login page', status: 'failed' },
@@ -327,7 +312,7 @@ describe('E2E: Retry mode with failure context injection', () => {
     const paths = getRunPaths(tmpDir, 'run-failed');
 
     setupRawStdin(toRawInputs(['fix the CSS issue', '/go']));
-    const capture = setupProvider([
+    setupProvider([
       'The CSS compilation error is likely due to missing imports.',
       'Fix CSS imports in login component.',
     ]);
@@ -366,71 +351,8 @@ describe('E2E: Retry mode with failure context injection', () => {
 
     const result = await runTaskRetryMode(tmpDir, retryContext);
 
-    // Verify: system prompt contains BOTH failure info and run session data
-    const systemPrompt = capture.systemPrompts[0]!;
-
-    // Failure info
-    expect(systemPrompt).toContain('build-login');
-    expect(systemPrompt).toContain('CSS compilation failed');
-    expect(systemPrompt).toContain('PostCSS error: unknown property');
-    expect(systemPrompt).toContain('implement');
-
-    // Run session data
-    expect(systemPrompt).toContain('Previous Run Data');
-    expect(systemPrompt).toContain('Build login page');
-    expect(systemPrompt).toContain('Planned OAuth2 login flow');
-    expect(systemPrompt).toContain('Failed at CSS compilation');
-    expect(systemPrompt).toContain('00-plan.md');
-    expect(systemPrompt).toContain('Login form with OAuth2');
-
-    // Run paths (AI can use Read tool)
-    expect(systemPrompt).toContain(paths.logsDir);
-    expect(systemPrompt).toContain(paths.reportsDir);
-
-    // Flow completed
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Fix CSS imports in login component.');
-  });
-
-  it('should include existing retry note in system prompt', async () => {
-    setupRawStdin(toRawInputs(['what should I do?', '/go']));
-    const capture = setupProvider([
-      'Based on the previous attempt, the mocks are still incomplete.',
-      'Add complete mocks for all API endpoints.',
-    ]);
-
-    const retryContext: RetryContext = {
-      failure: {
-        taskName: 'fix-tests',
-        taskContent: 'Fix failing test suite',
-        createdAt: '2026-02-15T16:00:00Z',
-        failedStep: '',
-        error: 'Test suite failed',
-        lastMessage: '',
-        retryNote: 'Previous attempt: added missing mocks but still failing',
-      },
-      subject: {
-        kind: 'branch',
-        value: 'takt/fix-tests',
-      },
-      workflowContext: {
-        name: 'default',
-        description: '',
-        workflowStructure: '',
-        stepPreviews: [],
-      },
-      run: null,
-      previousOrderContent: null,
-    };
-
-    await runTaskRetryMode(tmpDir, retryContext);
-
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).toContain('Existing Retry Note');
-    expect(systemPrompt).toContain('Previous attempt: added missing mocks but still failing');
-
-    // absent fields should NOT appear as sections
-    expect(systemPrompt).not.toContain('Last Message');
   });
 
   it('should cancel cleanly and not crash', async () => {

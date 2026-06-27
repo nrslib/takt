@@ -540,8 +540,7 @@ describe('WorkflowEngine provider_options resolution', () => {
 
     await engine.run();
 
-    const [, instruction, options] = vi.mocked(runAgent).mock.calls[0] ?? [];
-    expect(instruction).toContain('Return exactly one fenced JSON block');
+    const [, , options] = vi.mocked(runAgent).mock.calls[0] ?? [];
     expect(options?.resolvedProvider).toBe('cursor');
     expect(options?.resolvedModel).toBe('cursor-fast');
     expect(options?.outputSchema).toBeUndefined();

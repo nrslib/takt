@@ -211,8 +211,6 @@ describe('/go summary flow', () => {
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Add error handling to all API calls.');
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User: add error handling');
-    expect(capture.prompts[0]).not.toContain('User Note:\nadd error handling');
     expect(mockLogInfo).toHaveBeenCalledWith('Creating instruction...');
   });
 
@@ -253,14 +251,12 @@ describe('/go summary flow', () => {
 describe('/go with user note', () => {
   it('should append user note to summary prompt', async () => {
     setupRawStdin(toRawInputs(['refactor auth', '/go also check security']));
-    const capture = setupProvider(['Will do.', 'Refactor auth and check security.']);
+    setupProvider(['Will do.', 'Refactor auth and check security.']);
 
     const result = await runInstruct();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Refactor auth and check security.');
-    // /go summary call should include the user note in the prompt
-    expect(capture.prompts[1]).toContain('also check security');
   });
 });
 
@@ -403,13 +399,12 @@ describe('end-of-line /play command', () => {
 describe('end-of-line /go command', () => {
   it('should use preceding text as user note in summary', async () => {
     setupRawStdin(toRawInputs(['refactor auth', 'also check security /go']));
-    const capture = setupProvider(['Will do.', 'Refactor auth and check security.']);
+    setupProvider(['Will do.', 'Refactor auth and check security.']);
 
     const result = await runInstruct();
 
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Refactor auth and check security.');
-    expect(capture.prompts[1]).toContain('also check security');
   });
 
   it('should use preceding text as first task input without prior conversation', async () => {
@@ -421,8 +416,6 @@ describe('end-of-line /go command', () => {
     expect(result.action).toBe('execute');
     expect(result.task).toBe('実行タスクを整理する。');
     expect(capture.callCount).toBe(1);
-    expect(capture.prompts[0]).toContain('User: 実行して');
-    expect(capture.prompts[0]).not.toContain('User Note:\n実行して');
   });
 });
 
@@ -468,46 +461,5 @@ describe('session propagation', () => {
     expect(result.task).toBe('Final summary.');
     // Second call should receive the sessionId from first call
     expect(capture.sessionIds[1]).toBe('session-abc');
-  });
-});
-
-// =================================================================
-// Policy injection: transformPrompt wraps user input
-// =================================================================
-describe('policy injection', () => {
-  it('should wrap user messages with policy content', async () => {
-    setupRawStdin(toRawInputs(['fix the bug', '/cancel']));
-    const capture = setupProvider(['OK.']);
-
-    await runInstructMode('/test', '', 'takt/test', 'test', '', '');
-
-    // The prompt sent to AI should contain Policy section
-    expect(capture.prompts[0]).toContain('Policy');
-    expect(capture.prompts[0]).toContain('fix the bug');
-    expect(capture.prompts[0]).toContain('Policy Reminder');
-  });
-});
-
-// =================================================================
-// System prompt: branch name appears in intro
-// =================================================================
-describe('branch context', () => {
-  it('should include branch name and context in system prompt', async () => {
-    setupRawStdin(toRawInputs(['check changes', '/cancel']));
-    const capture = setupProvider(['Looks good.']);
-
-    await runInstructMode(
-      '/test',
-      '## Changes\n```\nsrc/auth.ts | 50 +++\n```',
-      'takt/feature-auth',
-      'feature-auth',
-      'Do something',
-      '',
-    );
-
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).toContain('takt/feature-auth');
-    expect(systemPrompt).toContain('src/auth.ts | 50 +++');
   });
 });

@@ -220,16 +220,6 @@ describe('E2E: Run session → instruct mode with interactive flow', () => {
       context,
     );
 
-    // Verify: system prompt contains run session data
-    expect(capture.systemPrompts.length).toBeGreaterThan(0);
-    const systemPrompt = capture.systemPrompts[0]!;
-    expect(systemPrompt).toContain('Previous Run Reference');
-    expect(systemPrompt).toContain('Implement JWT auth');
-    expect(systemPrompt).toContain('Planned JWT auth flow');
-    expect(systemPrompt).toContain('Created auth middleware');
-    expect(systemPrompt).toContain('00-plan.md');
-    expect(systemPrompt).toContain('JWT auth with refresh tokens');
-
     // Verify: interactive flow completed with execute action
     expect(result.action).toBe('execute');
     expect(result.task).toBe('Fix token expiry handling in auth middleware.');

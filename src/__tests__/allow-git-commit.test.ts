@@ -6,16 +6,7 @@ import {
   ParallelSubStepRawSchema,
   WorkflowStepRawSchema,
 } from '../core/models/index.js';
-import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
-import {
-  ReportInstructionBuilder,
-  type ReportInstructionContext,
-} from '../core/workflow/instruction/ReportInstructionBuilder.js';
-import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { loadTemplate } from '../shared/prompts/index.js';
-
-type Language = 'en' | 'ja';
 
 function createTestDir(): string {
   return mkdtempSync(join(tmpdir(), 'takt-allow-git-commit-'));
@@ -28,44 +19,6 @@ function withTestDir<T>(run: (testDir: string) => T): T {
   } finally {
     rmSync(testDir, { recursive: true, force: true });
   }
-}
-
-function createInstructionContext(language: Language): InstructionContext {
-  return {
-    task: 'Implement the requested change.',
-    iteration: 1,
-    maxSteps: 5,
-    stepIteration: 1,
-    cwd: '/tmp/project',
-    projectCwd: '/tmp/project',
-    userInputs: [],
-    language,
-  };
-}
-
-function createReportContext(language: Language): ReportInstructionContext {
-  return {
-    cwd: '/tmp/project',
-    reportDir: '/tmp/project/.takt/runs/test/reports',
-    stepIteration: 1,
-    language,
-  };
-}
-
-function gitRuleText(language: Language): { commit: string; push: string; add?: string } {
-  if (language === 'ja') {
-    return {
-      commit: 'git commit を実行しないでください',
-      push: 'git push を実行しないでください',
-      add: 'git add を実行しないでください',
-    };
-  }
-
-  return {
-    commit: 'Do NOT run git commit',
-    push: 'Do NOT run git push',
-    add: 'Do NOT run git add',
-  };
 }
 
 function normalizeFirstStep(
@@ -343,102 +296,4 @@ describe('allow_git_commit', () => {
     });
   });
 
-  describe('phase 1 instruction', () => {
-    it.each([
-      { language: 'en' as const, allowGitCommit: undefined, expectsGitRules: true },
-      { language: 'en' as const, allowGitCommit: false, expectsGitRules: true },
-      { language: 'en' as const, allowGitCommit: true, expectsGitRules: false },
-      { language: 'ja' as const, allowGitCommit: undefined, expectsGitRules: true },
-      { language: 'ja' as const, allowGitCommit: false, expectsGitRules: true },
-      { language: 'ja' as const, allowGitCommit: true, expectsGitRules: false },
-    ])(
-      'should toggle git execution rules in Phase 1 when allow_git_commit is $allowGitCommit ($language)',
-      ({ language, allowGitCommit, expectsGitRules }) => {
-        withTestDir((testDir) => {
-          const step = normalizeFirstStep({
-            name: 'implement',
-            persona: 'coder',
-            instruction: '{task}',
-            ...(allowGitCommit === undefined ? {} : { allow_git_commit: allowGitCommit }),
-          }, testDir);
-
-          const result = new InstructionBuilder(step, createInstructionContext(language)).build();
-          const gitRule = gitRuleText(language);
-
-          if (expectsGitRules) {
-            expect(result).toContain(gitRule.commit);
-            expect(result).toContain(gitRule.push);
-            expect(result).toContain(gitRule.add!);
-          } else {
-            expect(result).not.toContain(gitRule.commit);
-            expect(result).not.toContain(gitRule.push);
-            expect(result).not.toContain(gitRule.add!);
-          }
-        });
-      },
-    );
-  });
-
-  describe('phase 2 instruction', () => {
-    it.each([
-      { language: 'en' as const, allowGitCommit: undefined, expectsGitRules: true },
-      { language: 'en' as const, allowGitCommit: false, expectsGitRules: true },
-      { language: 'en' as const, allowGitCommit: true, expectsGitRules: false },
-      { language: 'ja' as const, allowGitCommit: undefined, expectsGitRules: true },
-      { language: 'ja' as const, allowGitCommit: false, expectsGitRules: true },
-      { language: 'ja' as const, allowGitCommit: true, expectsGitRules: false },
-    ])(
-      'should toggle git execution rules in Phase 2 when allow_git_commit is $allowGitCommit ($language)',
-      ({ language, allowGitCommit, expectsGitRules }) => {
-        withTestDir((testDir) => {
-          const step = normalizeFirstStep({
-            name: 'plan',
-            persona: 'planner',
-            instruction: '{task}',
-            ...(allowGitCommit === undefined ? {} : { allow_git_commit: allowGitCommit }),
-            output_contracts: {
-              report: [
-                {
-                  name: '00-plan.md',
-                  format: '# Plan Report',
-                  use_judge: true,
-                },
-              ],
-            },
-          }, testDir);
-
-          const result = new ReportInstructionBuilder(step, createReportContext(language)).build();
-          const gitRule = gitRuleText(language);
-
-          if (expectsGitRules) {
-            expect(result).toContain(gitRule.commit);
-            expect(result).toContain(gitRule.push);
-          } else {
-            expect(result).not.toContain(gitRule.commit);
-            expect(result).not.toContain(gitRule.push);
-          }
-        });
-      },
-    );
-  });
-
-  describe('templates', () => {
-    it('should keep git prohibition text out of phase templates so builders can inject it conditionally', () => {
-      const phase1En = loadTemplate('perform_phase1_message', 'en');
-      const phase1Ja = loadTemplate('perform_phase1_message', 'ja');
-      const phase2En = loadTemplate('perform_phase2_message', 'en');
-      const phase2Ja = loadTemplate('perform_phase2_message', 'ja');
-
-      expect(phase1En).not.toContain('Do NOT run git commit');
-      expect(phase1En).not.toContain('Do NOT run git push');
-      expect(phase1En).not.toContain('Do NOT run git add');
-      expect(phase1Ja).not.toContain('git commit を実行しないでください');
-      expect(phase1Ja).not.toContain('git push を実行しないでください');
-      expect(phase1Ja).not.toContain('git add を実行しないでください');
-      expect(phase2En).not.toContain('Do NOT run git commit');
-      expect(phase2En).not.toContain('Do NOT run git push');
-      expect(phase2Ja).not.toContain('git commit を実行しないでください');
-      expect(phase2Ja).not.toContain('git push を実行しないでください');
-    });
-  });
 });

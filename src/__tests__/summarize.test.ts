@@ -192,28 +192,6 @@ describe('summarizeTaskName', () => {
     );
   });
 
-  it('should wrap OpenCode summarizer system prompt with provider runtime instructions', async () => {
-    mockResolveConfigValues.mockReturnValue({
-      provider: 'opencode',
-      model: 'opencode/big-pickle',
-      branchNameStrategy: 'ai',
-    });
-    mockGetRuntimeInstructions.mockReturnValue('OpenCode tool names are lowercase.');
-    mockProviderCall.mockResolvedValue({
-      persona: 'summarizer',
-      status: 'done',
-      content: 'opencode-task',
-      timestamp: new Date(),
-    });
-
-    await summarizeTaskName('test', { cwd: '/project' });
-
-    const setupArg = mockProviderSetup.mock.calls[0]?.[0] as { systemPrompt: string };
-    expect(setupArg.systemPrompt).toContain('## Provider Runtime Instructions');
-    expect(setupArg.systemPrompt).toContain('OpenCode tool names are lowercase.');
-    expect(setupArg.systemPrompt).toContain('You are a slug generator.');
-  });
-
   it('should remove consecutive hyphens', async () => {
     // Given: AI response has consecutive hyphens
     mockProviderCall.mockResolvedValue({

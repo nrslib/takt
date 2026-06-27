@@ -21,7 +21,7 @@ import {
   displayAndClearSessionState,
   runConversationLoop,
 } from './conversationLoop.js';
-import { buildInteractivePolicyPrompt } from './policyPrompt.js';
+import { prependSourceContext } from './promptSections.js';
 import { initializeSession } from './sessionInitialization.js';
 import { loadAssistantInitContext } from './assistantInitFiles.js';
 import {
@@ -196,7 +196,7 @@ export async function interactiveMode(
     systemPrompt,
     allowedTools: DEFAULT_INTERACTIVE_TOOLS,
     transformPrompt: (userMessage: string, sourceContext?: string) =>
-      buildInteractivePolicyPrompt(ctx.lang, userMessage, sourceContext),
+      prependSourceContext(ctx.lang, userMessage, sourceContext),
     introMessage: ui.intro,
     selectAction,
     initialPromptContext: assistantInitContext,

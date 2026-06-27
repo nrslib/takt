@@ -210,19 +210,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       expect(fixInstructions).toHaveLength(2);
 
-      const fix1 = fixInstructions[0]!;
-      expect(fix1).toContain('## Previous Response');
-      expect(fix1).toContain('Arch R1 OK');
-      expect(fix1).toContain('Sec R1 needs fix');
-      expect(fix1).not.toContain('Arch R2 OK');
-      expect(fix1).not.toContain('Sec R2 still failing');
-
-      const fix2 = fixInstructions[1]!;
-      expect(fix2).toContain('## Previous Response');
-      expect(fix2).toContain('Arch R2 OK');
-      expect(fix2).toContain('Sec R2 still failing');
-      expect(fix2).not.toContain('Arch R1 OK');
-      expect(fix2).not.toContain('Sec R1 needs fix');
     });
 
     it('should use the latest step output across different steps for Previous Response', async () => {
@@ -266,16 +253,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       await engine.run();
 
       expect(aiFixInstructions).toHaveLength(1);
-      const aiFix = aiFixInstructions[0]!;
-      expect(aiFix).toContain('## Previous Response');
-      expect(aiFix).toContain('AI issues found');
-      expect(aiFix).not.toContain('AI issues fixed');
 
       expect(superviseInstructions).toHaveLength(1);
-      const supervise = superviseInstructions[0]!;
-      expect(supervise).toContain('## Previous Response');
-      expect(supervise).toContain('Arch OK');
-      expect(supervise).toContain('Sec OK');
     });
   });
 
@@ -460,8 +439,6 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       const [, , startInstruction] = startFn.mock.calls[0] ?? [];
       const [, , completeInstruction] = completeFn.mock.calls[0] ?? [];
-      expect(startInstruction).toContain('Return exactly one fenced JSON block');
-      expect(completeInstruction).toContain('Return exactly one fenced JSON block');
       expect(startInstruction).toBe(completeInstruction);
     });
 

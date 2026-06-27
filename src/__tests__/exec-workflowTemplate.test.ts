@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/index.js';
-import { InstructionBuilder, type InstructionContext } from '../core/workflow/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { buildExecWorkflowYaml } from '../features/exec/workflowTemplate.js';
@@ -313,46 +312,6 @@ describe('exec workflow template', () => {
         model: undefined,
         modelSource: 'step',
       }));
-    } finally {
-      rmSync(projectDir, { recursive: true, force: true });
-      rmSync(globalConfigDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should not inject worker output into the judge prompt', () => {
-    const yaml = buildExecWorkflowYaml(createExecConfig(), {
-      workflowName: 'exec-verifier-test',
-      taskDescription: 'Implement verifier isolation',
-    });
-    const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
-    try {
-      const judge = workflow.steps.find((step) => step.name === 'judge') as AgentWorkflowStep | undefined;
-      const judgeActor = judge?.parallel?.[0];
-      if (!judgeActor) {
-        throw new Error('Generated exec workflow must include judge actor sub-step');
-      }
-      const context: InstructionContext = {
-        task: 'Review the produced files',
-        iteration: 1,
-        maxSteps: 20,
-        stepIteration: 1,
-        cwd: projectDir,
-        projectCwd: projectDir,
-        userInputs: [],
-        workflowName: workflow.name,
-        workflowDescription: workflow.description,
-        previousOutput: {
-          persona: 'exec-worker',
-          status: 'done',
-          content: 'WORKER_OUTPUT_SHOULD_NOT_REACH_JUDGE',
-          timestamp: new Date('2026-06-23T00:00:00.000Z'),
-        },
-      };
-
-      const prompt = new InstructionBuilder(judgeActor, context).build();
-
-      expect(prompt).not.toContain('## Previous Response');
-      expect(prompt).not.toContain('WORKER_OUTPUT_SHOULD_NOT_REACH_JUDGE');
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });

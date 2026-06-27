@@ -91,8 +91,6 @@ codex exec --full-auto - < "$tmp_prompt_file"
 9. 前回出力（`pass_previous_response: true` のとき）
 10. レポート出力指示（`report` または `output_contracts.report` があるとき）
 11. ステータスタグ出力指示（`rules` があるとき）
-12. ポリシーリマインダー（ポリシーを末尾再掲）
-
 ### テンプレート変数展開
 
 インストラクション内のプレースホルダーを置換する。
