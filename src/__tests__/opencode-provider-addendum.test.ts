@@ -186,7 +186,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
     const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'write', 'bash'], 'readonly', undefined);
 
     const listed = extractToolNames(runtimeInstructions);
-    expect(listed).toEqual(['read', 'bash']);
+    expect(listed).toEqual(['read']);
   });
 
   it('should exclude web tools when networkAccess is false', () => {

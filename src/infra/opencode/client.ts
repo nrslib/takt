@@ -48,10 +48,14 @@ function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
   if (allowedTools !== undefined && allowedTools.length === 0) {
     return TAKT_AGENT_REPORT;
   }
-  if (allowedTools !== undefined && !allowedTools.some((t) => mapsToOpenCodeEditPermission(t))) {
-    return TAKT_AGENT_REVIEW;
+  const hasBash = allowedTools === undefined
+    || allowedTools.some((t) => t.trim().toLowerCase() === 'bash');
+  const hasEdit = allowedTools === undefined
+    || allowedTools.some((t) => mapsToOpenCodeEditPermission(t));
+  if (hasEdit && hasBash) {
+    return TAKT_AGENT;
   }
-  return TAKT_AGENT;
+  return TAKT_AGENT_REVIEW;
 }
 
 const log = createLogger('opencode-sdk');
