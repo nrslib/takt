@@ -7,7 +7,7 @@ describe('runStatusJudgmentPhase', () => {
     vi.clearAllMocks();
   });
 
-  it('should pass judge stage callbacks through PhaseRunnerContext', async () => {
+  it('should pass judge stage callbacks through status judgment context', async () => {
     const structuredCaller = {
       judgeStatus: vi.fn().mockImplementation(
       async (_structured: string, _tag: string, _rules: unknown[], options: { onJudgeStage?: (entry: {
@@ -53,11 +53,6 @@ describe('runStatusJudgmentPhase', () => {
       reportDir: '/tmp/project/.takt/reports',
       lastResponse: 'response body',
       iteration: 4,
-      getSessionId: vi.fn(),
-      resolveSessionKey: vi.fn(),
-      buildResumeOptions: vi.fn(),
-      buildNewSessionReportOptions: vi.fn(),
-      updatePersonaSession: vi.fn(),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       structuredCaller,
       onPhaseStart,
@@ -114,11 +109,6 @@ describe('runStatusJudgmentPhase', () => {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
       lastResponse: 'response body',
-      getSessionId: vi.fn(),
-      resolveSessionKey: vi.fn(),
-      buildResumeOptions: vi.fn(),
-      buildNewSessionReportOptions: vi.fn(),
-      updatePersonaSession: vi.fn(),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       structuredCaller,
     })).rejects.toThrow('Status judgment requires iteration for step "review"');
@@ -150,11 +140,6 @@ describe('runStatusJudgmentPhase', () => {
       reportDir: '/tmp/project/.takt/reports',
       lastResponse: 'response body',
       iteration: 4,
-      getSessionId: vi.fn(),
-      resolveSessionKey: vi.fn(),
-      buildResumeOptions: vi.fn(),
-      buildNewSessionReportOptions: vi.fn(),
-      updatePersonaSession: vi.fn(),
       resolveStepProviderModel,
       structuredCaller,
       onPhaseComplete,

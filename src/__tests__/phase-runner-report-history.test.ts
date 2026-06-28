@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { RunAgentOptions } from '../agents/runner.js';
 
@@ -30,12 +30,12 @@ function createContext(
     initialSessionId?: string | null;
     onBuildResumeOptions?: (overrides: Pick<RunAgentOptions, 'maxTurns'>) => void;
   } = {},
-): PhaseRunnerContext {
+): ReportPhaseRunnerContext {
   const currentLastResponse = options.lastResponse ?? 'Phase 1 result';
   let currentSessionId = options.initialSessionId === undefined
     ? 'session-1'
     : options.initialSessionId ?? undefined;
-  return {
+  const context = {
     cwd: reportDir,
     reportDir,
     lastResponse: currentLastResponse,
@@ -53,12 +53,18 @@ function createContext(
       _step,
       _overrides,
     ) => ({ cwd: reportDir }),
+    buildFallbackReportOptions: (
+      _step,
+      _failedPrimaryOptions,
+      _overrides,
+    ) => ({ cwd: reportDir, resolvedProvider: 'claude', allowedTools: [], sessionId: undefined }),
     updatePersonaSession: (_persona, sessionId) => {
       if (sessionId) {
         currentSessionId = sessionId;
       }
     },
   };
+  return context;
 }
 
 function queueRunAgentResponses(responses: AgentResponse[]): void {

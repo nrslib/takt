@@ -60,3 +60,27 @@ export function resolveAssistantProviderModelFromConfig(
 
   return { provider, model };
 }
+
+export function resolveAssistantScopedProviderModelFromConfig(
+  config: AssistantProviderConfig,
+): ProviderModelOutput {
+  const localAssistantProvider = config.local.taktProviders?.assistant?.provider;
+  const globalAssistantProvider = config.global.taktProviders?.assistant?.provider;
+  const provider = resolveProviderModelCandidates([
+    { provider: localAssistantProvider },
+    { provider: globalAssistantProvider },
+  ]).provider;
+
+  const model = resolveModelFromCandidates([
+    {
+      model: config.local.taktProviders?.assistant?.model,
+      provider: localAssistantProvider,
+    },
+    {
+      model: config.global.taktProviders?.assistant?.model,
+      provider: globalAssistantProvider,
+    },
+  ], provider);
+
+  return { provider, model };
+}

@@ -275,6 +275,8 @@ export interface WorkflowEngineOptions {
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
+  /** Provider/model used only for report phase fallback after OpenCode report retries fail. */
+  reportFallbackProvider?: StepProviderInfo;
   /** Resolved rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */

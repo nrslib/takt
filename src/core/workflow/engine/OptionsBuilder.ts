@@ -4,7 +4,7 @@ import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
-import type { PhaseRunnerContext } from '../phase-runner.js';
+import type { ReportPhaseRunnerContext, StatusJudgmentPhaseContext } from '../phase-runner.js';
 import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
@@ -35,6 +35,10 @@ import { buildSessionKey } from '../session-key.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+
+type ResolvedRunAgentOptions = RunAgentOptions & {
+  resolvedProviderOptions?: StepProviderOptions;
+};
 
 export class OptionsBuilder {
   constructor(
@@ -155,7 +159,7 @@ export class OptionsBuilder {
     step: WorkflowStep,
     mergedProviderOptions?: StepProviderOptions,
     runtime?: RuntimeStepResolution,
-  ): RunAgentOptions {
+  ): ResolvedRunAgentOptions {
     const steps = this.getWorkflowSteps();
     const currentIndex = steps.findIndex((currentStep) => currentStep.name === step.name);
     const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : '?/?';
@@ -170,7 +174,7 @@ export class OptionsBuilder {
       stepsList: steps,
       currentPosition,
     };
-    const baseOptions: RunAgentOptions & { resolvedProviderOptions?: StepProviderOptions } = {
+    const baseOptions: ResolvedRunAgentOptions = {
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
       abortSignal: this.engineOptions.abortSignal,
@@ -193,6 +197,30 @@ export class OptionsBuilder {
       childProcessEnv: this.engineOptions.childProcessEnv,
     };
     return baseOptions;
+  }
+
+  private buildReadonlyPhaseBaseOptions(
+    step: WorkflowStep,
+    mergedProviderOptions?: StepProviderOptions,
+    runtime?: RuntimeStepResolution,
+  ): ResolvedRunAgentOptions {
+    const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
+    return {
+      cwd: baseOptions.cwd,
+      projectCwd: baseOptions.projectCwd,
+      abortSignal: baseOptions.abortSignal,
+      personaPath: baseOptions.personaPath,
+      resolvedProvider: baseOptions.resolvedProvider,
+      resolvedModel: baseOptions.resolvedModel,
+      providerOptions: baseOptions.providerOptions,
+      resolvedProviderOptions: baseOptions.resolvedProviderOptions,
+      language: baseOptions.language,
+      onStream: baseOptions.onStream,
+      onPermissionRequest: baseOptions.onPermissionRequest,
+      onAskUserQuestion: baseOptions.onAskUserQuestion,
+      workflowMeta: baseOptions.workflowMeta,
+      childProcessEnv: baseOptions.childProcessEnv,
+    };
   }
 
   buildPhase1WorkflowMeta(
@@ -273,7 +301,7 @@ export class OptionsBuilder {
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
-      ...this.buildBaseOptions(step, undefined, runtime),
+      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
       // Report/status phases are read-only regardless of step settings.
       permissionMode: 'readonly',
       sessionId,
@@ -290,14 +318,51 @@ export class OptionsBuilder {
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
-      ...this.buildBaseOptions(step, undefined, runtime),
+      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
       permissionMode: 'readonly',
       allowedTools: overrides.allowedTools,
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
 
-  /** Build PhaseRunnerContext for Phase 2/3 execution */
+  buildFallbackReportOptions(
+    step: WorkflowStep,
+    failedPrimaryOptions: RunAgentOptions,
+    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+  ): RunAgentOptions | undefined {
+    if (this.engineOptions.reportFallbackProvider === undefined) {
+      return undefined;
+    }
+
+    const fallbackRuntime: RuntimeStepResolution = {
+      providerInfo: this.engineOptions.reportFallbackProvider,
+    };
+    const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, fallbackRuntime);
+    const options: RunAgentOptions = {
+      ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
+      permissionMode: 'readonly',
+      sessionId: undefined,
+      allowedTools: overrides.allowedTools,
+      ...(maxTurns !== undefined ? { maxTurns } : {}),
+    };
+
+    if (!this.canUseReportFallback(failedPrimaryOptions, options)) {
+      return undefined;
+    }
+
+    return options;
+  }
+
+  private canUseReportFallback(
+    failedPrimaryOptions: RunAgentOptions,
+    fallbackOptions: RunAgentOptions,
+  ): boolean {
+    return failedPrimaryOptions.resolvedProvider === 'opencode'
+      && fallbackOptions.resolvedProvider !== undefined
+      && fallbackOptions.resolvedProvider !== failedPrimaryOptions.resolvedProvider;
+  }
+
+  /** Build context for Phase 2/3 execution */
   buildPhaseRunnerContext(
     state: WorkflowState,
     lastResponse: string | undefined,
@@ -331,7 +396,7 @@ export class OptionsBuilder {
     ) => void,
     iteration?: number,
     runtime?: RuntimeStepResolution,
-  ): PhaseRunnerContext {
+  ): ReportPhaseRunnerContext & StatusJudgmentPhaseContext {
     return {
       cwd: this.getCwd(),
       reportDir: join(this.getCwd(), this.getReportDir()),
@@ -353,6 +418,9 @@ export class OptionsBuilder {
       resolveSessionKey: (step) => buildSessionKey(step, this.resolveStepProviderModel(step, runtime).provider),
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
       buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
+      buildFallbackReportOptions: (step, failedPrimaryOptions, overrides) =>
+        this.buildFallbackReportOptions(step, failedPrimaryOptions, overrides),
+      resolveReportFallbackProviderModel: () => this.engineOptions.reportFallbackProvider,
       updatePersonaSession,
       onPhaseStart,
       onPhaseComplete,

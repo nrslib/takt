@@ -203,6 +203,7 @@ async function executeWorkflowInternal(
       providerSource: bootstrap.currentProviderSource,
       model: bootstrap.configuredModel,
       modelSource: bootstrap.configuredModelSource,
+      reportFallbackProvider: options.reportFallbackProvider,
       rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
       providerOptions: options.providerOptions,
       providerOptionsSource: options.providerOptionsSource,

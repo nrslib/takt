@@ -8,7 +8,10 @@ import {
   resolveModelFromCandidates,
   resolveProviderModelCandidates,
 } from '../core/provider-resolution.js';
-import { resolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
+import {
+  resolveAssistantProviderModelFromConfig,
+  resolveAssistantScopedProviderModelFromConfig,
+} from '../core/config/provider-resolution.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -751,6 +754,80 @@ describe('resolveAssistantProviderModelFromConfig', () => {
     expect(result).toEqual({
       provider: 'mock',
       model: 'global-model',
+    });
+  });
+});
+
+describe('resolveAssistantScopedProviderModelFromConfig', () => {
+  it('should prefer local assistant over global assistant', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-top-level-model',
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+            model: 'local-assistant-model',
+          },
+        },
+      },
+      global: {
+        provider: 'mock',
+        model: 'global-top-level-model',
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'claude',
+      model: 'local-assistant-model',
+    });
+  });
+
+  it('should inherit global assistant when local assistant is absent', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-top-level-model',
+      },
+      global: {
+        provider: 'claude',
+        model: 'global-top-level-model',
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: 'global-assistant-model',
+    });
+  });
+
+  it('should not fallback to top-level provider or model when assistant is missing', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        provider: 'opencode',
+        model: 'local-top-level-model',
+      },
+      global: {
+        provider: 'claude',
+        model: 'global-top-level-model',
+      },
+    });
+
+    expect(result).toEqual({
+      provider: undefined,
+      model: undefined,
     });
   });
 });

@@ -19,6 +19,20 @@ const { mockLoadConfigRaw } = vi.hoisted(() => ({
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: vi.fn(),
   isWorkflowPath: vi.fn(() => false),
+  loadProjectConfig: () => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    if ('global' in raw && 'project' in raw) {
+      return raw.project;
+    }
+    return { ...raw, workflow: 'default', provider: 'claude', verbose: false };
+  },
+  loadGlobalConfig: () => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    if ('global' in raw && 'project' in raw) {
+      return raw.global;
+    }
+    return { provider: 'claude' };
+  },
   loadConfig: (...args: unknown[]) => {
     const raw = mockLoadConfigRaw(...args) as Record<string, unknown>;
     if ('global' in raw && 'project' in raw) {

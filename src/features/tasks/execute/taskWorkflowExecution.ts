@@ -4,14 +4,21 @@ import type {
   ProviderPermissionProfiles,
   ProviderProfileName,
 } from '../../../core/models/provider-profiles.js';
-import { loadWorkflowByIdentifier, isWorkflowPath, resolveWorkflowConfigValues } from '../../../infra/config/index.js';
+import {
+  loadGlobalConfig,
+  loadProjectConfig,
+  loadWorkflowByIdentifier,
+  isWorkflowPath,
+  resolveWorkflowConfigValues,
+} from '../../../infra/config/index.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
+import { resolveAssistantScopedProviderModelFromConfig } from '../../../core/config/provider-resolution.js';
+import type { StepProviderInfo, WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExecuteTaskOptions, WorkflowExecutionOptions, WorkflowExecutionResult } from './types.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
-import type { WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 
 const log = createLogger('task');
 
@@ -123,6 +130,7 @@ export async function executeTaskWorkflow(
     language: config.language,
     provider: agentOverrides?.provider,
     model: agentOverrides?.model,
+    reportFallbackProvider: resolveReportFallbackProviderModel(projectCwd),
     providerOptions: providerOptions.value,
     providerOptionsSource: providerOptions.source,
     providerOptionsOriginResolver: providerOptions.originResolver,
@@ -145,6 +153,32 @@ export async function executeTaskWorkflow(
     currentTaskIssueNumber,
     traceTaskMetadata,
   });
+}
+
+function resolveReportFallbackProviderModel(projectCwd: string): StepProviderInfo | undefined {
+  const project = loadProjectConfig(projectCwd);
+  const global = loadGlobalConfig();
+  const resolved = resolveAssistantScopedProviderModelFromConfig({
+    local: {
+      provider: project.provider,
+      model: project.model,
+      taktProviders: project.taktProviders,
+    },
+    global: {
+      provider: global.provider,
+      model: global.model,
+      taktProviders: global.taktProviders,
+    },
+  });
+
+  if (resolved.provider === undefined) {
+    return undefined;
+  }
+
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+  };
 }
 
 function resolveTraceTaskMetadata(options: ExecuteTaskOptions): WorkflowTraceTaskMetadata | undefined {

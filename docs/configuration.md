@@ -102,8 +102,11 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 # Set explicitly for self-hosted instances
 # vcs_provider: github                   # 'github' or 'gitlab'
 
-# Interactive assistant provider (optional)
-# Route the interactive planning conversation to a separate provider/model
+# Assistant provider (optional)
+# Routes the interactive planning conversation and the Report phase fallback provider.
+# Report fallback uses this only after an OpenCode report retry fails.
+# Project assistant overrides global assistant; when assistant is unset, TAKT does not
+# fall back to top-level provider/model for report fallback.
 # takt_providers:
 #   assistant:
 #     provider: claude
@@ -185,7 +188,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 | `base_branch` | string | - | Base branch for clone creation (defaults to remote default branch) |
 | `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
-| `takt_providers` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
+| `takt_providers` | object | - | TAKT internal provider overrides. `assistant` routes the interactive planning conversation and is also used as the Report phase fallback provider after an OpenCode report retry fails. Project `takt_providers.assistant` overrides global `takt_providers.assistant`; if neither is set, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `workflow_mcp_servers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
@@ -251,7 +254,7 @@ concurrency: 2                # Parallel task count for takt run in this project
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
-| `takt_providers` | object | - | TAKT internal provider overrides (e.g., `assistant: { provider: claude, model: opus }`) |
+| `takt_providers` | object | - | TAKT internal provider overrides. Project `takt_providers.assistant` overrides the global assistant provider/model and is used for the interactive planning conversation and Report phase fallback after an OpenCode report retry fails. If project and global assistant are both unset, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `workflow_mcp_servers` | object | - | MCP server transport policy (overrides global) |
 | `workflow_arpeggio` | object | - | Arpeggio custom code policy (overrides global) |
 | `workflow_runtime_prepare` | object | - | Runtime prepare policy (overrides global) |

@@ -7,7 +7,7 @@ import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
-import type { WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
+import type { StepProviderInfo, WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
 import type {
   ProviderOptionsOriginResolver,
@@ -63,6 +63,8 @@ export interface WorkflowExecutionOptions {
   model?: string;
   /** Source layer of `model`. */
   modelSource?: ProviderResolutionSource;
+  /** Provider/model used only for report phase fallback after OpenCode report retries fail. */
+  reportFallbackProvider?: StepProviderInfo;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
   /** Source layer for resolved provider options */
