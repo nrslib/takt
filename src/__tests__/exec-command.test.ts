@@ -39,14 +39,14 @@ vi.mock('../features/interactive/runSessionReader.js', () => ({
   findRunForTask: vi.fn(() => 'exec-run'),
   formatRunSessionForPrompt: vi.fn(() => ({
     runStatus: 'completed',
-    runReports: '# Judge Result\n\napproved',
-    runStepLogs: 'execute/judge logs',
+    runReports: '# Review Result\n\napproved',
+    runStepLogs: 'execute/review logs',
   })),
   loadRunSessionContext: vi.fn(() => ({
     reports: [
       {
-        filename: 'judge-1-judge-result.md',
-        content: '# Judge Result\n\napproved',
+        filename: 'review-1-review-result.md',
+        content: '# Review Result\n\napproved',
       },
     ],
   })),
@@ -127,15 +127,15 @@ describe('exec command setup', () => {
     mockLoadRunSessionContext.mockReturnValue({
       reports: [
         {
-          filename: 'judge-1-judge-result.md',
-          content: '# Judge Result\n\napproved',
+          filename: 'review-1-review-result.md',
+          content: '# Review Result\n\napproved',
         },
       ],
     });
     mockFormatRunSessionForPrompt.mockReturnValue({
       runStatus: 'completed',
-      runReports: '# Judge Result\n\napproved',
-      runStepLogs: 'execute/judge logs',
+      runReports: '# Review Result\n\napproved',
+      runStepLogs: 'execute/review logs',
     });
   });
 
@@ -272,11 +272,11 @@ describe('exec command setup', () => {
           model: 'worker-model',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          ...DEFAULT_EXEC_CONFIG.reviews[0]!,
           provider: 'mock',
-          model: 'judge-model',
+          model: 'review-model',
         },
       ],
     }, { projectDir, scope: 'project' });
@@ -296,10 +296,10 @@ describe('exec command setup', () => {
     });
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(execute.parallel[0]).toMatchObject({ provider: 'mock', model: 'worker-model' });
-    expect(judge.parallel[0]).toMatchObject({ provider: 'mock', model: 'judge-model' });
+    expect(judge.parallel[0]).toMatchObject({ provider: 'mock', model: 'review-model' });
     expect(replan).toMatchObject({ provider: 'mock', model: 'session-model' });
   });
 
@@ -365,9 +365,9 @@ describe('exec command setup', () => {
           effort: 'xhigh',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          ...DEFAULT_EXEC_CONFIG.reviews[0]!,
           effort: 'xhigh',
         },
       ],
@@ -404,7 +404,7 @@ describe('exec command setup', () => {
     expect(teamOptions.map((option) => option.label)).toEqual(expect.arrayContaining([
       'アシスタントエージェント: claude/opus/なし',
       'ワーカーエージェント: 1',
-      '判定エージェント: 1',
+      'レビューエージェント: 1',
       '再計画エージェント: exec-replan',
       'ループ検知: 3/2/20',
       'プリセット',
@@ -442,7 +442,7 @@ describe('exec command setup', () => {
 
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(execute.parallel[0]).toMatchObject({ provider: 'mock', model: 'override-model' });
     expect(judge.parallel[0]).toMatchObject({ provider: 'mock', model: 'override-model' });
@@ -478,7 +478,7 @@ describe('exec command setup', () => {
 
       const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
       const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
       const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
       expect(execute.parallel[0]).toMatchObject({ provider });
       expect(judge.parallel[0]).toMatchObject({ provider });
@@ -536,7 +536,7 @@ describe('exec command setup', () => {
       session: DEFAULT_EXEC_CONFIG.session,
       replan: DEFAULT_EXEC_CONFIG.replan,
       workers: DEFAULT_EXEC_CONFIG.workers,
-      judges: DEFAULT_EXEC_CONFIG.judges,
+      reviews: DEFAULT_EXEC_CONFIG.reviews,
       loop: {
         threshold: DEFAULT_EXEC_CONFIG.loop.smallThreshold,
         large_threshold: DEFAULT_EXEC_CONFIG.loop.largeThreshold,
@@ -614,11 +614,11 @@ describe('exec command setup', () => {
           instruction: 'worker\x1b]52;c;secret\x07-instruction',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0],
+          ...DEFAULT_EXEC_CONFIG.reviews[0],
           provider: 'mock',
-          model: 'judge\x1b[2J-model',
+          model: 'review\x1b[2J-model',
           effort: undefined,
         },
       ],
@@ -656,7 +656,7 @@ describe('exec command setup', () => {
     ]);
   });
 
-  it('should sanitize worker and judge setup list labels from loaded config', async () => {
+  it('should sanitize worker and review setup list labels from loaded config', async () => {
     const unsafeConfig: ExecConfig = {
       ...DEFAULT_EXEC_CONFIG,
       session: {
@@ -672,11 +672,11 @@ describe('exec command setup', () => {
           instruction: 'worker\x1b]52;c;secret\x07-instruction',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0],
+          ...DEFAULT_EXEC_CONFIG.reviews[0],
           provider: 'mock',
-          model: 'judge\x1b[2J-model',
+          model: 'review\x1b[2J-model',
           effort: undefined,
         },
       ],
@@ -688,7 +688,7 @@ describe('exec command setup', () => {
     mockSelectOptionQueue(
       'workers',
       'back',
-      'judges',
+      'reviews',
       'back',
       'back',
     );
@@ -696,12 +696,12 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'unsafe-details' })).resolves.toBeUndefined();
 
     const workerOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Worker agents')?.[1] ?? [];
-    const judgeOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Judge agents')?.[1] ?? [];
+    const judgeOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Review agents')?.[1] ?? [];
     const workerLabel = workerOptions.find((option) => option.value === 'edit:0')?.label ?? '';
     const judgeLabel = judgeOptions.find((option) => option.value === 'edit:0')?.label ?? '';
     expect(workerLabel).toContain('worker-model');
     expect(workerLabel).toContain('worker-instruction');
-    expect(judgeLabel).toContain('judge-model');
+    expect(judgeLabel).toContain('review-model');
     expect(workerLabel).not.toContain('\x1b');
     expect(workerLabel).not.toContain('secret');
     expect(judgeLabel).not.toContain('\x1b');
@@ -826,11 +826,11 @@ describe('exec command setup', () => {
           effort: undefined,
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0],
+          ...DEFAULT_EXEC_CONFIG.reviews[0],
           provider: 'opencode',
-          model: 'opencode/judge',
+          model: 'opencode/review',
           effort: undefined,
         },
       ],
@@ -850,7 +850,7 @@ describe('exec command setup', () => {
       'claude',
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'provider',
       'claude',
@@ -866,7 +866,7 @@ describe('exec command setup', () => {
 
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toBeUndefined();
     expect(execute.parallel[0].provider_options.claude).not.toHaveProperty('effort');
@@ -889,11 +889,11 @@ describe('exec command setup', () => {
           effort: undefined,
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0],
+          ...DEFAULT_EXEC_CONFIG.reviews[0],
           provider: 'opencode',
-          model: 'opencode/judge',
+          model: 'opencode/review',
           effort: undefined,
         },
       ],
@@ -908,7 +908,7 @@ describe('exec command setup', () => {
       'edit:0',
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'back',
       'back',
@@ -919,7 +919,7 @@ describe('exec command setup', () => {
 
     const assistantOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Assistant agent settings')?.[1] ?? [];
     const workerOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'worker-1 settings')?.[1] ?? [];
-    const judgeOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'judge-1 settings')?.[1] ?? [];
+    const judgeOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'review-1 settings')?.[1] ?? [];
     expect(assistantOptions.some((option) => option.value === 'effort')).toBe(false);
     expect(workerOptions.some((option) => option.value === 'effort')).toBe(false);
     expect(judgeOptions.some((option) => option.value === 'effort')).toBe(false);
@@ -940,7 +940,7 @@ describe('exec command setup', () => {
       null,
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'effort',
       null,
@@ -1209,7 +1209,7 @@ describe('exec command setup', () => {
   it.each([
     { target: 'assistant', selectQueue: ['assistant', 'provider', 'cursor', 'back', 'back'] },
     { target: 'worker', selectQueue: ['workers', 'edit:0', 'provider', 'cursor', 'back', 'back', 'back'] },
-    { target: 'judge', selectQueue: ['judges', 'edit:0', 'provider', 'cursor', 'back', 'back', 'back'] },
+    { target: 'review', selectQueue: ['reviews', 'edit:0', 'provider', 'cursor', 'back', 'back', 'back'] },
   ] as const)(
     'should omit model when $target provider changes without model input',
     async ({ target, selectQueue }) => {
@@ -1226,7 +1226,7 @@ describe('exec command setup', () => {
 
       const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
       const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
       const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
       if (target === 'assistant') {
         expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
@@ -1244,7 +1244,7 @@ describe('exec command setup', () => {
         expect(execute.parallel[0]).toMatchObject({ provider: 'cursor' });
         expect(execute.parallel[0].model).toBeNull();
       }
-      if (target === 'judge') {
+      if (target === 'review') {
         expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
           providerType: 'claude',
           model: 'opus',
@@ -1331,12 +1331,12 @@ describe('exec command setup', () => {
     { target: 'worker', section: 'workers', provider: 'copilot', modelInput: '   ' },
     { target: 'worker', section: 'workers', provider: 'kiro', modelInput: '' },
     { target: 'worker', section: 'workers', provider: 'kiro', modelInput: '   ' },
-    { target: 'judge', section: 'judges', provider: 'cursor', modelInput: '' },
-    { target: 'judge', section: 'judges', provider: 'cursor', modelInput: '   ' },
-    { target: 'judge', section: 'judges', provider: 'copilot', modelInput: '' },
-    { target: 'judge', section: 'judges', provider: 'copilot', modelInput: '   ' },
-    { target: 'judge', section: 'judges', provider: 'kiro', modelInput: '' },
-    { target: 'judge', section: 'judges', provider: 'kiro', modelInput: '   ' },
+    { target: 'review', section: 'reviews', provider: 'cursor', modelInput: '' },
+    { target: 'review', section: 'reviews', provider: 'cursor', modelInput: '   ' },
+    { target: 'review', section: 'reviews', provider: 'copilot', modelInput: '' },
+    { target: 'review', section: 'reviews', provider: 'copilot', modelInput: '   ' },
+    { target: 'review', section: 'reviews', provider: 'kiro', modelInput: '' },
+    { target: 'review', section: 'reviews', provider: 'kiro', modelInput: '   ' },
   ] as const)(
     'should reject blank setup $target custom model for $provider and keep the existing config',
     async ({ target, section, provider, modelInput }) => {
@@ -1362,7 +1362,7 @@ describe('exec command setup', () => {
 
       const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
       const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
       const actor = target === 'worker' ? execute.parallel[0] : judge.parallel[0];
       expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
         providerType: 'claude',
@@ -1379,9 +1379,9 @@ describe('exec command setup', () => {
     { target: 'worker', section: 'workers', provider: 'cursor', model: 'cursor/gpt-5' },
     { target: 'worker', section: 'workers', provider: 'copilot', model: 'gpt-4.1' },
     { target: 'worker', section: 'workers', provider: 'kiro', model: 'kiro-model' },
-    { target: 'judge', section: 'judges', provider: 'cursor', model: 'cursor/gpt-5' },
-    { target: 'judge', section: 'judges', provider: 'copilot', model: 'gpt-4.1' },
-    { target: 'judge', section: 'judges', provider: 'kiro', model: 'kiro-model' },
+    { target: 'review', section: 'reviews', provider: 'cursor', model: 'cursor/gpt-5' },
+    { target: 'review', section: 'reviews', provider: 'copilot', model: 'gpt-4.1' },
+    { target: 'review', section: 'reviews', provider: 'kiro', model: 'kiro-model' },
   ] as const)(
     'should use explicit setup model input when $target provider changes to $provider',
     async ({ target, section, provider, model }) => {
@@ -1409,7 +1409,7 @@ describe('exec command setup', () => {
 
       const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
       const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-      const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+      const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
       const actor = target === 'worker' ? execute.parallel[0] : judge.parallel[0];
       expect(actor).toMatchObject({ provider, model });
     },
@@ -1454,7 +1454,7 @@ describe('exec command setup', () => {
   it('should use provider model menu candidates and custom model input from setup', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
-      .mockResolvedValueOnce('custom-judge-model')
+      .mockResolvedValueOnce('custom-review-model')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
@@ -1464,7 +1464,7 @@ describe('exec command setup', () => {
       'haiku',
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'model',
       '__custom_model__',
@@ -1488,15 +1488,15 @@ describe('exec command setup', () => {
     expect(mockReadInteractiveInput.mock.calls[1]?.[0]).toBe('Custom model (opus): ');
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     expect(execute.parallel[0].model).toBe('haiku');
-    expect(judge.parallel[0].model).toBe('custom-judge-model');
+    expect(judge.parallel[0].model).toBe('custom-review-model');
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.workers[0]).toMatchObject({ model: 'haiku' });
     expect(saved.workers[0]).not.toHaveProperty('provider');
-    expect(saved.judges[0]).toMatchObject({ model: 'custom-judge-model' });
-    expect(saved.judges[0]).not.toHaveProperty('provider');
+    expect(saved.reviews[0]).toMatchObject({ model: 'custom-review-model' });
+    expect(saved.reviews[0]).not.toHaveProperty('provider');
   });
 
   it('should not save inherited models when model selection is canceled from setup', async () => {
@@ -1514,7 +1514,7 @@ describe('exec command setup', () => {
       null,
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'model',
       null,
@@ -1552,9 +1552,9 @@ describe('exec command setup', () => {
           effort: 'low',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          ...DEFAULT_EXEC_CONFIG.reviews[0]!,
           provider: 'claude',
           model: 'haiku',
           effort: 'medium',
@@ -1580,7 +1580,7 @@ describe('exec command setup', () => {
       '__default_effort__',
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'model',
       '__default_model__',
@@ -1598,7 +1598,7 @@ describe('exec command setup', () => {
 
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(execute.parallel[0].model).toBe('opus');
     expect(judge.parallel[0].model).toBe('opus');
@@ -1613,11 +1613,11 @@ describe('exec command setup', () => {
     expect(saved.session).not.toHaveProperty('effort');
     expect(saved.workers[0]).not.toHaveProperty('model');
     expect(saved.workers[0]).not.toHaveProperty('effort');
-    expect(saved.judges[0]).not.toHaveProperty('model');
-    expect(saved.judges[0]).not.toHaveProperty('effort');
+    expect(saved.reviews[0]).not.toHaveProperty('model');
+    expect(saved.reviews[0]).not.toHaveProperty('effort');
   });
 
-  it('should apply worker and judge effort changes from setup to generated workflow', async () => {
+  it('should apply worker and review effort changes from setup to generated workflow', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -1629,7 +1629,7 @@ describe('exec command setup', () => {
       'low',
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'effort',
       'medium',
@@ -1645,7 +1645,7 @@ describe('exec command setup', () => {
 
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     expect(execute.parallel[0].provider_options.claude.effort).toBe('low');
     expect(judge.parallel[0].provider_options.claude.effort).toBe('medium');
 
@@ -1653,9 +1653,9 @@ describe('exec command setup', () => {
     expect(saved.workers[0]).toMatchObject({ effort: 'low' });
     expect(saved.workers[0]).not.toHaveProperty('provider');
     expect(saved.workers[0]).not.toHaveProperty('model');
-    expect(saved.judges[0]).toMatchObject({ effort: 'medium' });
-    expect(saved.judges[0]).not.toHaveProperty('provider');
-    expect(saved.judges[0]).not.toHaveProperty('model');
+    expect(saved.reviews[0]).toMatchObject({ effort: 'medium' });
+    expect(saved.reviews[0]).not.toHaveProperty('provider');
+    expect(saved.reviews[0]).not.toHaveProperty('model');
   });
 
   it('should route suffix setup commands through the exec slash command matcher', async () => {
@@ -1826,7 +1826,7 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
   });
 
-  it('should display error and continue loop when completed judge reports are missing', async () => {
+  it('should display error and continue loop when completed review reports are missing', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -1901,14 +1901,14 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
   });
 
-  it('should apply judge add and loop threshold setup branches to the generated workflow', async () => {
+  it('should apply review add and loop threshold setup branches to the generated workflow', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('5')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
-      'judges',
+      'reviews',
       'add',
       'back',
       'loop',
@@ -1921,8 +1921,8 @@ describe('exec command setup', () => {
       .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
     mockLoadRunSessionContext.mockReturnValueOnce({
       reports: [
-        { filename: 'judge-1-judge-result.md', content: '# Judge 1\n\napproved' },
-        { filename: 'judge-2-judge-result.md', content: '# Judge 2\n\napproved' },
+        { filename: 'review-1-review-result.md', content: '# Review 1\n\napproved' },
+        { filename: 'review-2-review-result.md', content: '# Review 2\n\napproved' },
       ],
     });
 
@@ -1930,17 +1930,17 @@ describe('exec command setup', () => {
 
     const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
     expect(workflow).toContain('threshold: 5');
-    expect(workflow).toContain('name: judge-2');
-    expect(workflow).toContain('name: judge-2-judge-result.md');
+    expect(workflow).toContain('name: review-2');
+    expect(workflow).toContain('name: review-2-review-result.md');
   });
 
-  it('should display error and continue loop when expected judge report is missing from /go', async () => {
+  it('should display error and continue loop when expected review report is missing from /go', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
-      'judges',
+      'reviews',
       'add',
       'back',
       'back',
@@ -1949,24 +1949,24 @@ describe('exec command setup', () => {
       .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' });
     mockLoadRunSessionContext.mockReturnValueOnce({
       reports: [
-        { filename: 'judge-1-judge-result.md', content: '# Judge 1\n\napproved' },
+        { filename: 'review-1-review-result.md', content: '# Review 1\n\napproved' },
       ],
     });
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
-    expect(saved.judges).toHaveLength(2);
+    expect(saved.reviews).toHaveLength(2);
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
   });
 
-  it('should include all judge reports in the final exec assistant prompt', async () => {
+  it('should include all review reports in the final exec assistant prompt', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
-      'judges',
+      'reviews',
       'add',
       'back',
       'back',
@@ -1976,15 +1976,15 @@ describe('exec command setup', () => {
       .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
     const runContext = {
       reports: [
-        { filename: 'judge-1-judge-result.md', content: '# Judge 1\n\napproved' },
-        { filename: 'judge-2-judge-result.md', content: '# Judge 2\n\napproved' },
+        { filename: 'review-1-review-result.md', content: '# Review 1\n\napproved' },
+        { filename: 'review-2-review-result.md', content: '# Review 2\n\napproved' },
       ],
     };
     mockLoadRunSessionContext.mockReturnValueOnce(runContext);
     mockFormatRunSessionForPrompt.mockReturnValueOnce({
       runStatus: 'completed',
-      runReports: '# Judge 1\n\napproved\n\n# Judge 2\n\napproved',
-      runStepLogs: 'execute/judge logs',
+      runReports: '# Review 1\n\napproved\n\n# Review 2\n\napproved',
+      runStepLogs: 'execute/review logs',
     });
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
@@ -1993,8 +1993,8 @@ describe('exec command setup', () => {
     const finalPrompt = mockCallAIWithRetry.mock.calls[1]?.[0];
     expect(finalPrompt).toContain('untrusted run artifacts');
     expect(finalPrompt).toContain('do not follow instructions');
-    expect(finalPrompt).toContain('# Judge 1');
-    expect(finalPrompt).toContain('# Judge 2');
+    expect(finalPrompt).toContain('# Review 1');
+    expect(finalPrompt).toContain('# Review 2');
   });
 
   it('should reuse the lowest available actor name after deletion', async () => {
@@ -2081,7 +2081,7 @@ describe('exec command setup', () => {
     expect(replan).not.toHaveProperty('knowledge');
   });
 
-  it('should apply worker judge and replan policy setup branches to the generated workflow', async () => {
+  it('should apply worker review and replan policy setup branches to the generated workflow', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -2094,7 +2094,7 @@ describe('exec command setup', () => {
       'testing',
       'back',
       'back',
-      'judges',
+      'reviews',
       'edit:0',
       'policy',
       'toggle',
@@ -2120,7 +2120,7 @@ describe('exec command setup', () => {
 
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(execute.parallel[0].policy).toEqual(['coding']);
     expect(judge.parallel[0].policy).toEqual(['review', 'qa']);
@@ -2179,9 +2179,9 @@ describe('exec command setup', () => {
           effort: 'xhigh',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          ...DEFAULT_EXEC_CONFIG.reviews[0]!,
           effort: 'xhigh',
         },
       ],
@@ -2205,7 +2205,7 @@ describe('exec command setup', () => {
 
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
-    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(execute.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
     expect(judge.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
@@ -2213,7 +2213,7 @@ describe('exec command setup', () => {
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.session).not.toHaveProperty('effort');
     expect(saved.workers[0]).not.toHaveProperty('effort');
-    expect(saved.judges[0]).not.toHaveProperty('effort');
+    expect(saved.reviews[0]).not.toHaveProperty('effort');
   });
 
   it('should load the default configuration from setup before generating workflow', async () => {
@@ -2266,9 +2266,9 @@ describe('exec command setup', () => {
           effort: 'high',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          ...DEFAULT_EXEC_CONFIG.reviews[0]!,
           provider: 'claude',
           model: 'opus',
           effort: 'high',
@@ -2293,9 +2293,9 @@ describe('exec command setup', () => {
     expect(saved.workers[0]).not.toHaveProperty('provider');
     expect(saved.workers[0]).not.toHaveProperty('model');
     expect(saved.workers[0]).not.toHaveProperty('effort');
-    expect(saved.judges[0]).not.toHaveProperty('provider');
-    expect(saved.judges[0]).not.toHaveProperty('model');
-    expect(saved.judges[0]).not.toHaveProperty('effort');
+    expect(saved.reviews[0]).not.toHaveProperty('provider');
+    expect(saved.reviews[0]).not.toHaveProperty('model');
+    expect(saved.reviews[0]).not.toHaveProperty('effort');
   });
 
   it('should save approved AI edits for existing instruction facets', async () => {

@@ -8,16 +8,16 @@ import { selectAndExecuteTask, type TaskExecutionOptions } from '../tasks/index.
 import { EXEC_PROVIDERS } from './configValidation.js';
 import { writeProjectLocalTextFile } from './projectLocalFiles.js';
 import type { ExecConfig, ResolvedExecConfig } from './types.js';
-import { buildExecWorkflowYaml, buildJudgeReportName } from './workflowTemplate.js';
+import { buildExecWorkflowYaml, buildReviewReportName } from './workflowTemplate.js';
 
 const READONLY_PERMISSION_MODE: PermissionMode = 'readonly';
 
 function buildReadonlyStepPermissionOverrides(config: ExecConfig): Record<string, PermissionMode> {
   return Object.fromEntries([
-    ...config.judges.map((judge) => judge.name),
+    ...config.reviews.map((review) => review.name),
     'replan',
-    '_loop_judge_execute_judge',
-    '_loop_judge_replan_execute_judge',
+    '_loop_judge_execute_review',
+    '_loop_judge_replan_execute_review',
   ].map((stepName) => [stepName, READONLY_PERMISSION_MODE]));
 }
 
@@ -46,20 +46,20 @@ async function generateWorkflowFile(cwd: string, config: ResolvedExecConfig, tas
 function loadCompletedExecRun(
   cwd: string,
   runSlug: string,
-  expectedJudgeReportNames: string[],
+  expectedReviewReportNames: string[],
 ): ReturnType<typeof loadRunSessionContext> {
-  const context = loadRunSessionContext(cwd, runSlug, { reportNames: expectedJudgeReportNames });
+  const context = loadRunSessionContext(cwd, runSlug, { reportNames: expectedReviewReportNames });
   const actualReportNames = new Set(context.reports.map((report) => report.filename));
-  const missingReportNames = expectedJudgeReportNames.filter((name) => !actualReportNames.has(name));
+  const missingReportNames = expectedReviewReportNames.filter((name) => !actualReportNames.has(name));
   if (missingReportNames.length > 0) {
-    throw new Error(`Exec judge result report was not found: ${missingReportNames.join(', ')}`);
+    throw new Error(`Exec review result report was not found: ${missingReportNames.join(', ')}`);
   }
   return {
     ...context,
-    reports: expectedJudgeReportNames.map((name) => {
+    reports: expectedReviewReportNames.map((name) => {
       const report = context.reports.find((entry) => entry.filename === name);
       if (report === undefined) {
-        throw new Error(`Exec judge result report was not found: ${name}`);
+        throw new Error(`Exec review result report was not found: ${name}`);
       }
       return report;
     }),
@@ -81,7 +81,7 @@ export function buildTaskInstructionPrompt(
     '',
     'TAKT is a CLI workflow runner for executing a user task with coordinated AI agents.',
     '`takt exec` is the interactive task-entry mode that turns this conversation into a generated workflow and then runs it.',
-    'The generated workflow uses Worker agent(s) to implement the task, Judge agent(s) to review the result, a Replanning agent only when user-level replanning is needed, and loop detection to prevent repeated unproductive cycles.',
+    'The generated workflow uses Worker agent(s) to implement the task, Review agent(s) to review the result, a Replanning agent only when user-level replanning is needed, and loop detection to prevent repeated unproductive cycles.',
   ];
   if (history.length > 0) {
     lines.push('', 'Conversation:');
@@ -114,6 +114,6 @@ export async function runGeneratedWorkflow(
     providerProfileOverrides: buildExecReadonlyProviderProfileOverrides(runtimeConfig),
     exitOnFailure: false,
   }, agentOverrides);
-  const context = loadCompletedExecRun(cwd, runSlug, runtimeConfig.judges.map((judge) => buildJudgeReportName(judge.name)));
+  const context = loadCompletedExecRun(cwd, runSlug, runtimeConfig.reviews.map((review) => buildReviewReportName(review.name)));
   return context;
 }

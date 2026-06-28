@@ -66,11 +66,11 @@ describe('E2E: Exec mode (takt exec)', () => {
       '    instruction: exec-worker',
       '    knowledge: []',
       '    policy: []',
-      'judges:',
-      '  - name: judge-1',
+      'reviews:',
+      '  - name: review-1',
       '    provider: mock',
-      '    model: previous-judge',
-      '    instruction: exec-judge',
+      '    model: previous-review',
+      '    instruction: exec-review',
       '    knowledge: []',
       '    policy: []',
       'loop:',
@@ -90,7 +90,7 @@ describe('E2E: Exec mode (takt exec)', () => {
     expect(result.stdout).toContain('Previous configuration');
     expect(result.stdout).toContain('Assistant agent: mock/previous-session');
     expect(result.stdout).toContain('Worker agent x1: mock/previous-worker');
-    expect(result.stdout).toContain('Judge agent x1: mock/previous-judge');
+    expect(result.stdout).toContain('Review agent x1: mock/previous-review');
   });
 
   it('should expose setup during exec conversation', () => {
@@ -133,22 +133,22 @@ describe('E2E: Exec mode (takt exec)', () => {
       {
         persona: 'exec-assistant',
         status: 'done',
-        content: '[JUDGE-1:1]\napproved',
+        content: '[REVIEW-1:1]\napproved',
       },
       {
         persona: 'exec-assistant',
         status: 'done',
-        content: '# Judge Result\n\napproved',
+        content: '# Review Result\n\napproved',
       },
       {
         persona: 'conductor',
         status: 'done',
-        content: '[JUDGE-1:1]',
+        content: '[REVIEW-1:1]',
       },
       {
         persona: 'conductor',
         status: 'done',
-        content: '[JUDGE-1:1]',
+        content: '[REVIEW-1:1]',
       },
       {
         persona: 'exec-assistant',
@@ -178,10 +178,10 @@ describe('E2E: Exec mode (takt exec)', () => {
       }>;
     };
     const execute = workflow.steps.find((step) => step.name === 'execute');
-    const judge = workflow.steps.find((step) => step.name === 'judge');
+    const review = workflow.steps.find((step) => step.name === 'review');
     const replan = workflow.steps.find((step) => step.name === 'replan');
     expect(execute?.parallel?.[0]?.provider).toBe('mock');
-    expect(judge?.parallel?.[0]?.provider).toBe('mock');
+    expect(review?.parallel?.[0]?.provider).toBe('mock');
     expect(replan?.provider).toBe('mock');
     expect(existsSync(join(isolatedEnv.taktDir, 'exec.yaml'))).toBe(false);
   }, 240_000);

@@ -37,14 +37,14 @@ export const CLAUDE_TOOL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['claude
 const EXEC_ACTOR_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
 const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
   'execute',
-  'judge',
+  'review',
   'replan',
   'exec-assistant',
   'exec-replan',
   'exec-loop-monitor-small',
   'exec-loop-monitor-large',
-  '_loop_judge_execute_judge',
-  '_loop_judge_replan_execute_judge',
+  '_loop_judge_execute_review',
+  '_loop_judge_replan_execute_review',
 ]);
 
 export function providerSupportsExecEffort(provider: ProviderType, effort: ExecEffort): boolean {
@@ -139,7 +139,7 @@ export function assertExecConfig(config: ExecConfig): void {
     assertExecProviderModel(config.session.provider, config.session.model, 'exec.session.model');
     assertExecProviderEffort(config.session.provider, config.session.model, config.session.effort, 'exec.session.effort');
   }
-  assertUniqueActorSessionKeys([...config.workers, ...config.judges]);
+  assertUniqueActorSessionKeys([...config.workers, ...config.reviews]);
   config.workers.forEach((worker, index) => {
     if (worker.model !== undefined && worker.model.trim().length === 0) {
       throw new Error(`Invalid exec config at exec.workers[${index}].model: expected non-empty string`);
@@ -149,13 +149,13 @@ export function assertExecConfig(config: ExecConfig): void {
       assertExecProviderEffort(worker.provider, worker.model, worker.effort, `exec.workers[${index}].effort`);
     }
   });
-  config.judges.forEach((judge, index) => {
-    if (judge.model !== undefined && judge.model.trim().length === 0) {
-      throw new Error(`Invalid exec config at exec.judges[${index}].model: expected non-empty string`);
+  config.reviews.forEach((review, index) => {
+    if (review.model !== undefined && review.model.trim().length === 0) {
+      throw new Error(`Invalid exec config at exec.reviews[${index}].model: expected non-empty string`);
     }
-    if (judge.provider !== undefined) {
-      assertExecProviderModel(judge.provider, judge.model, `exec.judges[${index}].model`);
-      assertExecProviderEffort(judge.provider, judge.model, judge.effort, `exec.judges[${index}].effort`);
+    if (review.provider !== undefined) {
+      assertExecProviderModel(review.provider, review.model, `exec.reviews[${index}].model`);
+      assertExecProviderEffort(review.provider, review.model, review.effort, `exec.reviews[${index}].effort`);
     }
   });
 }
@@ -164,15 +164,15 @@ export function assertResolvedExecConfig(config: ExecConfig): asserts config is 
   assertExecProviderConfigured(config.session.provider, 'exec.session.provider');
   assertExecProviderModel(config.session.provider, config.session.model, 'exec.session.model');
   assertExecProviderEffort(config.session.provider, config.session.model, config.session.effort, 'exec.session.effort');
-  assertUniqueActorSessionKeys([...config.workers, ...config.judges]);
+  assertUniqueActorSessionKeys([...config.workers, ...config.reviews]);
   config.workers.forEach((worker, index) => {
     assertExecProviderConfigured(worker.provider, `exec.workers[${index}].provider`);
     assertExecProviderModel(worker.provider, worker.model, `exec.workers[${index}].model`);
     assertExecProviderEffort(worker.provider, worker.model, worker.effort, `exec.workers[${index}].effort`);
   });
-  config.judges.forEach((judge, index) => {
-    assertExecProviderConfigured(judge.provider, `exec.judges[${index}].provider`);
-    assertExecProviderModel(judge.provider, judge.model, `exec.judges[${index}].model`);
-    assertExecProviderEffort(judge.provider, judge.model, judge.effort, `exec.judges[${index}].effort`);
+  config.reviews.forEach((review, index) => {
+    assertExecProviderConfigured(review.provider, `exec.reviews[${index}].provider`);
+    assertExecProviderModel(review.provider, review.model, `exec.reviews[${index}].model`);
+    assertExecProviderEffort(review.provider, review.model, review.effort, `exec.reviews[${index}].effort`);
   });
 }

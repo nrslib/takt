@@ -31,9 +31,9 @@ workers:
     policy:
       - coding
       - testing
-judges:
-  - name: judge-1
-    instruction: exec-judge
+reviews:
+  - name: review-1
+    instruction: exec-review
     knowledge:
       - research
       - architecture

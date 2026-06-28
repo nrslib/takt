@@ -174,7 +174,7 @@ function parseExecConfig(raw: unknown): ExecConfig {
       policy: asStringArray(replan.policy, 'exec.replan.policy'),
     },
     workers: parseActorList(root.workers, 'exec.workers'),
-    judges: parseActorList(root.judges, 'exec.judges'),
+    reviews: parseActorList(root.reviews, 'exec.reviews'),
     loop: parseLoopConfig(loop),
   };
   assertExecConfig(config);
@@ -352,7 +352,7 @@ function toYamlExecConfig(config: ExecConfig): Record<string, unknown> {
     session: config.session,
     replan: config.replan,
     workers: config.workers,
-    judges: config.judges,
+    reviews: config.reviews,
     loop: {
       threshold: config.loop.smallThreshold,
       large_threshold: config.loop.largeThreshold,

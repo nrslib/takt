@@ -48,13 +48,13 @@ function createExecConfig(overrides: ExecConfigOverrides = {}): ExecConfig {
         policy: ['coding', 'testing'],
       },
     ],
-    judges: [
+    reviews: [
       {
-        name: 'judge-1',
+        name: 'review-1',
         provider: 'claude',
         model: 'opus',
         effort: 'high',
-        instruction: 'exec-judge',
+        instruction: 'exec-review',
         knowledge: ['architecture'],
         policy: ['review'],
       },
@@ -72,7 +72,7 @@ function createExecConfig(overrides: ExecConfigOverrides = {}): ExecConfig {
     session: { ...base.session, ...overrides.session },
     replan: { ...base.replan, ...overrides.replan },
     workers: overrides.workers ?? base.workers,
-    judges: overrides.judges ?? base.judges,
+    reviews: overrides.reviews ?? base.reviews,
     loop: { ...base.loop, ...overrides.loop },
   };
 }
@@ -100,7 +100,7 @@ function writeFacet(projectDir: string, kind: string, name: string, content: str
 function writeExecFacetStubs(projectDir: string): void {
   writeFacet(projectDir, 'personas', 'exec-assistant', 'Exec assistant persona');
   writeFacet(projectDir, 'personas', 'exec-worker', 'Exec worker persona');
-  for (const name of ['exec-worker', 'exec-judge', 'exec-replan']) {
+  for (const name of ['exec-worker', 'exec-review', 'exec-replan']) {
     writeFacet(projectDir, 'instructions', name, `${name} instruction`);
   }
   writeFacet(projectDir, 'instructions', 'exec-loop-monitor', 'exec-loop-monitor {cycle_count} instruction');
@@ -110,7 +110,7 @@ function writeExecFacetStubs(projectDir: string): void {
   for (const name of ['coding', 'testing', 'review']) {
     writeFacet(projectDir, 'policies', name, `${name} policy`);
   }
-  writeFacet(projectDir, 'output-contracts', 'exec-judge-result', 'Exec judge result output contract');
+  writeFacet(projectDir, 'output-contracts', 'exec-review-result', 'Exec review result output contract');
 }
 
 function writeWorkflowAndLoad(yaml: string): { workflow: ReturnType<typeof loadWorkflowFromFile>; projectDir: string; globalConfigDir: string } {
@@ -134,7 +134,7 @@ function parseRawWorkflow(yaml: string): RawWorkflow {
 }
 
 describe('exec workflow template', () => {
-  it('should generate a loadable workflow with parallel execute and judge steps', () => {
+  it('should generate a loadable workflow with parallel execute and review steps', () => {
     const yaml = buildExecWorkflowYaml(createExecConfig(), {
       workflowName: 'exec-test',
       taskDescription: 'Implement the requested task',
@@ -143,11 +143,11 @@ describe('exec workflow template', () => {
     const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
     try {
       const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
-      const judge = workflow.steps.find((step) => step.name === 'judge') as AgentWorkflowStep | undefined;
+      const judge = workflow.steps.find((step) => step.name === 'review') as AgentWorkflowStep | undefined;
       const replan = workflow.steps.find((step) => step.name === 'replan') as AgentWorkflowStep | undefined;
       const worker = execute?.parallel?.[0];
       const judgeActor = judge?.parallel?.[0];
-      const rawJudge = raw.steps.find((step) => step.name === 'judge');
+      const rawJudge = raw.steps.find((step) => step.name === 'review');
       const rawReplan = raw.steps.find((step) => step.name === 'replan');
       expect(workflow.name).toBe('exec-test');
       expect(workflow.description).toBe('Implement the requested task');
@@ -158,7 +158,7 @@ describe('exec workflow template', () => {
       expect(worker?.sessionKey).toBe('worker-1');
       expect(worker?.persona).toBe('exec-worker');
       expect(worker?.personaPath).toContain('exec-worker.md');
-      expect(judgeActor?.sessionKey).toBe('judge-1');
+      expect(judgeActor?.sessionKey).toBe('review-1');
       expect(rawJudge).toMatchObject({
         pass_previous_response: false,
         parallel: [
@@ -183,8 +183,8 @@ describe('exec workflow template', () => {
       expect(judgeActor?.passPreviousResponse).toBe(false);
       expect(replan?.sessionKey).toBe('exec-replan');
       expect(execute?.rules).toEqual([
-        expect.objectContaining({ condition: 'all("done")', next: 'judge', aggregateType: 'all' }),
-        expect.objectContaining({ condition: 'any("blocked")', next: 'judge', aggregateType: 'any' }),
+        expect.objectContaining({ condition: 'all("done")', next: 'review', aggregateType: 'all' }),
+        expect.objectContaining({ condition: 'any("blocked")', next: 'review', aggregateType: 'any' }),
       ]);
       expect(judge?.rules).toEqual([
         expect.objectContaining({ condition: 'all("approved")', next: 'COMPLETE', aggregateType: 'all' }),
@@ -228,13 +228,13 @@ describe('exec workflow template', () => {
           policy: ['coding', 'testing'],
         },
       ],
-      judges: [
+      reviews: [
         {
-          name: 'cursor-judge',
+          name: 'cursor-review',
           provider: 'cursor',
           model: undefined,
           effort: undefined,
-          instruction: 'exec-judge',
+          instruction: 'exec-review',
           knowledge: ['architecture'],
           policy: ['review'],
         },
@@ -247,18 +247,18 @@ describe('exec workflow template', () => {
     const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
     try {
       const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
-      const judge = workflow.steps.find((step) => step.name === 'judge') as AgentWorkflowStep | undefined;
+      const judge = workflow.steps.find((step) => step.name === 'review') as AgentWorkflowStep | undefined;
       const replan = workflow.steps.find((step) => step.name === 'replan') as AgentWorkflowStep | undefined;
       const cursorWorker = execute?.parallel?.[0];
       const cursorJudge = judge?.parallel?.[0];
       if (!cursorWorker || !cursorJudge || !replan || !judge) {
-        throw new Error('Generated exec workflow must include cursor worker, judge, and replan steps');
+        throw new Error('Generated exec workflow must include cursor worker, review, and replan steps');
       }
 
       expect(raw.steps.find((step) => step.name === 'execute')).toMatchObject({
         parallel: [{ provider: 'cursor', model: null }],
       });
-      expect(raw.steps.find((step) => step.name === 'judge')).toMatchObject({
+      expect(raw.steps.find((step) => step.name === 'review')).toMatchObject({
         parallel: [{ provider: 'cursor', model: null }],
       });
       expect(raw.steps.find((step) => step.name === 'replan')).toMatchObject({
@@ -318,24 +318,24 @@ describe('exec workflow template', () => {
     }
   });
 
-  it('should generate loop monitors and unique judge report output contracts', () => {
+  it('should generate loop monitors and unique review report output contracts', () => {
     const yaml = buildExecWorkflowYaml(createExecConfig({
-      judges: [
+      reviews: [
         {
-          name: 'judge-1',
+          name: 'review-1',
           provider: 'claude',
           model: 'opus',
           effort: 'high',
-          instruction: 'exec-judge',
+          instruction: 'exec-review',
           knowledge: ['architecture'],
           policy: ['review'],
         },
         {
-          name: 'security-judge',
+          name: 'security-review',
           provider: 'claude',
           model: 'opus',
           effort: 'high',
-          instruction: 'exec-judge',
+          instruction: 'exec-review',
           knowledge: ['architecture'],
           policy: ['review'],
         },
@@ -352,10 +352,10 @@ describe('exec workflow template', () => {
       const raw = parseRawWorkflow(yaml);
       const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
     try {
-      const judge = workflow.steps.find((step) => step.name === 'judge') as AgentWorkflowStep | undefined;
+      const judge = workflow.steps.find((step) => step.name === 'review') as AgentWorkflowStep | undefined;
       const loopMonitorJudges = raw.loop_monitors?.map((monitor) => monitor.judge);
       if (!judge) {
-        throw new Error('Generated exec workflow must include judge step');
+        throw new Error('Generated exec workflow must include review step');
       }
       expect(workflow.maxSteps).toBe(30);
       expect(loopMonitorJudges).toEqual([
@@ -382,7 +382,7 @@ describe('exec workflow template', () => {
       ]);
       expect(workflow.loopMonitors).toEqual([
         expect.objectContaining({
-          cycle: ['execute', 'judge'],
+          cycle: ['execute', 'review'],
           threshold: 4,
           judge: expect.objectContaining({
             sessionKey: 'exec-loop-monitor-small',
@@ -395,7 +395,7 @@ describe('exec workflow template', () => {
           }),
         }),
         expect.objectContaining({
-          cycle: ['replan', 'execute', 'judge'],
+          cycle: ['replan', 'execute', 'review'],
           threshold: 2,
           judge: expect.objectContaining({
             sessionKey: 'exec-loop-monitor-large',
@@ -410,13 +410,13 @@ describe('exec workflow template', () => {
       ]);
       expect(raw.report_formats).toBeUndefined();
       expect(judge?.parallel?.map((step) => step.outputContracts?.[0]?.name)).toEqual([
-        'judge-1-judge-result.md',
-        'security-judge-judge-result.md',
+        'review-1-review-result.md',
+        'security-review-review-result.md',
       ]);
       expect(judge?.parallel?.[0]?.outputContracts).toEqual([
         expect.objectContaining({
-          name: 'judge-1-judge-result.md',
-          format: 'Exec judge result output contract',
+          name: 'review-1-review-result.md',
+          format: 'Exec review result output contract',
         }),
       ]);
       for (const monitor of workflow.loopMonitors ?? []) {
@@ -476,22 +476,22 @@ describe('exec workflow template', () => {
           policy: ['coding'],
         },
       ],
-      judges: [
+      reviews: [
         {
-          name: 'terminal-judge',
+          name: 'terminal-review',
           provider: 'claude-terminal',
           model: 'sonnet',
           effort: 'medium',
-          instruction: 'exec-judge',
+          instruction: 'exec-review',
           knowledge: ['architecture'],
           policy: ['review'],
         },
         {
-          name: 'copilot-judge',
+          name: 'copilot-review',
           provider: 'copilot',
           model: 'gpt-5',
           effort: 'low',
-          instruction: 'exec-judge',
+          instruction: 'exec-review',
           knowledge: ['architecture'],
           policy: ['review'],
         },
@@ -503,12 +503,12 @@ describe('exec workflow template', () => {
     const { workflow, projectDir, globalConfigDir } = writeWorkflowAndLoad(yaml);
     try {
       const execute = workflow.steps.find((step) => step.name === 'execute') as AgentWorkflowStep | undefined;
-      const judge = workflow.steps.find((step) => step.name === 'judge') as AgentWorkflowStep | undefined;
+      const judge = workflow.steps.find((step) => step.name === 'review') as AgentWorkflowStep | undefined;
       const claudeWorker = execute?.parallel?.find((step) => step.name === 'claude-worker');
       const codexWorker = execute?.parallel?.find((step) => step.name === 'codex-worker');
       const opencodeWorker = execute?.parallel?.find((step) => step.name === 'opencode-worker');
-      const terminalJudge = judge?.parallel?.find((step) => step.name === 'terminal-judge');
-      const copilotJudge = judge?.parallel?.find((step) => step.name === 'copilot-judge');
+      const terminalJudge = judge?.parallel?.find((step) => step.name === 'terminal-review');
+      const copilotJudge = judge?.parallel?.find((step) => step.name === 'copilot-review');
       expect(claudeWorker?.providerOptions).toEqual({
         claude: {
           effort: 'high',
@@ -593,13 +593,13 @@ describe('exec workflow template', () => {
 
   it('should reject actor names that cannot be used as session keys or report file names', () => {
     expect(() => buildExecWorkflowYaml(createExecConfig({
-      judges: [
+      reviews: [
         {
-          name: '../judge',
+          name: '../review',
           provider: 'claude',
           model: 'opus',
           effort: 'high',
-          instruction: 'exec-judge',
+          instruction: 'exec-review',
           knowledge: ['architecture'],
           policy: ['review'],
         },
@@ -613,10 +613,10 @@ describe('exec workflow template', () => {
   it('should reject actor names that collide with generated exec workflow steps', () => {
     const reservedNames = [
       'execute',
-      'judge',
+      'review',
       'replan',
-      '_loop_judge_execute_judge',
-      '_loop_judge_replan_execute_judge',
+      '_loop_judge_execute_review',
+      '_loop_judge_replan_execute_review',
     ];
 
     for (const name of reservedNames) {

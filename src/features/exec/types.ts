@@ -34,7 +34,7 @@ export interface ExecConfig {
   session: ExecSessionConfig;
   replan: ExecReplanConfig;
   workers: ExecActorConfig[];
-  judges: ExecActorConfig[];
+  reviews: ExecActorConfig[];
   loop: ExecLoopConfig;
 }
 
@@ -49,7 +49,7 @@ export interface ResolvedExecActorConfig extends ExecActorConfig {
 export interface ResolvedExecConfig extends ExecConfig {
   session: ResolvedExecSessionConfig;
   workers: ResolvedExecActorConfig[];
-  judges: ResolvedExecActorConfig[];
+  reviews: ResolvedExecActorConfig[];
 }
 
 export type ExecPresetScope = 'project' | 'global' | 'builtin';

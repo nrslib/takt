@@ -15,10 +15,10 @@ export const DEFAULT_EXEC_CONFIG: ExecConfig = {
       policy: ['coding', 'testing'],
     },
   ],
-  judges: [
+  reviews: [
     {
-      name: 'judge-1',
-      instruction: 'exec-judge',
+      name: 'review-1',
+      instruction: 'exec-review',
       knowledge: ['architecture'],
       policy: ['review'],
     },

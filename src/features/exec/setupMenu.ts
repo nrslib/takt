@@ -43,9 +43,9 @@ import type {
   ResolvedExecSessionConfig,
 } from './types.js';
 
-type SetupSection = 'assistant' | 'workers' | 'judges' | 'replan' | 'loop' | 'preset' | 'back';
+type SetupSection = 'assistant' | 'workers' | 'reviews' | 'replan' | 'loop' | 'preset' | 'back';
 type SetupSectionOption = { label: string; value: SetupSection };
-type ActorListKind = 'workers' | 'judges';
+type ActorListKind = 'workers' | 'reviews';
 type ModelSelection = { changed: false } | { changed: true; model: string | undefined };
 const CUSTOM_MODEL_VALUE = '__custom_model__';
 const DEFAULT_MODEL_VALUE = '__default_model__';
@@ -68,7 +68,7 @@ function buildSetupSectionOptions(current: ResolvedExecConfig, lang: ExecLanguag
       value: 'assistant',
     },
     { label: execLabel(lang, 'setup.workersSummary', { count: String(current.workers.length) }), value: 'workers' },
-    { label: execLabel(lang, 'setup.judgesSummary', { count: String(current.judges.length) }), value: 'judges' },
+    { label: execLabel(lang, 'setup.reviewsSummary', { count: String(current.reviews.length) }), value: 'reviews' },
     { label: execLabel(lang, 'setup.replanSummary', { instruction: sanitizeTerminalText(current.replan.instruction) }), value: 'replan' },
     {
       label: execLabel(lang, 'setup.loopSummary', {
@@ -87,7 +87,7 @@ function formatFacetListForTerminal(values: string[], lang: ExecLanguage): strin
   return values.length > 0 ? values.map((value) => sanitizeTerminalText(value)).join(', ') : execLabel(lang, 'common.none');
 }
 
-function buildNextActorName(prefix: 'worker' | 'judge', actors: ExecActorConfig[]): string {
+function buildNextActorName(prefix: 'worker' | 'review', actors: ExecActorConfig[]): string {
   const existingNames = new Set(actors.map((actor) => actor.name));
   for (let index = 1; index <= actors.length + 1; index += 1) {
     const candidate = `${prefix}-${index}`;
@@ -367,7 +367,7 @@ async function editActorList(
   providerModelDefaults: ExecProviderModelDefaults,
 ): Promise<ExecActorConfig[]> {
   const label = execLabel(ctx.lang, `actors.${kind}`);
-  const actorNamePrefix = kind === 'workers' ? 'worker' : 'judge';
+  const actorNamePrefix = kind === 'workers' ? 'worker' : 'review';
   let current = config[kind];
   while (true) {
     const effectiveActors = resolveExecConfigProviderModel({ ...config, [kind]: current }, providerModelDefaults)[kind];
@@ -485,8 +485,8 @@ export async function runSetupMenu(
   providerModelDefaults: ExecProviderModelDefaults,
 ): Promise<ExecConfig> {
   const workerTemplate = DEFAULT_EXEC_CONFIG.workers[0];
-  const judgeTemplate = DEFAULT_EXEC_CONFIG.judges[0];
-  if (!workerTemplate || !judgeTemplate) {
+  const reviewTemplate = DEFAULT_EXEC_CONFIG.reviews[0];
+  if (!workerTemplate || !reviewTemplate) {
     throw new Error('Default exec actor templates are missing.');
   }
   let current = config;
@@ -504,7 +504,7 @@ export async function runSetupMenu(
     }
     try {
       const next = normalizeExecConfigEfforts(
-        await resolveSetupSection(cwd, section, current, runtimeConfig, workerTemplate, judgeTemplate, setupCtx, providerModelDefaults),
+        await resolveSetupSection(cwd, section, current, runtimeConfig, workerTemplate, reviewTemplate, setupCtx, providerModelDefaults),
         providerModelDefaults,
       );
       assertExecConfig(next);
@@ -530,7 +530,7 @@ async function resolveSetupSection(
   config: ExecConfig,
   runtimeConfig: ResolvedExecConfig,
   workerTemplate: ExecActorConfig,
-  judgeTemplate: ExecActorConfig,
+  reviewTemplate: ExecActorConfig,
   ctx: ExecSessionContext,
   providerModelDefaults: ExecProviderModelDefaults,
 ): Promise<ExecConfig> {
@@ -540,8 +540,8 @@ async function resolveSetupSection(
   if (section === 'workers') {
     return { ...config, workers: await editActorList(cwd, 'workers', config, workerTemplate, ctx, providerModelDefaults) };
   }
-  if (section === 'judges') {
-    return { ...config, judges: await editActorList(cwd, 'judges', config, judgeTemplate, ctx, providerModelDefaults) };
+  if (section === 'reviews') {
+    return { ...config, reviews: await editActorList(cwd, 'reviews', config, reviewTemplate, ctx, providerModelDefaults) };
   }
   if (section === 'replan') {
     return editReplanConfig(cwd, config, ctx);

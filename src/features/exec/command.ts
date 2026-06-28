@@ -76,7 +76,7 @@ async function runGoCommand(
       '',
       RUN_ARTIFACT_SECURITY_NOTE,
       '',
-      'Judge reports:',
+      'Review reports:',
       formattedRun.runReports,
       '',
       'Step logs:',

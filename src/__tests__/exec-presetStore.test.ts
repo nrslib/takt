@@ -38,13 +38,13 @@ function createExecConfig(instruction: string): ExecConfig {
         policy: ['coding', 'testing'],
       },
     ],
-    judges: [
+    reviews: [
       {
-        name: 'judge-1',
+        name: 'review-1',
         provider: 'claude',
         model: 'opus',
         effort: 'high',
-        instruction: 'exec-judge',
+        instruction: 'exec-review',
         knowledge: ['architecture'],
         policy: ['review'],
       },
@@ -83,16 +83,16 @@ function writePreset(dir: string, name: string, config: ExecConfig, description:
       ...config.workers[0]!.knowledge.map((entry) => `      - ${entry}`),
       `    policy:`,
       ...config.workers[0]!.policy.map((entry) => `      - ${entry}`),
-      `judges:`,
-      `  - name: ${config.judges[0]!.name}`,
-      `    provider: ${config.judges[0]!.provider}`,
-      `    model: ${config.judges[0]!.model}`,
-      `    effort: ${config.judges[0]!.effort}`,
-      `    instruction: ${config.judges[0]!.instruction}`,
+      `reviews:`,
+      `  - name: ${config.reviews[0]!.name}`,
+      `    provider: ${config.reviews[0]!.provider}`,
+      `    model: ${config.reviews[0]!.model}`,
+      `    effort: ${config.reviews[0]!.effort}`,
+      `    instruction: ${config.reviews[0]!.instruction}`,
       `    knowledge:`,
-      ...config.judges[0]!.knowledge.map((entry) => `      - ${entry}`),
+      ...config.reviews[0]!.knowledge.map((entry) => `      - ${entry}`),
       `    policy:`,
-      ...config.judges[0]!.policy.map((entry) => `      - ${entry}`),
+      ...config.reviews[0]!.policy.map((entry) => `      - ${entry}`),
       `loop:`,
       `  threshold: ${config.loop.smallThreshold}`,
       `  large_threshold: ${config.loop.largeThreshold}`,
@@ -106,7 +106,7 @@ function writeRawPreset(dir: string, name: string, yaml: string): void {
   writeFileSync(join(dir, `${name}.yaml`), yaml);
 }
 
-type PresetYamlSections = Partial<Record<'session' | 'replan' | 'workers' | 'judges' | 'loop', readonly string[]>>;
+type PresetYamlSections = Partial<Record<'session' | 'replan' | 'workers' | 'reviews' | 'loop', readonly string[]>>;
 
 function buildPresetYaml(name: string, sections: PresetYamlSections): string {
   const session = sections.session ?? [
@@ -131,13 +131,13 @@ function buildPresetYaml(name: string, sections: PresetYamlSections): string {
     '    knowledge: []',
     '    policy: []',
   ];
-  const judges = sections.judges ?? [
-    'judges:',
-    '  - name: judge-1',
+  const reviews = sections.reviews ?? [
+    'reviews:',
+    '  - name: review-1',
     '    provider: claude',
     '    model: opus',
     '    effort: high',
-    '    instruction: exec-judge',
+    '    instruction: exec-review',
     '    knowledge: []',
     '    policy: []',
   ];
@@ -154,7 +154,7 @@ function buildPresetYaml(name: string, sections: PresetYamlSections): string {
     ...session,
     ...replan,
     ...workers,
-    ...judges,
+    ...reviews,
     ...loop,
   ].join('\n');
 }
@@ -312,12 +312,12 @@ describe('exec preset store', () => {
         '    instruction: exec-worker',
         '    knowledge: []',
         '    policy: []',
-        'judges:',
-        '  - name: judge-1',
+        'reviews:',
+        '  - name: review-1',
         '    provider: claude',
         '    model: opus',
         '    effort: high',
-        '    instruction: exec-judge',
+        '    instruction: exec-review',
         '    knowledge: []',
         '    policy: []',
         'loop:',
@@ -359,12 +359,12 @@ describe('exec preset store', () => {
         '    instruction: exec-worker',
         '    knowledge: []',
         '    policy: []',
-        'judges:',
-        '  - name: judge-1',
+        'reviews:',
+        '  - name: review-1',
         '    provider: claude',
         '    model: opus',
         '    effort: high',
-        '    instruction: exec-judge',
+        '    instruction: exec-review',
         '    knowledge: []',
         '    policy: []',
         'loop:',
@@ -389,7 +389,7 @@ describe('exec preset store', () => {
       const raw = readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8');
       expect(raw).toContain('session:');
       expect(raw).toContain('workers:');
-      expect(raw).toContain('judges:');
+      expect(raw).toContain('reviews:');
       expect(loaded).toEqual(config);
     } finally {
       rmSync(globalConfigDir, { recursive: true, force: true });
@@ -649,19 +649,19 @@ describe('exec preset store', () => {
         /exec\.workers\[0\]\.model: expected non-empty string/,
       ],
       [
-        'blank-judge-model',
-        buildPresetYaml('blank-judge-model', {
-          judges: [
-            'judges:',
-            '  - name: judge-1',
+        'blank-review-model',
+        buildPresetYaml('blank-review-model', {
+          reviews: [
+            'reviews:',
+            '  - name: review-1',
             '    provider: cursor',
             '    model: " "',
-            '    instruction: exec-judge',
+            '    instruction: exec-review',
             '    knowledge: []',
             '    policy: []',
           ],
         }),
-        /exec\.judges\[0\]\.model: expected non-empty string/,
+        /exec\.reviews\[0\]\.model: expected non-empty string/,
       ],
       [
         'string-threshold',
@@ -772,11 +772,11 @@ describe('exec preset store', () => {
         /exec\.workers\[0\]\.name: actor name "replan" is reserved/,
       ],
       [
-        'reserved-loop-judge-step-name',
-        buildPresetYaml('reserved-loop-judge-step-name', {
+        'reserved-loop-review-step-name',
+        buildPresetYaml('reserved-loop-review-step-name', {
           workers: [
             'workers:',
-            '  - name: _loop_judge_execute_judge',
+            '  - name: _loop_judge_execute_review',
             '    provider: claude',
             '    model: sonnet',
             '    effort: high',
@@ -785,7 +785,7 @@ describe('exec preset store', () => {
             '    policy: []',
           ],
         }),
-        /exec\.workers\[0\]\.name: actor name "_loop_judge_execute_judge" is reserved/,
+        /exec\.workers\[0\]\.name: actor name "_loop_judge_execute_review" is reserved/,
       ],
       [
         'opencode-bare-session-model',
@@ -845,18 +845,18 @@ describe('exec preset store', () => {
         .toThrow(/exec\.workers\[0\]\.model: expected non-empty string/);
 
       writeFileSync(join(globalConfigDir, 'exec.yaml'), buildExecYaml({
-        judges: [
-          'judges:',
-          '  - name: judge-1',
+        reviews: [
+          'reviews:',
+          '  - name: review-1',
           '    provider: cursor',
           '    model: " "',
-          '    instruction: exec-judge',
+          '    instruction: exec-review',
           '    knowledge: []',
           '    policy: []',
         ],
       }));
       expect(() => loadLastUsedExecConfig({ globalConfigDir }))
-        .toThrow(/exec\.judges\[0\]\.model: expected non-empty string/);
+        .toThrow(/exec\.reviews\[0\]\.model: expected non-empty string/);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
@@ -919,14 +919,14 @@ describe('exec preset store', () => {
     }
   });
 
-  it('should define the builtin research preset with three workers and one judge', () => {
+  it('should define the builtin research preset with three workers and one review', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-research-preset-'));
     const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-research-preset-global-'));
     try {
       const preset = loadExecPreset('research', { projectDir, globalConfigDir });
       expect(preset.source).toBe('builtin');
       expect(preset.config.workers).toHaveLength(3);
-      expect(preset.config.judges).toHaveLength(1);
+      expect(preset.config.reviews).toHaveLength(1);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(globalConfigDir, { recursive: true, force: true });
@@ -939,7 +939,7 @@ describe('exec preset store', () => {
     const duplicateConfig: ExecConfig = {
       ...config,
       workers: [{ ...config.workers[0]!, name: 'step' }],
-      judges: [{ ...config.judges[0]!, name: 'step' }],
+      reviews: [{ ...config.reviews[0]!, name: 'step' }],
     };
     try {
       writePreset(join(projectDir, '.takt', 'exec', 'presets'), 'duplicate', duplicateConfig, 'duplicate actors');

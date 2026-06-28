@@ -27,7 +27,7 @@ type ProviderOptions = {
 };
 
 const WORKER_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'];
-const JUDGE_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'];
+const REVIEW_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'];
 
 function buildModelEntry(provider: ProviderType, model: string | undefined): { model?: string | null } {
   if (model !== undefined) {
@@ -63,12 +63,12 @@ function buildProviderOptions(
   return undefined;
 }
 
-function buildSessionJudgeProviderFields(config: ResolvedExecConfig): Record<string, unknown> {
+function buildSessionReviewProviderFields(config: ResolvedExecConfig): Record<string, unknown> {
   const providerOptions = buildProviderOptions(
     config.session.provider,
     config.session.model,
     config.session.effort,
-    JUDGE_CLAUDE_TOOLS,
+    REVIEW_CLAUDE_TOOLS,
   );
   return {
     provider: config.session.provider,
@@ -77,8 +77,8 @@ function buildSessionJudgeProviderFields(config: ResolvedExecConfig): Record<str
   };
 }
 
-export function buildJudgeReportName(actorName: string): string {
-  return `${actorName}-judge-result.md`;
+export function buildReviewReportName(actorName: string): string {
+  return `${actorName}-review-result.md`;
 }
 
 function buildActorStep(actor: ResolvedExecActorConfig, edit: boolean, claudeAllowedTools: string[]): Record<string, unknown> {
@@ -101,8 +101,8 @@ function buildActorStep(actor: ResolvedExecActorConfig, edit: boolean, claudeAll
       output_contracts: {
         report: [
           {
-            name: buildJudgeReportName(actor.name),
-            format: 'exec-judge-result',
+            name: buildReviewReportName(actor.name),
+            format: 'exec-review-result',
           },
         ],
       },
@@ -124,7 +124,7 @@ function buildReplanStep(config: ResolvedExecConfig): Record<string, unknown> {
     instruction: config.replan.instruction,
     ...(config.replan.knowledge.length > 0 ? { knowledge: config.replan.knowledge } : {}),
     ...(config.replan.policy.length > 0 ? { policy: config.replan.policy } : {}),
-    ...buildSessionJudgeProviderFields(config),
+    ...buildSessionReviewProviderFields(config),
     rules: [
       {
         condition: 'User input needed for clarification',
@@ -147,13 +147,13 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
     initial_step: 'execute',
     loop_monitors: [
       {
-        cycle: ['execute', 'judge'],
+        cycle: ['execute', 'review'],
         threshold: config.loop.smallThreshold,
         judge: {
           session_key: 'exec-loop-monitor-small',
           persona: 'exec-assistant',
           instruction: 'exec-loop-monitor',
-          ...buildSessionJudgeProviderFields(config),
+          ...buildSessionReviewProviderFields(config),
           rules: [
             { condition: 'Healthy (progress being made)', next: 'execute' },
             { condition: 'Unproductive (same rework repeating)', next: 'replan' },
@@ -161,13 +161,13 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
         },
       },
       {
-        cycle: ['replan', 'execute', 'judge'],
+        cycle: ['replan', 'execute', 'review'],
         threshold: config.loop.largeThreshold,
         judge: {
           session_key: 'exec-loop-monitor-large',
           persona: 'exec-assistant',
           instruction: 'exec-loop-monitor',
-          ...buildSessionJudgeProviderFields(config),
+          ...buildSessionReviewProviderFields(config),
           rules: [
             { condition: 'Healthy (progress being made)', next: 'replan' },
             { condition: 'Unproductive (no convergence)', next: 'COMPLETE' },
@@ -180,14 +180,14 @@ export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWork
         name: 'execute',
         parallel: config.workers.map((worker) => buildActorStep(worker, true, WORKER_CLAUDE_TOOLS)),
         rules: [
-          { condition: 'all("done")', next: 'judge' },
-          { condition: 'any("blocked")', next: 'judge' },
+          { condition: 'all("done")', next: 'review' },
+          { condition: 'any("blocked")', next: 'review' },
         ],
       },
       {
-        name: 'judge',
+        name: 'review',
         pass_previous_response: false,
-        parallel: config.judges.map((judge) => buildActorStep(judge, false, JUDGE_CLAUDE_TOOLS)),
+        parallel: config.reviews.map((review) => buildActorStep(review, false, REVIEW_CLAUDE_TOOLS)),
         rules: [
           { condition: 'all("approved")', next: 'COMPLETE' },
           { condition: 'any("needs_replan")', next: 'replan' },

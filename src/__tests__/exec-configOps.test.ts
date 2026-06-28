@@ -49,8 +49,8 @@ function createTestConfig(): ExecConfig {
     workers: [
       { name: 'w1', provider: 'claude', model: 'sonnet', effort: 'high', instruction: 'exec-worker', knowledge: [], policy: [] },
     ],
-    judges: [
-      { name: 'j1', provider: 'claude', model: 'opus', effort: 'high', instruction: 'exec-judge', knowledge: [], policy: [] },
+    reviews: [
+      { name: 'j1', provider: 'claude', model: 'opus', effort: 'high', instruction: 'exec-review', knowledge: [], policy: [] },
     ],
     loop: { smallThreshold: 3, largeThreshold: 2, maxSteps: 20 },
   };
@@ -62,27 +62,27 @@ const DEFAULT_PROVIDER_MODEL: ExecProviderModelDefaults = {
 };
 
 describe('applyExecOverrides', () => {
-  it('should apply provider override consistently to session, workers, and judges', () => {
+  it('should apply provider override consistently to session, workers, and reviews', () => {
     const config = createTestConfig();
 
     const result = applyExecOverrides(config, { provider: 'codex' }, DEFAULT_PROVIDER_MODEL);
 
     expect(result.session.provider).toBe('codex');
     expect(result.workers[0]!.provider).toBe('codex');
-    expect(result.judges[0]!.provider).toBe('codex');
+    expect(result.reviews[0]!.provider).toBe('codex');
     expect(result.session.model).toBeUndefined();
     expect(result.workers[0]!.model).toBeUndefined();
-    expect(result.judges[0]!.model).toBeUndefined();
+    expect(result.reviews[0]!.model).toBeUndefined();
   });
 
-  it('should apply model override consistently to session, workers, and judges', () => {
+  it('should apply model override consistently to session, workers, and reviews', () => {
     const config = createTestConfig();
 
     const result = applyExecOverrides(config, { model: 'haiku' }, DEFAULT_PROVIDER_MODEL);
 
     expect(result.session.model).toBe('haiku');
     expect(result.workers[0]!.model).toBe('haiku');
-    expect(result.judges[0]!.model).toBe('haiku');
+    expect(result.reviews[0]!.model).toBe('haiku');
   });
 
   it('should clear stale effort when a model override is incompatible with it', () => {
@@ -98,9 +98,9 @@ describe('applyExecOverrides', () => {
           effort: 'xhigh',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...baseConfig.judges[0]!,
+          ...baseConfig.reviews[0]!,
           provider: 'claude',
           model: 'claude-opus-4-7',
           effort: 'xhigh',
@@ -112,7 +112,7 @@ describe('applyExecOverrides', () => {
 
     expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
     expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
-    expect(result.judges[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.reviews[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
   });
 
   it('should clear stale inherited effort when a model override relies on the configured provider', () => {
@@ -128,9 +128,9 @@ describe('applyExecOverrides', () => {
           effort: 'xhigh',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...baseConfig.judges[0]!,
+          ...baseConfig.reviews[0]!,
           provider: undefined,
           model: undefined,
           effort: 'xhigh',
@@ -145,7 +145,7 @@ describe('applyExecOverrides', () => {
 
     expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
     expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
-    expect(result.judges[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.reviews[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
   });
 
   it('should clear stale inherited effort when no provider or model override is provided', () => {
@@ -161,9 +161,9 @@ describe('applyExecOverrides', () => {
           effort: 'xhigh',
         },
       ],
-      judges: [
+      reviews: [
         {
-          ...baseConfig.judges[0]!,
+          ...baseConfig.reviews[0]!,
           provider: undefined,
           model: undefined,
           effort: 'xhigh',
@@ -178,7 +178,7 @@ describe('applyExecOverrides', () => {
 
     expect(result.session).toMatchObject({ effort: undefined });
     expect(result.workers[0]).toMatchObject({ effort: undefined });
-    expect(result.judges[0]).toMatchObject({ effort: undefined });
+    expect(result.reviews[0]).toMatchObject({ effort: undefined });
   });
 
   it('should re-resolve effort when provider changes', () => {
@@ -188,7 +188,7 @@ describe('applyExecOverrides', () => {
 
     expect(result.session.effort).toBe('high');
     expect(result.workers[0]!.effort).toBe('high');
-    expect(result.judges[0]!.effort).toBe('high');
+    expect(result.reviews[0]!.effort).toBe('high');
   });
 
   it('should reject opencode provider override without an explicit provider-qualified model', () => {
@@ -212,12 +212,12 @@ describe('applyExecOverrides', () => {
           policy: [],
         },
       ],
-      judges: [
+      reviews: [
         {
           name: 'j1',
           provider: 'opencode',
           model: 'opencode/big-pickle',
-          instruction: 'exec-judge',
+          instruction: 'exec-review',
           knowledge: [],
           policy: [],
         },
@@ -229,7 +229,7 @@ describe('applyExecOverrides', () => {
 
     expect(summary).toContain('Assistant agent: opencode/big-pickle');
     expect(summary).toContain('Worker agent x1: opencode/big-pickle');
-    expect(summary).toContain('Judge agent x1: opencode/big-pickle');
+    expect(summary).toContain('Review agent x1: opencode/big-pickle');
     expect(workerDetails).toContain('opencode/big-pickle · instruction: exec-worker');
     expect(summary).not.toContain('opencode/opencode/big-pickle');
     expect(workerDetails).not.toContain('opencode/opencode/big-pickle');
@@ -273,15 +273,15 @@ describe('applyExecOverrides', () => {
 
       expect(result.session).toMatchObject({ provider });
       expect(result.workers[0]).toMatchObject({ provider });
-      expect(result.judges[0]).toMatchObject({ provider });
+      expect(result.reviews[0]).toMatchObject({ provider });
       expect(result.session.model).toBeUndefined();
       expect(result.workers[0]!.model).toBeUndefined();
-      expect(result.judges[0]!.model).toBeUndefined();
+      expect(result.reviews[0]!.model).toBeUndefined();
       expect(summary).toContain(`Assistant agent: ${provider}/(provider default)`);
       expect(summary).toContain(`Worker agent x1: ${provider}/(provider default)`);
-      expect(summary).toContain(`Judge agent x1: ${provider}/(provider default)`);
+      expect(summary).toContain(`Review agent x1: ${provider}/(provider default)`);
       expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).toMatchObject({ provider, model: null });
-      expect(findRawStep(rawWorkflow, 'judge').parallel?.[0]).toMatchObject({ provider, model: null });
+      expect(findRawStep(rawWorkflow, 'review').parallel?.[0]).toMatchObject({ provider, model: null });
       expect(findRawStep(rawWorkflow, 'replan')).toMatchObject({ provider, model: null });
       expect(rawWorkflow.loop_monitors?.map((monitor) => monitor.judge)).toEqual([
         expect.objectContaining({ provider, model: null }),
@@ -303,7 +303,7 @@ describe('applyExecOverrides', () => {
 
       expect(result.session).toMatchObject({ provider, model });
       expect(result.workers[0]).toMatchObject({ provider, model });
-      expect(result.judges[0]).toMatchObject({ provider, model });
+      expect(result.reviews[0]).toMatchObject({ provider, model });
     },
   );
 

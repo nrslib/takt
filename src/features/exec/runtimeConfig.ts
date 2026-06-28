@@ -95,7 +95,7 @@ export function resolveExecConfigProviderModel(
     ...config,
     session: resolveSessionConfig(config.session, defaults),
     workers: config.workers.map((worker, index) => resolveActorConfig(worker, defaults, `exec.workers[${index}].provider`)),
-    judges: config.judges.map((judge, index) => resolveActorConfig(judge, defaults, `exec.judges[${index}].provider`)),
+    reviews: config.reviews.map((review, index) => resolveActorConfig(review, defaults, `exec.reviews[${index}].provider`)),
   };
   assertResolvedExecConfig(resolved);
   return resolved;

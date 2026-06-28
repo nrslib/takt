@@ -124,11 +124,11 @@ function normalizeProviderModelEffort<T extends { provider?: ProviderType; model
 export function normalizeExecConfigEfforts(config: ExecConfig, defaults: ExecProviderModelDefaults): ExecConfig {
   const session = normalizeProviderModelEffort(config.session, defaults, 'exec.session');
   const workers = config.workers.map((worker, index) => normalizeProviderModelEffort(worker, defaults, `exec.workers[${index}]`));
-  const judges = config.judges.map((judge, index) => normalizeProviderModelEffort(judge, defaults, `exec.judges[${index}]`));
+  const reviews = config.reviews.map((review, index) => normalizeProviderModelEffort(review, defaults, `exec.reviews[${index}]`));
   if (
     session === config.session
     && workers.every((worker, index) => worker === config.workers[index])
-    && judges.every((judge, index) => judge === config.judges[index])
+    && reviews.every((review, index) => review === config.reviews[index])
   ) {
     return config;
   }
@@ -136,7 +136,7 @@ export function normalizeExecConfigEfforts(config: ExecConfig, defaults: ExecPro
     ...config,
     session,
     workers,
-    judges,
+    reviews,
   };
 }
 
@@ -155,7 +155,7 @@ export function applyExecOverrides(
     ...config,
     session: applyProviderOverride(config.session, overrides, defaults, 'exec.session'),
     workers: config.workers.map((worker, index) => applyProviderOverride(worker, overrides, defaults, `exec.workers[${index}]`)),
-    judges: config.judges.map((judge, index) => applyProviderOverride(judge, overrides, defaults, `exec.judges[${index}]`)),
+    reviews: config.reviews.map((review, index) => applyProviderOverride(review, overrides, defaults, `exec.reviews[${index}]`)),
   };
   const normalized = normalizeExecConfigEfforts(next, defaults);
   assertExecConfig(normalized);
@@ -168,7 +168,7 @@ export function formatExecConfigSummary(config: ExecConfig): string {
   return [
     `Assistant agent: ${formatProviderModel(config.session.provider, config.session.model)}`,
     `Worker agent x${config.workers.length}: ${config.workers.map((worker) => formatProviderModel(worker.provider, worker.model)).join(', ')}`,
-    `Judge agent x${config.judges.length}: ${config.judges.map((judge) => formatProviderModel(judge.provider, judge.model)).join(', ')}`,
+    `Review agent x${config.reviews.length}: ${config.reviews.map((review) => formatProviderModel(review.provider, review.model)).join(', ')}`,
   ].join('  |  ');
 }
 

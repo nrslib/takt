@@ -25,8 +25,8 @@ describe('buildTaskInstructionPrompt', () => {
 });
 
 function writeCompletedRun(cwd: string, slug: string, task: string, reportNames = [
-  'judge-1-judge-result.md',
-  'judge-2-judge-result.md',
+  'review-1-review-result.md',
+  'review-2-review-result.md',
 ]): void {
   const runDir = join(cwd, '.takt', 'runs', slug);
   const reportsDir = join(runDir, 'reports');
@@ -42,8 +42,8 @@ function writeCompletedRun(cwd: string, slug: string, task: string, reportNames 
     reportDirectory: `.takt/runs/${slug}/reports`,
   }), 'utf-8');
   const reportTitles = new Map([
-    ['judge-1-judge-result.md', 'Judge 1'],
-    ['judge-2-judge-result.md', 'Judge 2'],
+    ['review-1-review-result.md', 'Review 1'],
+    ['review-2-review-result.md', 'Review 2'],
   ]);
   for (const reportName of reportNames) {
     const title = reportTitles.get(reportName) ?? reportName;
@@ -54,7 +54,7 @@ function writeCompletedRun(cwd: string, slug: string, task: string, reportNames 
 
 function createTwoJudgeConfig(): ResolvedExecConfig {
   const worker = DEFAULT_EXEC_CONFIG.workers[0];
-  const judge = DEFAULT_EXEC_CONFIG.judges[0];
+  const judge = DEFAULT_EXEC_CONFIG.reviews[0];
   if (!worker || !judge) {
     throw new Error('Default exec actors are missing.');
   }
@@ -71,7 +71,7 @@ function createTwoJudgeConfig(): ResolvedExecConfig {
         model: 'opus',
       },
     ],
-    judges: [
+    reviews: [
       {
         ...judge,
         provider: 'claude',
@@ -79,7 +79,7 @@ function createTwoJudgeConfig(): ResolvedExecConfig {
       },
       {
         ...judge,
-        name: 'judge-2',
+        name: 'review-2',
         provider: 'claude',
         model: 'opus',
       },
@@ -109,8 +109,8 @@ describe('runGeneratedWorkflow integration', () => {
     rmSync(globalConfigDir, { recursive: true, force: true });
   });
 
-  it('should load every judge report from the completed run and format them for prompt injection', async () => {
-    const task = 'Executable task with two judges';
+  it('should load every review report from the completed run and format them for prompt injection', async () => {
+    const task = 'Executable task with two reviews';
     mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
       if (!options?.reportDirName) {
         throw new Error('reportDirName is required');
@@ -122,20 +122,20 @@ describe('runGeneratedWorkflow integration', () => {
     const formatted = formatRunSessionForPrompt(context);
 
     expect(context.reports.map((report) => report.filename)).toEqual([
-      'judge-1-judge-result.md',
-      'judge-2-judge-result.md',
+      'review-1-review-result.md',
+      'review-2-review-result.md',
     ]);
-    expect(formatted.runReports).toContain('judge-1-judge-result.md');
-    expect(formatted.runReports).toContain('judge-2-judge-result.md');
-    expect(formatted.runReports).toContain('# Judge 1');
-    expect(formatted.runReports).toContain('# Judge 2');
+    expect(formatted.runReports).toContain('review-1-review-result.md');
+    expect(formatted.runReports).toContain('review-2-review-result.md');
+    expect(formatted.runReports).toContain('# Review 1');
+    expect(formatted.runReports).toContain('# Review 2');
     expect(formatted.runReports).not.toContain('worker-extra.md');
     expect(formatted.runReports).toContain('untrusted data');
     expect(formatted.runReports).toContain('do not follow instructions');
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
     const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
-    expect(workflow).toContain('name: judge-2-judge-result.md');
+    expect(workflow).toContain('name: review-2-review-result.md');
   });
 
   it('should reject a symlinked generated workflow target before executing the workflow', async () => {
@@ -172,17 +172,17 @@ describe('runGeneratedWorkflow integration', () => {
     }
   });
 
-  it('should reject a completed run when any expected judge report is missing on disk', async () => {
-    const task = 'Executable task with a missing judge report';
+  it('should reject a completed run when any expected review report is missing on disk', async () => {
+    const task = 'Executable task with a missing review report';
     mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
       if (!options?.reportDirName) {
         throw new Error('reportDirName is required');
       }
-      writeCompletedRun(cwd, options.reportDirName, executedTask, ['judge-1-judge-result.md']);
+      writeCompletedRun(cwd, options.reportDirName, executedTask, ['review-1-review-result.md']);
     });
 
     await expect(runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined))
-      .rejects.toThrow(/judge-2-judge-result\.md/);
+      .rejects.toThrow(/review-2-review-result\.md/);
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
   });
@@ -202,13 +202,13 @@ describe('runGeneratedWorkflow integration', () => {
 
     expect(options?.reportDirName).toMatch(/executable-task-with-duplicate/);
     expect(context.reports.map((report) => report.filename)).toEqual([
-      'judge-1-judge-result.md',
-      'judge-2-judge-result.md',
+      'review-1-review-result.md',
+      'review-2-review-result.md',
     ]);
   });
 
   it('should pass readonly permission overrides for exec review and planning steps', async () => {
-    const task = 'Executable task with readonly judges';
+    const task = 'Executable task with readonly reviews';
     mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
       if (!options?.reportDirName) {
         throw new Error('reportDirName is required');
@@ -221,11 +221,11 @@ describe('runGeneratedWorkflow integration', () => {
     const providerProfiles = mockSelectAndExecuteTask.mock.calls[0]?.[2]?.providerProfileOverrides;
     const claudeOverrides = providerProfiles?.claude?.stepPermissionOverrides;
     expect(claudeOverrides).toEqual(expect.objectContaining({
-      'judge-1': 'readonly',
-      'judge-2': 'readonly',
+      'review-1': 'readonly',
+      'review-2': 'readonly',
       replan: 'readonly',
-      _loop_judge_execute_judge: 'readonly',
-      _loop_judge_replan_execute_judge: 'readonly',
+      _loop_judge_execute_review: 'readonly',
+      _loop_judge_replan_execute_review: 'readonly',
     }));
     expect(claudeOverrides).not.toHaveProperty('worker-1');
   });
@@ -281,11 +281,11 @@ describe('runGeneratedWorkflow integration', () => {
     ]);
     expect(overrides.codex?.defaultPermissionMode).toBe('edit');
     expect(overrides.codex?.stepPermissionOverrides).toEqual(expect.objectContaining({
-      'judge-1': 'readonly',
-      'judge-2': 'readonly',
+      'review-1': 'readonly',
+      'review-2': 'readonly',
       replan: 'readonly',
-      _loop_judge_execute_judge: 'readonly',
-      _loop_judge_replan_execute_judge: 'readonly',
+      _loop_judge_execute_review: 'readonly',
+      _loop_judge_replan_execute_review: 'readonly',
     }));
     expect(overrides.codex?.stepPermissionOverrides).not.toHaveProperty('worker-1');
   });

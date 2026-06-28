@@ -1,4 +1,4 @@
-# Exec Judge Result
+# Exec Review Result
 
 ## Status
 
@@ -6,7 +6,7 @@ approved | needs_fix | needs_replan
 
 ## Evidence
 
-判定の根拠を簡潔に書く。
+レビューの根拠を簡潔に書く。
 
 ## Required Next Step
 

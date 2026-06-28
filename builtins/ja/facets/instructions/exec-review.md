@@ -1,4 +1,4 @@
-# Exec Judge 指示
+# Exec Review 指示
 
 Worker の結果を独立セッションでレビューする。
 

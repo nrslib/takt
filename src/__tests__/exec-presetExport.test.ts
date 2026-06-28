@@ -44,12 +44,12 @@ function createExecConfig(): ExecConfig {
       knowledge: ['architecture'],
       policy: ['coding', 'testing'],
     }],
-    judges: [{
-      name: 'judge-1',
+    reviews: [{
+      name: 'review-1',
       provider: 'claude',
       model: 'opus',
       effort: 'high',
-      instruction: 'exec-judge',
+      instruction: 'exec-review',
       knowledge: ['architecture'],
       policy: ['review'],
     }],
@@ -87,16 +87,16 @@ function writeProjectPreset(
     ...config.workers[0]!.knowledge.map((k) => `      - ${k}`),
     '    policy:',
     ...config.workers[0]!.policy.map((p) => `      - ${p}`),
-    'judges:',
-    `  - name: ${config.judges[0]!.name}`,
-    `    provider: ${config.judges[0]!.provider}`,
-    `    model: ${config.judges[0]!.model}`,
-    ...(config.judges[0]!.effort !== undefined ? [`    effort: ${config.judges[0]!.effort}`] : []),
-    `    instruction: ${config.judges[0]!.instruction}`,
+    'reviews:',
+    `  - name: ${config.reviews[0]!.name}`,
+    `    provider: ${config.reviews[0]!.provider}`,
+    `    model: ${config.reviews[0]!.model}`,
+    ...(config.reviews[0]!.effort !== undefined ? [`    effort: ${config.reviews[0]!.effort}`] : []),
+    `    instruction: ${config.reviews[0]!.instruction}`,
     '    knowledge:',
-    ...config.judges[0]!.knowledge.map((k) => `      - ${k}`),
+    ...config.reviews[0]!.knowledge.map((k) => `      - ${k}`),
     '    policy:',
-    ...config.judges[0]!.policy.map((p) => `      - ${p}`),
+    ...config.reviews[0]!.policy.map((p) => `      - ${p}`),
     'loop:',
     `  threshold: ${config.loop.smallThreshold}`,
     `  large_threshold: ${config.loop.largeThreshold}`,
@@ -162,7 +162,7 @@ describe('exec preset export', () => {
       expect(parsed.description).toBe('my-workflow');
       expect(parsed.initial_step).toBe('execute');
       expect(parsed.max_steps).toBe(20);
-      expect(parsed.steps.map((s) => s.name)).toEqual(['execute', 'judge', 'replan']);
+      expect(parsed.steps.map((s) => s.name)).toEqual(['execute', 'review', 'replan']);
     });
 
     it('should resolve provider and model from defaults into all workflow actors', async () => {
@@ -177,7 +177,7 @@ describe('exec preset export', () => {
       // Then: all actors have the resolved provider and model
       const parsed = readExportedWorkflow(projectDir, 'resolved-test');
       const executeStep = parsed.steps.find((s) => s.name === 'execute');
-      const judgeStep = parsed.steps.find((s) => s.name === 'judge');
+      const judgeStep = parsed.steps.find((s) => s.name === 'review');
       const replanStep = parsed.steps.find((s) => s.name === 'replan');
 
       expect(executeStep?.parallel?.[0]).toMatchObject({ provider: 'claude', model: 'sonnet' });
@@ -198,11 +198,11 @@ describe('exec preset export', () => {
       const parsed = readExportedWorkflow(projectDir, 'loop-test');
       expect(parsed.loop_monitors).toHaveLength(2);
       expect(parsed.loop_monitors?.[0]).toMatchObject({
-        cycle: ['execute', 'judge'],
+        cycle: ['execute', 'review'],
         threshold: 3,
       });
       expect(parsed.loop_monitors?.[1]).toMatchObject({
-        cycle: ['replan', 'execute', 'judge'],
+        cycle: ['replan', 'execute', 'review'],
         threshold: 2,
       });
     });
@@ -302,7 +302,7 @@ describe('exec preset export', () => {
 
       const parsed = readExportedWorkflow(projectDir, 'custom-workflow');
       expect(parsed.name).toBe('custom-workflow');
-      expect(parsed.steps.map((s) => s.name)).toEqual(['execute', 'judge', 'replan']);
+      expect(parsed.steps.map((s) => s.name)).toEqual(['execute', 'review', 'replan']);
 
       const executeStep = parsed.steps.find((s) => s.name === 'execute');
       expect(executeStep?.parallel?.[0]).toMatchObject({
