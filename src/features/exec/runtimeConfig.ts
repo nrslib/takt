@@ -52,16 +52,27 @@ function resolveExecProvider(
   return provider;
 }
 
+export function resolveExecProviderModel(
+  explicitProvider: ProviderType | undefined,
+  explicitModel: string | undefined,
+  defaults: ExecProviderModelDefaults,
+  path: string,
+): { provider: ProviderType; model?: string } {
+  const provider = resolveExecProvider(explicitProvider, defaults, path);
+  const model = resolveExecModel(explicitProvider, explicitModel, defaults);
+  return {
+    provider,
+    model,
+  };
+}
+
 function resolveSessionConfig(
   session: ExecSessionConfig,
   defaults: ExecProviderModelDefaults,
 ): ResolvedExecSessionConfig {
-  const provider = resolveExecProvider(session.provider, defaults, 'exec.session.provider');
-  const model = resolveExecModel(session.provider, session.model, defaults);
   return {
     ...session,
-    provider,
-    ...(model !== undefined ? { model } : {}),
+    ...resolveExecProviderModel(session.provider, session.model, defaults, 'exec.session.provider'),
   };
 }
 
@@ -70,12 +81,9 @@ function resolveActorConfig(
   defaults: ExecProviderModelDefaults,
   path: string,
 ): ResolvedExecActorConfig {
-  const provider = resolveExecProvider(actor.provider, defaults, path);
-  const model = resolveExecModel(actor.provider, actor.model, defaults);
   return {
     ...actor,
-    provider,
-    ...(model !== undefined ? { model } : {}),
+    ...resolveExecProviderModel(actor.provider, actor.model, defaults, path),
   };
 }
 
@@ -91,8 +99,4 @@ export function resolveExecConfigProviderModel(
   };
   assertResolvedExecConfig(resolved);
   return resolved;
-}
-
-export function resolveExecRuntimeConfig(cwd: string, config: ExecConfig): ResolvedExecConfig {
-  return resolveExecConfigProviderModel(config, resolveConfiguredExecProviderModel(cwd));
 }

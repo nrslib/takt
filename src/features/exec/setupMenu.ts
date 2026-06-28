@@ -13,7 +13,7 @@ import {
 import {
   formatProviderModel,
   formatActorDetails,
-  resolveEffortAfterProviderOverride,
+  normalizeExecConfigEfforts,
   resolveEffortAfterProviderModelOverride,
   resolveModelAfterProviderOverride,
 } from './configOps.js';
@@ -28,7 +28,11 @@ import {
   shouldKeepExecSession,
   type ExecSessionContext,
 } from './assistantSession.js';
-import { resolveExecRuntimeConfig } from './runtimeConfig.js';
+import {
+  resolveExecConfigProviderModel,
+  resolveExecProviderModel,
+  type ExecProviderModelDefaults,
+} from './runtimeConfig.js';
 import type {
   ExecActorConfig,
   ExecConfig,
@@ -177,6 +181,7 @@ async function selectModel(
 async function editSessionConfig(
   session: ExecSessionConfig,
   effectiveSession: ResolvedExecSessionConfig,
+  providerModelDefaults: ExecProviderModelDefaults,
   lang: ExecLanguage,
 ): Promise<ExecSessionConfig> {
   let current = effectiveSession;
@@ -200,26 +205,34 @@ async function editSessionConfig(
     if (field === 'provider') {
       const provider = await selectProvider(current.provider, lang);
       if (provider !== current.provider) {
+        const model = resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined);
+        const nextResolvedProviderModel = resolveExecProviderModel(provider, model, providerModelDefaults, 'exec.session.provider');
         current = {
           ...current,
-          provider,
-          model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
-          effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
+          ...nextResolvedProviderModel,
+          effort: resolveEffortAfterProviderModelOverride(
+            current.provider,
+            current.model,
+            nextResolvedProviderModel.provider,
+            nextResolvedProviderModel.model,
+            current.effort,
+          ),
         };
-        raw = { ...raw, provider: current.provider, model: current.model, effort: current.effort };
+        raw = { ...raw, provider, model, effort: current.effort };
       }
     }
     if (field === 'model') {
       const selection = await selectModel(current.provider, raw.model, current.model, lang);
       if (selection.changed) {
+        const nextResolvedProviderModel = resolveExecProviderModel(raw.provider, selection.model, providerModelDefaults, 'exec.session.provider');
         const effort = resolveEffortAfterProviderModelOverride(
           current.provider,
           current.model,
-          current.provider,
-          selection.model,
+          nextResolvedProviderModel.provider,
+          nextResolvedProviderModel.model,
           current.effort,
         );
-        current = { ...current, model: selection.model, effort };
+        current = { ...current, ...nextResolvedProviderModel, effort };
         raw = { ...raw, model: selection.model, effort };
       }
     }
@@ -240,6 +253,7 @@ async function editActor(
   effectiveActor: ResolvedExecActorConfig,
   defaultActor: ExecActorConfig,
   ctx: ExecSessionContext,
+  providerModelDefaults: ExecProviderModelDefaults,
 ): Promise<ExecActorConfig> {
   let current = effectiveActor;
   let raw = actor;
@@ -281,26 +295,34 @@ async function editActor(
     if (field === 'provider') {
       const provider = await selectProvider(current.provider, ctx.lang);
       if (provider !== current.provider) {
+        const model = resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined);
+        const nextResolvedProviderModel = resolveExecProviderModel(provider, model, providerModelDefaults, `exec.${current.name}.provider`);
         current = {
           ...current,
-          provider,
-          model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
-          effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
+          ...nextResolvedProviderModel,
+          effort: resolveEffortAfterProviderModelOverride(
+            current.provider,
+            current.model,
+            nextResolvedProviderModel.provider,
+            nextResolvedProviderModel.model,
+            current.effort,
+          ),
         };
-        raw = { ...raw, provider: current.provider, model: current.model, effort: current.effort };
+        raw = { ...raw, provider, model, effort: current.effort };
       }
     }
     if (field === 'model') {
       const selection = await selectModel(current.provider, raw.model, current.model, ctx.lang);
       if (selection.changed) {
+        const nextResolvedProviderModel = resolveExecProviderModel(raw.provider, selection.model, providerModelDefaults, `exec.${current.name}.provider`);
         const effort = resolveEffortAfterProviderModelOverride(
           current.provider,
           current.model,
-          current.provider,
-          selection.model,
+          nextResolvedProviderModel.provider,
+          nextResolvedProviderModel.model,
           current.effort,
         );
-        current = { ...current, model: selection.model, effort };
+        current = { ...current, ...nextResolvedProviderModel, effort };
         raw = { ...raw, model: selection.model, effort };
       }
     }
@@ -342,12 +364,13 @@ async function editActorList(
   config: ExecConfig,
   template: ExecActorConfig,
   ctx: ExecSessionContext,
+  providerModelDefaults: ExecProviderModelDefaults,
 ): Promise<ExecActorConfig[]> {
   const label = execLabel(ctx.lang, `actors.${kind}`);
   const actorNamePrefix = kind === 'workers' ? 'worker' : 'judge';
   let current = config[kind];
   while (true) {
-    const effectiveActors = resolveExecRuntimeConfig(cwd, { ...config, [kind]: current })[kind];
+    const effectiveActors = resolveExecConfigProviderModel({ ...config, [kind]: current }, providerModelDefaults)[kind];
     const action = await selectExecOption<string>(ctx.lang, label, [
       ...effectiveActors.map((actor, index) => ({
         label: `${sanitizeTerminalText(current[index]?.name ?? actor.name)}: ${formatActorDetails(actor, ctx.lang)}`,
@@ -386,7 +409,7 @@ async function editActorList(
       if (!effectiveActor) {
         throw new Error(execLabel(ctx.lang, 'actors.invalidIndex', { label, index: String(index) }));
       }
-      const updated = await editActor(cwd, actor, effectiveActor, template, ctx);
+      const updated = await editActor(cwd, actor, effectiveActor, template, ctx, providerModelDefaults);
       current = current.map((entry, entryIndex) => entryIndex === index ? updated : entry);
     }
     if (!shouldKeepSetupMenuOpen()) {
@@ -455,7 +478,12 @@ async function editLoopConfig(config: ExecConfig, lang: ExecLanguage): Promise<E
   }
 }
 
-export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: ExecSessionContext): Promise<ExecConfig> {
+export async function runSetupMenu(
+  cwd: string,
+  config: ExecConfig,
+  ctx: ExecSessionContext,
+  providerModelDefaults: ExecProviderModelDefaults,
+): Promise<ExecConfig> {
   const workerTemplate = DEFAULT_EXEC_CONFIG.workers[0];
   const judgeTemplate = DEFAULT_EXEC_CONFIG.judges[0];
   if (!workerTemplate || !judgeTemplate) {
@@ -464,20 +492,23 @@ export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: ExecSes
   let current = config;
   let setupCtx = ctx;
   if (!shouldKeepSetupMenuOpen()) {
-    const runtimeConfig = resolveExecRuntimeConfig(cwd, current);
+    const runtimeConfig = resolveExecConfigProviderModel(current, providerModelDefaults);
     await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(runtimeConfig, setupCtx.lang));
     return current;
   }
   while (true) {
-    const runtimeConfig = resolveExecRuntimeConfig(cwd, current);
+    const runtimeConfig = resolveExecConfigProviderModel(current, providerModelDefaults);
     const section = await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(runtimeConfig, setupCtx.lang));
     if (section === null || section === 'back') {
       return current;
     }
     try {
-      const next = await resolveSetupSection(cwd, section, current, runtimeConfig, workerTemplate, judgeTemplate, setupCtx);
+      const next = normalizeExecConfigEfforts(
+        await resolveSetupSection(cwd, section, current, runtimeConfig, workerTemplate, judgeTemplate, setupCtx, providerModelDefaults),
+        providerModelDefaults,
+      );
       assertExecConfig(next);
-      const nextRuntimeConfig = resolveExecRuntimeConfig(cwd, next);
+      const nextRuntimeConfig = resolveExecConfigProviderModel(next, providerModelDefaults);
       const nextSessionId = shouldKeepExecSession(runtimeConfig.session, nextRuntimeConfig.session) ? setupCtx.sessionId : undefined;
       setupCtx = createExecSessionContext(cwd, nextRuntimeConfig, nextSessionId);
       current = next;
@@ -501,15 +532,16 @@ async function resolveSetupSection(
   workerTemplate: ExecActorConfig,
   judgeTemplate: ExecActorConfig,
   ctx: ExecSessionContext,
+  providerModelDefaults: ExecProviderModelDefaults,
 ): Promise<ExecConfig> {
   if (section === 'assistant') {
-    return { ...config, session: await editSessionConfig(config.session, runtimeConfig.session, ctx.lang) };
+    return { ...config, session: await editSessionConfig(config.session, runtimeConfig.session, providerModelDefaults, ctx.lang) };
   }
   if (section === 'workers') {
-    return { ...config, workers: await editActorList(cwd, 'workers', config, workerTemplate, ctx) };
+    return { ...config, workers: await editActorList(cwd, 'workers', config, workerTemplate, ctx, providerModelDefaults) };
   }
   if (section === 'judges') {
-    return { ...config, judges: await editActorList(cwd, 'judges', config, judgeTemplate, ctx) };
+    return { ...config, judges: await editActorList(cwd, 'judges', config, judgeTemplate, ctx, providerModelDefaults) };
   }
   if (section === 'replan') {
     return editReplanConfig(cwd, config, ctx);

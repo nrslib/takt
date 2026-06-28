@@ -9,7 +9,6 @@ import { EXEC_PROVIDERS } from './configValidation.js';
 import { writeProjectLocalTextFile } from './projectLocalFiles.js';
 import type { ExecConfig, ResolvedExecConfig } from './types.js';
 import { buildExecWorkflowYaml, buildJudgeReportName } from './workflowTemplate.js';
-import { resolveExecRuntimeConfig } from './runtimeConfig.js';
 
 const READONLY_PERMISSION_MODE: PermissionMode = 'readonly';
 
@@ -100,12 +99,11 @@ export function buildTaskInstructionPrompt(
 
 export async function runGeneratedWorkflow(
   cwd: string,
-  config: ExecConfig,
+  runtimeConfig: ResolvedExecConfig,
   task: string,
   agentOverrides: TaskExecutionOptions | undefined,
 ): Promise<ReturnType<typeof loadRunSessionContext>> {
   const runSlug = generateExecutionReportDir(cwd, task);
-  const runtimeConfig = resolveExecRuntimeConfig(cwd, config);
   const workflowPath = await generateWorkflowFile(cwd, runtimeConfig, task, `exec-${runSlug}`);
   await selectAndExecuteTask(cwd, task, {
     workflow: workflowPath,

@@ -3,6 +3,7 @@ import { parse as parseYaml } from 'yaml';
 import { applyExecOverrides, formatActorDetails, formatExecConfigSummary } from '../features/exec/configOps.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { buildExecWorkflowYaml } from '../features/exec/workflowTemplate.js';
+import type { ExecProviderModelDefaults } from '../features/exec/runtimeConfig.js';
 
 type RawExecWorkflowStep = {
   name?: string;
@@ -55,11 +56,16 @@ function createTestConfig(): ExecConfig {
   };
 }
 
+const DEFAULT_PROVIDER_MODEL: ExecProviderModelDefaults = {
+  provider: 'claude',
+  model: 'opus',
+};
+
 describe('applyExecOverrides', () => {
   it('should apply provider override consistently to session, workers, and judges', () => {
     const config = createTestConfig();
 
-    const result = applyExecOverrides(config, { provider: 'codex' });
+    const result = applyExecOverrides(config, { provider: 'codex' }, DEFAULT_PROVIDER_MODEL);
 
     expect(result.session.provider).toBe('codex');
     expect(result.workers[0]!.provider).toBe('codex');
@@ -72,7 +78,7 @@ describe('applyExecOverrides', () => {
   it('should apply model override consistently to session, workers, and judges', () => {
     const config = createTestConfig();
 
-    const result = applyExecOverrides(config, { model: 'haiku' });
+    const result = applyExecOverrides(config, { model: 'haiku' }, DEFAULT_PROVIDER_MODEL);
 
     expect(result.session.model).toBe('haiku');
     expect(result.workers[0]!.model).toBe('haiku');
@@ -102,17 +108,83 @@ describe('applyExecOverrides', () => {
       ],
     };
 
-    const result = applyExecOverrides(config, { model: 'claude-sonnet-4-5-20250929' });
+    const result = applyExecOverrides(config, { model: 'claude-sonnet-4-5-20250929' }, DEFAULT_PROVIDER_MODEL);
 
     expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
     expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
     expect(result.judges[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
   });
 
+  it('should clear stale inherited effort when a model override relies on the configured provider', () => {
+    const baseConfig = createTestConfig();
+    const config: ExecConfig = {
+      ...baseConfig,
+      session: { effort: 'xhigh' },
+      workers: [
+        {
+          ...baseConfig.workers[0]!,
+          provider: undefined,
+          model: undefined,
+          effort: 'xhigh',
+        },
+      ],
+      judges: [
+        {
+          ...baseConfig.judges[0]!,
+          provider: undefined,
+          model: undefined,
+          effort: 'xhigh',
+        },
+      ],
+    };
+
+    const result = applyExecOverrides(config, { model: 'claude-sonnet-4-5-20250929' }, {
+      provider: 'claude',
+      model: 'claude-opus-4-7',
+    });
+
+    expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.judges[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+  });
+
+  it('should clear stale inherited effort when no provider or model override is provided', () => {
+    const baseConfig = createTestConfig();
+    const config: ExecConfig = {
+      ...baseConfig,
+      session: { effort: 'xhigh' },
+      workers: [
+        {
+          ...baseConfig.workers[0]!,
+          provider: undefined,
+          model: undefined,
+          effort: 'xhigh',
+        },
+      ],
+      judges: [
+        {
+          ...baseConfig.judges[0]!,
+          provider: undefined,
+          model: undefined,
+          effort: 'xhigh',
+        },
+      ],
+    };
+
+    const result = applyExecOverrides(config, undefined, {
+      provider: 'claude',
+      model: 'claude-sonnet-4-5-20250929',
+    });
+
+    expect(result.session).toMatchObject({ effort: undefined });
+    expect(result.workers[0]).toMatchObject({ effort: undefined });
+    expect(result.judges[0]).toMatchObject({ effort: undefined });
+  });
+
   it('should re-resolve effort when provider changes', () => {
     const config = createTestConfig();
 
-    const result = applyExecOverrides(config, { provider: 'codex' });
+    const result = applyExecOverrides(config, { provider: 'codex' }, DEFAULT_PROVIDER_MODEL);
 
     expect(result.session.effort).toBe('high');
     expect(result.workers[0]!.effort).toBe('high');
@@ -122,7 +194,7 @@ describe('applyExecOverrides', () => {
   it('should reject opencode provider override without an explicit provider-qualified model', () => {
     const config = createTestConfig();
 
-    expect(() => applyExecOverrides(config, { provider: 'opencode' }))
+    expect(() => applyExecOverrides(config, { provider: 'opencode' }, DEFAULT_PROVIDER_MODEL))
       .toThrow(/provider 'opencode' requires model/);
   });
 
@@ -166,14 +238,14 @@ describe('applyExecOverrides', () => {
   it('should reject explicit Claude model aliases for codex overrides', () => {
     const config = createTestConfig();
 
-    expect(() => applyExecOverrides(config, { provider: 'codex', model: 'opus' }))
+    expect(() => applyExecOverrides(config, { provider: 'codex', model: 'opus' }, DEFAULT_PROVIDER_MODEL))
       .toThrow(/Claude model alias/);
   });
 
   it('should reject explicit bare opencode model overrides', () => {
     const config = createTestConfig();
 
-    expect(() => applyExecOverrides(config, { provider: 'opencode', model: 'big-pickle' }))
+    expect(() => applyExecOverrides(config, { provider: 'opencode', model: 'big-pickle' }, DEFAULT_PROVIDER_MODEL))
       .toThrow(/provider\/model/);
   });
 
@@ -182,7 +254,7 @@ describe('applyExecOverrides', () => {
     (model) => {
       const config = createTestConfig();
 
-      expect(() => applyExecOverrides(config, { model }))
+      expect(() => applyExecOverrides(config, { model }, DEFAULT_PROVIDER_MODEL))
         .toThrow(/exec\.session\.model: expected non-empty string/);
     },
   );
@@ -192,7 +264,7 @@ describe('applyExecOverrides', () => {
     (provider) => {
       const config = createTestConfig();
 
-      const result = applyExecOverrides(config, { provider });
+      const result = applyExecOverrides(config, { provider }, DEFAULT_PROVIDER_MODEL);
       const summary = formatExecConfigSummary(result);
       const rawWorkflow = parseExecWorkflowYaml(buildExecWorkflowYaml(result, {
         workflowName: 'exec-provider-default-test',
@@ -227,7 +299,7 @@ describe('applyExecOverrides', () => {
     (provider, model) => {
       const config = createTestConfig();
 
-      const result = applyExecOverrides(config, { provider, model });
+      const result = applyExecOverrides(config, { provider, model }, DEFAULT_PROVIDER_MODEL);
 
       expect(result.session).toMatchObject({ provider, model });
       expect(result.workers[0]).toMatchObject({ provider, model });
@@ -238,7 +310,7 @@ describe('applyExecOverrides', () => {
   it('should return original config when no overrides provided', () => {
     const config = createTestConfig();
 
-    const result = applyExecOverrides(config, undefined);
+    const result = applyExecOverrides(config, undefined, DEFAULT_PROVIDER_MODEL);
 
     expect(result).toBe(config);
   });
@@ -246,7 +318,7 @@ describe('applyExecOverrides', () => {
   it('should return original config when overrides have no provider or model', () => {
     const config = createTestConfig();
 
-    const result = applyExecOverrides(config, {});
+    const result = applyExecOverrides(config, {}, DEFAULT_PROVIDER_MODEL);
 
     expect(result).toBe(config);
   });
@@ -255,7 +327,7 @@ describe('applyExecOverrides', () => {
     const config = createTestConfig();
     const originalProvider = config.session.provider;
 
-    applyExecOverrides(config, { provider: 'codex' });
+    applyExecOverrides(config, { provider: 'codex' }, DEFAULT_PROVIDER_MODEL);
 
     expect(config.session.provider).toBe(originalProvider);
   });

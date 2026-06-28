@@ -10,7 +10,7 @@ import {
   buildExecReadonlyProviderProfileOverrides,
   runGeneratedWorkflow,
 } from '../features/exec/workflowRunner.js';
-import type { ExecConfig } from '../features/exec/types.js';
+import type { ResolvedExecConfig } from '../features/exec/types.js';
 
 vi.mock('../features/tasks/index.js', () => ({
   selectAndExecuteTask: vi.fn(),
@@ -52,18 +52,36 @@ function writeCompletedRun(cwd: string, slug: string, task: string, reportNames 
   writeFileSync(join(reportsDir, 'worker-extra.md'), 'x'.repeat(MAX_RUN_REPORT_BYTES + 1), 'utf-8');
 }
 
-function createTwoJudgeConfig(): ExecConfig {
+function createTwoJudgeConfig(): ResolvedExecConfig {
+  const worker = DEFAULT_EXEC_CONFIG.workers[0];
   const judge = DEFAULT_EXEC_CONFIG.judges[0];
-  if (!judge) {
-    throw new Error('Default exec judge is missing.');
+  if (!worker || !judge) {
+    throw new Error('Default exec actors are missing.');
   }
   return {
     ...DEFAULT_EXEC_CONFIG,
+    session: {
+      provider: 'claude',
+      model: 'opus',
+    },
+    workers: [
+      {
+        ...worker,
+        provider: 'claude',
+        model: 'opus',
+      },
+    ],
     judges: [
-      judge,
+      {
+        ...judge,
+        provider: 'claude',
+        model: 'opus',
+      },
       {
         ...judge,
         name: 'judge-2',
+        provider: 'claude',
+        model: 'opus',
       },
     ],
   };

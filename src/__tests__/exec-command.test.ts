@@ -303,6 +303,82 @@ describe('exec command setup', () => {
     expect(replan).toMatchObject({ provider: 'mock', model: 'session-model' });
   });
 
+  it('should generate workflows with the provider and model resolved when exec mode starts', async () => {
+    let providerModelResolutions = 0;
+    mockResolveWorkflowConfigValues.mockImplementation((_cwd, keys) => {
+      const requestedKeys = keys ?? [];
+      if (requestedKeys.includes('provider') || requestedKeys.includes('model')) {
+        providerModelResolutions += 1;
+        return providerModelResolutions === 1
+          ? {
+            enableBuiltinWorkflows: true,
+            language: 'en',
+            provider: 'claude',
+            model: 'opus',
+          }
+          : {
+            enableBuiltinWorkflows: true,
+            language: 'en',
+            provider: 'mock',
+            model: 'changed-model',
+          };
+      }
+      return {
+        enableBuiltinWorkflows: true,
+        language: 'en',
+      };
+    });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    expect(providerModelResolutions).toBe(1);
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toMatchObject({
+      providerType: 'claude',
+      model: 'opus',
+    });
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(execute.parallel[0]).toMatchObject({ provider: 'claude', model: 'opus' });
+    expect(replan).toMatchObject({ provider: 'claude', model: 'opus' });
+  });
+
+  it('should start with stale inherited effort when the configured default model is incompatible', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'en',
+      provider: 'claude',
+      model: 'claude-sonnet-4-5-20250929',
+    });
+    saveExecPreset('stale-inherited-effort-team', 'Stale inherited effort team', {
+      ...DEFAULT_EXEC_CONFIG,
+      session: { effort: 'xhigh' },
+      workers: [
+        {
+          ...DEFAULT_EXEC_CONFIG.workers[0]!,
+          effort: 'xhigh',
+        },
+      ],
+      judges: [
+        {
+          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          effort: 'xhigh',
+        },
+      ],
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput.mockResolvedValueOnce('/cancel');
+
+    await expect(runExecCommand(projectDir, { preset: 'stale-inherited-effort-team' })).resolves.toBeUndefined();
+
+    expect(mockReadInteractiveInput).toHaveBeenCalled();
+  });
+
   it('should localize setup and preset menus for Japanese language', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: true,
@@ -972,6 +1048,39 @@ describe('exec command setup', () => {
     expect(saved.session).not.toHaveProperty('effort');
     expect(saved.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
     expect(saved.workers[0]).not.toHaveProperty('effort');
+  });
+
+  it('should clear incompatible effort when setup changes a Claude model back to provider default', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'en',
+      provider: 'claude',
+      model: 'claude-sonnet-4-5-20250929',
+    });
+    saveExecPreset('xhigh-default-team', 'Claude xhigh default team', {
+      ...DEFAULT_EXEC_CONFIG,
+      session: {
+        provider: 'claude',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+      },
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'assistant',
+      'model',
+      '__default_model__',
+      'back',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, { preset: 'xhigh-default-team' })).resolves.toBeUndefined();
+
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.session).not.toHaveProperty('model');
+    expect(saved.session).not.toHaveProperty('effort');
   });
 
   it('should apply assistant effort changes from setup to AI facet calls in the same setup session', async () => {
@@ -2051,6 +2160,59 @@ describe('exec command setup', () => {
 
     const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
     expect(workflow).toContain('threshold: 9');
+  });
+
+  it('should clear stale inherited effort from presets loaded in setup before generating workflow', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'en',
+      provider: 'claude',
+      model: 'claude-sonnet-4-5-20250929',
+    });
+    saveExecPreset('stale-loaded-team', 'Stale loaded team', {
+      ...DEFAULT_EXEC_CONFIG,
+      session: { effort: 'xhigh' },
+      workers: [
+        {
+          ...DEFAULT_EXEC_CONFIG.workers[0]!,
+          effort: 'xhigh',
+        },
+      ],
+      judges: [
+        {
+          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          effort: 'xhigh',
+        },
+      ],
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'preset',
+      'load',
+      'project',
+      'stale-loaded-team',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(execute.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    expect(judge.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    expect(replan.provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.session).not.toHaveProperty('effort');
+    expect(saved.workers[0]).not.toHaveProperty('effort');
+    expect(saved.judges[0]).not.toHaveProperty('effort');
   });
 
   it('should load the default configuration from setup before generating workflow', async () => {

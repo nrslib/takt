@@ -8,6 +8,7 @@ import {
   assertExecProviderEffort,
   assertResolvedExecConfig,
 } from './configValidation.js';
+import { resolveExecConfigProviderModel, resolveExecProviderModel, type ExecProviderModelDefaults } from './runtimeConfig.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ResolvedExecActorConfig } from './types.js';
 
 export function formatProviderModel(provider: ProviderType, model: string | undefined, lang?: ExecLanguage): string {
@@ -21,14 +22,6 @@ export function formatProviderModel(provider: ProviderType, model: string | unde
     return formattedModel;
   }
   return `${formattedProvider}/${formattedModel}`;
-}
-
-export function resolveEffortAfterProviderOverride(
-  currentProvider: ProviderType | undefined,
-  nextProvider: ProviderType,
-  effort: ExecEffort | undefined,
-): ExecEffort | undefined {
-  return resolveEffortAfterProviderModelOverride(currentProvider, undefined, nextProvider, undefined, effort);
 }
 
 function canKeepEffortForProviderModel(
@@ -78,39 +71,96 @@ export function resolveModelAfterProviderOverride(
 function applyProviderOverride<T extends { provider?: ProviderType; model?: string; effort?: ExecEffort }>(
   config: T,
   overrides: TaskExecutionOptions | undefined,
+  defaults: ExecProviderModelDefaults,
   errorPath: string,
 ): T {
   const provider = overrides?.provider ?? config.provider;
   const model = provider === undefined
     ? overrides?.model ?? config.model
     : resolveModelAfterProviderOverride(config.provider, provider, config.model, overrides?.model);
+  const nextResolvedProviderModel = provider === undefined && defaults.provider === undefined
+    ? undefined
+    : resolveExecProviderModel(provider, model, defaults, `${errorPath}.provider`);
   const next = {
     ...config,
     ...(provider !== undefined ? { provider } : {}),
     model,
-    effort: provider === undefined
+    effort: nextResolvedProviderModel === undefined
       ? config.effort
-      : resolveEffortAfterProviderModelOverride(config.provider, config.model, provider, model, config.effort),
+      : resolveEffortAfterProviderModelOverride(
+        config.provider,
+        config.model,
+        nextResolvedProviderModel.provider,
+        nextResolvedProviderModel.model,
+        config.effort,
+      ),
   } as T;
-  if (next.provider !== undefined) {
-    assertExecProviderModel(next.provider, next.model, `${errorPath}.model`);
-    assertExecProviderEffort(next.provider, next.model, next.effort, `${errorPath}.effort`);
+  if (nextResolvedProviderModel !== undefined) {
+    assertExecProviderModel(nextResolvedProviderModel.provider, nextResolvedProviderModel.model, `${errorPath}.model`);
+    assertExecProviderEffort(nextResolvedProviderModel.provider, nextResolvedProviderModel.model, next.effort, `${errorPath}.effort`);
   }
   return next;
 }
 
-export function applyExecOverrides(config: ExecConfig, overrides: TaskExecutionOptions | undefined): ExecConfig {
-  if (overrides === undefined || (overrides.provider === undefined && overrides.model === undefined)) {
+function normalizeProviderModelEffort<T extends { provider?: ProviderType; model?: string; effort?: ExecEffort }>(
+  config: T,
+  defaults: ExecProviderModelDefaults,
+  errorPath: string,
+): T {
+  const resolvedProviderModel = resolveExecProviderModel(config.provider, config.model, defaults, `${errorPath}.provider`);
+  const effort = resolveEffortAfterProviderModelOverride(
+    config.provider,
+    config.model,
+    resolvedProviderModel.provider,
+    resolvedProviderModel.model,
+    config.effort,
+  );
+  if (effort === config.effort) {
     return config;
+  }
+  return { ...config, effort };
+}
+
+export function normalizeExecConfigEfforts(config: ExecConfig, defaults: ExecProviderModelDefaults): ExecConfig {
+  const session = normalizeProviderModelEffort(config.session, defaults, 'exec.session');
+  const workers = config.workers.map((worker, index) => normalizeProviderModelEffort(worker, defaults, `exec.workers[${index}]`));
+  const judges = config.judges.map((judge, index) => normalizeProviderModelEffort(judge, defaults, `exec.judges[${index}]`));
+  if (
+    session === config.session
+    && workers.every((worker, index) => worker === config.workers[index])
+    && judges.every((judge, index) => judge === config.judges[index])
+  ) {
+    return config;
+  }
+  return {
+    ...config,
+    session,
+    workers,
+    judges,
+  };
+}
+
+export function applyExecOverrides(
+  config: ExecConfig,
+  overrides: TaskExecutionOptions | undefined,
+  defaults: ExecProviderModelDefaults,
+): ExecConfig {
+  if (overrides === undefined || (overrides.provider === undefined && overrides.model === undefined)) {
+    const normalized = normalizeExecConfigEfforts(config, defaults);
+    assertExecConfig(normalized);
+    resolveExecConfigProviderModel(normalized, defaults);
+    return normalized;
   }
   const next = {
     ...config,
-    session: applyProviderOverride(config.session, overrides, 'exec.session'),
-    workers: config.workers.map((worker, index) => applyProviderOverride(worker, overrides, `exec.workers[${index}]`)),
-    judges: config.judges.map((judge, index) => applyProviderOverride(judge, overrides, `exec.judges[${index}]`)),
+    session: applyProviderOverride(config.session, overrides, defaults, 'exec.session'),
+    workers: config.workers.map((worker, index) => applyProviderOverride(worker, overrides, defaults, `exec.workers[${index}]`)),
+    judges: config.judges.map((judge, index) => applyProviderOverride(judge, overrides, defaults, `exec.judges[${index}]`)),
   };
-  assertExecConfig(next);
-  return next;
+  const normalized = normalizeExecConfigEfforts(next, defaults);
+  assertExecConfig(normalized);
+  resolveExecConfigProviderModel(normalized, defaults);
+  return normalized;
 }
 
 export function formatExecConfigSummary(config: ExecConfig): string {

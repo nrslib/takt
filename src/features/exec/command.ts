@@ -12,10 +12,14 @@ import { EXEC_CONVERSATION_COMMAND_AVAILABILITY } from './commandAvailability.js
 import { listExecPresets, saveLastUsedExecConfig } from './presetStore.js';
 import { selectInitialExecConfig } from './presetSelection.js';
 import { runSetupMenu } from './setupMenu.js';
-import type { ExecConfig } from './types.js';
+import type { ExecConfig, ResolvedExecConfig } from './types.js';
 import { buildTaskInstructionPrompt, runGeneratedWorkflow } from './workflowRunner.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import { resolveExecRuntimeConfig } from './runtimeConfig.js';
+import {
+  resolveConfiguredExecProviderModel,
+  resolveExecConfigProviderModel,
+  type ExecProviderModelDefaults,
+} from './runtimeConfig.js';
 
 interface RunExecCommandOptions {
   list?: boolean;
@@ -42,7 +46,7 @@ function saveExecConfigForNextRun(config: ExecConfig): void {
 
 async function runGoCommand(
   cwd: string,
-  config: ExecConfig,
+  runtimeConfig: ResolvedExecConfig,
   history: ConversationMessage[],
   inlineText: string,
   ctx: ReturnType<typeof createExecSessionContext>,
@@ -60,7 +64,7 @@ async function runGoCommand(
     loadTemplate('exec_assistant_instruct', ctx.lang),
   );
   const summaryCtx = { ...ctx, sessionId: summary.sessionId };
-  const runContext = await runGeneratedWorkflow(cwd, config, summary.content, agentOverrides);
+  const runContext = await runGeneratedWorkflow(cwd, runtimeConfig, summary.content, agentOverrides);
   const formattedRun = formatRunSessionForPrompt(runContext);
   const completion = await askExecAssistant(
     cwd,
@@ -88,9 +92,14 @@ async function runGoCommand(
   return { ...summaryCtx, sessionId: completion.sessionId };
 }
 
-async function runExecConversation(cwd: string, config: ExecConfig, agentOverrides: TaskExecutionOptions | undefined): Promise<void> {
+async function runExecConversation(
+  cwd: string,
+  config: ExecConfig,
+  providerModelDefaults: ExecProviderModelDefaults,
+  agentOverrides: TaskExecutionOptions | undefined,
+): Promise<void> {
   let currentConfig = config;
-  let currentRuntimeConfig = resolveExecRuntimeConfig(cwd, currentConfig);
+  let currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
   let ctx = createExecSessionContext(cwd, currentRuntimeConfig);
   let history: ConversationMessage[] = [];
   info('Starting exec mode');
@@ -113,12 +122,12 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
       try {
         const previousSessionConfig = currentRuntimeConfig.session;
         const previousConfig = currentConfig;
-        const nextConfig = await runSetupMenu(cwd, currentConfig, ctx);
+        const nextConfig = await runSetupMenu(cwd, currentConfig, ctx, providerModelDefaults);
         if (!isSameExecConfig(previousConfig, nextConfig)) {
           saveExecConfigForNextRun(nextConfig);
         }
         currentConfig = nextConfig;
-        currentRuntimeConfig = resolveExecRuntimeConfig(cwd, currentConfig);
+        currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
         const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
         ctx = createExecSessionContext(cwd, currentRuntimeConfig, nextSessionId);
         info(formatExecConfigSummary(currentRuntimeConfig));
@@ -135,7 +144,7 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
     }
     if (match?.command === SlashCommand.Go) {
       try {
-        ctx = await runGoCommand(cwd, currentConfig, history, match.text, ctx, agentOverrides);
+        ctx = await runGoCommand(cwd, currentRuntimeConfig, history, match.text, ctx, agentOverrides);
       } catch (error) {
         info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
       }
@@ -173,7 +182,8 @@ export async function runExecCommand(cwd: string, options: RunExecCommandOptions
   }
 
   const baseConfig = selectInitialExecConfig(cwd, options.preset);
-  const config = applyExecOverrides(baseConfig, options.agentOverrides);
-  await runExecConversation(cwd, config, options.agentOverrides);
+  const providerModelDefaults = resolveConfiguredExecProviderModel(cwd);
+  const config = applyExecOverrides(baseConfig, options.agentOverrides, providerModelDefaults);
+  await runExecConversation(cwd, config, providerModelDefaults, options.agentOverrides);
   success('Exec session ended');
 }
