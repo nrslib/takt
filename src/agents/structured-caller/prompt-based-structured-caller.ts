@@ -14,7 +14,6 @@ import {
   type JudgeStatusResult,
 } from '../judge-status-usecase.js';
 import type { DecomposeTaskOptions, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
-import { TEAM_LEADER_MAX_TURNS } from '../decompose-task-usecase.js';
 import type { StructuredCaller } from './contracts.js';
 import {
   buildPromptBasedStructuredInstruction,
@@ -183,7 +182,6 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         resolvedProvider: options.resolvedProvider,
         allowedTools: options.inspectTools ?? [],
         permissionMode: 'readonly',
-        ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
         childProcessEnv: options.childProcessEnv,
@@ -225,7 +223,6 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
         resolvedProvider: options.resolvedProvider,
         allowedTools: [],
         permissionMode: 'readonly',
-        ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
         onStream: options.onStream,
         workflowMeta: options.workflowMeta,
         childProcessEnv: options.childProcessEnv,
