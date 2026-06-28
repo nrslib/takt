@@ -9,6 +9,7 @@ import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
 import {
@@ -40,17 +41,17 @@ import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-
 export type { OpenCodeCallOptions } from './types.js';
 
 const TAKT_AGENT = 'takt';
-const TAKT_AGENT_NO_BASH = 'takt-no-bash';
+const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
 
 function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
   if (allowedTools !== undefined && allowedTools.length === 0) {
     return TAKT_AGENT_REPORT;
   }
-  if (allowedTools === undefined || allowedTools.some((t) => t.toLowerCase() === 'bash')) {
-    return TAKT_AGENT;
+  if (allowedTools !== undefined && !allowedTools.some((t) => mapsToOpenCodeEditPermission(t))) {
+    return TAKT_AGENT_REVIEW;
   }
-  return TAKT_AGENT_NO_BASH;
+  return TAKT_AGENT;
 }
 
 const log = createLogger('opencode-sdk');
@@ -177,8 +178,8 @@ async function createSharedServer(
             }),
             tools: { task: false },
           },
-          [TAKT_AGENT_NO_BASH]: {
-            prompt: loadTemplate('opencode_agent_prompt', 'en', {
+          [TAKT_AGENT_REVIEW]: {
+            prompt: loadTemplate('opencode_review_agent_prompt', 'en', {
               listFilesMethod: 'uses read tool on the directory to list files',
             }),
             tools: { task: false },
@@ -192,7 +193,7 @@ async function createSharedServer(
     })
   );
   log.debug('OpenCode server started with TAKT agents', {
-    agents: ['takt', 'takt-no-bash'],
+    agents: [TAKT_AGENT, TAKT_AGENT_REVIEW, TAKT_AGENT_REPORT],
     model,
     port,
   });
