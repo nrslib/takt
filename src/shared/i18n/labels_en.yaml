@@ -72,7 +72,7 @@ interactive:
     cancel: "Exit interactive mode"
     resume: "Load a previous session"
     pasteImage: "Attach clipboard image"
-    setup: "Configure exec team"
+    setup: "Configure exec agents"
 
 # ===== Exec Mode UI =====
 exec:
@@ -95,21 +95,21 @@ exec:
     projectDescription: ".takt/facets"
     globalDescription: "~/.takt/facets"
   setup:
-    teamConfiguration: "Team Configuration"
-    assistantSummary: "Assistant: {summary}"
-    workersSummary: "Workers: {count}"
-    judgesSummary: "Judges: {count}"
-    replanSummary: "Replan: {instruction}"
-    loopSummary: "Loop: {small}/{large}/{max}"
+    teamConfiguration: "Exec agents"
+    assistantSummary: "Assistant agent: {summary}"
+    workersSummary: "Worker agents: {count}"
+    judgesSummary: "Judge agents: {count}"
+    replanSummary: "Replanning agent: {instruction}"
+    loopSummary: "Loop detection: {small}/{large}/{max}"
     preset: "Preset"
   actors:
-    workers: "Workers"
-    judges: "Judges"
+    workers: "Worker agents"
+    judges: "Judge agents"
     mustContainOne: "{label} must contain at least one entry."
     deletePrompt: "Delete {label}"
     invalidIndex: "Invalid {label} index: {index}"
   settings:
-    assistant: "Assistant settings"
+    assistant: "Assistant agent settings"
     actor: "{name} settings"
     provider: "Provider"
     model: "Model"
@@ -121,6 +121,8 @@ exec:
     customModel: "Custom input..."
     customModelPrompt: "Custom model"
     customModelRequired: "Custom model must be a non-empty string."
+    defaultModel: "Default ({value})"
+    defaultEffort: "Default (none)"
   fields:
     provider: "Provider: {value}"
     model: "Model: {value}"
@@ -129,16 +131,16 @@ exec:
     instruction: "Instruction: {value}"
     knowledge: "Knowledge: {value}"
     policy: "Policy: {value}"
-    smallLoopThreshold: "Small loop threshold: {value}"
-    largeLoopThreshold: "Large loop threshold: {value}"
+    smallLoopThreshold: "Small loop detection threshold: {value}"
+    largeLoopThreshold: "Large loop detection threshold: {value}"
     maxSteps: "Max steps: {value}"
     actorInstruction: "instruction: {value}"
   replan:
-    settings: "Replan settings"
+    settings: "Replanning agent settings"
   loop:
-    settings: "Loop settings"
-    smallThresholdPrompt: "Small loop threshold"
-    largeThresholdPrompt: "Large loop threshold"
+    settings: "Loop detection settings"
+    smallThresholdPrompt: "Small loop detection threshold"
+    largeThresholdPrompt: "Large loop detection threshold"
     maxStepsPrompt: "Max steps"
   preset:
     menu: "Preset"

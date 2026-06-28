@@ -1,11 +1,7 @@
 import type { ExecConfig } from './types.js';
 
 export const DEFAULT_EXEC_CONFIG: ExecConfig = {
-  session: {
-    provider: 'claude',
-    model: 'opus',
-    effort: 'high',
-  },
+  session: {},
   replan: {
     instruction: 'exec-replan',
     knowledge: ['architecture'],
@@ -14,9 +10,6 @@ export const DEFAULT_EXEC_CONFIG: ExecConfig = {
   workers: [
     {
       name: 'worker-1',
-      provider: 'claude',
-      model: 'sonnet',
-      effort: 'high',
       instruction: 'exec-worker',
       knowledge: ['architecture'],
       policy: ['coding', 'testing'],
@@ -25,9 +18,6 @@ export const DEFAULT_EXEC_CONFIG: ExecConfig = {
   judges: [
     {
       name: 'judge-1',
-      provider: 'claude',
-      model: 'opus',
-      effort: 'high',
       instruction: 'exec-judge',
       knowledge: ['architecture'],
       policy: ['review'],

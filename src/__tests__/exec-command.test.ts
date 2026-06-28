@@ -119,6 +119,8 @@ describe('exec command setup', () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: true,
       language: 'en',
+      provider: 'claude',
+      model: 'opus',
     });
     mockGetProvider.mockReturnValue({ setup: vi.fn() });
     mockSelectAndExecuteTask.mockResolvedValue(undefined);
@@ -161,7 +163,13 @@ describe('exec command setup', () => {
     rmSync(globalConfigDir, { recursive: true, force: true });
   });
 
-  it('should pass assistant effort as provider options for exec assistant calls', async () => {
+  it('should pass explicit assistant effort as provider options for exec assistant calls', async () => {
+    saveExecPreset('effort-team', 'Explicit effort team', {
+      ...DEFAULT_EXEC_CONFIG,
+      session: {
+        effort: 'high',
+      },
+    }, { projectDir, scope: 'project' });
     mockReadInteractiveInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -169,7 +177,7 @@ describe('exec command setup', () => {
       .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
       .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
 
-    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+    await expect(runExecCommand(projectDir, { preset: 'effort-team' })).resolves.toBeUndefined();
 
     expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
       providerOptions: { claude: { effort: 'high' } },
@@ -246,10 +254,56 @@ describe('exec command setup', () => {
     expect(workflow).toContain('threshold: 7');
   });
 
+  it('should run an explicit exec provider config without a configured TAKT provider', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'en',
+    });
+    saveExecPreset('explicit-provider-team', 'Explicit provider team', {
+      ...DEFAULT_EXEC_CONFIG,
+      session: {
+        provider: 'mock',
+        model: 'session-model',
+      },
+      workers: [
+        {
+          ...DEFAULT_EXEC_CONFIG.workers[0]!,
+          provider: 'mock',
+          model: 'worker-model',
+        },
+      ],
+      judges: [
+        {
+          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          provider: 'mock',
+          model: 'judge-model',
+        },
+      ],
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'explicit-provider-team' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(execute.parallel[0]).toMatchObject({ provider: 'mock', model: 'worker-model' });
+    expect(judge.parallel[0]).toMatchObject({ provider: 'mock', model: 'judge-model' });
+    expect(replan).toMatchObject({ provider: 'mock', model: 'session-model' });
+  });
+
   it('should localize setup and preset menus for Japanese language', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: true,
       language: 'ja',
+      provider: 'claude',
+      model: 'opus',
     });
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
@@ -263,15 +317,15 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    const teamCall = mockSelectOption.mock.calls.find((call) => call[0] === 'チーム設定');
+    const teamCall = mockSelectOption.mock.calls.find((call) => call[0] === 'exec エージェント');
     const teamOptions = teamCall?.[1] ?? [];
     expect(teamCall?.[2]).toEqual({ cancelLabel: 'キャンセル' });
     expect(teamOptions.map((option) => option.label)).toEqual(expect.arrayContaining([
-      'アシスタント: claude/opus/high',
-      'ワーカー: 1',
-      'ジャッジ: 1',
-      '再計画: exec-replan',
-      'ループ: 3/2/20',
+      'アシスタントエージェント: claude/opus/なし',
+      'ワーカーエージェント: 1',
+      '判定エージェント: 1',
+      '再計画エージェント: exec-replan',
+      'ループ検知: 3/2/20',
       'プリセット',
       '戻る',
     ]));
@@ -291,7 +345,7 @@ describe('exec command setup', () => {
     ]);
   });
 
-  it('should apply CLI provider and model overrides to saved config and generated workflow', async () => {
+  it('should apply CLI provider and model overrides to generated workflow and assistant calls', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -315,13 +369,7 @@ describe('exec command setup', () => {
     expect(judge.parallel[0]).not.toHaveProperty('provider_options');
     expect(replan).not.toHaveProperty('provider_options');
 
-    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
-    expect(saved.session).toEqual({ provider: 'mock', model: 'override-model' });
-    expect(saved.workers[0]).toMatchObject({ provider: 'mock', model: 'override-model' });
-    expect(saved.judges[0]).toMatchObject({ provider: 'mock', model: 'override-model' });
-    expect(saved.session).not.toHaveProperty('effort');
-    expect(saved.workers[0]).not.toHaveProperty('effort');
-    expect(saved.judges[0]).not.toHaveProperty('effort');
+    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
     for (const call of mockCallAIWithRetry.mock.calls) {
       const ctx = call[4];
@@ -357,13 +405,7 @@ describe('exec command setup', () => {
       expect(judge.parallel[0].model).toBeNull();
       expect(replan.model).toBeNull();
 
-      const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
-      expect(saved.session).toMatchObject({ provider });
-      expect(saved.workers[0]).toMatchObject({ provider });
-      expect(saved.judges[0]).toMatchObject({ provider });
-      expect(saved.session).not.toHaveProperty('model');
-      expect(saved.workers[0]).not.toHaveProperty('model');
-      expect(saved.judges[0]).not.toHaveProperty('model');
+      expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
       for (const call of mockCallAIWithRetry.mock.calls) {
         const ctx = call[4];
@@ -518,13 +560,18 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'unsafe' })).resolves.toBeUndefined();
 
     const teamOptions = mockSelectOption.mock.calls[0]?.[1] ?? [];
-    expect(teamOptions.find((option) => option.value === 'assistant')?.label).toBe('Assistant: mock/session-model/none');
-    expect(teamOptions.find((option) => option.value === 'replan')?.label).toBe('Replan: replan-instruction');
+    expect(teamOptions.find((option) => option.value === 'assistant')?.label).toBe('Assistant agent: mock/session-model/none');
+    expect(teamOptions.find((option) => option.value === 'replan')?.label).toBe('Replanning agent: replan-instruction');
 
     const assistantOptions = mockSelectOption.mock.calls[1]?.[1] ?? [];
     expect(assistantOptions.find((option) => option.value === 'model')?.label).toBe('Model: session-model');
     const modelOptions = mockSelectOption.mock.calls[2]?.[1] ?? [];
-    expect(modelOptions.map((option) => option.label)).toEqual(['mock-model', 'session-model (current)', 'Custom input...']);
+    expect(modelOptions.map((option) => option.label)).toEqual([
+      'Default (provider default)',
+      'mock-model',
+      'session-model (current)',
+      'Custom input...',
+    ]);
   });
 
   it('should sanitize worker and judge setup list labels from loaded config', async () => {
@@ -566,8 +613,8 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'unsafe-details' })).resolves.toBeUndefined();
 
-    const workerOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Workers')?.[1] ?? [];
-    const judgeOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Judges')?.[1] ?? [];
+    const workerOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Worker agents')?.[1] ?? [];
+    const judgeOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Judge agents')?.[1] ?? [];
     const workerLabel = workerOptions.find((option) => option.value === 'edit:0')?.label ?? '';
     const judgeLabel = judgeOptions.find((option) => option.value === 'edit:0')?.label ?? '';
     expect(workerLabel).toContain('worker-model');
@@ -666,23 +713,23 @@ describe('exec command setup', () => {
     expect(output).not.toContain('secret');
   });
 
-  it('should clear unsupported session effort when setup changes provider', async () => {
+  it('should apply session provider change for provider-default model providers', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
     mockSelectOptionQueue(
       'assistant',
       'provider',
-      'opencode',
+      'cursor',
       'back',
       'back',
     );
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
-    expect(mockGetProvider).toHaveBeenCalledWith('opencode');
+    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
   });
 
-  it('should restore concrete effort when setup changes from unsupported to supported providers', async () => {
+  it('should not synthesize effort when setup changes from unsupported to supported providers', async () => {
     saveExecPreset('opencode-team', 'OpenCode team', {
       ...DEFAULT_EXEC_CONFIG,
       session: {
@@ -739,10 +786,10 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual({ claude: { effort: 'high' } });
-    expect(execute.parallel[0].provider_options.claude.effort).toBe('high');
-    expect(judge.parallel[0].provider_options.claude.effort).toBe('high');
-    expect(replan.provider_options.claude.effort).toBe('high');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toBeUndefined();
+    expect(execute.parallel[0].provider_options.claude).not.toHaveProperty('effort');
+    expect(judge.parallel[0].provider_options.claude).not.toHaveProperty('effort');
+    expect(replan.provider_options.claude).not.toHaveProperty('effort');
   });
 
   it('should hide effort settings for providers without exec effort support', async () => {
@@ -788,7 +835,7 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'opencode-team' })).resolves.toBeUndefined();
 
-    const assistantOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Assistant settings')?.[1] ?? [];
+    const assistantOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'Assistant agent settings')?.[1] ?? [];
     const workerOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'worker-1 settings')?.[1] ?? [];
     const judgeOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'judge-1 settings')?.[1] ?? [];
     expect(assistantOptions.some((option) => option.value === 'effort')).toBe(false);
@@ -796,7 +843,7 @@ describe('exec command setup', () => {
     expect(judgeOptions.some((option) => option.value === 'effort')).toBe(false);
   });
 
-  it('should not offer none when selecting effort for providers with exec effort support', async () => {
+  it('should offer default when selecting effort for providers with exec effort support', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/cancel');
@@ -827,8 +874,8 @@ describe('exec command setup', () => {
       .map((call) => call[1]);
     expect(effortOptionSets).toHaveLength(3);
     for (const options of effortOptionSets) {
-      expect(options.map((option) => option.value)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
-      expect(options.some((option) => option.label.toLowerCase().includes('none'))).toBe(false);
+      expect(options.map((option) => option.value)).toEqual(['__default_effort__', 'low', 'medium', 'high', 'xhigh', 'max']);
+      expect(options[0]?.label).toContain('Default');
     }
   });
 
@@ -924,15 +971,11 @@ describe('exec command setup', () => {
     expect(replan).toMatchObject({
       provider: 'codex',
       model: 'gpt-5',
-      provider_options: {
-        codex: {
-          reasoning_effort: 'high',
-        },
-      },
     });
+    expect(replan).not.toHaveProperty('provider_options');
   });
 
-  it('should replace assistant model when setup changes provider without selecting a model', async () => {
+  it('should omit assistant model when setup changes provider without selecting a model', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
       .mockResolvedValueOnce('/go Implement a small task')
@@ -954,9 +997,10 @@ describe('exec command setup', () => {
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toEqual(expect.objectContaining({
       providerType: 'codex',
-      model: 'gpt-5',
+      model: undefined,
     }));
-    expect(replan).toMatchObject({ provider: 'codex', model: 'gpt-5' });
+    expect(replan).toMatchObject({ provider: 'codex' });
+    expect(replan).not.toHaveProperty('model');
   });
 
   it.each(['cursor', 'copilot', 'kiro'] as const)(
@@ -1154,7 +1198,7 @@ describe('exec command setup', () => {
       }));
       expect(actor).toMatchObject({
         provider: 'claude',
-        model: target === 'worker' ? 'sonnet' : 'opus',
+        model: 'opus',
       });
     },
   );
@@ -1266,8 +1310,8 @@ describe('exec command setup', () => {
       .filter((call) => call[0] === 'Model')
       .map((call) => call[1].map((option) => option.value));
     expect(modelOptionSets).toEqual([
-      ['opus', 'sonnet', 'haiku', '__custom_model__'],
-      ['opus', 'sonnet', 'haiku', '__custom_model__'],
+      ['__default_model__', 'opus', 'sonnet', 'haiku', '__custom_model__'],
+      ['__default_model__', 'opus', 'sonnet', 'haiku', '__custom_model__'],
     ]);
     expect(mockReadInteractiveInput.mock.calls[1]?.[0]).toBe('Custom model (opus): ');
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
@@ -1275,6 +1319,130 @@ describe('exec command setup', () => {
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
     expect(execute.parallel[0].model).toBe('haiku');
     expect(judge.parallel[0].model).toBe('custom-judge-model');
+
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.workers[0]).toMatchObject({ model: 'haiku' });
+    expect(saved.workers[0]).not.toHaveProperty('provider');
+    expect(saved.judges[0]).toMatchObject({ model: 'custom-judge-model' });
+    expect(saved.judges[0]).not.toHaveProperty('provider');
+  });
+
+  it('should not save inherited models when model selection is canceled from setup', async () => {
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'assistant',
+      'model',
+      null,
+      'back',
+      'workers',
+      'edit:0',
+      'model',
+      null,
+      'back',
+      'back',
+      'judges',
+      'edit:0',
+      'model',
+      null,
+      'back',
+      'back',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+    const modelOptionSets = mockSelectOption.mock.calls
+      .filter((call) => call[0] === 'Model')
+      .map((call) => call[1].map((option) => option.label));
+    expect(modelOptionSets).toHaveLength(3);
+    for (const labels of modelOptionSets) {
+      expect(labels[0]).toBe('Default (provider default) (current)');
+      expect(labels).toContain('opus');
+    }
+    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
+  });
+
+  it('should clear explicit model and effort from setup when default is selected', async () => {
+    saveExecPreset('explicit-team', 'Explicit model effort team', {
+      ...DEFAULT_EXEC_CONFIG,
+      session: {
+        provider: 'claude',
+        model: 'haiku',
+        effort: 'medium',
+      },
+      workers: [
+        {
+          ...DEFAULT_EXEC_CONFIG.workers[0]!,
+          provider: 'claude',
+          model: 'haiku',
+          effort: 'low',
+        },
+      ],
+      judges: [
+        {
+          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          provider: 'claude',
+          model: 'haiku',
+          effort: 'medium',
+        },
+      ],
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'assistant',
+      'model',
+      '__default_model__',
+      'effort',
+      '__default_effort__',
+      'back',
+      'workers',
+      'edit:0',
+      'model',
+      '__default_model__',
+      'effort',
+      '__default_effort__',
+      'back',
+      'back',
+      'judges',
+      'edit:0',
+      'model',
+      '__default_model__',
+      'effort',
+      '__default_effort__',
+      'back',
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'explicit-team' })).resolves.toBeUndefined();
+
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(execute.parallel[0].model).toBe('opus');
+    expect(judge.parallel[0].model).toBe('opus');
+    expect(replan.model).toBe('opus');
+    expect(execute.parallel[0].provider_options.claude).not.toHaveProperty('effort');
+    expect(judge.parallel[0].provider_options.claude).not.toHaveProperty('effort');
+    expect(replan.provider_options.claude).not.toHaveProperty('effort');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toBeUndefined();
+
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.session).not.toHaveProperty('model');
+    expect(saved.session).not.toHaveProperty('effort');
+    expect(saved.workers[0]).not.toHaveProperty('model');
+    expect(saved.workers[0]).not.toHaveProperty('effort');
+    expect(saved.judges[0]).not.toHaveProperty('model');
+    expect(saved.judges[0]).not.toHaveProperty('effort');
   });
 
   it('should apply worker and judge effort changes from setup to generated workflow', async () => {
@@ -1308,6 +1476,14 @@ describe('exec command setup', () => {
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
     expect(execute.parallel[0].provider_options.claude.effort).toBe('low');
     expect(judge.parallel[0].provider_options.claude.effort).toBe('medium');
+
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.workers[0]).toMatchObject({ effort: 'low' });
+    expect(saved.workers[0]).not.toHaveProperty('provider');
+    expect(saved.workers[0]).not.toHaveProperty('model');
+    expect(saved.judges[0]).toMatchObject({ effort: 'medium' });
+    expect(saved.judges[0]).not.toHaveProperty('provider');
+    expect(saved.judges[0]).not.toHaveProperty('model');
   });
 
   it('should route suffix setup commands through the exec slash command matcher', async () => {
@@ -1317,14 +1493,14 @@ describe('exec command setup', () => {
     mockSelectOptionQueue(
       'assistant',
       'provider',
-      'opencode',
+      'cursor',
       'back',
       'back',
     );
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    expect(mockGetProvider).toHaveBeenCalledWith('opencode');
+    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
@@ -1381,7 +1557,7 @@ describe('exec command setup', () => {
     mockSelectOptionQueue(
       'assistant',
       'provider',
-      'opencode',
+      'cursor',
       'back',
       'back',
     );
@@ -1393,12 +1569,12 @@ describe('exec command setup', () => {
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
     expect(mockCallAIWithRetry.mock.calls[1]?.[4]).toEqual(expect.objectContaining({
-      providerType: 'opencode',
+      providerType: 'cursor',
       sessionId: undefined,
     }));
   });
 
-  it('should save last-used config only after /go executes successfully', async () => {
+  it('should not save last-used config after /go when setup was not changed', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/go Implement a small task')
       .mockResolvedValueOnce('/cancel');
@@ -1408,22 +1584,7 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    const execConfigPath = join(globalConfigDir, 'exec.yaml');
-    expect(existsSync(execConfigPath)).toBe(true);
-    const saved = parseYaml(readFileSync(execConfigPath, 'utf-8'));
-    expect(saved).toMatchObject({
-      session: {
-        provider: 'claude',
-        model: 'opus',
-      },
-      workers: [
-        expect.objectContaining({
-          name: 'worker-1',
-          provider: 'claude',
-          model: 'sonnet',
-        }),
-      ],
-    });
+    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
     expect(mockSelectAndExecuteTask).toHaveBeenCalledOnce();
   });
 
@@ -1622,7 +1783,8 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
-    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.judges).toHaveLength(2);
     expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
   });
 
@@ -1857,6 +2019,60 @@ describe('exec command setup', () => {
     expect(workflow).toContain(`threshold: ${DEFAULT_EXEC_CONFIG.loop.smallThreshold}`);
   });
 
+  it('should save setup-loaded default config before canceling the exec session', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      enableBuiltinWorkflows: true,
+      language: 'en',
+      provider: 'codex',
+      model: 'gpt-5',
+    });
+    saveLastUsedExecConfig({
+      ...DEFAULT_EXEC_CONFIG,
+      session: {
+        provider: 'claude',
+        model: 'opus',
+        effort: 'high',
+      },
+      workers: [
+        {
+          ...DEFAULT_EXEC_CONFIG.workers[0]!,
+          provider: 'claude',
+          model: 'opus',
+          effort: 'high',
+        },
+      ],
+      judges: [
+        {
+          ...DEFAULT_EXEC_CONFIG.judges[0]!,
+          provider: 'claude',
+          model: 'opus',
+          effort: 'high',
+        },
+      ],
+    }, { globalConfigDir });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'preset',
+      'load',
+      'default',
+      'back',
+    );
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.session).toEqual({});
+    expect(saved.workers[0]).not.toHaveProperty('provider');
+    expect(saved.workers[0]).not.toHaveProperty('model');
+    expect(saved.workers[0]).not.toHaveProperty('effort');
+    expect(saved.judges[0]).not.toHaveProperty('provider');
+    expect(saved.judges[0]).not.toHaveProperty('model');
+    expect(saved.judges[0]).not.toHaveProperty('effort');
+  });
+
   it('should save approved AI edits for existing instruction facets', async () => {
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
@@ -1889,6 +2105,8 @@ describe('exec command setup', () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: true,
       language: 'ja',
+      provider: 'claude',
+      model: 'opus',
     });
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')
@@ -1917,6 +2135,8 @@ describe('exec command setup', () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: false,
       language: 'en',
+      provider: 'claude',
+      model: 'opus',
     });
     mkdirSync(join(projectDir, '.takt', 'facets', 'instructions'), { recursive: true });
     mkdirSync(join(globalConfigDir, 'facets', 'instructions'), { recursive: true });
@@ -1948,6 +2168,8 @@ describe('exec command setup', () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: false,
       language: 'en',
+      provider: 'claude',
+      model: 'opus',
     });
     mkdirSync(join(projectDir, '.takt', 'facets', 'knowledge'), { recursive: true });
     mkdirSync(join(globalConfigDir, 'facets', 'knowledge'), { recursive: true });
@@ -1979,6 +2201,8 @@ describe('exec command setup', () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: false,
       language: 'en',
+      provider: 'claude',
+      model: 'opus',
     });
     mockReadInteractiveInput
       .mockResolvedValueOnce('/setup')

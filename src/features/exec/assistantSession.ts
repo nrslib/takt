@@ -9,7 +9,7 @@ import type {
 } from '../../core/models/workflow-types.js';
 import { callAIWithRetry, type SessionContext } from '../interactive/aiCaller.js';
 import type { FacetLookupConfig } from '../catalog/catalogFacets.js';
-import type { ExecConfig, ExecSessionConfig } from './types.js';
+import type { ResolvedExecConfig, ResolvedExecSessionConfig } from './types.js';
 import { assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidation.js';
 
 interface AskExecAssistantOptions {
@@ -20,7 +20,7 @@ export interface ExecSessionContext extends SessionContext {
   readonly facetLookupConfig: FacetLookupConfig;
 }
 
-function buildSessionProviderOptions(session: ExecSessionConfig): StepProviderOptions | undefined {
+function buildSessionProviderOptions(session: ResolvedExecSessionConfig): StepProviderOptions | undefined {
   assertExecProviderEffort(session.provider, session.model, session.effort, 'exec.session.effort');
   if (session.effort === undefined) {
     return undefined;
@@ -37,7 +37,7 @@ function buildSessionProviderOptions(session: ExecSessionConfig): StepProviderOp
   throw new Error(`Unreachable: assertExecProviderEffort should have rejected provider "${session.provider}" with effort "${session.effort}"`);
 }
 
-export function createExecSessionContext(cwd: string, config: ExecConfig, sessionId?: string): ExecSessionContext {
+export function createExecSessionContext(cwd: string, config: ResolvedExecConfig, sessionId?: string): ExecSessionContext {
   const resolvedConfig = resolveWorkflowConfigValues(cwd, ['enableBuiltinWorkflows', 'language']);
   const providerOptions = buildSessionProviderOptions(config.session);
   return {
@@ -55,7 +55,7 @@ export function createExecSessionContext(cwd: string, config: ExecConfig, sessio
   };
 }
 
-export function shouldKeepExecSession(previous: ExecSessionConfig, next: ExecSessionConfig): boolean {
+export function shouldKeepExecSession(previous: ResolvedExecSessionConfig, next: ResolvedExecSessionConfig): boolean {
   return previous.provider === next.provider && previous.model === next.model;
 }
 

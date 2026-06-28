@@ -1,5 +1,4 @@
 import { join } from 'node:path';
-import { debugLog } from '../../shared/utils/index.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type { PermissionMode } from '../../core/models/status.js';
 import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
@@ -7,10 +6,10 @@ import type { ConversationMessage } from '../interactive/interactive.js';
 import { loadRunSessionContext } from '../interactive/runSessionReader.js';
 import { selectAndExecuteTask, type TaskExecutionOptions } from '../tasks/index.js';
 import { EXEC_PROVIDERS } from './configValidation.js';
-import { saveLastUsedExecConfig } from './presetStore.js';
 import { writeProjectLocalTextFile } from './projectLocalFiles.js';
-import type { ExecConfig } from './types.js';
+import type { ExecConfig, ResolvedExecConfig } from './types.js';
 import { buildExecWorkflowYaml, buildJudgeReportName } from './workflowTemplate.js';
+import { resolveExecRuntimeConfig } from './runtimeConfig.js';
 
 const READONLY_PERMISSION_MODE: PermissionMode = 'readonly';
 
@@ -34,7 +33,7 @@ export function buildExecReadonlyProviderProfileOverrides(config: ExecConfig): P
   ])) as ProviderPermissionProfiles;
 }
 
-async function generateWorkflowFile(cwd: string, config: ExecConfig, task: string, workflowName: string): Promise<string> {
+async function generateWorkflowFile(cwd: string, config: ResolvedExecConfig, task: string, workflowName: string): Promise<string> {
   const workflowDir = join(cwd, '.takt', 'exec');
   const workflowPath = join(workflowDir, 'workflow.yaml');
   const yaml = buildExecWorkflowYaml(config, {
@@ -77,7 +76,13 @@ export function buildTaskInstructionPrompt(
     return null;
   }
 
-  const lines = ['Create a concise executable task instruction for TAKT exec.'];
+  const lines = [
+    'Create a concise executable task instruction for TAKT exec.',
+    '',
+    'TAKT is a CLI workflow runner for executing a user task with coordinated AI agents.',
+    '`takt exec` is the interactive task-entry mode that turns this conversation into a generated workflow and then runs it.',
+    'The generated workflow uses Worker agent(s) to implement the task, Judge agent(s) to review the result, a Replanning agent only when user-level replanning is needed, and loop detection to prevent repeated unproductive cycles.',
+  ];
   if (history.length > 0) {
     lines.push('', 'Conversation:');
     for (const message of history) {
@@ -99,21 +104,17 @@ export async function runGeneratedWorkflow(
   agentOverrides: TaskExecutionOptions | undefined,
 ): Promise<ReturnType<typeof loadRunSessionContext>> {
   const runSlug = generateExecutionReportDir(cwd, task);
-  const workflowPath = await generateWorkflowFile(cwd, config, task, `exec-${runSlug}`);
+  const runtimeConfig = resolveExecRuntimeConfig(cwd, config);
+  const workflowPath = await generateWorkflowFile(cwd, runtimeConfig, task, `exec-${runSlug}`);
   await selectAndExecuteTask(cwd, task, {
     workflow: workflowPath,
     skipTaskList: true,
     interactiveUserInput: true,
     interactiveMetadata: { confirmed: true, task },
     reportDirName: runSlug,
-    providerProfileOverrides: buildExecReadonlyProviderProfileOverrides(config),
+    providerProfileOverrides: buildExecReadonlyProviderProfileOverrides(runtimeConfig),
     exitOnFailure: false,
   }, agentOverrides);
-  const context = loadCompletedExecRun(cwd, runSlug, config.judges.map((judge) => buildJudgeReportName(judge.name)));
-  try {
-    saveLastUsedExecConfig(config);
-  } catch (error) {
-    debugLog('exec', 'Failed to save last-used exec config', error instanceof Error ? error.message : String(error));
-  }
+  const context = loadCompletedExecRun(cwd, runSlug, runtimeConfig.judges.map((judge) => buildJudgeReportName(judge.name)));
   return context;
 }

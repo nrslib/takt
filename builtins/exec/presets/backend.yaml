@@ -1,9 +1,6 @@
 name: backend
 description: Backend development team
-session:
-  provider: claude
-  model: opus
-  effort: high
+session: {}
 replan:
   instruction: exec-replan
   knowledge:
@@ -12,9 +9,6 @@ replan:
   policy: []
 workers:
   - name: worker-1
-    provider: claude
-    model: sonnet
-    effort: high
     instruction: exec-worker
     knowledge:
       - architecture
@@ -25,9 +19,6 @@ workers:
       - testing
 judges:
   - name: judge-1
-    provider: claude
-    model: opus
-    effort: high
     instruction: exec-judge
     knowledge:
       - architecture

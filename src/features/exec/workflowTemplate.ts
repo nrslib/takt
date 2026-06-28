@@ -1,12 +1,12 @@
 import { stringify as stringifyYaml } from 'yaml';
 import type { ProviderType } from '../../infra/providers/index.js';
 import {
-  assertExecConfig,
   assertExecProviderEffort,
+  assertResolvedExecConfig,
   CLAUDE_TOOL_PROVIDERS,
   providerAllowsOmittedExecModel,
 } from './configValidation.js';
-import type { ExecActorConfig, ExecConfig, ExecEffort } from './types.js';
+import type { ExecConfig, ExecEffort, ResolvedExecActorConfig, ResolvedExecConfig } from './types.js';
 
 interface BuildExecWorkflowOptions {
   workflowName: string;
@@ -63,7 +63,7 @@ function buildProviderOptions(
   return undefined;
 }
 
-function buildSessionJudgeProviderFields(config: ExecConfig): Record<string, unknown> {
+function buildSessionJudgeProviderFields(config: ResolvedExecConfig): Record<string, unknown> {
   const providerOptions = buildProviderOptions(
     config.session.provider,
     config.session.model,
@@ -81,7 +81,7 @@ export function buildJudgeReportName(actorName: string): string {
   return `${actorName}-judge-result.md`;
 }
 
-function buildActorStep(actor: ExecActorConfig, edit: boolean, claudeAllowedTools: string[]): Record<string, unknown> {
+function buildActorStep(actor: ResolvedExecActorConfig, edit: boolean, claudeAllowedTools: string[]): Record<string, unknown> {
   const providerOptions = buildProviderOptions(actor.provider, actor.model, actor.effort, claudeAllowedTools);
   return {
     name: actor.name,
@@ -113,7 +113,7 @@ function buildActorStep(actor: ExecActorConfig, edit: boolean, claudeAllowedTool
   };
 }
 
-function buildReplanStep(config: ExecConfig): Record<string, unknown> {
+function buildReplanStep(config: ResolvedExecConfig): Record<string, unknown> {
   return {
     name: 'replan',
     session_key: 'exec-replan',
@@ -139,7 +139,7 @@ function buildReplanStep(config: ExecConfig): Record<string, unknown> {
 }
 
 export function buildExecWorkflowYaml(config: ExecConfig, options: BuildExecWorkflowOptions): string {
-  assertExecConfig(config);
+  assertResolvedExecConfig(config);
   const workflow = {
     name: options.workflowName,
     description: options.taskDescription,

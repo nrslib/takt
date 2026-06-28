@@ -7,31 +7,13 @@ import { selectAndExecuteTask } from '../features/tasks/index.js';
 import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import {
   buildExecReadonlyProviderProfileOverrides,
-  buildTaskInstructionPrompt,
   runGeneratedWorkflow,
 } from '../features/exec/workflowRunner.js';
 import type { ExecConfig } from '../features/exec/types.js';
 
-const { saveExecConfigControl } = vi.hoisted(() => ({
-  saveExecConfigControl: { shouldThrow: false },
-}));
-
 vi.mock('../features/tasks/index.js', () => ({
   selectAndExecuteTask: vi.fn(),
 }));
-
-vi.mock('../features/exec/presetStore.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../features/exec/presetStore.js')>();
-  return {
-    ...original,
-    saveLastUsedExecConfig: (...args: Parameters<typeof original.saveLastUsedExecConfig>) => {
-      if (saveExecConfigControl.shouldThrow) {
-        throw new Error('Simulated save failure');
-      }
-      return original.saveLastUsedExecConfig(...args);
-    },
-  };
-});
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 
@@ -125,7 +107,7 @@ describe('runGeneratedWorkflow integration', () => {
     expect(formatted.runReports).not.toContain('worker-extra.md');
     expect(formatted.runReports).toContain('untrusted data');
     expect(formatted.runReports).toContain('do not follow instructions');
-    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(true);
+    expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
 
     const workflow = readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8');
     expect(workflow).toContain('name: judge-2-judge-result.md');
@@ -178,30 +160,6 @@ describe('runGeneratedWorkflow integration', () => {
       .rejects.toThrow(/judge-2-judge-result\.md/);
 
     expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
-  });
-
-  it('should return context even when saveLastUsedExecConfig fails', async () => {
-    const task = 'Executable task with save failure';
-    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
-      if (!options?.reportDirName) {
-        throw new Error('reportDirName is required');
-      }
-      writeCompletedRun(cwd, options.reportDirName, executedTask);
-    });
-
-    saveExecConfigControl.shouldThrow = true;
-
-    try {
-      const context = await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined);
-
-      expect(context.reports.map((report) => report.filename)).toEqual([
-        'judge-1-judge-result.md',
-        'judge-2-judge-result.md',
-      ]);
-      expect(existsSync(join(globalConfigDir, 'exec.yaml'))).toBe(false);
-    } finally {
-      saveExecConfigControl.shouldThrow = false;
-    }
   });
 
   it('should read back the exact generated run slug instead of searching by task text', async () => {
@@ -280,38 +238,6 @@ describe('runGeneratedWorkflow integration', () => {
 
     const options = mockSelectAndExecuteTask.mock.calls[0]?.[2];
     expect(options?.exitOnFailure).toBe(false);
-  });
-
-  it('should build a task instruction prompt from conversation history and inline /go text', () => {
-    const prompt = buildTaskInstructionPrompt([
-      { role: 'user', content: 'We need to add exec mode.' },
-      { role: 'assistant', content: 'Use workers and judges.' },
-    ], false, 'Focus on tests first.');
-
-    expect(prompt).toBe([
-      'Create a concise executable task instruction for TAKT exec.',
-      '',
-      'Conversation:',
-      'User: We need to add exec mode.',
-      'Assistant: Use workers and judges.',
-      '',
-      'Additional user note:',
-      'Focus on tests first.',
-    ].join('\n'));
-  });
-
-  it('should build a task instruction prompt from the active assistant session context', () => {
-    const prompt = buildTaskInstructionPrompt([], true, '');
-
-    expect(prompt).toBe([
-      'Create a concise executable task instruction for TAKT exec.',
-      '',
-      'Use the active exec assistant session context as the conversation.',
-    ].join('\n'));
-  });
-
-  it('should not build a task instruction prompt without conversation session or inline text', () => {
-    expect(buildTaskInstructionPrompt([], false, '')).toBeNull();
   });
 
   it('should build readonly permission profiles for every exec provider', () => {

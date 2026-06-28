@@ -88,9 +88,9 @@ describe('E2E: Exec mode (takt exec)', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Previous configuration');
-    expect(result.stdout).toContain('Session: mock/previous-session');
-    expect(result.stdout).toContain('Worker x1: mock/previous-worker');
-    expect(result.stdout).toContain('Judge x1: mock/previous-judge');
+    expect(result.stdout).toContain('Assistant agent: mock/previous-session');
+    expect(result.stdout).toContain('Worker agent x1: mock/previous-worker');
+    expect(result.stdout).toContain('Judge agent x1: mock/previous-judge');
   });
 
   it('should expose setup during exec conversation', () => {
@@ -102,8 +102,8 @@ describe('E2E: Exec mode (takt exec)', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Team Configuration');
-    expect(result.stdout).toContain('Assistant:');
+    expect(result.stdout).toContain('Exec agents');
+    expect(result.stdout).toContain('Assistant agent:');
   });
 
   it('should execute /go through a generated workflow using the existing workflow engine', () => {
@@ -183,11 +183,7 @@ describe('E2E: Exec mode (takt exec)', () => {
     expect(execute?.parallel?.[0]?.provider).toBe('mock');
     expect(judge?.parallel?.[0]?.provider).toBe('mock');
     expect(replan?.provider).toBe('mock');
-    const lastUsedConfigPath = join(isolatedEnv.taktDir, 'exec.yaml');
-    expect(existsSync(lastUsedConfigPath)).toBe(true);
-    const lastUsedConfig = readFileSync(lastUsedConfigPath, 'utf-8');
-    expect(lastUsedConfig).toContain('workers:');
-    expect(lastUsedConfig).toContain('judges:');
+    expect(existsSync(join(isolatedEnv.taktDir, 'exec.yaml'))).toBe(false);
   }, 240_000);
 
   it('should not create exec workflow or config when /go has no task context', () => {

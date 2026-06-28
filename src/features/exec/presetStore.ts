@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { basename, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import type { ProviderType } from '../../infra/providers/index.js';
 import { getResourcesDir } from '../../infra/resources/index.js';
 import { debugLog } from '../../shared/utils/index.js';
 import { assertExecActorName, assertExecConfig, EXEC_EFFORTS, EXEC_PROVIDERS } from './configValidation.js';
@@ -91,11 +92,14 @@ function asStringArray(value: unknown, path: string): string[] {
 }
 
 function asProvider(value: unknown, path: string): ExecConfig['session']['provider'] {
+  if (value === undefined) {
+    return undefined;
+  }
   const provider = asString(value, path);
-  if (!EXEC_PROVIDERS.includes(provider as ExecConfig['session']['provider'])) {
+  if (!EXEC_PROVIDERS.includes(provider as ProviderType)) {
     throw new Error(`Invalid exec config at ${path}: unsupported provider "${provider}"`);
   }
-  return provider as ExecConfig['session']['provider'];
+  return provider as ProviderType;
 }
 
 function asEffort(value: unknown, path: string): ExecEffort | undefined {
@@ -129,7 +133,7 @@ function parseActor(value: unknown, path: string): ExecActorConfig {
   assertExecActorName(name, `${path}.name`);
   return {
     name,
-    provider: asProvider(actor.provider, `${path}.provider`),
+    ...(actor.provider !== undefined ? { provider: asProvider(actor.provider, `${path}.provider`) } : {}),
     model: asModel(actor.model, `${path}.model`),
     effort: asEffort(actor.effort, `${path}.effort`),
     instruction: asString(actor.instruction, `${path}.instruction`),
@@ -160,7 +164,7 @@ function parseExecConfig(raw: unknown): ExecConfig {
   const loop = asRecord(root.loop, 'exec.loop');
   const config = {
     session: {
-      provider: asProvider(session.provider, 'exec.session.provider'),
+      ...(session.provider !== undefined ? { provider: asProvider(session.provider, 'exec.session.provider') } : {}),
       model: asModel(session.model, 'exec.session.model'),
       effort: asEffort(session.effort, 'exec.session.effort'),
     },

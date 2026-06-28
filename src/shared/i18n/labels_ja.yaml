@@ -72,7 +72,7 @@ interactive:
     cancel: "対話モードを終了"
     resume: "セッションを読み込む"
     pasteImage: "クリップボード画像を添付"
-    setup: "exec チームを設定"
+    setup: "exec エージェントを設定"
 
 # ===== Exec Mode UI =====
 exec:
@@ -95,21 +95,21 @@ exec:
     projectDescription: ".takt/facets"
     globalDescription: "~/.takt/facets"
   setup:
-    teamConfiguration: "チーム設定"
-    assistantSummary: "アシスタント: {summary}"
-    workersSummary: "ワーカー: {count}"
-    judgesSummary: "ジャッジ: {count}"
-    replanSummary: "再計画: {instruction}"
-    loopSummary: "ループ: {small}/{large}/{max}"
+    teamConfiguration: "exec エージェント"
+    assistantSummary: "アシスタントエージェント: {summary}"
+    workersSummary: "ワーカーエージェント: {count}"
+    judgesSummary: "判定エージェント: {count}"
+    replanSummary: "再計画エージェント: {instruction}"
+    loopSummary: "ループ検知: {small}/{large}/{max}"
     preset: "プリセット"
   actors:
-    workers: "ワーカー"
-    judges: "ジャッジ"
+    workers: "ワーカーエージェント"
+    judges: "判定エージェント"
     mustContainOne: "{label} は少なくとも1件必要です。"
     deletePrompt: "{label}を削除"
     invalidIndex: "{label} のインデックスが不正です: {index}"
   settings:
-    assistant: "アシスタント設定"
+    assistant: "アシスタントエージェント設定"
     actor: "{name} の設定"
     provider: "プロバイダー"
     model: "モデル"
@@ -121,6 +121,8 @@ exec:
     customModel: "カスタム入力..."
     customModelPrompt: "カスタムモデル"
     customModelRequired: "カスタムモデルは空にできません。"
+    defaultModel: "デフォルト（{value}）"
+    defaultEffort: "デフォルト（なし）"
   fields:
     provider: "プロバイダー: {value}"
     model: "モデル: {value}"
@@ -129,16 +131,16 @@ exec:
     instruction: "指示: {value}"
     knowledge: "知識: {value}"
     policy: "ポリシー: {value}"
-    smallLoopThreshold: "小ループしきい値: {value}"
-    largeLoopThreshold: "大ループしきい値: {value}"
+    smallLoopThreshold: "小ループ検知しきい値: {value}"
+    largeLoopThreshold: "大ループ検知しきい値: {value}"
     maxSteps: "最大ステップ数: {value}"
     actorInstruction: "指示: {value}"
   replan:
-    settings: "再計画設定"
+    settings: "再計画エージェント設定"
   loop:
-    settings: "ループ設定"
-    smallThresholdPrompt: "小ループしきい値"
-    largeThresholdPrompt: "大ループしきい値"
+    settings: "ループ検知設定"
+    smallThresholdPrompt: "小ループ検知しきい値"
+    largeThresholdPrompt: "大ループ検知しきい値"
     maxStepsPrompt: "最大ステップ数"
   preset:
     menu: "プリセット"

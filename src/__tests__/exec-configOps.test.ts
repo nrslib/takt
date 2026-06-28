@@ -64,9 +64,9 @@ describe('applyExecOverrides', () => {
     expect(result.session.provider).toBe('codex');
     expect(result.workers[0]!.provider).toBe('codex');
     expect(result.judges[0]!.provider).toBe('codex');
-    expect(result.session.model).toBe('gpt-5');
-    expect(result.workers[0]!.model).toBe('gpt-5');
-    expect(result.judges[0]!.model).toBe('gpt-5');
+    expect(result.session.model).toBeUndefined();
+    expect(result.workers[0]!.model).toBeUndefined();
+    expect(result.judges[0]!.model).toBeUndefined();
   });
 
   it('should apply model override consistently to session, workers, and judges', () => {
@@ -89,14 +89,11 @@ describe('applyExecOverrides', () => {
     expect(result.judges[0]!.effort).toBe('high');
   });
 
-  it('should use the opencode default model when provider override changes from Claude', () => {
+  it('should reject opencode provider override without an explicit provider-qualified model', () => {
     const config = createTestConfig();
 
-    const result = applyExecOverrides(config, { provider: 'opencode' });
-
-    expect(result.session).toMatchObject({ provider: 'opencode', model: 'opencode/big-pickle' });
-    expect(result.workers[0]).toMatchObject({ provider: 'opencode', model: 'opencode/big-pickle' });
-    expect(result.judges[0]).toMatchObject({ provider: 'opencode', model: 'opencode/big-pickle' });
+    expect(() => applyExecOverrides(config, { provider: 'opencode' }))
+      .toThrow(/provider 'opencode' requires model/);
   });
 
   it('should display provider-qualified opencode models without duplicating the provider', () => {
@@ -128,9 +125,9 @@ describe('applyExecOverrides', () => {
     const summary = formatExecConfigSummary(config);
     const workerDetails = formatActorDetails(config.workers[0]!);
 
-    expect(summary).toContain('Session: opencode/big-pickle');
-    expect(summary).toContain('Worker x1: opencode/big-pickle');
-    expect(summary).toContain('Judge x1: opencode/big-pickle');
+    expect(summary).toContain('Assistant agent: opencode/big-pickle');
+    expect(summary).toContain('Worker agent x1: opencode/big-pickle');
+    expect(summary).toContain('Judge agent x1: opencode/big-pickle');
     expect(workerDetails).toContain('opencode/big-pickle · instruction: exec-worker');
     expect(summary).not.toContain('opencode/opencode/big-pickle');
     expect(workerDetails).not.toContain('opencode/opencode/big-pickle');
@@ -178,9 +175,9 @@ describe('applyExecOverrides', () => {
       expect(result.session.model).toBeUndefined();
       expect(result.workers[0]!.model).toBeUndefined();
       expect(result.judges[0]!.model).toBeUndefined();
-      expect(summary).toContain(`Session: ${provider}/(provider default)`);
-      expect(summary).toContain(`Worker x1: ${provider}/(provider default)`);
-      expect(summary).toContain(`Judge x1: ${provider}/(provider default)`);
+      expect(summary).toContain(`Assistant agent: ${provider}/(provider default)`);
+      expect(summary).toContain(`Worker agent x1: ${provider}/(provider default)`);
+      expect(summary).toContain(`Judge agent x1: ${provider}/(provider default)`);
       expect(findRawStep(rawWorkflow, 'execute').parallel?.[0]).toMatchObject({ provider, model: null });
       expect(findRawStep(rawWorkflow, 'judge').parallel?.[0]).toMatchObject({ provider, model: null });
       expect(findRawStep(rawWorkflow, 'replan')).toMatchObject({ provider, model: null });

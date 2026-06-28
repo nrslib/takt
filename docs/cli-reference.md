@@ -109,7 +109,7 @@ takt --task "Add authentication" --workflow dual
 
 ## Instant Exec Mode
 
-`takt exec` starts an Assistant + Worker(s) + Judge(s) session without writing workflow YAML by hand.
+`takt exec` starts TAKT's interactive task-entry mode without writing workflow YAML by hand. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Judge agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.
 
 ```bash
 takt exec          # use previous config, or default on first run
@@ -117,22 +117,22 @@ takt exec backend  # start from a named preset
 takt exec --list   # list available exec presets
 ```
 
-Preset lookup order is project `.takt/exec/presets/`, then global `~/.takt/exec/presets/`, then builtin `builtins/exec/presets/`. A successful `/go` saves the selected configuration to `~/.takt/exec.yaml` for the next run.
+Preset lookup order is project `.takt/exec/presets/`, then global `~/.takt/exec/presets/`, then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when the workflow is generated, unless an exec config explicitly overrides them. `effort` is emitted only when it is explicitly configured. Changes made in `/setup` are saved to `~/.takt/exec.yaml` for the next exec session.
 
 Inside exec mode:
 
 | Command | Description |
 |---------|-------------|
-| `/setup` | Edit assistant, workers, judges, replan facets, loop thresholds, and project/global presets |
+| `/setup` | Edit agents, replan facets, loop detection thresholds, and project/global presets |
 | `/go` | Summarize the conversation into executable task instructions and run the generated workflow |
 | `/go <note>` | Run with an additional note appended to the conversation summary |
 | `/cancel` | Exit without executing |
 
 `/setup` can save/delete project or global presets. Instruction, knowledge, and policy fields reference normal facets; new facets are saved under `.takt/facets/{instructions,knowledge,policies}/` or `~/.takt/facets/{instructions,knowledge,policies}/`.
 
-On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the existing workflow engine. `/go` with no prior conversation and no inline task text is rejected before creating the workflow or saving `exec.yaml`. The judge result reports are read from the completed run and injected back into the exec assistant session for the final summary.
+On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the existing workflow engine. `/go` with no prior conversation and no inline task text is rejected before creating the workflow. The judge result reports are read from the completed run and injected back into the exec assistant session for the final summary.
 
-Generated exec workflows use `session_key` to keep Worker, Judge, replan, and loop-monitor sessions separate even when they share a persona. In user-authored workflows, `session_key` is supported only on normal agent steps, parallel sub-steps, and `loop_monitors.judge`; it is not supported on system steps, workflow_call steps, or parallel parent steps. The effective session key is suffixed with the resolved provider.
+Generated exec workflows use `session_key` to keep Worker agent, Judge agent, Replanning agent, and loop detection sessions separate even when they share a persona. In user-authored workflows, `session_key` is supported only on normal agent steps, parallel sub-steps, and `loop_monitors.judge`; it is not supported on system steps, workflow_call steps, or parallel parent steps. The effective session key is suffixed with the resolved provider.
 
 ## GitHub Issue Tasks
 

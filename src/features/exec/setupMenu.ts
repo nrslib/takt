@@ -27,12 +27,24 @@ import {
   shouldKeepExecSession,
   type ExecSessionContext,
 } from './assistantSession.js';
-import type { ExecActorConfig, ExecConfig, ExecEffort, ExecSessionConfig } from './types.js';
+import { resolveExecRuntimeConfig } from './runtimeConfig.js';
+import type {
+  ExecActorConfig,
+  ExecConfig,
+  ExecEffort,
+  ExecSessionConfig,
+  ResolvedExecActorConfig,
+  ResolvedExecConfig,
+  ResolvedExecSessionConfig,
+} from './types.js';
 
 type SetupSection = 'assistant' | 'workers' | 'judges' | 'replan' | 'loop' | 'preset' | 'back';
 type SetupSectionOption = { label: string; value: SetupSection };
 type ActorListKind = 'workers' | 'judges';
+type ModelSelection = { changed: false } | { changed: true; model: string | undefined };
 const CUSTOM_MODEL_VALUE = '__custom_model__';
+const DEFAULT_MODEL_VALUE = '__default_model__';
+const DEFAULT_EFFORT_VALUE = '__default_effort__';
 
 function supportsAnyExecEffort(provider: ProviderType): boolean {
   return getSupportedExecEfforts(provider).length > 0;
@@ -42,7 +54,7 @@ function shouldKeepSetupMenuOpen(): boolean {
   return resolveTtyPolicy().useTty && !process.stdin.readableEnded;
 }
 
-function buildSetupSectionOptions(current: ExecConfig, lang: ExecLanguage): SetupSectionOption[] {
+function buildSetupSectionOptions(current: ResolvedExecConfig, lang: ExecLanguage): SetupSectionOption[] {
   return [
     {
       label: execLabel(lang, 'setup.assistantSummary', {
@@ -94,12 +106,22 @@ async function selectEffort(provider: ProviderType, current: ExecEffort | undefi
   if (efforts.length === 0) {
     throw new Error(`Provider "${provider}" does not support exec effort selection.`);
   }
-  const selected = await selectExecOption<ExecEffort>(lang, execLabel(lang, 'settings.effort'), efforts.map((effort) => ({
-    label: effort === current ? execCurrentLabel(lang, effort) : effort,
-    value: effort,
-  })));
+  const defaultLabel = execLabel(lang, 'settings.defaultEffort');
+  const selected = await selectExecOption<ExecEffort | typeof DEFAULT_EFFORT_VALUE>(lang, execLabel(lang, 'settings.effort'), [
+    {
+      label: current === undefined ? execCurrentLabel(lang, defaultLabel) : defaultLabel,
+      value: DEFAULT_EFFORT_VALUE,
+    },
+    ...efforts.map((effort) => ({
+      label: effort === current ? execCurrentLabel(lang, effort) : effort,
+      value: effort,
+    })),
+  ]);
   if (selected === null) {
     return current;
+  }
+  if (selected === DEFAULT_EFFORT_VALUE) {
+    return undefined;
   }
   return selected;
 }
@@ -115,34 +137,53 @@ function requireCustomModelInput(model: string, lang: ExecLanguage): string {
   return model;
 }
 
-async function selectModel(provider: ProviderType, current: string | undefined, lang: ExecLanguage): Promise<string | undefined> {
+async function selectModel(
+  provider: ProviderType,
+  rawCurrent: string | undefined,
+  effectiveCurrent: string | undefined,
+  lang: ExecLanguage,
+): Promise<ModelSelection> {
   const candidates = [...new Set([
     ...getExecModelCandidates(provider),
-    ...(current !== undefined ? [current] : []),
+    ...(rawCurrent !== undefined ? [rawCurrent] : []),
+    ...(effectiveCurrent !== undefined ? [effectiveCurrent] : []),
   ])];
+  const defaultLabel = execLabel(lang, 'settings.defaultModel', { value: execLabel(lang, 'common.providerDefault') });
   const selected = await selectExecOption<string>(lang, execLabel(lang, 'settings.model'), [
+    {
+      label: rawCurrent === undefined ? execCurrentLabel(lang, defaultLabel) : defaultLabel,
+      value: DEFAULT_MODEL_VALUE,
+    },
     ...candidates.map((model) => ({
-      label: model === current ? execCurrentLabel(lang, sanitizeTerminalText(model)) : sanitizeTerminalText(model),
+      label: model === rawCurrent ? execCurrentLabel(lang, sanitizeTerminalText(model)) : sanitizeTerminalText(model),
       value: model,
     })),
     { label: execLabel(lang, 'settings.customModel'), value: CUSTOM_MODEL_VALUE },
   ]);
   if (selected === null) {
-    return current;
+    return { changed: false };
+  }
+  if (selected === DEFAULT_MODEL_VALUE) {
+    return { changed: true, model: undefined };
   }
   if (selected === CUSTOM_MODEL_VALUE) {
-    const model = await promptText(execLabel(lang, 'settings.customModelPrompt'), current ?? '', lang);
-    return requireCustomModelInput(model, lang);
+    const model = await promptText(execLabel(lang, 'settings.customModelPrompt'), rawCurrent ?? effectiveCurrent ?? '', lang);
+    return { changed: true, model: requireCustomModelInput(model, lang) };
   }
-  return selected;
+  return { changed: true, model: selected };
 }
 
-async function editSessionConfig(session: ExecSessionConfig, lang: ExecLanguage): Promise<ExecSessionConfig> {
-  let current = session;
+async function editSessionConfig(
+  session: ExecSessionConfig,
+  effectiveSession: ResolvedExecSessionConfig,
+  lang: ExecLanguage,
+): Promise<ExecSessionConfig> {
+  let current = effectiveSession;
+  let raw = session;
   while (true) {
     const options: Array<{ label: string; value: 'provider' | 'model' | 'effort' | 'back' }> = [
       { label: execLabel(lang, 'fields.provider', { value: sanitizeTerminalText(current.provider) }), value: 'provider' },
-      { label: execLabel(lang, 'fields.model', { value: formatModelValue(current.model, lang) }), value: 'model' },
+      { label: execLabel(lang, 'fields.model', { value: formatModelValue(raw.model, lang) }), value: 'model' },
     ];
     if (supportsAnyExecEffort(current.provider)) {
       options.push({
@@ -153,26 +194,34 @@ async function editSessionConfig(session: ExecSessionConfig, lang: ExecLanguage)
     options.push({ label: execLabel(lang, 'common.back'), value: 'back' });
     const field = await selectExecOption<'provider' | 'model' | 'effort' | 'back'>(lang, execLabel(lang, 'settings.assistant'), options);
     if (field === null || field === 'back') {
-      return current;
+      return raw;
     }
     if (field === 'provider') {
       const provider = await selectProvider(current.provider, lang);
-      current = {
-        ...current,
-        provider,
-        model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
-        effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
-      };
+      if (provider !== current.provider) {
+        current = {
+          ...current,
+          provider,
+          model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
+          effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
+        };
+        raw = { ...raw, provider: current.provider, model: current.model, effort: current.effort };
+      }
     }
     if (field === 'model') {
-      current = { ...current, model: await selectModel(current.provider, current.model, lang) };
+      const selection = await selectModel(current.provider, raw.model, current.model, lang);
+      if (selection.changed) {
+        current = { ...current, model: selection.model };
+        raw = { ...raw, model: selection.model };
+      }
     }
     if (field === 'effort') {
       current = { ...current, effort: await selectEffort(current.provider, current.effort, lang) };
+      raw = { ...raw, effort: current.effort };
     }
     assertExecProviderEffort(current.provider, current.model, current.effort, 'exec.session.effort');
     if (!shouldKeepSetupMenuOpen()) {
-      return current;
+      return raw;
     }
   }
 }
@@ -180,10 +229,12 @@ async function editSessionConfig(session: ExecSessionConfig, lang: ExecLanguage)
 async function editActor(
   cwd: string,
   actor: ExecActorConfig,
+  effectiveActor: ResolvedExecActorConfig,
   defaultActor: ExecActorConfig,
   ctx: ExecSessionContext,
 ): Promise<ExecActorConfig> {
-  let current = actor;
+  let current = effectiveActor;
+  let raw = actor;
   while (true) {
     const options: Array<{
       label: string;
@@ -191,7 +242,7 @@ async function editActor(
     }> = [
       { label: execLabel(ctx.lang, 'fields.name', { value: sanitizeTerminalText(current.name) }), value: 'name' },
       { label: execLabel(ctx.lang, 'fields.provider', { value: sanitizeTerminalText(current.provider) }), value: 'provider' },
-      { label: execLabel(ctx.lang, 'fields.model', { value: formatModelValue(current.model, ctx.lang) }), value: 'model' },
+      { label: execLabel(ctx.lang, 'fields.model', { value: formatModelValue(raw.model, ctx.lang) }), value: 'model' },
     ];
     if (supportsAnyExecEffort(current.provider)) {
       options.push({
@@ -211,43 +262,61 @@ async function editActor(
       options,
     );
     if (field === null || field === 'back') {
-      return current;
+      return raw;
     }
     if (field === 'name') {
       const name = await promptText(execLabel(ctx.lang, 'settings.name'), current.name, ctx.lang);
       assertExecActorName(name, `exec.${current.name}.name`);
+      raw = { ...raw, name };
       current = { ...current, name };
     }
     if (field === 'provider') {
       const provider = await selectProvider(current.provider, ctx.lang);
-      current = {
-        ...current,
-        provider,
-        model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
-        effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
-      };
+      if (provider !== current.provider) {
+        current = {
+          ...current,
+          provider,
+          model: resolveModelAfterProviderOverride(current.provider, provider, current.model, undefined),
+          effort: resolveEffortAfterProviderOverride(current.provider, provider, current.effort),
+        };
+        raw = { ...raw, provider: current.provider, model: current.model, effort: current.effort };
+      }
     }
     if (field === 'model') {
-      current = { ...current, model: await selectModel(current.provider, current.model, ctx.lang) };
+      const selection = await selectModel(current.provider, raw.model, current.model, ctx.lang);
+      if (selection.changed) {
+        current = { ...current, model: selection.model };
+        raw = { ...raw, model: selection.model };
+      }
     }
     if (field === 'effort') {
       current = { ...current, effort: await selectEffort(current.provider, current.effort, ctx.lang) };
+      raw = { ...raw, effort: current.effort };
     }
     if (field === 'instruction') {
+      const instruction = await editInstructionFacetRef(cwd, current.instruction, defaultActor.instruction, ctx);
+      raw = {
+        ...raw,
+        instruction,
+      };
       current = {
         ...current,
-        instruction: await editInstructionFacetRef(cwd, current.instruction, defaultActor.instruction, ctx),
+        instruction,
       };
     }
     if (field === 'knowledge') {
-      current = { ...current, knowledge: await editFacetRefList(cwd, 'knowledge', current.knowledge, ctx) };
+      const knowledge = await editFacetRefList(cwd, 'knowledge', current.knowledge, ctx);
+      raw = { ...raw, knowledge };
+      current = { ...current, knowledge };
     }
     if (field === 'policy') {
-      current = { ...current, policy: await editFacetRefList(cwd, 'policies', current.policy, ctx) };
+      const policy = await editFacetRefList(cwd, 'policies', current.policy, ctx);
+      raw = { ...raw, policy };
+      current = { ...current, policy };
     }
     assertExecProviderEffort(current.provider, current.model, current.effort, `exec.${current.name}.effort`);
     if (!shouldKeepSetupMenuOpen()) {
-      return current;
+      return raw;
     }
   }
 }
@@ -255,17 +324,18 @@ async function editActor(
 async function editActorList(
   cwd: string,
   kind: ActorListKind,
-  actors: ExecActorConfig[],
+  config: ExecConfig,
   template: ExecActorConfig,
   ctx: ExecSessionContext,
 ): Promise<ExecActorConfig[]> {
   const label = execLabel(ctx.lang, `actors.${kind}`);
   const actorNamePrefix = kind === 'workers' ? 'worker' : 'judge';
-  let current = actors;
+  let current = config[kind];
   while (true) {
+    const effectiveActors = resolveExecRuntimeConfig(cwd, { ...config, [kind]: current })[kind];
     const action = await selectExecOption<string>(ctx.lang, label, [
-      ...current.map((actor, index) => ({
-        label: `${sanitizeTerminalText(actor.name)}: ${formatActorDetails(actor, ctx.lang)}`,
+      ...effectiveActors.map((actor, index) => ({
+        label: `${sanitizeTerminalText(current[index]?.name ?? actor.name)}: ${formatActorDetails(actor, ctx.lang)}`,
         value: `edit:${index}`,
       })),
       { label: execLabel(ctx.lang, 'common.add'), value: 'add' },
@@ -294,10 +364,14 @@ async function editActorList(
     } else if (action.startsWith('edit:')) {
       const index = Number(action.slice('edit:'.length));
       const actor = current[index];
+      const effectiveActor = effectiveActors[index];
       if (!actor) {
         throw new Error(execLabel(ctx.lang, 'actors.invalidIndex', { label, index: String(index) }));
       }
-      const updated = await editActor(cwd, actor, template, ctx);
+      if (!effectiveActor) {
+        throw new Error(execLabel(ctx.lang, 'actors.invalidIndex', { label, index: String(index) }));
+      }
+      const updated = await editActor(cwd, actor, effectiveActor, template, ctx);
       current = current.map((entry, entryIndex) => entryIndex === index ? updated : entry);
     }
     if (!shouldKeepSetupMenuOpen()) {
@@ -375,19 +449,22 @@ export async function runSetupMenu(cwd: string, config: ExecConfig, ctx: ExecSes
   let current = config;
   let setupCtx = ctx;
   if (!shouldKeepSetupMenuOpen()) {
-    await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(current, setupCtx.lang));
+    const runtimeConfig = resolveExecRuntimeConfig(cwd, current);
+    await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(runtimeConfig, setupCtx.lang));
     return current;
   }
   while (true) {
-    const section = await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(current, setupCtx.lang));
+    const runtimeConfig = resolveExecRuntimeConfig(cwd, current);
+    const section = await selectExecOption<SetupSection>(setupCtx.lang, execLabel(setupCtx.lang, 'setup.teamConfiguration'), buildSetupSectionOptions(runtimeConfig, setupCtx.lang));
     if (section === null || section === 'back') {
       return current;
     }
     try {
-      const next = await resolveSetupSection(cwd, section, current, workerTemplate, judgeTemplate, setupCtx);
+      const next = await resolveSetupSection(cwd, section, current, runtimeConfig, workerTemplate, judgeTemplate, setupCtx);
       assertExecConfig(next);
-      const nextSessionId = shouldKeepExecSession(current.session, next.session) ? setupCtx.sessionId : undefined;
-      setupCtx = createExecSessionContext(cwd, next, nextSessionId);
+      const nextRuntimeConfig = resolveExecRuntimeConfig(cwd, next);
+      const nextSessionId = shouldKeepExecSession(runtimeConfig.session, nextRuntimeConfig.session) ? setupCtx.sessionId : undefined;
+      setupCtx = createExecSessionContext(cwd, nextRuntimeConfig, nextSessionId);
       current = next;
     } catch (error) {
       if (error instanceof ProjectBoundaryError) {
@@ -405,18 +482,19 @@ async function resolveSetupSection(
   cwd: string,
   section: SetupSection | null,
   config: ExecConfig,
+  runtimeConfig: ResolvedExecConfig,
   workerTemplate: ExecActorConfig,
   judgeTemplate: ExecActorConfig,
   ctx: ExecSessionContext,
 ): Promise<ExecConfig> {
   if (section === 'assistant') {
-    return { ...config, session: await editSessionConfig(config.session, ctx.lang) };
+    return { ...config, session: await editSessionConfig(config.session, runtimeConfig.session, ctx.lang) };
   }
   if (section === 'workers') {
-    return { ...config, workers: await editActorList(cwd, 'workers', config.workers, workerTemplate, ctx) };
+    return { ...config, workers: await editActorList(cwd, 'workers', config, workerTemplate, ctx) };
   }
   if (section === 'judges') {
-    return { ...config, judges: await editActorList(cwd, 'judges', config.judges, judgeTemplate, ctx) };
+    return { ...config, judges: await editActorList(cwd, 'judges', config, judgeTemplate, ctx) };
   }
   if (section === 'replan') {
     return editReplanConfig(cwd, config, ctx);

@@ -3,14 +3,14 @@ import type { ProviderType } from '../../infra/providers/index.js';
 export type ExecEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ExecSessionConfig {
-  provider: ProviderType;
+  provider?: ProviderType;
   model?: string;
   effort?: ExecEffort;
 }
 
 export interface ExecActorConfig {
   name: string;
-  provider: ProviderType;
+  provider?: ProviderType;
   model?: string;
   effort?: ExecEffort;
   instruction: string;
@@ -36,6 +36,20 @@ export interface ExecConfig {
   workers: ExecActorConfig[];
   judges: ExecActorConfig[];
   loop: ExecLoopConfig;
+}
+
+export interface ResolvedExecSessionConfig extends ExecSessionConfig {
+  provider: ProviderType;
+}
+
+export interface ResolvedExecActorConfig extends ExecActorConfig {
+  provider: ProviderType;
+}
+
+export interface ResolvedExecConfig extends ExecConfig {
+  session: ResolvedExecSessionConfig;
+  workers: ResolvedExecActorConfig[];
+  judges: ResolvedExecActorConfig[];
 }
 
 export type ExecPresetScope = 'project' | 'global' | 'builtin';

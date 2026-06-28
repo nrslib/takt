@@ -576,8 +576,8 @@ describe('exec workflow template', () => {
     })).toThrow(/provider "opencode" does not support effort "high"/);
   });
 
-  it('should reject missing effort for providers with exec effort support', () => {
-    expect(() => buildExecWorkflowYaml(createExecConfig({
+  it('should allow missing effort for providers with exec effort support', () => {
+    const raw = parseRawWorkflow(buildExecWorkflowYaml(createExecConfig({
       session: {
         provider: 'codex',
         model: 'gpt-5',
@@ -585,8 +585,10 @@ describe('exec workflow template', () => {
       },
     }), {
       workflowName: 'exec-missing-effort-test',
-      taskDescription: 'Reject missing effort',
-    })).toThrow(/provider "codex" requires effort/);
+      taskDescription: 'Allow missing effort',
+    }));
+
+    expect(raw.steps.find((step) => step.name === 'replan')).not.toHaveProperty('provider_options');
   });
 
   it('should reject actor names that cannot be used as session keys or report file names', () => {

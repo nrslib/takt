@@ -234,7 +234,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | Command | Description |
 |---------|-------------|
 | `takt` | Talk to AI, refine requirements, execute or queue tasks |
-| `takt exec` | Start instant Assistant + Worker(s) + Judge(s) mode without writing workflow YAML |
+| `takt exec` | Start instant Assistant/Worker/Judge agent mode without writing workflow YAML |
 | `takt run` | Execute all pending tasks |
 | `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
 | `takt #N` | Execute GitHub Issue as task |
@@ -247,13 +247,15 @@ See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
 ### Instant exec mode
 
-`takt exec` starts a temporary multi-agent session from the previous exec configuration, or the default configuration on first run. Pass a preset name to start from that preset. Use `/setup` during the conversation to edit the assistant, workers, judges, loop thresholds, presets, and referenced instruction/knowledge/policy facets. Use `/go` after the task is clear; inline text after `/go` is treated as an additional note. Use `/cancel` to exit without running.
+`takt exec` starts TAKT's interactive task-entry mode. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Judge agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.
 
-Exec presets resolve in this order: project `.takt/exec/presets/` → global `~/.takt/exec/presets/` → builtin `builtins/exec/presets/`. The last successful exec configuration is saved to `~/.takt/exec.yaml`. `/setup` can save or delete project/global presets, and created facets are stored under `.takt/facets/` or `~/.takt/facets/`.
+Exec starts from the previous exec configuration, or the default configuration on first run. Pass a preset name to start from that preset. Use `/setup` during the conversation to edit agents, loop detection thresholds, presets, and referenced instruction/knowledge/policy facets. Builtin/default presets define the agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when the workflow is generated, unless an exec config explicitly overrides them. `effort` is emitted only when it is explicitly configured.
 
-When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it through the normal workflow engine. `/go` without prior conversation or inline task text does not generate the workflow or save `exec.yaml`.
+Exec presets resolve in this order: project `.takt/exec/presets/` → global `~/.takt/exec/presets/` → builtin `builtins/exec/presets/`. Changes made in `/setup` are saved to `~/.takt/exec.yaml` for the next exec session. `/setup` can also save or delete project/global presets, and created facets are stored under `.takt/facets/` or `~/.takt/facets/`.
 
-Normal agent steps, parallel sub-steps, and loop monitor judges may set `session_key` to share or isolate persona sessions. System steps, workflow_call steps, and parallel parent steps cannot set `session_key`. TAKT builds the runtime key as `session_key` plus the resolved provider, so values must be non-empty strings that do not collide with other generated session routes.
+When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it through the normal workflow engine. Inline text after `/go` is treated as an additional note. `/go` without prior conversation or inline task text does not generate the workflow. Use `/cancel` to exit without running.
+
+Normal agent steps, parallel sub-steps, and loop detection judges may set `session_key` to share or isolate persona sessions. System steps, workflow_call steps, and parallel parent steps cannot set `session_key`. TAKT builds the runtime key as `session_key` plus the resolved provider, so values must be non-empty strings that do not collide with other generated session routes.
 
 ## Configuration
 

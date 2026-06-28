@@ -6,11 +6,10 @@ import {
   assertExecConfig,
   assertExecProviderModel,
   assertExecProviderEffort,
-  getDefaultExecModel,
-  getDefaultExecEffort,
+  assertResolvedExecConfig,
   providerSupportsExecEffort,
 } from './configValidation.js';
-import type { ExecActorConfig, ExecConfig, ExecEffort } from './types.js';
+import type { ExecActorConfig, ExecConfig, ExecEffort, ResolvedExecActorConfig } from './types.js';
 
 export function formatProviderModel(provider: ProviderType, model: string | undefined, lang?: ExecLanguage): string {
   const formattedProvider = sanitizeTerminalText(provider);
@@ -26,21 +25,24 @@ export function formatProviderModel(provider: ProviderType, model: string | unde
 }
 
 export function resolveEffortAfterProviderOverride(
-  currentProvider: ProviderType,
+  currentProvider: ProviderType | undefined,
   nextProvider: ProviderType,
   effort: ExecEffort | undefined,
 ): ExecEffort | undefined {
+  if (effort === undefined) {
+    return undefined;
+  }
   if (currentProvider === nextProvider) {
     return effort;
   }
-  if (effort !== undefined && providerSupportsExecEffort(nextProvider, effort)) {
+  if (providerSupportsExecEffort(nextProvider, effort)) {
     return effort;
   }
-  return getDefaultExecEffort(nextProvider);
+  return undefined;
 }
 
 export function resolveModelAfterProviderOverride(
-  currentProvider: ProviderType,
+  currentProvider: ProviderType | undefined,
   nextProvider: ProviderType,
   currentModel: string | undefined,
   overrideModel: string | undefined,
@@ -51,24 +53,28 @@ export function resolveModelAfterProviderOverride(
   if (currentProvider === nextProvider) {
     return currentModel;
   }
-  return getDefaultExecModel(nextProvider);
+  return undefined;
 }
 
-function applyProviderOverride<T extends { provider: ProviderType; model?: string; effort?: ExecEffort }>(
+function applyProviderOverride<T extends { provider?: ProviderType; model?: string; effort?: ExecEffort }>(
   config: T,
   overrides: TaskExecutionOptions | undefined,
   errorPath: string,
 ): T {
   const provider = overrides?.provider ?? config.provider;
-  const model = resolveModelAfterProviderOverride(config.provider, provider, config.model, overrides?.model);
+  const model = provider === undefined
+    ? overrides?.model ?? config.model
+    : resolveModelAfterProviderOverride(config.provider, provider, config.model, overrides?.model);
   const next = {
     ...config,
-    provider,
+    ...(provider !== undefined ? { provider } : {}),
     model,
-    effort: resolveEffortAfterProviderOverride(config.provider, provider, config.effort),
+    effort: provider === undefined ? config.effort : resolveEffortAfterProviderOverride(config.provider, provider, config.effort),
   } as T;
-  assertExecProviderModel(next.provider, next.model, `${errorPath}.model`);
-  assertExecProviderEffort(next.provider, next.model, next.effort, `${errorPath}.effort`);
+  if (next.provider !== undefined) {
+    assertExecProviderModel(next.provider, next.model, `${errorPath}.model`);
+    assertExecProviderEffort(next.provider, next.model, next.effort, `${errorPath}.effort`);
+  }
   return next;
 }
 
@@ -87,14 +93,22 @@ export function applyExecOverrides(config: ExecConfig, overrides: TaskExecutionO
 }
 
 export function formatExecConfigSummary(config: ExecConfig): string {
+  assertResolvedExecConfig(config);
   return [
-    `Session: ${formatProviderModel(config.session.provider, config.session.model)}`,
-    `Worker x${config.workers.length}: ${config.workers.map((worker) => formatProviderModel(worker.provider, worker.model)).join(', ')}`,
-    `Judge x${config.judges.length}: ${config.judges.map((judge) => formatProviderModel(judge.provider, judge.model)).join(', ')}`,
+    `Assistant agent: ${formatProviderModel(config.session.provider, config.session.model)}`,
+    `Worker agent x${config.workers.length}: ${config.workers.map((worker) => formatProviderModel(worker.provider, worker.model)).join(', ')}`,
+    `Judge agent x${config.judges.length}: ${config.judges.map((judge) => formatProviderModel(judge.provider, judge.model)).join(', ')}`,
   ].join('  |  ');
 }
 
+function assertResolvedExecActorConfig(actor: ExecActorConfig): asserts actor is ResolvedExecActorConfig {
+  if (actor.provider === undefined) {
+    throw new Error(`Invalid exec config at exec.${actor.name}.provider: provider is not resolved`);
+  }
+}
+
 export function formatActorDetails(actor: ExecActorConfig, lang?: ExecLanguage): string {
+  assertResolvedExecActorConfig(actor);
   const effort = actor.effort ? `/${sanitizeTerminalText(actor.effort)}` : '';
   const instruction = lang === undefined
     ? `instruction: ${sanitizeTerminalText(actor.instruction)}`

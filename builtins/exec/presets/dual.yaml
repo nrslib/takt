@@ -1,9 +1,6 @@
 name: dual
 description: Two-worker development team
-session:
-  provider: claude
-  model: opus
-  effort: high
+session: {}
 replan:
   instruction: exec-replan
   knowledge:
@@ -11,9 +8,6 @@ replan:
   policy: []
 workers:
   - name: worker-1
-    provider: claude
-    model: sonnet
-    effort: high
     instruction: exec-worker
     knowledge:
       - architecture
@@ -21,9 +15,6 @@ workers:
       - coding
       - testing
   - name: worker-2
-    provider: claude
-    model: sonnet
-    effort: high
     instruction: exec-worker
     knowledge:
       - unit-testing
@@ -32,9 +23,6 @@ workers:
       - testing
 judges:
   - name: judge-1
-    provider: claude
-    model: opus
-    effort: high
     instruction: exec-judge
     knowledge:
       - architecture

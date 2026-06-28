@@ -74,16 +74,16 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
     ).toThrow('does not support effort "max"');
   });
 
-  it('should reject codex provider when effort is undefined', () => {
+  it('should allow codex provider when effort is undefined', () => {
     expect(() =>
       assertExecProviderEffort('codex', 'o3', undefined, 'test'),
-    ).toThrow('requires effort');
+    ).not.toThrow();
   });
 
-  it('should reject copilot provider when effort is undefined', () => {
+  it('should allow copilot provider when effort is undefined', () => {
     expect(() =>
       assertExecProviderEffort('copilot', 'gpt-4', undefined, 'test'),
-    ).toThrow('requires effort');
+    ).not.toThrow();
   });
 
   it('should reject claude provider with incompatible model-effort combination', () => {
@@ -119,18 +119,18 @@ describe('assertExecProviderModel', () => {
     expect(() => assertExecProviderModel('opencode', 'opencode/big-pickle', 'exec.session.model')).not.toThrow();
   });
 
-  it.each(['cursor', 'copilot', 'kiro'] as const)(
+  it.each(['claude', 'codex', 'mock', 'cursor', 'copilot', 'kiro'] as const)(
     'should allow omitted model for %s',
     (provider) => {
       expect(() => assertExecProviderModel(provider, undefined, 'exec.session.model')).not.toThrow();
     },
   );
 
-  it.each(['claude', 'codex', 'mock'] as const)(
+  it.each(['opencode'] as const)(
     'should reject omitted model for %s',
     (provider) => {
       expect(() => assertExecProviderModel(provider, undefined, 'exec.session.model'))
-        .toThrow(`provider "${provider}" requires model`);
+        .toThrow(/requires model/);
     },
   );
 });
