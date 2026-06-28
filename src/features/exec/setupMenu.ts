@@ -550,7 +550,7 @@ async function resolveSetupSection(
     return editLoopConfig(config, ctx.lang);
   }
   if (section === 'preset') {
-    return editPresetSetup(cwd, config, ctx.lang);
+    return editPresetSetup(cwd, config, ctx.lang, providerModelDefaults);
   }
   return config;
 }

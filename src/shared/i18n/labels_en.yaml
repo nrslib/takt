@@ -161,6 +161,9 @@ exec:
     descriptionDefault: "Custom exec preset"
     saved: "Saved {scope} exec preset: {name}"
     deleted: "Deleted {scope} exec preset: {name}"
+    exportAsWorkflow: "Export preset as workflow"
+    exportNamePrompt: "Workflow name"
+    exported: "Exported workflow: {name}"
   facets:
     instructions: "instructions"
     knowledge: "knowledge"

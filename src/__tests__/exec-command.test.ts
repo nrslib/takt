@@ -415,6 +415,7 @@ describe('exec command setup', () => {
       'プリセットを読み込む',
       '現在のプリセットを保存',
       'プリセットを削除',
+      'プリセットをワークフローとしてエクスポート',
       '戻る',
     ]);
     const sourceOptions = mockSelectOption.mock.calls.find((call) => call[0] === 'プリセット読み込み元')?.[1] ?? [];

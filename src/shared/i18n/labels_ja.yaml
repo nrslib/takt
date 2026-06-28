@@ -161,6 +161,9 @@ exec:
     descriptionDefault: "カスタム exec プリセット"
     saved: "{scope} exec プリセットを保存しました: {name}"
     deleted: "{scope} exec プリセットを削除しました: {name}"
+    exportAsWorkflow: "プリセットをワークフローとしてエクスポート"
+    exportNamePrompt: "ワークフロー名"
+    exported: "ワークフローをエクスポートしました: {name}"
   facets:
     instructions: "指示"
     knowledge: "知識"
