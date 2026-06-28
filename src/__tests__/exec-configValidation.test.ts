@@ -10,40 +10,48 @@ import type { ExecEffort } from '../features/exec/types.js';
 
 describe('assertExecProviderEffort and providerSupportsExecEffort consistency', () => {
   const providers = ['claude', 'codex', 'copilot'] as const;
+  const effortCases = providers.flatMap((provider) =>
+    EXEC_EFFORTS.map((effort) => [provider, effort] as const));
+  const supportedEffortCases = providers.flatMap((provider) =>
+    getSupportedExecEfforts(provider).map((effort) => [provider, effort] as const));
+  const unsupportedEffortCases = providers.flatMap((provider) =>
+    EXEC_EFFORTS
+      .filter((effort) => !getSupportedExecEfforts(provider).includes(effort))
+      .map((effort) => [provider, effort] as const));
 
-  it('should reject exactly the same efforts that providerSupportsExecEffort returns false for', () => {
-    for (const provider of providers) {
-      for (const effort of EXEC_EFFORTS) {
-        const supported = providerSupportsExecEffort(provider, effort);
-        if (supported) {
-          expect(() =>
-            assertExecProviderEffort(provider, 'test-model', effort, 'test'),
-          ).not.toThrow();
-        } else {
-          expect(() =>
-            assertExecProviderEffort(provider, 'test-model', effort, 'test'),
-          ).toThrow(`does not support effort "${effort}"`);
-        }
-      }
-    }
-  });
-
-  it('should accept exactly the same efforts that getSupportedExecEfforts returns', () => {
-    for (const provider of providers) {
-      const supported = getSupportedExecEfforts(provider);
-      for (const effort of supported) {
+  it.each(effortCases)(
+    'should match providerSupportsExecEffort for %s/%s',
+    (provider, effort) => {
+      const supported = providerSupportsExecEffort(provider, effort);
+      if (supported) {
         expect(() =>
           assertExecProviderEffort(provider, 'test-model', effort, 'test'),
         ).not.toThrow();
-      }
-      const unsupported = EXEC_EFFORTS.filter((e) => !supported.includes(e));
-      for (const effort of unsupported) {
+      } else {
         expect(() =>
           assertExecProviderEffort(provider, 'test-model', effort, 'test'),
-        ).toThrow(`does not support effort`);
+        ).toThrow(`does not support effort "${effort}"`);
       }
-    }
-  });
+    },
+  );
+
+  it.each(supportedEffortCases)(
+    'should accept effort returned by getSupportedExecEfforts for %s/%s',
+    (provider, effort) => {
+      expect(() =>
+        assertExecProviderEffort(provider, 'test-model', effort, 'test'),
+      ).not.toThrow();
+    },
+  );
+
+  it.each(unsupportedEffortCases)(
+    'should reject effort omitted from getSupportedExecEfforts for %s/%s',
+    (provider, effort) => {
+      expect(() =>
+        assertExecProviderEffort(provider, 'test-model', effort, 'test'),
+      ).toThrow(`does not support effort`);
+    },
+  );
 });
 
 describe('assertExecProviderEffort sufficiency for type narrowing', () => {

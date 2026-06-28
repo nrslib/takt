@@ -79,6 +79,36 @@ describe('applyExecOverrides', () => {
     expect(result.judges[0]!.model).toBe('haiku');
   });
 
+  it('should clear stale effort when a model override is incompatible with it', () => {
+    const baseConfig = createTestConfig();
+    const config: ExecConfig = {
+      ...baseConfig,
+      session: { provider: 'claude', model: 'claude-opus-4-7', effort: 'xhigh' },
+      workers: [
+        {
+          ...baseConfig.workers[0]!,
+          provider: 'claude',
+          model: 'claude-opus-4-7',
+          effort: 'xhigh',
+        },
+      ],
+      judges: [
+        {
+          ...baseConfig.judges[0]!,
+          provider: 'claude',
+          model: 'claude-opus-4-7',
+          effort: 'xhigh',
+        },
+      ],
+    };
+
+    const result = applyExecOverrides(config, { model: 'claude-sonnet-4-5-20250929' });
+
+    expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.judges[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+  });
+
   it('should re-resolve effort when provider changes', () => {
     const config = createTestConfig();
 

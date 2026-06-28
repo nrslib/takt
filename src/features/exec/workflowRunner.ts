@@ -72,7 +72,8 @@ export function buildTaskInstructionPrompt(
   hasSessionContext: boolean,
   inlineTaskText: string,
 ): string | null {
-  if (history.length === 0 && !hasSessionContext && inlineTaskText.length === 0) {
+  const normalizedInlineTaskText = inlineTaskText.trim();
+  if (history.length === 0 && !hasSessionContext && normalizedInlineTaskText.length === 0) {
     return null;
   }
 
@@ -91,8 +92,8 @@ export function buildTaskInstructionPrompt(
   } else if (hasSessionContext) {
     lines.push('', 'Use the active exec assistant session context as the conversation.');
   }
-  if (inlineTaskText.length > 0) {
-    lines.push('', 'Additional user note:', inlineTaskText);
+  if (normalizedInlineTaskText.length > 0) {
+    lines.push('', 'Additional user note:', normalizedInlineTaskText);
   }
   return lines.join('\n');
 }

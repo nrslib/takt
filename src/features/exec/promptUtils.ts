@@ -13,13 +13,18 @@ export async function selectExecOption<T extends string>(
   return await selectOption<T>(message, options, { cancelLabel: execLabel(lang, 'common.cancel') });
 }
 
-export async function promptText(prompt: string, current: string, lang: SessionContext['lang']): Promise<string> {
+export async function promptTextOrCancel(prompt: string, current: string, lang: SessionContext['lang']): Promise<string | null> {
   const input = await readInteractiveInput(`${prompt} (${sanitizeTerminalText(current)}): `, lang, EXEC_TEXT_INPUT_COMMAND_AVAILABILITY);
   if (input === null) {
-    return current;
+    return null;
   }
   const trimmed = input.trim();
   return trimmed.length > 0 ? trimmed : current;
+}
+
+export async function promptText(prompt: string, current: string, lang: SessionContext['lang']): Promise<string> {
+  const input = await promptTextOrCancel(prompt, current, lang);
+  return input ?? current;
 }
 
 export async function promptInteger(prompt: string, current: number, lang: SessionContext['lang']): Promise<number> {

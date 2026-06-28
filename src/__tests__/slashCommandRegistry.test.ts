@@ -103,4 +103,14 @@ describe('filterSlashCommands', () => {
 
     expect(commands).toEqual(['/go', '/cancel', '/setup']);
   });
+
+  it('should keep /setup hidden when the setup flag is not enabled', () => {
+    expect(filterSlashCommands('/set', {
+      enabledCommands: [SlashCommand.Setup],
+    }).map((entry) => entry.command)).toEqual([]);
+    expect(filterSlashCommands('/set', {
+      enableSetupCommand: false,
+      enabledCommands: [SlashCommand.Setup],
+    }).map((entry) => entry.command)).toEqual([]);
+  });
 });

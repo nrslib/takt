@@ -7,7 +7,6 @@ import {
   assertExecProviderModel,
   assertExecProviderEffort,
   assertResolvedExecConfig,
-  providerSupportsExecEffort,
 } from './configValidation.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ResolvedExecActorConfig } from './types.js';
 
@@ -29,16 +28,36 @@ export function resolveEffortAfterProviderOverride(
   nextProvider: ProviderType,
   effort: ExecEffort | undefined,
 ): ExecEffort | undefined {
+  return resolveEffortAfterProviderModelOverride(currentProvider, undefined, nextProvider, undefined, effort);
+}
+
+function canKeepEffortForProviderModel(
+  provider: ProviderType,
+  model: string | undefined,
+  effort: ExecEffort,
+): boolean {
+  try {
+    assertExecProviderEffort(provider, model, effort, 'exec.effort');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveEffortAfterProviderModelOverride(
+  currentProvider: ProviderType | undefined,
+  currentModel: string | undefined,
+  nextProvider: ProviderType,
+  nextModel: string | undefined,
+  effort: ExecEffort | undefined,
+): ExecEffort | undefined {
   if (effort === undefined) {
     return undefined;
   }
-  if (currentProvider === nextProvider) {
+  if (currentProvider === nextProvider && currentModel === nextModel) {
     return effort;
   }
-  if (providerSupportsExecEffort(nextProvider, effort)) {
-    return effort;
-  }
-  return undefined;
+  return canKeepEffortForProviderModel(nextProvider, nextModel, effort) ? effort : undefined;
 }
 
 export function resolveModelAfterProviderOverride(
@@ -69,7 +88,9 @@ function applyProviderOverride<T extends { provider?: ProviderType; model?: stri
     ...config,
     ...(provider !== undefined ? { provider } : {}),
     model,
-    effort: provider === undefined ? config.effort : resolveEffortAfterProviderOverride(config.provider, provider, config.effort),
+    effort: provider === undefined
+      ? config.effort
+      : resolveEffortAfterProviderModelOverride(config.provider, config.model, provider, model, config.effort),
   } as T;
   if (next.provider !== undefined) {
     assertExecProviderModel(next.provider, next.model, `${errorPath}.model`);

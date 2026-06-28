@@ -117,7 +117,7 @@ takt exec backend  # start from a named preset
 takt exec --list   # list available exec presets
 ```
 
-Preset lookup order is project `.takt/exec/presets/`, then global `~/.takt/exec/presets/`, then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when the workflow is generated, unless an exec config explicitly overrides them. `effort` is emitted only when it is explicitly configured. Changes made in `/setup` are saved to `~/.takt/exec.yaml` for the next exec session.
+Preset lookup order is project `.takt/exec/presets/`, then global `$TAKT_CONFIG_DIR/exec/presets/` (or `~/.takt/exec/presets/` when unset), then builtin `builtins/exec/presets/`. Builtin/default presets define agent roles, facets, and loop thresholds only. Provider and model are resolved from normal TAKT configuration when exec mode starts, and the same resolved values are used for the Assistant dialogue, `/setup` display, and workflow generation. An exec config overrides provider/model only when it sets them explicitly. `effort` is emitted only when it is explicitly configured. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (or `~/.takt/exec.yaml` when unset) for the next exec session.
 
 Inside exec mode:
 
@@ -128,7 +128,7 @@ Inside exec mode:
 | `/go <note>` | Run with an additional note appended to the conversation summary |
 | `/cancel` | Exit without executing |
 
-`/setup` can save/delete project or global presets. Instruction, knowledge, and policy fields reference normal facets; new facets are saved under `.takt/facets/{instructions,knowledge,policies}/` or `~/.takt/facets/{instructions,knowledge,policies}/`.
+`/setup` can save/delete project or global presets. Instruction, knowledge, and policy fields reference normal facets; new facets are saved under `.takt/facets/{instructions,knowledge,policies}/` or `$TAKT_CONFIG_DIR/facets/{instructions,knowledge,policies}/` (or `~/.takt/facets/{instructions,knowledge,policies}/` when unset).
 
 On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the existing workflow engine. `/go` with no prior conversation and no inline task text is rejected before creating the workflow. The judge result reports are read from the completed run and injected back into the exec assistant session for the final summary.
 

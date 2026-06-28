@@ -289,6 +289,11 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'explicit-provider-team' })).resolves.toBeUndefined();
 
+    expect(mockGetProvider).toHaveBeenCalledWith('mock');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toMatchObject({
+      providerType: 'mock',
+      model: 'session-model',
+    });
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'judge');
@@ -910,6 +915,63 @@ describe('exec command setup', () => {
         },
       },
     });
+  });
+
+  it('should clear incompatible effort when setup changes Claude models', async () => {
+    saveExecPreset('xhigh-team', 'Claude xhigh team', {
+      ...DEFAULT_EXEC_CONFIG,
+      session: {
+        provider: 'claude',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+      },
+      workers: [
+        {
+          ...DEFAULT_EXEC_CONFIG.workers[0]!,
+          provider: 'claude',
+          model: 'claude-opus-4-7',
+          effort: 'xhigh',
+        },
+      ],
+    }, { projectDir, scope: 'project' });
+    mockReadInteractiveInput
+      .mockResolvedValueOnce('/setup')
+      .mockResolvedValueOnce('claude-sonnet-4-5-20250929')
+      .mockResolvedValueOnce('claude-sonnet-4-5-20250929')
+      .mockResolvedValueOnce('/go Implement a small task')
+      .mockResolvedValueOnce('/cancel');
+    mockSelectOptionQueue(
+      'assistant',
+      'model',
+      '__custom_model__',
+      'back',
+      'workers',
+      'edit:0',
+      'model',
+      '__custom_model__',
+      'back',
+      'back',
+      'back',
+    );
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Executable task' }, sessionId: 'session-1' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'Execution completed' }, sessionId: 'session-1' });
+
+    await expect(runExecCommand(projectDir, { preset: 'xhigh-team' })).resolves.toBeUndefined();
+
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toBeUndefined();
+    const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
+    const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
+    const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
+    expect(execute.parallel[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
+    expect(execute.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    expect(replan).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
+    expect(replan.provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
+    expect(saved.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
+    expect(saved.session).not.toHaveProperty('effort');
+    expect(saved.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
+    expect(saved.workers[0]).not.toHaveProperty('effort');
   });
 
   it('should apply assistant effort changes from setup to AI facet calls in the same setup session', async () => {
@@ -2221,7 +2283,7 @@ describe('exec command setup', () => {
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
   });
 
-  it('should reject project instruction symlinks before AI facet edit content is sent', async () => {
+  it('should display setup error for project instruction symlinks before AI facet edit content is sent', async () => {
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-exec-facet-external-'));
     const secretPath = join(externalDir, 'secret.md');
     const instructionDir = join(projectDir, '.takt', 'facets', 'instructions');
@@ -2229,7 +2291,9 @@ describe('exec command setup', () => {
       mkdirSync(instructionDir, { recursive: true });
       writeFileSync(secretPath, '# Secret\n\nprivate content', 'utf-8');
       symlinkSync(secretPath, join(instructionDir, 'exec-worker.md'));
-      mockReadInteractiveInput.mockResolvedValueOnce('/setup');
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup')
+        .mockResolvedValueOnce('/cancel');
       mockSelectOptionQueue(
         'workers',
         'edit:0',
@@ -2238,8 +2302,7 @@ describe('exec command setup', () => {
         'project',
       );
 
-      await expect(runExecCommand(projectDir, { preset: 'backend' }))
-        .rejects.toThrow(/Project-local instructions facet/);
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
       expect(mockCallAIWithRetry).not.toHaveBeenCalled();
       expect(readFileSync(secretPath, 'utf-8')).toBe('# Secret\n\nprivate content');
@@ -2248,12 +2311,14 @@ describe('exec command setup', () => {
     }
   });
 
-  it('should reject project instruction parent symlinks before falling back to builtin content', async () => {
+  it('should display setup error for project instruction parent symlinks before falling back to builtin content', async () => {
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-exec-facet-parent-external-'));
     try {
       mkdirSync(join(projectDir, '.takt', 'facets'), { recursive: true });
       symlinkSync(externalDir, join(projectDir, '.takt', 'facets', 'instructions'));
-      mockReadInteractiveInput.mockResolvedValueOnce('/setup');
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup')
+        .mockResolvedValueOnce('/cancel');
       mockSelectOptionQueue(
         'workers',
         'edit:0',
@@ -2262,8 +2327,7 @@ describe('exec command setup', () => {
         'project',
       );
 
-      await expect(runExecCommand(projectDir, { preset: 'backend' }))
-        .rejects.toThrow(/Project-local instructions facet/);
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
       expect(mockCallAIWithRetry).not.toHaveBeenCalled();
       expect(existsSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'))).toBe(false);
@@ -2273,14 +2337,15 @@ describe('exec command setup', () => {
     }
   });
 
-  it('should reject project instruction writes when the facet parent directory is a symlink', async () => {
+  it('should display setup error for project instruction writes when the facet parent directory is a symlink', async () => {
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-exec-facet-parent-external-'));
     try {
       mkdirSync(join(projectDir, '.takt'), { recursive: true });
       symlinkSync(externalDir, join(projectDir, '.takt', 'facets'));
       mockReadInteractiveInput
         .mockResolvedValueOnce('/setup')
-        .mockResolvedValueOnce('Make the worker require tests');
+        .mockResolvedValueOnce('Make the worker require tests')
+        .mockResolvedValueOnce('/cancel');
       mockSelectOptionQueue(
         'workers',
         'edit:0',
@@ -2294,8 +2359,7 @@ describe('exec command setup', () => {
         sessionId: 'ai-facet-session',
       });
 
-      await expect(runExecCommand(projectDir, { preset: 'backend' }))
-        .rejects.toThrow(/Project-local instructions facet/);
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
       expect(existsSync(join(externalDir, 'instructions', 'exec-worker.md'))).toBe(false);
     } finally {
@@ -2324,6 +2388,31 @@ describe('exec command setup', () => {
 
     expect(existsSync(join(projectDir, '.takt', 'exec', 'presets', 'saved-team.yaml'))).toBe(false);
   });
+
+  it.each([
+    ['name prompt', [null], 'custom'],
+    ['description prompt', ['custom-team', null], 'custom-team'],
+  ] as const)(
+    'should not save a project preset when the %s is cancelled',
+    async (_caseName, promptInputs, presetName) => {
+      mockReadInteractiveInput
+        .mockResolvedValueOnce('/setup');
+      for (const input of promptInputs) {
+        mockReadInteractiveInput.mockResolvedValueOnce(input);
+      }
+      mockReadInteractiveInput.mockResolvedValueOnce('/cancel');
+      mockSelectOptionQueue(
+        'preset',
+        'save',
+        'project',
+        'back',
+      );
+
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
+
+      expect(existsSync(join(projectDir, '.takt', 'exec', 'presets', `${presetName}.yaml`))).toBe(false);
+    },
+  );
 
   it('should delete a global preset from setup when a project preset has the same name', async () => {
     saveExecPreset('shared-team', 'Project shared team', DEFAULT_EXEC_CONFIG, { projectDir, scope: 'project' });
@@ -2375,7 +2464,7 @@ describe('exec command setup', () => {
     expect(workflow).not.toContain('generated-knowledge');
   });
 
-  it('should reject project AI-generated facet creation when the target is a symlink', async () => {
+  it('should display setup error for project AI-generated facet creation when the target is a symlink', async () => {
     const externalDir = mkdtempSync(join(tmpdir(), 'takt-exec-create-facet-external-'));
     const externalPath = join(externalDir, 'generated-knowledge.md');
     const projectKnowledgeDir = join(projectDir, '.takt', 'facets', 'knowledge');
@@ -2386,7 +2475,8 @@ describe('exec command setup', () => {
       mockReadInteractiveInput
         .mockResolvedValueOnce('/setup')
         .mockResolvedValueOnce('generated-knowledge')
-        .mockResolvedValueOnce('Create knowledge for local context');
+        .mockResolvedValueOnce('Create knowledge for local context')
+        .mockResolvedValueOnce('/cancel');
       mockSelectOptionQueue(
         'workers',
         'edit:0',
@@ -2400,8 +2490,7 @@ describe('exec command setup', () => {
         sessionId: 'ai-facet-session',
       });
 
-      await expect(runExecCommand(projectDir, { preset: 'backend' }))
-        .rejects.toThrow(/Project-local knowledge facet/);
+      await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
 
       expect(readFileSync(externalPath, 'utf-8')).toBe('# External\n\nunchanged');
       expect(existsSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'))).toBe(false);

@@ -6,6 +6,7 @@ import { formatRunSessionForPrompt, MAX_RUN_REPORT_BYTES } from '../features/int
 import { selectAndExecuteTask } from '../features/tasks/index.js';
 import { DEFAULT_EXEC_CONFIG } from '../features/exec/defaults.js';
 import {
+  buildTaskInstructionPrompt,
   buildExecReadonlyProviderProfileOverrides,
   runGeneratedWorkflow,
 } from '../features/exec/workflowRunner.js';
@@ -16,6 +17,12 @@ vi.mock('../features/tasks/index.js', () => ({
 }));
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
+
+describe('buildTaskInstructionPrompt', () => {
+  it('should treat whitespace-only inline task text as empty', () => {
+    expect(buildTaskInstructionPrompt([], false, '   ')).toBeNull();
+  });
+});
 
 function writeCompletedRun(cwd: string, slug: string, task: string, reportNames = [
   'judge-1-judge-result.md',

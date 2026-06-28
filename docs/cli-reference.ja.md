@@ -117,7 +117,7 @@ takt exec backend  # 名前付きプリセットで開始
 takt exec --list   # 利用可能な exec プリセットを表示
 ```
 
-プリセットの探索順は project `.takt/exec/presets/`、global `~/.takt/exec/presets/`、builtin `builtins/exec/presets/` です。builtin/default プリセットは、エージェントの役割、facet、ループ検知しきい値だけを定義します。provider と model は workflow 生成時に通常の TAKT 設定から解決され、exec config で明示した場合だけ上書きされます。`effort` は明示設定された場合だけ出力されます。`/setup` で変更した設定は、次回起動用の設定として `~/.takt/exec.yaml` に保存されます。
+プリセットの探索順は project `.takt/exec/presets/`、global `$TAKT_CONFIG_DIR/exec/presets/`（未設定時は `~/.takt/exec/presets/`）、builtin `builtins/exec/presets/` です。builtin/default プリセットは、エージェントの役割、facet、ループ検知しきい値だけを定義します。provider と model は exec モード開始時に通常の TAKT 設定から解決され、assistant 対話、`/setup` 表示、workflow 生成で同じ解決結果が使われます。exec config で明示した場合だけ provider/model を上書きします。`effort` は明示設定された場合だけ出力されます。`/setup` で変更した設定は、次回起動用の設定として `$TAKT_CONFIG_DIR/exec.yaml`（未設定時は `~/.takt/exec.yaml`）に保存されます。
 
 exec モード内の主なコマンド:
 
@@ -128,7 +128,7 @@ exec モード内の主なコマンド:
 | `/go <note>` | 会話要約に追加メモを付けて実行 |
 | `/cancel` | 実行せず終了 |
 
-`/setup` では project/global プリセットの保存・削除ができます。Instruction、Knowledge、Policy は通常の facet 参照で、作成した facet は `.takt/facets/{instructions,knowledge,policies}/` または `~/.takt/facets/{instructions,knowledge,policies}/` に保存されます。
+`/setup` では project/global プリセットの保存・削除ができます。Instruction、Knowledge、Policy は通常の facet 参照で、作成した facet は `.takt/facets/{instructions,knowledge,policies}/` または `$TAKT_CONFIG_DIR/facets/{instructions,knowledge,policies}/`（未設定時は `~/.takt/facets/{instructions,knowledge,policies}/`）に保存されます。
 
 `/go` 実行時、TAKT は `.takt/exec/workflow.yaml` を生成し、既存の workflow engine で実行します。事前の会話もインラインのタスク本文もない `/go` は、workflow を作成する前に拒否されます。完了後は judge result report を読み戻し、exec assistant セッションへ注入して最終サマリを返します。
 

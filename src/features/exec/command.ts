@@ -110,17 +110,22 @@ async function runExecConversation(cwd: string, config: ExecConfig, agentOverrid
     }
     const match = matchSlashCommand(trimmed, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
     if (match?.command === SlashCommand.Setup) {
-      const previousSessionConfig = currentRuntimeConfig.session;
-      const previousConfig = currentConfig;
-      const nextConfig = await runSetupMenu(cwd, currentConfig, ctx);
-      if (!isSameExecConfig(previousConfig, nextConfig)) {
-        saveExecConfigForNextRun(nextConfig);
+      try {
+        const previousSessionConfig = currentRuntimeConfig.session;
+        const previousConfig = currentConfig;
+        const nextConfig = await runSetupMenu(cwd, currentConfig, ctx);
+        if (!isSameExecConfig(previousConfig, nextConfig)) {
+          saveExecConfigForNextRun(nextConfig);
+        }
+        currentConfig = nextConfig;
+        currentRuntimeConfig = resolveExecRuntimeConfig(cwd, currentConfig);
+        const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
+        ctx = createExecSessionContext(cwd, currentRuntimeConfig, nextSessionId);
+        info(formatExecConfigSummary(currentRuntimeConfig));
+      } catch (error) {
+        info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+        blankLine();
       }
-      currentConfig = nextConfig;
-      currentRuntimeConfig = resolveExecRuntimeConfig(cwd, currentConfig);
-      const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
-      ctx = createExecSessionContext(cwd, currentRuntimeConfig, nextSessionId);
-      info(formatExecConfigSummary(currentRuntimeConfig));
       continue;
     }
 

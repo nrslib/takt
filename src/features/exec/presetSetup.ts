@@ -9,7 +9,7 @@ import {
 } from './presetStore.js';
 import { DEFAULT_EXEC_CONFIG } from './defaults.js';
 import { execLabel, execScopeLabel, type ExecLanguage } from './labels.js';
-import { promptText, selectExecOption } from './promptUtils.js';
+import { promptTextOrCancel, selectExecOption } from './promptUtils.js';
 import type { ExecConfig, ExecPresetScope } from './types.js';
 
 type PresetSetupAction = 'load' | 'save' | 'delete' | 'back';
@@ -54,8 +54,14 @@ async function saveCurrentConfigAsPreset(cwd: string, config: ExecConfig, lang: 
   if (scope === null) {
     return;
   }
-  const name = await promptText(execLabel(lang, 'preset.namePrompt'), 'custom', lang);
-  const description = await promptText(execLabel(lang, 'preset.descriptionPrompt'), execLabel(lang, 'preset.descriptionDefault'), lang);
+  const name = await promptTextOrCancel(execLabel(lang, 'preset.namePrompt'), 'custom', lang);
+  if (name === null) {
+    return;
+  }
+  const description = await promptTextOrCancel(execLabel(lang, 'preset.descriptionPrompt'), execLabel(lang, 'preset.descriptionDefault'), lang);
+  if (description === null) {
+    return;
+  }
   saveExecPreset(name, description, config, { projectDir: cwd, scope });
   info(execLabel(lang, 'preset.saved', {
     scope: sanitizeTerminalText(execScopeLabel(lang, scope)),

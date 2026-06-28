@@ -14,6 +14,7 @@ import {
   formatProviderModel,
   formatActorDetails,
   resolveEffortAfterProviderOverride,
+  resolveEffortAfterProviderModelOverride,
   resolveModelAfterProviderOverride,
 } from './configOps.js';
 import { DEFAULT_EXEC_CONFIG } from './defaults.js';
@@ -211,8 +212,15 @@ async function editSessionConfig(
     if (field === 'model') {
       const selection = await selectModel(current.provider, raw.model, current.model, lang);
       if (selection.changed) {
-        current = { ...current, model: selection.model };
-        raw = { ...raw, model: selection.model };
+        const effort = resolveEffortAfterProviderModelOverride(
+          current.provider,
+          current.model,
+          current.provider,
+          selection.model,
+          current.effort,
+        );
+        current = { ...current, model: selection.model, effort };
+        raw = { ...raw, model: selection.model, effort };
       }
     }
     if (field === 'effort') {
@@ -285,8 +293,15 @@ async function editActor(
     if (field === 'model') {
       const selection = await selectModel(current.provider, raw.model, current.model, ctx.lang);
       if (selection.changed) {
-        current = { ...current, model: selection.model };
-        raw = { ...raw, model: selection.model };
+        const effort = resolveEffortAfterProviderModelOverride(
+          current.provider,
+          current.model,
+          current.provider,
+          selection.model,
+          current.effort,
+        );
+        current = { ...current, model: selection.model, effort };
+        raw = { ...raw, model: selection.model, effort };
       }
     }
     if (field === 'effort') {
