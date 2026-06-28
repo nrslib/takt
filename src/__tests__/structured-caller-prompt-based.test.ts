@@ -189,9 +189,10 @@ describe('PromptBasedStructuredCaller', () => {
         provider: 'cursor',
         model: 'cursor-fast',
         personaPath: '/tmp/personas/team-leader.md',
-        maxTurns: 15,
       }),
     );
+    const [, , callOptions] = mockRunAgent.mock.calls[0] ?? [];
+    expect(callOptions).not.toHaveProperty('maxTurns');
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];
     expect(runOptions).not.toHaveProperty('outputSchema');
   });
