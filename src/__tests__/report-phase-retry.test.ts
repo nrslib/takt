@@ -98,6 +98,9 @@ function createContext(
         currentSessionId = sessionId;
       }
     },
+    resolveStepProviderModel: (_step) => ({
+      provider: primaryProvider,
+    }),
   };
   return context;
 }
@@ -1414,6 +1417,9 @@ describe('runReportPhase retry with new session', () => {
           sessions.set(key, sessionId);
         }
       },
+      resolveStepProviderModel: (_step) => ({
+        provider: 'opencode',
+      }),
     };
     queueRunAgentResponses([{
       persona: 'coder',

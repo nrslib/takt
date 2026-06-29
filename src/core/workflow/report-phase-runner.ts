@@ -432,7 +432,7 @@ function resolveReportAttemptProviderInfo(
   options: RunAgentOptions,
   ctx: ReportPhaseRunnerContext,
 ): StepProviderInfo | undefined {
-  const providerInfo = ctx.resolveStepProviderModel?.(step);
+  const providerInfo = ctx.resolveStepProviderModel(step);
   const fallbackProviderInfo = ctx.resolveReportFallbackProviderModel?.();
   if (
     fallbackProviderInfo?.provider !== undefined

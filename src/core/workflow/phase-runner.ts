@@ -84,7 +84,7 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
     step: WorkflowStep,
     includeRawFindingsSchema: boolean,
   ) => FindingContractInstructionContext | undefined;
-  resolveStepProviderModel?: (step: WorkflowStep) => StepProviderInfo;
+  resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
 }
 
 export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
