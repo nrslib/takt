@@ -63,6 +63,9 @@ function createContext(
         currentSessionId = sessionId;
       }
     },
+    resolveStepProviderModel: (_step) => ({
+      provider: 'opencode',
+    }),
   };
   return context;
 }
