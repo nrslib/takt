@@ -89,7 +89,7 @@
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
-    "faceted-prompting": "^0.5.0",
+    "faceted-prompting": "^0.6.1",
     "traced-config": "^0.3.0",
     "update-notifier": "^7.3.1",
     "wanakana": "^5.3.1",
