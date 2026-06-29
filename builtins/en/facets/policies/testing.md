@@ -165,9 +165,9 @@ Test data should explicitly generate the minimum facts needed by each test. Muta
 | Factories provide defaults and each test overrides only relevant fields | OK |
 | Contract changes update fixtures, mocks, and snapshots in the same change | OK |
 
-## External Contract Mocks
+## Contract Mocks and Test Doubles
 
-When mocking an external SDK, external API, generated client, or CLI, align mocked exception types, statuses, return values, missing values, partial successes, and idempotency with the real contract. Type compatibility alone does not verify the semantic contract.
+When mocking an external SDK, external API, generated client, or CLI, align mocked exception types, statuses, return values, missing values, partial successes, and idempotency with the real contract. When using test doubles for internal builders, runners, or adapters, also match production semantics for permissions, capabilities, overrides, missing values, and side effects. Type compatibility alone does not verify the semantic contract.
 
 | Criteria | Verdict |
 |----------|---------|
@@ -175,6 +175,7 @@ When mocking an external SDK, external API, generated client, or CLI, align mock
 | The mock throws the exception or return value expected by the implementation, and test success is used as proof of the external contract | REJECT |
 | Error types or response shapes from a different operation in the same service are reused | REJECT |
 | The mock is type-safe but operation-specific semantic contracts, such as existing-resource behavior, partial success, or missing detection, are not verified | REJECT |
+| Internal test double drops constraints, overrides, or side effects that production always passes | REJECT |
 | When real integration is stubbed, the report separates what the mock verifies from the unverified real-integration scope | OK |
 
 ### Naming

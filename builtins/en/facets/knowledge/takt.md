@@ -169,10 +169,18 @@ Provider errors propagate through: `AgentResponse.error` → session log → con
 
 ## Session Management
 
-Agent sessions are stored per-cwd. Session resume is skipped during worktree/clone execution.
+Agent sessions are stored per-cwd and per-provider. Session resume is skipped during worktree/clone execution.
+
+When a normal Phase 1 response merely omits `sessionId`, that alone is not a reason to discard the existing session. Paths that are allowed to continue the existing resume context should preserve the old sessionId.
+
+However, when a retry or fallback explicitly runs as a new session and succeeds, a missing `sessionId` must not continue using the old resumed session. The storage layer must be told that the new run produced no sessionId, so the old session is cleared or isolated.
+
+The Report Phase is Phase 2 and reads Phase 1 outputs. Its execution contract is readonly and tool-free. Report retry/fallback must preserve `permissionMode: readonly`, empty tool permission, and provider capability overrides such as turn limits.
 
 | Criteria | Judgment |
 |----------|----------|
 | Session resuming when `cwd !== projectCwd` | REJECT (cross-project contamination) |
 | Session key missing provider identifier | REJECT (cross-provider contamination) |
-| Session broken between phases | REJECT (context loss) |
+| Session broken between phases that should continue context | REJECT (context loss) |
+| Old resumed session remains after successful new-session retry | REJECT (unintended resume) |
+| Report retry/fallback drops readonly mode, tool-free execution, or capability overrides | REJECT |

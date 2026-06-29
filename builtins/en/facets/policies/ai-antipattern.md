@@ -135,6 +135,24 @@ Verification approach:
 3. If tests are added as part of the fix, verify they test "correct behavior after the fix" (not "the finding itself")
 4. For mid-PR specification changes, verify the tests cover the new behavior in the layer that owns it, not only the absence of the old specification
 
+## Superficial Fixes Through Test Doubles
+
+AI sometimes makes tests pass by loosening test doubles or ignoring arguments the production code uses instead of fixing the production contract. A passing test is evidence only when it exercised the same semantic contract as production.
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| A test double omits constraints or overrides always applied by the production helper | Permissions, capabilities, limits, or missing-value semantics differ from production | REJECT |
+| A mock ignores input that production uses for branching | Accepts `options` or `context` but never verifies them | REJECT |
+| A dependency with side-effect contracts is replaced by a return-only stub | Session updates, cache invalidation, or event emission are unobserved | REJECT |
+| The test only verifies that something was called, not the arguments or side effects | The test passes even when constraints are not propagated | REJECT |
+| The test double reproduces the observable production contract and assertions inspect arguments and side effects | Key options, missing values, and failure-state transitions are verified | OK |
+
+Verification approach:
+1. Inspect the replaced production function, builder, or adapter for return shape, missing values, side effects, and override propagation
+2. Check whether the test double collapses branch-relevant inputs into fixed values
+3. When the fix concerns state transitions or permission propagation, verify call arguments and side effects in addition to final state
+4. Check that test names and completion reports do not overclaim behavior the test double cannot prove
+
 ## Context Fitness Assessment
 
 Does the code fit this specific project?
