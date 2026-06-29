@@ -78,7 +78,7 @@ export interface WorkflowExecutionBootstrap {
   analyticsEmitter: AnalyticsEmitter;
   structuredCaller: CapabilityAwareStructuredCaller;
   savedSessions: Record<string, string>;
-  sessionUpdateHandler: (persona: string, sessionId: string) => void;
+  sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
   writeTraceReportOnce: ReturnType<typeof createTraceReportWriter>;
 }
 
@@ -240,9 +240,9 @@ export async function createWorkflowExecutionBootstrap(
       : loadPersonaSessions(projectCwd, currentProvider))
     : {};
   const sessionUpdateHandler = isWorktree
-    ? (personaName: string, personaSessionId: string) =>
+    ? (personaName: string, personaSessionId: string | undefined) =>
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
-    : (persona: string, personaSessionId: string) =>
+    : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
   const writeTraceReportOnce = createTraceReportWriter({
     sessionLogger,

@@ -227,8 +227,8 @@ export interface IterationLimitRequest {
   currentStep: string;
 }
 
-/** Callback for session updates (when persona session IDs change) */
-export type SessionUpdateCallback = (persona: string, sessionId: string) => void;
+/** Callback for session updates (when persona session IDs change or clear) */
+export type SessionUpdateCallback = (persona: string, sessionId: string | undefined) => void;
 
 /**
  * Callback for iteration limit reached.

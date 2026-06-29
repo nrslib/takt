@@ -77,7 +77,7 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
     failedPrimaryOptions: RunAgentOptions,
     overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
   ) => RunAgentOptions | undefined;
-  resolveReportFallbackProviderModel?: () => StepProviderInfo | undefined;
+  resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
   /** Update persona session after a phase run */
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   buildFindingContractInstructionContext?: (

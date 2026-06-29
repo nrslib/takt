@@ -592,7 +592,9 @@ export class StepExecutor {
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
     }
-    updatePersonaSession(sessionKey, response.sessionId);
+    if (response.sessionId !== undefined) {
+      updatePersonaSession(sessionKey, response.sessionId);
+    }
     this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, phaseExecutionId, state.iteration);
 
     // Provider failures should abort immediately.

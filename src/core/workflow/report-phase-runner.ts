@@ -139,10 +139,8 @@ export async function runReportPhase(
       }
       if (retryAttempt.kind === 'success') {
         writeReportFile(ctx.reportDir, fileName, retryAttempt.content);
-        if (retryAttempt.response.sessionId) {
-          currentSessionId = retryAttempt.response.sessionId;
-          ctx.updatePersonaSession(sessionKey, currentSessionId);
-        }
+        currentSessionId = retryAttempt.response.sessionId;
+        ctx.updatePersonaSession(sessionKey, currentSessionId);
         log.debug('Report file generated', { step: step.name, fileName });
         continue;
       }
@@ -433,7 +431,7 @@ function resolveReportAttemptProviderInfo(
   ctx: ReportPhaseRunnerContext,
 ): StepProviderInfo | undefined {
   const providerInfo = ctx.resolveStepProviderModel(step);
-  const fallbackProviderInfo = ctx.resolveReportFallbackProviderModel?.();
+  const fallbackProviderInfo = ctx.resolveReportFallbackProviderModel();
   if (
     fallbackProviderInfo?.provider !== undefined
     && options.resolvedProvider === fallbackProviderInfo.provider

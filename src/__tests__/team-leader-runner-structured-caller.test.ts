@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
+import { runTeamLeaderPart } from '../core/workflow/engine/team-leader-part-runner.js';
 import type { AgentResponse, WorkflowStep, WorkflowState } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
@@ -206,6 +207,63 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect.any(Function),
       expect.any(Function),
     );
+  });
+
+  it('should keep an existing team leader part session when the response omits sessionId', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+      sessionId: undefined,
+    });
+    const sessions = new Map<string, string>([
+      ['coder:opencode', 'existing-part-session'],
+    ]);
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) {
+        sessions.delete(key);
+      } else {
+        sessions.set(key, sessionId);
+      }
+    });
+    const optionsBuilder = {
+      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode' }),
+      buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
+    } as unknown as OptionsBuilder;
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task',
+      passPreviousResponse: false,
+      teamLeader: {
+        maxConcurrency: 1,
+        maxTotalParts: 20,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+    };
+
+    await runTeamLeaderPart(
+      optionsBuilder,
+      step,
+      undefined,
+      { id: 'part-1', title: 'API', instruction: 'Implement API' },
+      0,
+      1000,
+      updatePersonaSession,
+      undefined,
+      {
+        enabled: false,
+        workflowName: 'workflow',
+        iteration: 1,
+      },
+    );
+
+    expect(updatePersonaSession).not.toHaveBeenCalled();
+    expect(sessions.get('coder:opencode')).toBe('existing-part-session');
   });
 
   it('Given teamLeader.partTags, When running multiple decomposed parts, Then each part step gets part tags without changing aggregated output', async () => {

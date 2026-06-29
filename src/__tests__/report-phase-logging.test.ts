@@ -45,6 +45,12 @@ function createContext(): ReportPhaseRunnerContext {
       allowedTools: [],
       sessionId: undefined,
     }),
+    resolveReportFallbackProviderModel: () => ({
+      provider: 'claude',
+    }),
+    resolveStepProviderModel: () => ({
+      provider: 'opencode',
+    }),
     updatePersonaSession: () => {},
   };
   return context;

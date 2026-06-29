@@ -76,6 +76,44 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 1. Happy Path
   // =====================================================
   describe('Happy path', () => {
+    it('should keep an existing normal step session when the response omits sessionId', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 1,
+        initialStep: 'implement',
+        steps: [
+          makeStep('implement', {
+            persona: 'coder',
+            personaDisplayName: 'coder',
+            rules: [
+              makeRule('done', 'COMPLETE'),
+            ],
+          }),
+        ],
+      });
+      const onSessionUpdate = vi.fn();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        initialSessions: {
+          'coder:mock': 'existing-session',
+        },
+        onSessionUpdate,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'coder', content: 'done', sessionId: undefined }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(state.personaSessions.get('coder:mock')).toBe('existing-session');
+      expect(onSessionUpdate).not.toHaveBeenCalled();
+    });
+
     it('should complete: plan → implement → ai_review → reviewers(all approved) → supervise → COMPLETE', async () => {
       const config = buildDefaultWorkflowConfig();
       engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });

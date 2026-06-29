@@ -94,10 +94,16 @@ function createContext(
       };
     },
     updatePersonaSession: (_persona, sessionId) => {
-      if (sessionId) {
+      if (sessionId === undefined) {
+        currentSessionId = undefined;
+      } else {
         currentSessionId = sessionId;
       }
     },
+    resolveReportFallbackProviderModel: () => ({
+      provider: fallbackProvider,
+      model: providers.fallbackModel,
+    }),
     resolveStepProviderModel: (_step) => ({
       provider: primaryProvider,
     }),
@@ -287,6 +293,73 @@ describe('runReportPhase retry with new session', () => {
 
     const retryOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(retryOptions.sessionId).toBeUndefined();
+  });
+
+  it('should clear the old resume session when a new-session retry succeeds without returning a sessionId', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step: WorkflowStep = {
+      ...createStep('03-retry-clear-first.md'),
+      outputContracts: [{ name: '03-retry-clear-first.md' }, { name: '03-retry-clear-second.md' }],
+    };
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    const freshAttempts: string[] = [];
+    let savedSessionId: string | undefined = 'session-resume-1';
+    const originalBuildNewSessionReportOptions = ctx.buildNewSessionReportOptions;
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+      savedSessionId = sessionId;
+    };
+    ctx.getSessionId = () => savedSessionId;
+    ctx.buildNewSessionReportOptions = (currentStep, overrides) => {
+      freshAttempts.push(currentStep.name);
+      return originalBuildNewSessionReportOptions(currentStep, overrides);
+    };
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-1' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nFirst attempt with tool call',
+          timestamp: new Date('2026-02-11T00:01:20Z'),
+          sessionId: 'session-resume-2',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRetry report without session id',
+          timestamp: new Date('2026-02-11T00:01:21Z'),
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nSecond report from fresh session',
+          timestamp: new Date('2026-02-11T00:01:22Z'),
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(sessionUpdates).toEqual([{ key: 'coder', sessionId: undefined }]);
+    expect(freshAttempts).toEqual(['implement', 'implement']);
+    expect(readFileSync(join(reportDir, '03-retry-clear-first.md'), 'utf-8')).toBe('# Report\nRetry report without session id');
+    expect(readFileSync(join(reportDir, '03-retry-clear-second.md'), 'utf-8')).toBe('# Report\nSecond report from fresh session');
+
+    const secondFileOptions = runAgentMock.mock.calls[2]?.[2] as { sessionId?: string };
+    expect(secondFileOptions.sessionId).toBeUndefined();
   });
 
   it('should fall back to Claude when report phase retry also emits a tool call', async () => {
@@ -1417,6 +1490,9 @@ describe('runReportPhase retry with new session', () => {
           sessions.set(key, sessionId);
         }
       },
+      resolveReportFallbackProviderModel: () => ({
+        provider: 'claude',
+      }),
       resolveStepProviderModel: (_step) => ({
         provider: 'opencode',
       }),

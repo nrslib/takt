@@ -285,7 +285,9 @@ export class ParallelRunner {
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }
-        updatePersonaSession(subSessionKey, subResponse.sessionId);
+        if (subResponse.sessionId !== undefined) {
+          updatePersonaSession(subSessionKey, subResponse.sessionId);
+        }
         this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);

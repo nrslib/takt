@@ -317,9 +317,15 @@ export class WorkflowEngine extends EventEmitter {
   isAbortRequested(): boolean { return this.abortRequested; }
 
   private updatePersonaSession(persona: string, sessionId: string | undefined): void {
-    if (!sessionId) return;
     const previousSessionId = this.state.personaSessions.get(persona);
-    this.state.personaSessions.set(persona, sessionId);
+    if (sessionId === previousSessionId) return;
+
+    if (sessionId === undefined) {
+      this.state.personaSessions.delete(persona);
+    } else {
+      this.state.personaSessions.set(persona, sessionId);
+    }
+
     if (this.options.onSessionUpdate && sessionId !== previousSessionId) {
       this.options.onSessionUpdate(persona, sessionId);
     }
