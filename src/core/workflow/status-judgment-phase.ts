@@ -5,7 +5,6 @@ import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction
 import { getJudgmentReportFiles } from './evaluation/rule-utils.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { StatusJudgmentPhaseContext } from './phase-runner.js';
-import type { StepProviderInfo } from './types.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflowSpans.js';
 
@@ -54,13 +53,6 @@ function buildBaseContext(
     lastResponse: ctx.lastResponse,
     inputSource: 'response',
   };
-}
-
-function resolveStepProviderInfo(step: WorkflowStep, ctx: StatusJudgmentPhaseContext): StepProviderInfo {
-  if (!ctx.resolveStepProviderModel) {
-    throw new Error(`Status judgment requires provider resolution for step "${step.name}"`);
-  }
-  return ctx.resolveStepProviderModel(step);
 }
 
 /**
@@ -121,7 +113,7 @@ export async function runStatusJudgmentPhase(
   }
 
   try {
-    const stepProvider = resolveStepProviderInfo(step, ctx);
+    const stepProvider = ctx.resolveStepProviderModel(step);
     const result = await runWithPhaseSpan(
       {
         enabled: ctx.observabilityEnabled === true,

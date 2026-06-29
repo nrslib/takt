@@ -830,4 +830,96 @@ describe('resolveAssistantScopedProviderModelFromConfig', () => {
       model: undefined,
     });
   });
+
+  it('should return the local assistant provider with no model when only provider is configured locally', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+          },
+        },
+      },
+      global: {
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: undefined,
+    });
+  });
+
+  it('should keep the local assistant model unresolved when only assistant models are configured', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        taktProviders: {
+          assistant: {
+            model: 'local-assistant-model',
+          },
+        },
+      },
+      global: {
+        taktProviders: {
+          assistant: {
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: undefined,
+      model: 'local-assistant-model',
+    });
+  });
+
+  it('should inherit global assistant provider with no model when only provider is configured globally', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {},
+      global: {
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'claude',
+      model: undefined,
+    });
+  });
+
+  it('should not inherit a global assistant model when the local assistant provider wins', () => {
+    const result = resolveAssistantScopedProviderModelFromConfig({
+      local: {
+        taktProviders: {
+          assistant: {
+            provider: 'codex',
+          },
+        },
+      },
+      global: {
+        taktProviders: {
+          assistant: {
+            provider: 'claude',
+            model: 'global-assistant-model',
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      model: undefined,
+    });
+  });
 });

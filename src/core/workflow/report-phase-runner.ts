@@ -389,7 +389,7 @@ function buildReportAttemptSpanOutcome(
   const retryableFailure = classifyRetryableFailure(result);
   if (retryableFailure !== undefined) {
     return {
-      status: result.status,
+      status: 'error',
       content: '',
       error: buildRetryableFailureEventError(retryableFailure, result.status),
       providerUsage: result.providerUsage,

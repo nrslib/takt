@@ -674,6 +674,30 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     expect(options).toBeUndefined();
   });
 
+  it('should not build report fallback options when fallback provider matches the failed primary provider', () => {
+    // Given
+    const step = createStep({ provider: 'opencode', model: 'opencode/qwen3-coder-next' });
+    const builder = createBuilder(step, {
+      reportFallbackProvider: {
+        provider: 'opencode',
+        model: 'opencode/report-model',
+      },
+    });
+
+    // When
+    const options = builder.buildFallbackReportOptions(step, {
+      cwd: '/project',
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/qwen3-coder-next',
+    }, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    expect(options).toBeUndefined();
+  });
+
   it('should expose configured report fallback options through report phase context', () => {
     // Given
     const step = createStep({ provider: 'opencode', model: 'opencode/qwen3-coder-next' });

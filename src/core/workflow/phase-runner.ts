@@ -90,7 +90,7 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
 export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
   /** Structured caller for phase 3 status judgment */
   structuredCaller: StructuredCaller;
-  resolveStepProviderModel?: (step: WorkflowStep) => StepProviderInfo;
+  resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
   /** Callback for Phase 3 internal stage logging */
   onJudgeStage?: (
     step: WorkflowStep,

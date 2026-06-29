@@ -177,6 +177,35 @@ describe('runReportPhase provider info', () => {
     });
   });
 
+  it('records empty report output as an error outcome before fallback succeeds', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('fallback-empty-outcome.md');
+    const ctx = createContext(reportDir);
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '',
+        timestamp: new Date('2026-06-28T00:00:00Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '# Report\nFallback OK',
+        timestamp: new Date('2026-06-28T00:00:01Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'fallback-empty-outcome.md'), 'utf-8')).toBe('# Report\nFallback OK');
+    expect(capturedOutcomes[0]).toMatchObject({
+      status: 'error',
+      content: '',
+      error: 'Report output is empty',
+    });
+  });
+
   it('does not attach raw retry failure content to observability outcomes before fallback succeeds', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('fallback-redacted.md');
