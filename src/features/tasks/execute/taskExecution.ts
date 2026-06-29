@@ -3,7 +3,6 @@
  */
 
 import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
-import { executeWorkflow } from './workflowExecution.js';
 import type {
   TaskExecutionOptions,
   ExecuteTaskOptions,
@@ -21,12 +20,12 @@ import {
   persistPrFailedTaskResult,
   persistTaskResult,
 } from './taskResultHandler.js';
-import { executeTaskWorkflow } from './taskWorkflowExecution.js';
+import { runWorkflowExecution } from './workflowExecutionApi.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
 export async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<WorkflowExecutionResult> {
-  return executeTaskWorkflow(options, executeWorkflow);
+  return runWorkflowExecution(options);
 }
 
 /**

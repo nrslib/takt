@@ -88,7 +88,7 @@ export async function createWorkflowExecutionBootstrap(
   cwd: string,
   options: WorkflowExecutionOptions,
 ): Promise<WorkflowExecutionBootstrap> {
-  const { headerPrefix = 'Running Workflow:', interactiveUserInput = false } = options;
+  const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(workflowConfig.name);
 
@@ -101,12 +101,14 @@ export async function createWorkflowExecutionBootstrap(
         displayLabel: options.taskDisplayLabel,
       })
     : undefined;
-  const out = createOutputFns(prefixWriter);
+  const out = createOutputFns(prefixWriter, outputMode);
   out.header(`${headerPrefix} ${safeWorkflowName}`);
 
   const displayRef = { current: null as StreamDisplay | null };
   const handlerRef = { current: null as ReturnType<StreamDisplay['createHandler']> | null };
-  const streamHandler = prefixWriter
+  const streamHandler = outputMode === 'silent'
+    ? (): void => {}
+    : prefixWriter
     ? createPrefixedStreamHandler(prefixWriter)
     : (event: DisplayStreamEvent): void => {
         if (!displayRef.current || event.type === 'result') {

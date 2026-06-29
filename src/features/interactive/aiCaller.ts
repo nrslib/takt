@@ -43,6 +43,8 @@ export interface SessionContext {
 interface CallAIWithRetryOptions {
   imageAttachments?: ProviderImageAttachment[];
   permissionMode?: PermissionMode;
+  outputMode?: 'terminal' | 'silent';
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -59,8 +61,19 @@ export async function callAIWithRetry(
   ctx: SessionContext,
   options: CallAIWithRetryOptions = {},
 ): Promise<{ result: CallAIResult | null; sessionId: string | undefined }> {
-  const display = new StreamDisplay('assistant', isQuietMode());
+  const outputMode = options.outputMode ?? 'terminal';
+  const display = outputMode === 'terminal'
+    ? new StreamDisplay('assistant', isQuietMode())
+    : undefined;
   const abortController = new AbortController();
+  const onExternalAbort = (): void => {
+    abortController.abort(options.abortSignal?.reason);
+  };
+  if (options.abortSignal?.aborted) {
+    onExternalAbort();
+  } else {
+    options.abortSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
   let sigintCount = 0;
   const onSigInt = (): void => {
     sigintCount += 1;
@@ -74,7 +87,9 @@ export async function callAIWithRetry(
     error(getLabel('workflow.sigintForce', ctx.lang));
     process.exit(EXIT_SIGINT);
   };
-  process.on('SIGINT', onSigInt);
+  if (outputMode === 'terminal') {
+    process.on('SIGINT', onSigInt);
+  }
   let { sessionId } = ctx;
 
   try {
@@ -96,16 +111,18 @@ export async function callAIWithRetry(
       permissionMode: options.permissionMode,
       providerOptions: ctx.providerOptions,
       abortSignal: abortController.signal,
-      onStream: display.createHandler(),
+      onStream: display?.createHandler(),
       imageAttachments: nativeImageAttachments,
     });
-    display.flush();
+    display?.flush();
     const success = response.status !== 'blocked' && response.status !== 'error';
 
     if (!success && sessionId) {
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
-      const retryDisplay = new StreamDisplay('assistant', isQuietMode());
+      const retryDisplay = outputMode === 'terminal'
+        ? new StreamDisplay('assistant', isQuietMode())
+        : undefined;
       const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
       const retry = await retryAgent.call(promptForProvider, {
         cwd,
@@ -115,10 +132,10 @@ export async function callAIWithRetry(
         permissionMode: options.permissionMode,
         providerOptions: ctx.providerOptions,
         abortSignal: abortController.signal,
-        onStream: retryDisplay.createHandler(),
+        onStream: retryDisplay?.createHandler(),
         imageAttachments: nativeImageAttachments,
       });
-      retryDisplay.flush();
+      retryDisplay?.flush();
       if (retry.sessionId) {
         sessionId = retry.sessionId;
         updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
@@ -140,10 +157,15 @@ export async function callAIWithRetry(
   } catch (e) {
     const msg = getErrorMessage(e);
     log.error('AI call failed', { error: msg });
-    error(msg);
-    blankLine();
+    if (outputMode === 'terminal') {
+      error(msg);
+      blankLine();
+    }
     return { result: null, sessionId };
   } finally {
-    process.removeListener('SIGINT', onSigInt);
+    options.abortSignal?.removeEventListener('abort', onExternalAbort);
+    if (outputMode === 'terminal') {
+      process.removeListener('SIGINT', onSigInt);
+    }
   }
 }

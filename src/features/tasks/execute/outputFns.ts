@@ -29,7 +29,27 @@ export interface OutputFns {
   logLine: (text: string) => void;
 }
 
-export function createOutputFns(prefixWriter: TaskPrefixWriter | undefined): OutputFns {
+function createSilentOutputFns(): OutputFns {
+  const noop = (): void => {};
+  return {
+    header: noop,
+    info: noop,
+    warn: noop,
+    error: noop,
+    success: noop,
+    status: noop,
+    blankLine: noop,
+    logLine: noop,
+  };
+}
+
+export function createOutputFns(
+  prefixWriter: TaskPrefixWriter | undefined,
+  outputMode: 'terminal' | 'silent' = 'terminal',
+): OutputFns {
+  if (outputMode === 'silent') {
+    return createSilentOutputFns();
+  }
   if (!prefixWriter) {
     return {
       header: rawHeader,

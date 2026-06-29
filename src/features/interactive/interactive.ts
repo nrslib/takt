@@ -26,13 +26,19 @@ import { initializeSession } from './sessionInitialization.js';
 import { loadAssistantInitContext } from './assistantInitFiles.js';
 import {
   type WorkflowContext,
+  type ConversationMessage,
   formatStepPreviews,
+  buildSummaryPrompt as buildInteractiveSummaryPrompt,
   type InteractiveModeAction,
   type SummaryActionValue,
   type PostSummaryAction,
   buildSummaryActionOptions,
   selectSummaryAction,
 } from './interactive-summary.js';
+import {
+  DEFAULT_INTERACTIVE_TOOLS,
+  buildConversationSummaryPrompt,
+} from './interactiveApplication.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
 import type { InteractiveImageAttachment } from './imageAttachments.js';
 
@@ -100,19 +106,64 @@ export function resolveLanguage(lang?: Language): 'en' | 'ja' {
   return lang === 'ja' ? 'ja' : 'en';
 }
 
-/** Default toolset for interactive mode */
-export const DEFAULT_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'];
+export { DEFAULT_INTERACTIVE_TOOLS } from './interactiveApplication.js';
 
 /**
  * Build the summary prompt (used as both system prompt and user message).
  */
 export {
-  buildSummaryPrompt,
   formatStepPreviews,
   type ConversationMessage,
   type WorkflowContext,
   type TaskHistorySummaryItem,
 } from './interactive-summary.js';
+
+export function buildSummaryPrompt(
+  history: ConversationMessage[],
+  userNote: string,
+  lang: 'en' | 'ja',
+  promptContext?: string,
+): string;
+export function buildSummaryPrompt(
+  history: ConversationMessage[],
+  hasSession: boolean,
+  lang: 'en' | 'ja',
+  noTranscriptNote: string,
+  conversationLabel: string,
+  workflowContext?: WorkflowContext,
+  sourceContext?: string,
+  promptContext?: string,
+): string;
+export function buildSummaryPrompt(
+  history: ConversationMessage[],
+  userNoteOrHasSession: string | boolean,
+  lang: 'en' | 'ja',
+  promptContextOrNoTranscript?: string,
+  conversationLabel?: string,
+  workflowContext?: WorkflowContext,
+  sourceContext?: string,
+  promptContext?: string,
+): string {
+  if (typeof userNoteOrHasSession === 'boolean') {
+    return buildInteractiveSummaryPrompt(
+      history,
+      userNoteOrHasSession,
+      lang,
+      promptContextOrNoTranscript ?? '',
+      conversationLabel ?? '',
+      workflowContext,
+      sourceContext,
+      promptContext,
+    );
+  }
+
+  return buildConversationSummaryPrompt(
+    history,
+    userNoteOrHasSession,
+    lang,
+    promptContextOrNoTranscript,
+  );
+}
 
 /**
  * Run the interactive task input mode.

@@ -11,6 +11,7 @@ import type {
   WorkflowResumePointEntry,
   RateLimitFallbackConfig,
   FallbackContext,
+  McpServerConfig,
 } from '../models/types.js';
 import type { PersonaProviderEntry, ProviderRoutingConfig, ResolvedObservabilityConfig } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
@@ -253,6 +254,8 @@ export interface WorkflowEngineOptions {
   initialUserInputs?: string[];
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
+  /** MCP servers supplied by the application boundary for every phase-1 agent step. */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Callback when iteration limit is reached - returns additional iterations or null to stop */
   onIterationLimit?: IterationLimitCallback;
   /** Ignore workflow maxSteps and keep running */

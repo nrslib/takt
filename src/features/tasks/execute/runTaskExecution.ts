@@ -1,7 +1,6 @@
 import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
 import { executeTaskAndCompleteWithResult, executeTaskWithResult } from './taskExecution.js';
-import { executeTaskWorkflow } from './taskWorkflowExecution.js';
-import { executeWorkflowForRun } from './workflowExecution.js';
+import { runWorkflowExecution } from './workflowExecutionApi.js';
 import type {
   ExecuteTaskOptions,
   TaskExecutionOptions,
@@ -17,11 +16,7 @@ async function executeTaskWithRunResult(
   options: ExecuteTaskOptions,
   runContext?: RunTaskExecutionContext,
 ): Promise<WorkflowExecutionResult> {
-  return executeTaskWorkflow(
-    options,
-    (workflowConfig, task, cwd, workflowOptions) =>
-      executeWorkflowForRun(workflowConfig, task, cwd, workflowOptions, runContext),
-  );
+  return runWorkflowExecution(options, runContext);
 }
 
 export async function executeRunTaskAndComplete(

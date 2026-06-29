@@ -107,6 +107,21 @@ takt --task "Add authentication" --workflow dual
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
 
+## ACP Agent
+
+`takt-acp` starts TAKT as an Agent Client Protocol agent over stdio JSON-RPC.
+Launch it from an ACP-compatible client as the agent command:
+
+```bash
+takt-acp
+```
+
+The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root, and runs workflow execution through the same application-level workflow API used by the CLI. If a prompt requests execution, TAKT uses the `default` workflow unless the conversation result explicitly provides another workflow.
+
+`session/new` must include `mcpServers`. Empty `mcpServers: []` is accepted. Stdio MCP servers are passed to workflow execution, but TAKT fails fast before the run when the effective provider for a step does not support MCP servers. Non-stdio MCP transports and duplicate MCP server names are rejected during session creation.
+
+TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/update` notifications. `additionalDirectories` is not advertised and non-empty `additionalDirectories` requests are rejected.
+
 ## Instant Exec Mode
 
 `takt exec` starts TAKT's interactive task-entry mode without writing workflow YAML by hand. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.

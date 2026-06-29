@@ -264,6 +264,42 @@ describe('PromptBasedStructuredCaller', () => {
     );
   });
 
+  it('should pass mcpServers through decomposeTask to runAgent', async () => {
+    const mcpServers = {
+      docs: {
+        type: 'stdio' as const,
+        command: 'node',
+        args: ['docs-server.js'],
+      },
+    };
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify([
+          { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+        ]),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+      mcpServers,
+    });
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json'),
+      expect.objectContaining({ mcpServers }),
+    );
+  });
+
   it('should omit maxTurns for prompt-based decomposeTask when resolved provider does not support it', async () => {
     mockRunAgent.mockResolvedValue({
       persona: 'leader',
@@ -714,6 +750,46 @@ describe('PromptBasedStructuredCaller', () => {
         model: 'sonnet',
         resolvedModel: 'cursor-fast',
       }),
+    );
+  });
+
+  it('should pass mcpServers through requestMoreParts to runAgent', async () => {
+    const mcpServers = {
+      docs: {
+        type: 'stdio' as const,
+        command: 'node',
+        args: ['docs-server.js'],
+      },
+    };
+    mockRunAgent.mockResolvedValue({
+      persona: 'leader',
+      status: 'done',
+      content: [
+        '```json',
+        JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+        '```',
+      ].join('\n'),
+      timestamp: new Date(),
+    });
+
+    const caller = new PromptBasedStructuredCaller();
+    await caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        provider: 'cursor',
+        persona: 'team-leader',
+        mcpServers,
+      },
+    );
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.stringContaining('```json ... ```'),
+      expect.objectContaining({ mcpServers }),
     );
   });
 
