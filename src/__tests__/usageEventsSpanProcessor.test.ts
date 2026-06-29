@@ -67,6 +67,27 @@ describe('UsageEventsSpanProcessor', () => {
     ]);
   });
 
+  it('writes step tags and persona into the phase usage event record', () => {
+    const logPath = createTempLogPath();
+    const processor = new UsageEventsSpanProcessor({
+      runId: 'run-1',
+      sessionId: 'session-1',
+      phaseUsageLogPath: logPath,
+    });
+
+    processor.onEnd(makePhaseSpanWithTagsAndPersona('run-1') as unknown as ReadableSpan);
+
+    expect(readRecords(logPath)).toEqual([
+      expect.objectContaining({
+        run_id: 'run-1',
+        session_id: 'session-1',
+        phase: 'phase1_execute',
+        tags: ['coding', 'review'],
+        persona: 'coder',
+      }),
+    ]);
+  });
+
   it('ignores duplicate runId registrations without redirecting existing output', () => {
     const firstLogPath = createTempLogPath('first-usage-events.phase.jsonl');
     const secondLogPath = createTempLogPath('second-usage-events.phase.jsonl');
@@ -179,6 +200,18 @@ function makePhaseSpan(runId: string): Record<string, unknown> {
       'gen_ai.usage.input_tokens': 3,
       'gen_ai.usage.output_tokens': 2,
       'gen_ai.usage.total_tokens': 5,
+    },
+  };
+}
+
+function makePhaseSpanWithTagsAndPersona(runId: string): Record<string, unknown> {
+  const span = makePhaseSpan(runId) as { attributes: Record<string, unknown> };
+  return {
+    ...span,
+    attributes: {
+      ...span.attributes,
+      'takt.step.persona': 'coder',
+      'takt.step.tags': ['coding', 'review'],
     },
   };
 }
