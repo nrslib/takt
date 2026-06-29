@@ -105,17 +105,37 @@ describe('facet include expansion', () => {
     expect(content).toBe('Inline with {{include:policies/something}}');
   });
 
-  it('should prefer project partial over builtin partial', () => {
+  it('should prefer project partial over builtin partial with the same name', () => {
     const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
     const projectPartialsDir = join(tempDir, '.takt', 'facets', 'partials', 'instructions');
     mkdirSync(instructionsDir, { recursive: true });
     mkdirSync(projectPartialsDir, { recursive: true });
 
-    writeFileSync(join(projectPartialsDir, 'overridable.md'), 'Project version');
+    writeFileSync(join(projectPartialsDir, 'implement-common.md'), 'Project version');
     writeFileSync(join(instructionsDir, 'test.md'),
-      '{{include:instructions/overridable}}');
+      '{{include:instructions/implement-common}}');
 
     const content = resolveRefToContent('test', undefined, tempDir, 'instructions', context);
+    expect(content).toBe('Project version');
+  });
+
+  it('should resolve includes from the source facet layer in package workflows', () => {
+    const repertoireDir = join(tempDir, 'repertoire');
+    const workflowDir = join(repertoireDir, '@nrslib', 'pkg', 'workflows');
+    context = { projectDir: tempDir, lang: 'ja', workflowDir, repertoireDir };
+
+    const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+    const projectPartialsDir = join(tempDir, '.takt', 'facets', 'partials', 'instructions');
+    const packagePartialsDir = join(repertoireDir, '@nrslib', 'pkg', 'facets', 'partials', 'instructions');
+    mkdirSync(instructionsDir, { recursive: true });
+    mkdirSync(projectPartialsDir, { recursive: true });
+    mkdirSync(packagePartialsDir, { recursive: true });
+
+    writeFileSync(join(packagePartialsDir, 'shared.md'), 'Package version');
+    writeFileSync(join(projectPartialsDir, 'shared.md'), 'Project version');
+    writeFileSync(join(instructionsDir, 'test.md'), '{{include:instructions/shared}}');
+
+    const content = resolveRefToContent('test', undefined, workflowDir, 'instructions', context);
     expect(content).toBe('Project version');
   });
 });

@@ -504,11 +504,13 @@ function applyFacetIncludes(
 ): ResolvedFacetContent | undefined {
   if (!resolved || !context || !resolved.sourcePath) return resolved;
   const facetsRoots = buildFacetsRoots(context);
+  const sourceLayerIndex = findSourceLayerIndex(resolved.sourcePath, facetsRoots);
+  const includeRoots = facetsRoots.slice(sourceLayerIndex ?? 0);
   const { body } = expandFacetIncludes({
     body: resolved.content,
-    facetsRoots,
+    facetsRoots: includeRoots,
     repertoireDirs: [],
-    allowedRoots: facetsRoots,
+    allowedRoots: includeRoots,
   });
   return body !== resolved.content ? { ...resolved, content: body } : resolved;
 }
