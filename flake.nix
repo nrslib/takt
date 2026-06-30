@@ -30,7 +30,7 @@
             version = packageJson.version;
             src = ./.;
 
-            npmDepsHash = "sha256-lkAlgIq0kgTAKDc8ROBNySj7gefNqiGJHnRg/Z2Kt6M=";
+            npmDepsHash = "sha256-NI4xnLSqxE+CNOc4dJiI84Ayb5ie6atZrL5e+SnlQS4=";
             nodejs = nodejs;
 
             meta = {
