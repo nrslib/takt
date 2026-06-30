@@ -100,7 +100,31 @@ function cleanupPartialClone(clonePath: string): void {
   }
 }
 
+function detachHeadIfBranchCheckedOut(clonePath: string, branch: string): void {
+  let currentBranch: string;
+  try {
+    currentBranch = execFileSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+      cwd: clonePath,
+      stdio: 'pipe',
+    }).toString().trim();
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 1) {
+      return; // HEAD is detached
+    }
+    throw err;
+  }
+
+  if (currentBranch === branch) {
+    execFileSync('git', ['checkout', '--detach'], {
+      cwd: clonePath,
+      stdio: 'pipe',
+    });
+  }
+}
+
 export function fetchRemoteBranchIntoIsolatedClone(projectDir: string, clonePath: string, branch: string): void {
+  detachHeadIfBranchCheckedOut(clonePath, branch);
   try {
     runIsolatedGitCommandSync(clonePath, [
       'fetch',
@@ -119,6 +143,7 @@ export async function fetchRemoteBranchIntoIsolatedCloneAbortable(
   branch: string,
   abortSignal?: AbortSignal,
 ): Promise<void> {
+  detachHeadIfBranchCheckedOut(clonePath, branch);
   try {
     await runIsolatedGitCommandAbortable(clonePath, [
       'fetch',
