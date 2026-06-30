@@ -178,7 +178,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
     expect(listed).toEqual(['read', 'todowrite', 'edit', 'bash']);
   });
 
-  it('should exclude edit when permissionMode is readonly', () => {
+  it('should exclude edit but allow bash when permissionMode is readonly', () => {
     const provider = new OpenCodeProvider() as {
       getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null;
     };
@@ -186,7 +186,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
     const runtimeInstructions = provider.getRuntimeInstructions(['read', 'edit', 'write', 'bash'], 'readonly', undefined);
 
     const listed = extractToolNames(runtimeInstructions);
-    expect(listed).toEqual(['read']);
+    expect(listed).toEqual(['read', 'bash']);
   });
 
   it('should exclude web tools when networkAccess is false', () => {
