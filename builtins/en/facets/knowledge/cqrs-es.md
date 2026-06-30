@@ -25,13 +25,13 @@ If the source task or user request only describes CRUD-equivalent business requi
 
 | Source request | Task-spec treatment |
 |----------------|--------------------|
-| "Manage allowed IPs per facility" | Treat as CRUD admin settings |
-| "Approve and cancel orders, and restore state from history" | Treat as a CQRS+ES candidate |
-| "Trigger another process asynchronously when this changes" | Include event emission as a design candidate |
-| "Show who changed what and when" | Check whether CRUD + audit log is sufficient |
-| "Rebuild past state by replaying events" | Treat as a CQRS+ES requirement |
+| "Manage allowed IPs per facility" | Treat as CRUD admin settings. Domain vocabulary is just "add/remove" with no business rules |
+| "Manage order approval, cancellation, and returns where billing and inventory react to state changes" | CQRS+ES candidate. Complex state transitions, business invariants, and multiple aggregates in coordination |
+| "Insurance policy amendments with review rules that vary by amendment type, where past assessment history influences future decisions" | CQRS+ES candidate. Business rules are complex and evolving; history itself is input to business decisions |
+| "Show who changed what and when" | Check whether CRUD + audit log is sufficient. Display-only change history can be handled by audit columns |
+| "Toggle notification settings on/off" | Treat as CRUD admin settings. Current-value lookup and update only |
 
-Simple audit requirements are not sufficient grounds for CQRS+ES. If the need is only "who changed what and when", audit columns on CRUD tables or a separate audit log are often simpler.
+CQRS+ES excels in complex business domains (finance, insurance, healthcare — domains where business rules are complex and evolve). Simple audit requirements or technical async processing alone are not sufficient grounds for CQRS+ES. The deciding factor is the complexity of the business logic.
 
 ## Aggregate Design
 
