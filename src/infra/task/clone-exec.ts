@@ -100,7 +100,15 @@ function cleanupPartialClone(clonePath: string): void {
   }
 }
 
-function detachHeadIfBranchCheckedOut(clonePath: string, branch: string): void {
+function throwIfTaskAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    throw new Error(TASK_EXECUTION_ABORTED_MESSAGE);
+  }
+}
+
+function detachHeadIfBranchCheckedOut(clonePath: string, branch: string, abortSignal?: AbortSignal): void {
+  throwIfTaskAborted(abortSignal);
+
   let currentBranch: string;
   try {
     currentBranch = execFileSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
@@ -114,6 +122,8 @@ function detachHeadIfBranchCheckedOut(clonePath: string, branch: string): void {
     }
     throw err;
   }
+
+  throwIfTaskAborted(abortSignal);
 
   if (currentBranch === branch) {
     execFileSync('git', ['checkout', '--detach'], {
@@ -143,7 +153,7 @@ export async function fetchRemoteBranchIntoIsolatedCloneAbortable(
   branch: string,
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  detachHeadIfBranchCheckedOut(clonePath, branch);
+  detachHeadIfBranchCheckedOut(clonePath, branch, abortSignal);
   try {
     await runIsolatedGitCommandAbortable(clonePath, [
       'fetch',
