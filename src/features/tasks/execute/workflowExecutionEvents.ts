@@ -75,29 +75,30 @@ export interface WorkflowExecutionEventBridge {
 }
 
 type OutInfo = { info: (line: string) => void };
-type EventSinkDispatchResult =
-  | { success: true }
-  | { success: false; error: unknown };
-
 function emitWorkflowExecutionEvent(
   sink: WorkflowExecutionOptions['eventSink'],
   event: WorkflowExecutionEvent,
   onFailure: (error: unknown) => void,
-  pendingDispatches: Array<Promise<EventSinkDispatchResult>>,
-  dispatchChainRef: { current: Promise<EventSinkDispatchResult> },
+  dispatchState: {
+    current: Promise<void>;
+    hasError: boolean;
+    firstError: unknown;
+  },
 ): void {
   if (!sink) {
     return;
   }
-  const dispatch = dispatchChainRef.current.then(() => sink(event)).then(
-    () => ({ success: true as const }),
+  const dispatch = dispatchState.current.then(() => sink(event)).then(
+    () => undefined,
     (error) => {
+      if (!dispatchState.hasError) {
+        dispatchState.hasError = true;
+        dispatchState.firstError = error;
+      }
       onFailure(error);
-      return { success: false as const, error };
     },
   );
-  dispatchChainRef.current = dispatch;
-  pendingDispatches.push(dispatch);
+  dispatchState.current = dispatch;
 }
 
 function getEventSinkErrorMessage(error: unknown): string {
@@ -206,15 +207,25 @@ function createOutputEvents(
         step,
         isError: false,
       }));
-    case 'rate_limit':
-      return [{
-        type: streamEvent.data.status === 'rejected' ? 'error' : 'progress',
-        message: [
-          `Rate limit ${streamEvent.data.status}`,
-          streamEvent.data.rateLimitType ? `(${streamEvent.data.rateLimitType})` : undefined,
-        ].filter((line): line is string => line !== undefined).join(' '),
-        step,
-      }];
+    case 'rate_limit': {
+      const message = [
+        `Rate limit ${streamEvent.data.status}`,
+        streamEvent.data.rateLimitType ? `(${streamEvent.data.rateLimitType})` : undefined,
+      ].filter((line): line is string => line !== undefined).join(' ');
+
+      return [
+        {
+          type: 'rate_limited',
+          message,
+          ...(step ? { step } : {}),
+        },
+        {
+          type: streamEvent.data.status === 'rejected' ? 'error' : 'progress',
+          message,
+          step,
+        },
+      ];
+    }
     default:
       return [];
   }
@@ -292,9 +303,10 @@ export function bindWorkflowExecutionEvents(
     lastResumePoint: deps.initialResumePoint,
     sessionLog: deps.sessionLog,
   };
-  const pendingEventSinkDispatches: Array<Promise<EventSinkDispatchResult>> = [];
-  const eventSinkDispatchChain = {
-    current: Promise.resolve({ success: true } as EventSinkDispatchResult),
+  const eventSinkDispatchState = {
+    current: Promise.resolve(),
+    hasError: false,
+    firstError: undefined as unknown,
   };
   const pendingToolCallIds: string[] = [];
   const pendingPermissionRequestIds: string[] = [];
@@ -380,8 +392,7 @@ export function bindWorkflowExecutionEvents(
         maxSteps: deps.workflowConfig.maxSteps,
       },
       onEventSinkFailure,
-      pendingEventSinkDispatches,
-      eventSinkDispatchChain,
+      eventSinkDispatchState,
     );
     emitWorkflowExecutionEvent(
       deps.eventSink,
@@ -391,8 +402,7 @@ export function bindWorkflowExecutionEvents(
         step: step.name,
       },
       onEventSinkFailure,
-      pendingEventSinkDispatches,
-      eventSinkDispatchChain,
+      eventSinkDispatchState,
     );
 
     const stepIteration = (stepIterations.get(step.name) ?? 0) + 1;
@@ -473,8 +483,7 @@ export function bindWorkflowExecutionEvents(
           step: step.name,
         },
         onEventSinkFailure,
-        pendingEventSinkDispatches,
-        eventSinkDispatchChain,
+        eventSinkDispatchState,
       );
     }
     if (response.sessionId) {
@@ -483,13 +492,22 @@ export function bindWorkflowExecutionEvents(
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {
+        type: 'step_completed',
+        step: step.name,
+        status: response.status,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
         type: 'progress',
         message: `Completed step "${step.name}" with status ${response.status}`,
         step: step.name,
       },
       onEventSinkFailure,
-      pendingEventSinkDispatches,
-      eventSinkDispatchChain,
+      eventSinkDispatchState,
     );
 
     updateUsageForStepCompletion(deps.usageEventLogger, response);
@@ -509,28 +527,49 @@ export function bindWorkflowExecutionEvents(
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {
+        type: 'rate_limited',
+        message,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
         type: 'error',
         message,
         step: step.name,
       },
       onEventSinkFailure,
-      pendingEventSinkDispatches,
-      eventSinkDispatchChain,
+      eventSinkDispatchState,
     );
   });
 
   deps.engine.on('step:blocked', (step, response) => {
+    const confirmationId = nextConfirmationId();
+    const message = extractBlockedPrompt(response.content);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'blocked',
+        confirmationId,
+        message,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {
         type: 'confirmation_requested',
-        confirmationId: nextConfirmationId(),
-        message: extractBlockedPrompt(response.content),
+        confirmationId,
+        message,
         step: step.name,
       },
       onEventSinkFailure,
-      pendingEventSinkDispatches,
-      eventSinkDispatchChain,
+      eventSinkDispatchState,
     );
   });
 
@@ -577,8 +616,7 @@ export function bindWorkflowExecutionEvents(
         reportDirectory: deps.reportDirectory,
       },
       onEventSinkFailure,
-      pendingEventSinkDispatches,
-      eventSinkDispatchChain,
+      eventSinkDispatchState,
     );
   });
 
@@ -626,8 +664,7 @@ export function bindWorkflowExecutionEvents(
         reason,
       },
       onEventSinkFailure,
-      pendingEventSinkDispatches,
-      eventSinkDispatchChain,
+      eventSinkDispatchState,
     );
   });
 
@@ -639,8 +676,7 @@ export function bindWorkflowExecutionEvents(
         deps.eventSink,
         event,
         onEventSinkFailure,
-        pendingEventSinkDispatches,
-        eventSinkDispatchChain,
+        eventSinkDispatchState,
       );
     },
     emitWorkflowFailed(event): void {
@@ -648,8 +684,7 @@ export function bindWorkflowExecutionEvents(
         deps.eventSink,
         event,
         onEventSinkFailure,
-        pendingEventSinkDispatches,
-        eventSinkDispatchChain,
+        eventSinkDispatchState,
       );
     },
     emitProviderOutput(event: StreamEvent): void {
@@ -664,17 +699,14 @@ export function bindWorkflowExecutionEvents(
           deps.eventSink,
           outputEvent,
           onEventSinkFailure,
-          pendingEventSinkDispatches,
-          eventSinkDispatchChain,
+          eventSinkDispatchState,
         );
       }
     },
     async flushEventSink(): Promise<void> {
-      await eventSinkDispatchChain.current;
-      const results = await Promise.all(pendingEventSinkDispatches);
-      const failed = results.find((result): result is { success: false; error: unknown } => !result.success);
-      if (failed) {
-        throw failed.error;
+      await eventSinkDispatchState.current;
+      if (eventSinkDispatchState.hasError) {
+        throw eventSinkDispatchState.firstError;
       }
     },
   };

@@ -32,16 +32,26 @@ describe('runWorkflowExecution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSelectAndExecuteTask.mockRejectedValue(new Error('CLI routing must not be called'));
-    mockExecuteTaskWorkflow.mockResolvedValue({
-      success: true,
-      lastStep: 'supervise',
-      lastMessage: 'done',
-      runDirectory: '/repo/.takt/runs/run-1',
-      reportDirectory: '/repo/.takt/runs/run-1/reports',
-      ndjsonLogPath: '/repo/.takt/runs/run-1/logs/session.ndjson',
+    mockExecuteTaskWorkflow.mockImplementation(async (request, executor) => {
+      return executor(
+        { name: 'takt-default', steps: [], maxSteps: 3 },
+        request.task,
+        request.cwd,
+        {
+          projectCwd: request.projectCwd,
+          outputMode: request.outputMode,
+          eventSink: request.eventSink,
+          abortSignal: request.abortSignal,
+          mcpServers: request.mcpServers,
+          provider: request.agentOverrides?.provider,
+          model: request.agentOverrides?.model,
+        },
+      );
     });
     mockExecuteWorkflow.mockResolvedValue({
       success: true,
+      lastStep: 'supervise',
+      lastMessage: 'done',
       runDirectory: '/repo/.takt/runs/run-1',
       reportDirectory: '/repo/.takt/runs/run-1/reports',
       ndjsonLogPath: '/repo/.takt/runs/run-1/logs/session.ndjson',
@@ -103,6 +113,22 @@ describe('runWorkflowExecution', () => {
       expect.any(Function),
     );
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      { name: 'takt-default', steps: [], maxSteps: 3 },
+      'Implement ACP support',
+      '/repo',
+      expect.objectContaining({
+        projectCwd: '/repo',
+        outputMode: 'silent',
+        eventSink,
+        abortSignal: abortController.signal,
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
+        },
+        provider: 'mock',
+        model: 'mock-model',
+      }),
+    );
   });
 
   it('should fail before execution when cwd is missing', async () => {

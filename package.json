@@ -14,7 +14,7 @@
     "build": "tsc && mkdir -p dist/shared/prompts/en dist/shared/prompts/ja dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
     "watch": "tsc --watch",
     "analyze:usage": "node dist/commands/analyze-usage.js",
-    "test": "vitest run --config vitest.config.unit.parallel.ts",
+    "test": "node scripts/run-npm-test.mjs",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",
     "test:unit:parallel": "vitest run --config vitest.config.unit.parallel.ts",
     "test:it": "npm run test:it:parallel && npm run test:it:serial",

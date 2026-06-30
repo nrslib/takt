@@ -529,10 +529,61 @@ describe('bindWorkflowExecutionEvents', () => {
       step: 'review',
     });
     expect(eventSink).toHaveBeenCalledWith({
+      type: 'blocked',
+      confirmationId: 'confirmation-1',
+      message: 'Which file should be updated?',
+      step: 'review',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
       type: 'confirmation_requested',
       confirmationId: 'confirmation-1',
       message: 'Which file should be updated?',
       step: 'review',
+    });
+  });
+
+  it('event sink へ step completed、rate limited、blocked の専用イベントを渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:complete', step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'approved',
+      timestamp: new Date(),
+    }, 'instruction');
+    engine.emit('step:rate_limited', step, {
+      status: 'rate_limited',
+      content: '',
+      error: 'retry later',
+    });
+    engine.emit('step:blocked', step, {
+      content: '質問: Proceed?',
+      status: 'blocked',
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'step_completed',
+      step: 'review',
+      status: 'done',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'rate_limited',
+      step: 'review',
+      message: 'retry later',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'blocked',
+      step: 'review',
+      confirmationId: 'confirmation-1',
+      message: 'Proceed?',
     });
   });
 
@@ -872,6 +923,11 @@ describe('bindWorkflowExecutionEvents', () => {
       message: 'Permission summary: 1 resolved permissions',
       step: 'review',
       isError: false,
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'rate_limited',
+      message: 'Rate limit rejected (requests)',
+      step: 'review',
     });
     expect(eventSink).toHaveBeenCalledWith({
       type: 'error',

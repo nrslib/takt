@@ -122,6 +122,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
     }
 
     const task = result.content.trim();
+    if (!task) {
+      return { kind: 'error', message: 'Task text is required' };
+    }
     return {
       kind: 'workflow_execution_requested',
       task,

@@ -118,7 +118,7 @@ takt-acp
 
 The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root, and runs workflow execution through the same application-level workflow API used by the CLI. If a prompt requests execution, TAKT uses the `default` workflow unless the conversation result explicitly provides another workflow.
 
-`session/new` must include `mcpServers`. Empty `mcpServers: []` is accepted. Stdio MCP servers are passed to workflow execution, but TAKT fails fast before the run when the effective provider for a step does not support MCP servers. Non-stdio MCP transports and duplicate MCP server names are rejected during session creation.
+`session/new` may omit `mcpServers`; omitted or empty `mcpServers: []` is treated as no MCP servers. Stdio MCP servers are passed to workflow execution, but TAKT fails fast before the run when the effective provider for a step does not support MCP servers. Non-stdio MCP transports, duplicate MCP server names, and duplicate trimmed MCP env names are rejected during session creation.
 
 TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/update` notifications. `additionalDirectories` is not advertised and non-empty `additionalDirectories` requests are rejected.
 

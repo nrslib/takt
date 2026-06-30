@@ -60,14 +60,11 @@ export function requestCancel(
   sessionId: string,
 ): void {
   const session = requireAcpSession(sessions, sessionId);
-  if (!session.abortController) {
-    return;
-  }
   sessions.set(sessionId, {
     ...session,
     cancelRequested: true,
   });
-  session.abortController.abort();
+  session.abortController?.abort();
 }
 
 export function nextConfirmationId(

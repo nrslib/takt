@@ -94,6 +94,18 @@ function emitMissingWorkflow(outputMode: ExecuteTaskOptions['outputMode'], safeW
   info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
 }
 
+async function dispatchMissingWorkflowFailure(
+  eventSink: ExecuteTaskOptions['eventSink'],
+  reason: string,
+): Promise<WorkflowExecutionResult> {
+  await eventSink?.({
+    type: 'completed',
+    success: false,
+    reason,
+  });
+  return { success: false, reason };
+}
+
 export async function executeTaskWorkflow(
   options: ExecuteTaskOptions,
   workflowExecutor: WorkflowExecutor,
@@ -130,11 +142,17 @@ export async function executeTaskWorkflow(
   if (!workflowConfig) {
     if (isWorkflowPath(workflowIdentifier)) {
       emitMissingWorkflowFile(outputMode, safeWorkflowIdentifier);
-      return { success: false, reason: `Workflow file not found: ${safeWorkflowIdentifier}` };
+      return dispatchMissingWorkflowFailure(
+        eventSink,
+        `Workflow file not found: ${safeWorkflowIdentifier}`,
+      );
     }
 
     emitMissingWorkflow(outputMode, safeWorkflowIdentifier);
-    return { success: false, reason: `Workflow "${safeWorkflowIdentifier}" not found.` };
+    return dispatchMissingWorkflowFailure(
+      eventSink,
+      `Workflow "${safeWorkflowIdentifier}" not found.`,
+    );
   }
   log.debug('Running workflow', {
     name: workflowConfig.name,

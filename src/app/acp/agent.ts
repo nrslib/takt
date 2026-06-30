@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
-import { packageVersion } from '../../shared/packageInfo.js';
+import { packageVersion } from '../../shared/package-info.js';
 import type { ConversationSessionResult } from '../../features/interactive/conversationSession.js';
 import {
   runWorkflowExecution,
@@ -85,9 +85,6 @@ function requireAbsolutePath(value: string, fieldName: string): void {
 function requireNoAdditionalDirectories(additionalDirectories: string[] | undefined): void {
   if (!additionalDirectories || additionalDirectories.length === 0) {
     return;
-  }
-  for (const directory of additionalDirectories) {
-    requireAbsolutePath(directory, 'additionalDirectories');
   }
   throw new Error('additionalDirectories is not supported');
 }

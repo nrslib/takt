@@ -91,28 +91,40 @@ describe('ACP conversation to workflow integration', () => {
       },
       eventSink: expect.any(Function),
     }));
+    const workflowEvents = sendSessionUpdate.mock.calls
+      .filter((call) => call[0] === sessionId && call[1]?.kind === 'workflow_event')
+      .map((call) => call[1].event);
+    expect(workflowEvents.map((event) => event.type)).toEqual([
+      'run_started',
+      'step_started',
+      'output',
+      'completed',
+    ]);
+    expect(workflowEvents[0]).toEqual({
+      type: 'run_started',
+      runDirectory: '/repo/.takt/runs/run-1',
+    });
+    expect(workflowEvents[1]).toEqual({
+      type: 'step_started',
+      step: 'draft',
+      iteration: 1,
+      maxSteps: 5,
+    });
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
       kind: 'workflow_event',
       event: {
-        type: 'run_started',
-        runDirectory: '/repo/.takt/runs/run-1',
+        type: 'output',
+        outputType: 'text',
+        message: 'streamed answer',
+        step: 'draft',
       },
     });
-	    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
-	      kind: 'workflow_event',
-	      event: {
-	        type: 'output',
-	        outputType: 'text',
-	        message: 'streamed answer',
-	        step: 'draft',
-	      },
-	    });
-	    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
-	      kind: 'workflow_event',
-	      event: {
-	        type: 'completed',
-	        success: true,
-	        reportDirectory: '/repo/.takt/runs/run-1/reports',
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'workflow_event',
+      event: {
+        type: 'completed',
+        success: true,
+        reportDirectory: '/repo/.takt/runs/run-1/reports',
       },
     });
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {

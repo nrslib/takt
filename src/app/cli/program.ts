@@ -15,7 +15,7 @@ import {
 } from '../../infra/config/index.js';
 import { initGitProvider } from '../../infra/git/index.js';
 import { setQuietMode } from '../../shared/context.js';
-import { packageVersion } from '../../shared/packageInfo.js';
+import { packageVersion } from '../../shared/package-info.js';
 import { setLogLevel } from '../../shared/ui/index.js';
 import { initDebugLogger, createLogger, setVerboseConsole } from '../../shared/utils/index.js';
 

@@ -23,6 +23,12 @@ function workflowEventToText(event: WorkflowExecutionEvent): string {
       return `Workflow started. Report: ${event.reportDirectory}`;
     case 'step_started':
       return `Starting step "${event.step}" (${event.iteration}/${event.maxSteps})`;
+    case 'step_completed':
+      return `Completed step "${event.step}" with status ${event.status}`;
+    case 'rate_limited':
+      return event.message;
+    case 'blocked':
+      return event.message;
     case 'progress':
       return event.message;
     case 'output':
@@ -37,7 +43,7 @@ function workflowEventToText(event: WorkflowExecutionEvent): string {
       return event.message;
     case 'completed':
       return event.success
-        ? `Workflow completed. Report: ${event.reportDirectory}`
+        ? formatWorkflowResult({ success: true, reportDirectory: event.reportDirectory })
         : `Workflow failed: ${event.reason}`;
   }
 }

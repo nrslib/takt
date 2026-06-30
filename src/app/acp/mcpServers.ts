@@ -1,23 +1,20 @@
 import type { McpServer } from '@agentclientprotocol/sdk';
 import type { McpServerConfig } from '../../core/models/index.js';
 
-function requireAcpMcpServers(mcpServers: McpServer[] | undefined): McpServer[] {
-  if (mcpServers === undefined) {
-    throw new Error('mcpServers is required');
-  }
-  return mcpServers;
-}
-
 function envVariablesToRecord(env: Array<{ name: string; value: string }>): Record<string, string> | undefined {
   if (env.length === 0) {
     return undefined;
   }
   const values: Record<string, string> = {};
   for (const entry of env) {
-    if (!entry.name.trim()) {
+    const name = entry.name.trim();
+    if (!name) {
       throw new Error('mcpServers env name is required');
     }
-    values[entry.name] = entry.value;
+    if (Object.prototype.hasOwnProperty.call(values, name)) {
+      throw new Error(`Duplicate MCP server env name: ${name}`);
+    }
+    values[name] = entry.value;
   }
   return values;
 }
@@ -25,12 +22,11 @@ function envVariablesToRecord(env: Array<{ name: string; value: string }>): Reco
 export function normalizeAcpMcpServers(
   mcpServers: McpServer[] | undefined,
 ): Record<string, McpServerConfig> | undefined {
-  const requiredServers = requireAcpMcpServers(mcpServers);
-  if (requiredServers.length === 0) {
+  if (mcpServers === undefined || mcpServers.length === 0) {
     return undefined;
   }
   const normalized: Record<string, McpServerConfig> = {};
-  for (const server of requiredServers) {
+  for (const server of mcpServers) {
     if ('type' in server) {
       throw new Error(`Unsupported ACP MCP server transport: ${server.type}`);
     }

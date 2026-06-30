@@ -44,6 +44,22 @@ export type WorkflowExecutionEvent =
       maxSteps: number | 'infinite';
     }
   | {
+      type: 'step_completed';
+      step: string;
+      status: string;
+    }
+  | {
+      type: 'rate_limited';
+      step?: string;
+      message: string;
+    }
+  | {
+      type: 'blocked';
+      step: string;
+      confirmationId: string;
+      message: string;
+    }
+  | {
       type: 'progress';
       message: string;
       step?: string;
@@ -84,7 +100,7 @@ export type WorkflowExecutionEvent =
   | {
       type: 'completed';
       success: true;
-      reportDirectory: string;
+      reportDirectory?: string;
     }
   | {
       type: 'completed';

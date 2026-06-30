@@ -154,6 +154,25 @@ describe('conversation session application API', () => {
     });
   });
 
+  it('should reject an empty /go summary instead of requesting workflow execution', async () => {
+    const session = createSession();
+    await session.handleUserMessage({ text: 'implement ACP support' });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: {
+        content: '   ',
+        success: true,
+      },
+      sessionId: undefined,
+    });
+
+    const result = await session.handleUserMessage({ text: '/go include progress updates' });
+
+    expect(result).toEqual({
+      kind: 'error',
+      message: 'Task text is required',
+    });
+  });
+
   it('should pass the adapter abort signal to summary AI calls', async () => {
     const session = createSession();
     await session.handleUserMessage({ text: 'implement ACP support' });

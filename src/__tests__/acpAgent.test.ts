@@ -219,6 +219,19 @@ describe('TAKT ACP agent adapter', () => {
     });
   });
 
+  it('should map successful workflow completion without an undefined report path', () => {
+    expect(mapTaktAcpUpdateToSessionUpdate({
+      kind: 'workflow_event',
+      event: {
+        type: 'completed',
+        success: true,
+      },
+    })).toEqual({
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Workflow completed.' },
+    });
+  });
+
   it('should create a session from root session/new params', async () => {
     const createConversationSession = vi.fn(() => ({
       handleUserMessage: vi.fn(),
@@ -255,18 +268,26 @@ describe('TAKT ACP agent adapter', () => {
     })).rejects.toThrow(/cwd/i);
   });
 
-  it('should reject session/new when mcpServers is missing', async () => {
-    const createConversationSession = vi.fn();
+  it('should create a session without mcpServers', async () => {
+    const createConversationSession = vi.fn(() => ({
+      handleUserMessage: vi.fn(),
+    }));
     const agent = createTaktAcpAgent({
       createConversationSession,
       runWorkflowExecution: vi.fn(),
       sendSessionUpdate: vi.fn(),
     });
 
-    await expect(agent.handleSessionNew({
+    const result = await agent.handleSessionNew({
       cwd: '/repo',
-    })).rejects.toThrow(/mcpServers is required/i);
-    expect(createConversationSession).not.toHaveBeenCalled();
+    });
+
+    expect(result).toEqual({
+      sessionId: expect.any(String),
+    });
+    expect(createConversationSession).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/repo',
+    }));
   });
 
   it('should reject session/new when cwd is relative', async () => {
@@ -282,7 +303,7 @@ describe('TAKT ACP agent adapter', () => {
     })).rejects.toThrow(/cwd must be an absolute path/i);
   });
 
-  it('should reject relative additionalDirectories before session creation', async () => {
+  it('should reject non-empty additionalDirectories without path validation', async () => {
     const createConversationSession = vi.fn();
     const agent = createTaktAcpAgent({
       createConversationSession,
@@ -294,7 +315,7 @@ describe('TAKT ACP agent adapter', () => {
       cwd: '/repo',
       additionalDirectories: ['../other'],
       mcpServers: [],
-    })).rejects.toThrow(/additionalDirectories must be an absolute path/i);
+    })).rejects.toThrow(/additionalDirectories is not supported/i);
     expect(createConversationSession).not.toHaveBeenCalled();
   });
 
@@ -352,6 +373,19 @@ describe('TAKT ACP agent adapter', () => {
         { name: 'docs', command: 'other-mcp', args: [], env: [] },
       ],
       error: /Duplicate MCP server name: docs/i,
+    },
+    {
+      title: 'duplicate trimmed env name',
+      mcpServers: [{
+        name: 'docs',
+        command: 'docs-mcp',
+        args: [],
+        env: [
+          { name: ' DOCS_TOKEN ', value: 'x' },
+          { name: 'DOCS_TOKEN', value: 'y' },
+        ],
+      }],
+      error: /Duplicate MCP server env name: DOCS_TOKEN/i,
     },
     {
       title: 'empty env name',
@@ -418,6 +452,48 @@ describe('TAKT ACP agent adapter', () => {
           type: 'stdio',
           command: 'docs-mcp',
           args: ['serve'],
+          env: { DOCS_TOKEN: 'token' },
+        },
+      },
+    }));
+  });
+
+  it('should trim ACP MCP server env names before passing them into workflow execution', async () => {
+    const runWorkflowExecution = vi.fn().mockResolvedValue({
+      success: true,
+      reportDirectory: '/repo/.takt/runs/run-1/reports',
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Use docs MCP',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew({
+      cwd: '/repo',
+      mcpServers: [{
+        name: 'docs',
+        command: 'docs-mcp',
+        args: [],
+        env: [{ name: ' DOCS_TOKEN ', value: 'token' }],
+      }],
+    });
+
+    await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Use docs MCP' }],
+    });
+
+    expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
+      mcpServers: {
+        docs: {
+          type: 'stdio',
+          command: 'docs-mcp',
+          args: [],
           env: { DOCS_TOKEN: 'token' },
         },
       },
@@ -595,7 +671,7 @@ describe('TAKT ACP agent adapter', () => {
     });
   });
 
-  it('should not carry session/cancel into the next prompt when no turn is active', async () => {
+  it('should carry idle session/cancel into the next prompt', async () => {
     let receivedSignal: AbortSignal | undefined;
     const handleUserMessage = vi.fn((input: { abortSignal?: AbortSignal }) => {
       receivedSignal = input.abortSignal;
@@ -617,9 +693,9 @@ describe('TAKT ACP agent adapter', () => {
       prompt: [{ type: 'text', text: 'hello' }],
     });
 
-    expect(receivedSignal?.aborted).toBe(false);
+    expect(receivedSignal?.aborted).toBe(true);
     expect(result).toEqual({
-      stopReason: 'end_turn',
+      stopReason: 'cancelled',
     });
   });
 
@@ -821,6 +897,232 @@ describe('TAKT ACP agent adapter', () => {
             ],
           },
         },
+      },
+    });
+  });
+
+  it('should reject single-select ACP elicitation answers outside the advertised options', async () => {
+    const sendSessionUpdate = vi.fn();
+    const createElicitation = vi.fn().mockResolvedValue({
+      action: 'accept',
+      content: { answer: 'unsafe' },
+    });
+    const runWorkflowExecution = vi.fn(async (request) => {
+      await expect(request.onAskUserQuestion?.({
+        questions: [{
+          question: 'Choose a mode',
+          options: [{ label: 'safe' }],
+        }],
+      })).rejects.toThrow(/unsupported answer: unsafe/i);
+      return {
+        success: false,
+        reason: 'invalid answer',
+      };
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Implement ACP support',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate,
+      createElicitation,
+    });
+    await agent.handleInitialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    });
+
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'workflow_event',
+      event: {
+        type: 'tool_completed',
+        toolCallId: 'confirmation-1',
+        message: 'ACP elicitation response included unsupported answer: unsafe',
+        isError: true,
+      },
+    });
+  });
+
+  it('should reject multi-select ACP elicitation answers outside the advertised options', async () => {
+    const sendSessionUpdate = vi.fn();
+    const createElicitation = vi.fn().mockResolvedValue({
+      action: 'accept',
+      content: { answer: ['safe', 'unsafe'] },
+    });
+    const runWorkflowExecution = vi.fn(async (request) => {
+      await expect(request.onAskUserQuestion?.({
+        questions: [{
+          question: 'Choose areas',
+          multiSelect: true,
+          options: [{ label: 'safe' }],
+        }],
+      })).rejects.toThrow(/unsupported answer: unsafe/i);
+      return {
+        success: false,
+        reason: 'invalid answer',
+      };
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Implement ACP support',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate,
+      createElicitation,
+    });
+    await agent.handleInitialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    });
+
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'workflow_event',
+      event: {
+        type: 'tool_completed',
+        toolCallId: 'confirmation-1',
+        message: 'ACP elicitation response included unsupported answer: unsafe',
+        isError: true,
+      },
+    });
+  });
+
+  it('should reject empty multi-select ACP elicitation answers', async () => {
+    const sendSessionUpdate = vi.fn();
+    const createElicitation = vi.fn().mockResolvedValue({
+      action: 'accept',
+      content: { answer: [] },
+    });
+    const runWorkflowExecution = vi.fn(async (request) => {
+      await expect(request.onAskUserQuestion?.({
+        questions: [{
+          question: 'Choose areas',
+          multiSelect: true,
+          options: [{ label: 'safe' }],
+        }],
+      })).rejects.toThrow(/valid answer/i);
+      return {
+        success: false,
+        reason: 'invalid answer',
+      };
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Implement ACP support',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate,
+      createElicitation,
+    });
+    await agent.handleInitialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    });
+
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'workflow_event',
+      event: {
+        type: 'tool_completed',
+        toolCallId: 'confirmation-1',
+        message: 'ACP elicitation response did not include a valid answer',
+        isError: true,
+      },
+    });
+  });
+
+  it('should cancel pending ACP elicitation without waiting for the client response', async () => {
+    const sendSessionUpdate = vi.fn();
+    let resolveWorkflowStarted: (() => void) | undefined;
+    const workflowStarted = new Promise<void>((resolve) => {
+      resolveWorkflowStarted = resolve;
+    });
+    const createElicitation = vi.fn(() => new Promise<never>(() => undefined));
+    const runWorkflowExecution = vi.fn(async (request) => {
+      const questionPromise = request.onAskUserQuestion?.({
+        questions: [{ question: 'Proceed?' }],
+      });
+      resolveWorkflowStarted?.();
+      await expect(questionPromise).rejects.toThrow(/confirmation cancelled/i);
+      return {
+        success: false,
+        reason: 'cancelled',
+      };
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Implement ACP support',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate,
+      createElicitation,
+    });
+    await agent.handleInitialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const promptPromise = agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    });
+    await workflowStarted;
+    await agent.handleSessionCancel({ sessionId });
+    const result = await promptPromise;
+
+    expect(result).toEqual({ stopReason: 'cancelled' });
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'workflow_event',
+      event: {
+        type: 'tool_completed',
+        toolCallId: 'confirmation-1',
+        message: 'ACP confirmation cancelled',
+        isError: true,
       },
     });
   });

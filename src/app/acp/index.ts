@@ -9,13 +9,79 @@ import {
   ndJsonStream,
   type AgentContext,
   type AgentApp,
+  type NewSessionRequest,
   type Stream,
 } from '@agentclientprotocol/sdk';
+import { z } from 'zod/v4';
 import {
   createTaktAcpAgent,
   mapTaktAcpUpdateToSessionUpdate,
   type TaktAcpAgentDependencies,
 } from './agent.js';
+import { createLogger } from '../../shared/utils/debug.js';
+
+const log = createLogger('acp');
+
+type StreamSessionNewRequest = Omit<NewSessionRequest, 'mcpServers'> & {
+  mcpServers?: NewSessionRequest['mcpServers'];
+};
+
+const acpMetadataSchema = z.record(z.string(), z.unknown()).nullish();
+
+const acpHttpHeaderSchema = z.object({
+  name: z.string(),
+  value: z.string(),
+  _meta: acpMetadataSchema,
+});
+
+const acpMcpServerSchema = z.union([
+  z.object({
+    type: z.literal('http'),
+    name: z.string(),
+    url: z.string(),
+    headers: z.array(acpHttpHeaderSchema),
+    _meta: acpMetadataSchema,
+  }),
+  z.object({
+    type: z.literal('sse'),
+    name: z.string(),
+    url: z.string(),
+    headers: z.array(acpHttpHeaderSchema),
+    _meta: acpMetadataSchema,
+  }),
+  z.object({
+    type: z.literal('acp'),
+    name: z.string(),
+    id: z.string(),
+    _meta: acpMetadataSchema,
+  }),
+  z.object({
+    name: z.string(),
+    command: z.string(),
+    args: z.array(z.string()),
+    env: z.array(z.object({
+      name: z.string(),
+      value: z.string(),
+      _meta: acpMetadataSchema,
+    })),
+    _meta: acpMetadataSchema,
+  }),
+]);
+
+const streamSessionNewRequestParser = {
+  parse(params: unknown): StreamSessionNewRequest {
+    const request = z.object({
+      cwd: z.string(),
+      additionalDirectories: z.array(z.string()).optional(),
+      mcpServers: z.array(acpMcpServerSchema).optional(),
+      _meta: acpMetadataSchema,
+    }).parse(params);
+    return {
+      ...request,
+      mcpServers: request.mcpServers ?? [],
+    };
+  },
+};
 
 export function createTaktAcpAgentApp(deps: TaktAcpAgentDependencies = {}): AgentApp {
   let clientContext: AgentContext | undefined;
@@ -23,7 +89,14 @@ export function createTaktAcpAgentApp(deps: TaktAcpAgentDependencies = {}): Agen
   const taktAgent = createTaktAcpAgent({
     ...deps,
     sendSessionUpdate: async (sessionId, update) => {
-      await deps.sendSessionUpdate?.(sessionId, update);
+      try {
+        await deps.sendSessionUpdate?.(sessionId, update);
+      } catch (error) {
+        log.warn('ACP session update hook failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       if (!clientContext) {
         return;
       }
@@ -46,7 +119,7 @@ export function createTaktAcpAgentApp(deps: TaktAcpAgentDependencies = {}): Agen
     })
     .onRequest(methods.agent.initialize, ({ params }) =>
       taktAgent.handleInitialize(params))
-    .onRequest(methods.agent.session.new, ({ params }) =>
+    .onRequest(methods.agent.session.new, streamSessionNewRequestParser, ({ params }) =>
       taktAgent.handleSessionNew(params))
     .onRequest(methods.agent.session.prompt, ({ params }) =>
       taktAgent.handleSessionPrompt(params))

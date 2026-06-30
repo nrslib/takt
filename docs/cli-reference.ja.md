@@ -117,7 +117,7 @@ takt-acp
 
 ACP session の `cwd` は絶対パスである必要があります。TAKT はこのディレクトリを会話の基点かつ workflow project root として扱い、CLI と同じ application-level workflow API 経由で workflow を実行します。会話結果が workflow を明示しない場合は `default` workflow を使います。
 
-`session/new` には `mcpServers` が必須です。空の `mcpServers: []` は受理されます。stdio MCP server は workflow 実行へ渡されますが、step の実効 provider が MCP server に非対応の場合、TAKT は実行前に fail fast します。stdio 以外の MCP transport と重複した MCP server 名は session 作成時に拒否されます。
+`session/new` は `mcpServers` を省略できます。省略または空の `mcpServers: []` は MCP server なしとして扱われます。stdio MCP server は workflow 実行へ渡されますが、step の実効 provider が MCP server に非対応の場合、TAKT は実行前に fail fast します。stdio 以外の MCP transport、重複した MCP server 名、trim 後に重複する MCP env 名は session 作成時に拒否されます。
 
 現在対応しているのは `initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` 通知です。`additionalDirectories` capability は宣言しておらず、非空の `additionalDirectories` を含むリクエストは拒否されます。
 
