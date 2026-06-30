@@ -4,7 +4,7 @@ import {
   itSerialTestGlobs,
   itTestGlobs,
   parallelSrcRunnerConfig,
-} from './vitest.config.shared';
+} from './vitest.config.shared.js';
 
 export default defineConfig({
   test: {

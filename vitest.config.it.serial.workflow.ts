@@ -3,7 +3,7 @@ import {
   commonSrcTestConfig,
   itSerialWorkflowLoaderTestGlobs,
   serialSrcRunnerConfig,
-} from './vitest.config.shared';
+} from './vitest.config.shared.js';
 
 export default defineConfig({
   test: {

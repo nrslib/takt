@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mockE2eShards, mockE2eSpecs } from '../vitest.config.e2e.mock-specs.mjs';
 
@@ -27,6 +28,50 @@ const vitestOptionsWithValue = new Set([
 ]);
 
 mkdirSync(resolve(repoRoot, 'e2e/results'), { recursive: true });
+
+function copyBaseEnv() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) =>
+      !key.startsWith('TAKT_') &&
+      ![
+        'HOME',
+        'XDG_CACHE_HOME',
+        'XDG_CONFIG_HOME',
+        'XDG_STATE_HOME',
+      ].includes(key)
+    )
+  );
+}
+
+function createShardEnv(shardNumber) {
+  const baseDir = mkdtempSync(join(tmpdir(), `takt-e2e-mock-shard-${shardNumber}-`));
+  const homeDir = join(baseDir, 'home');
+  const configDir = join(baseDir, 'xdg-config');
+  const cacheDir = join(baseDir, 'xdg-cache');
+  const stateDir = join(baseDir, 'xdg-state');
+  const taktDir = join(baseDir, '.takt');
+  const tmpDir = join(baseDir, 'tmp');
+
+  for (const dir of [homeDir, configDir, cacheDir, stateDir, taktDir, tmpDir]) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  return {
+    env: {
+      ...copyBaseEnv(),
+      HOME: homeDir,
+      XDG_CONFIG_HOME: configDir,
+      XDG_CACHE_HOME: cacheDir,
+      XDG_STATE_HOME: stateDir,
+      TMPDIR: tmpDir,
+      TAKT_CONFIG_DIR: taktDir,
+      TAKT_E2E_PROVIDER: 'mock',
+      TAKT_NO_TTY: '1',
+      GIT_TERMINAL_PROMPT: '0',
+    },
+    cleanup: () => rmSync(baseDir, { recursive: true, force: true }),
+  };
+}
 
 function splitPassthroughArgs(args) {
   const vitestArgs = [];
@@ -109,6 +154,7 @@ function runShard(files, index) {
 
   return new Promise((resolveResult) => {
     const shardNumber = index + 1;
+    const shardEnv = createShardEnv(shardNumber);
     const args = [
       vitestBin,
       'run',
@@ -119,17 +165,24 @@ function runShard(files, index) {
       ...vitestArgs,
     ];
 
+    let finished = false;
+    const finish = (result) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      shardEnv.cleanup();
+      resolveResult(result);
+    };
+
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        TAKT_E2E_PROVIDER: 'mock',
-      },
+      env: shardEnv.env,
       stdio: 'inherit',
     });
 
     child.on('exit', (code, signal) => {
-      resolveResult({
+      finish({
         shardNumber,
         code: code ?? 1,
         signal,
@@ -138,7 +191,7 @@ function runShard(files, index) {
 
     child.on('error', (error) => {
       console.error(`[takt] Failed to start E2E mock shard ${shardNumber}: ${error.message}`);
-      resolveResult({
+      finish({
         shardNumber,
         code: 1,
         signal: null,
