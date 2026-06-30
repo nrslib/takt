@@ -11,8 +11,10 @@ git clone https://github.com/your-username/takt.git
 cd takt
 npm install
 npm run build
-npm test
 npm run lint
+npm test
+npm run test:it
+npm run test:e2e:mock
 ```
 
 If you use Nix flakes, `nix develop` opens a shell with the project Node.js runtime and Bun available:
@@ -38,6 +40,8 @@ Large refactoring or feature additions without prior discussion are difficult to
 npm run build
 npm run lint
 npm test
+npm run test:it
+npm run test:e2e:mock
 ```
 
 ### 2. Run a TAKT review (recommended)
