@@ -26,6 +26,13 @@ class ReportPhaseToolCallError extends Error {
   }
 }
 
+export class ReportPhaseGenerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReportPhaseGenerationError';
+  }
+}
+
 /**
  * Phase 2: Report output.
  * Resumes the agent session with no tools to request report content.
@@ -105,7 +112,7 @@ export async function runReportPhase(
     }
 
     if (!hasLastResponse) {
-      throw new Error(`Report phase failed for ${fileName}: ${firstAttempt.errorMessage}`);
+      throw new ReportPhaseGenerationError(`Report phase failed for ${fileName}: ${firstAttempt.errorMessage}`);
     }
 
     const retryInstruction = new ReportInstructionBuilder(step, {
@@ -151,7 +158,7 @@ export async function runReportPhase(
 
     const fallbackOptions = buildFallbackReportOptions(step, fallbackBaseOptions, ctx);
     if (fallbackOptions === undefined) {
-      throw new Error(`Report phase failed for ${fileName}: ${retryFailure.errorMessage}`);
+      throw new ReportPhaseGenerationError(`Report phase failed for ${fileName}: ${retryFailure.errorMessage}`);
     }
 
     log.info('Report phase failed, falling back to report provider', {
@@ -176,7 +183,7 @@ export async function runReportPhase(
       return { rateLimited: true, response: fallbackAttempt.response };
     }
     if (fallbackAttempt.kind === 'retryable_failure') {
-      throw new Error(`Report phase failed for ${fileName}: ${fallbackAttempt.errorMessage}`);
+      throw new ReportPhaseGenerationError(`Report phase failed for ${fileName}: ${fallbackAttempt.errorMessage}`);
     }
 
     writeReportFile(ctx.reportDir, fileName, fallbackAttempt.content);

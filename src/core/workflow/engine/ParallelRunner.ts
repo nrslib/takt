@@ -15,7 +15,7 @@ import type {
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
-import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
+import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementStepIteration } from './state-manager.js';
@@ -308,23 +308,36 @@ export class ParallelRunner {
 
         // Phase 2: report output for sub-step
         if (subStep.outputContracts && subStep.outputContracts.length > 0) {
-          const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
-          if (reportResult && 'blocked' in reportResult) {
-            const blockedResponse: AgentResponse = {
-              ...subResponse,
-              status: 'blocked',
-              content: reportResult.response.content,
-            };
-            state.stepOutputs.set(subStep.name, blockedResponse);
-            return { subStep, response: blockedResponse, instruction: phase1Instruction, providerInfo: subPm };
-          }
-          if (reportResult && 'rateLimited' in reportResult) {
-            const rateLimitedResponse: AgentResponse = {
-              ...reportResult.response,
-              persona: subStep.name,
-            };
-            state.stepOutputs.set(subStep.name, rateLimitedResponse);
-            return { subStep, response: rateLimitedResponse, instruction: phase1Instruction, providerInfo: subPm };
+          try {
+            const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
+            if (reportResult && 'blocked' in reportResult) {
+              const blockedResponse: AgentResponse = {
+                ...subResponse,
+                status: 'blocked',
+                content: reportResult.response.content,
+              };
+              state.stepOutputs.set(subStep.name, blockedResponse);
+              return { subStep, response: blockedResponse, instruction: phase1Instruction, providerInfo: subPm };
+            }
+            if (reportResult && 'rateLimited' in reportResult) {
+              const rateLimitedResponse: AgentResponse = {
+                ...reportResult.response,
+                persona: subStep.name,
+              };
+              state.stepOutputs.set(subStep.name, rateLimitedResponse);
+              return { subStep, response: rateLimitedResponse, instruction: phase1Instruction, providerInfo: subPm };
+            }
+          } catch (reportError) {
+            if (reportError instanceof ReportPhaseGenerationError) {
+              const errorMsg = getErrorMessage(reportError);
+              log.info('Report phase failed for parallel sub-step, continuing to status judgment', {
+                step: subStep.name,
+                error: errorMsg,
+              });
+              this.deps.onPhaseComplete?.(subStep, 2, 'report', '', 'error', errorMsg, undefined, parentIteration);
+            } else {
+              throw reportError;
+            }
           }
         }
 

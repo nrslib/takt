@@ -10,7 +10,7 @@ import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } f
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { hasTagBasedRules } from './evaluation/rule-utils.js';
 import type { FindingContractInstructionContext } from './instruction/instruction-context.js';
-export { runReportPhase, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
+export { runReportPhase, ReportPhaseGenerationError, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
 export interface BasePhaseRunnerContext {

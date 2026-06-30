@@ -19,7 +19,7 @@ import type {
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepRunResult } from '../types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
+import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
@@ -450,16 +450,29 @@ export class StepExecutor {
     // Phase 2: report output (resume same session, Write only)
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
-      const reportResult = await runReportPhase(step, stepIteration, phaseCtx);
-      if (reportResult && 'blocked' in reportResult) {
-        nextResponse = { ...nextResponse, status: 'blocked', content: reportResult.response.content };
-        return nextResponse;
-      }
-      if (reportResult && 'rateLimited' in reportResult) {
-        return {
-          ...reportResult.response,
-          persona: step.name,
-        };
+      try {
+        const reportResult = await runReportPhase(step, stepIteration, phaseCtx);
+        if (reportResult && 'blocked' in reportResult) {
+          nextResponse = { ...nextResponse, status: 'blocked', content: reportResult.response.content };
+          return nextResponse;
+        }
+        if (reportResult && 'rateLimited' in reportResult) {
+          return {
+            ...reportResult.response,
+            persona: step.name,
+          };
+        }
+      } catch (reportError) {
+        if (reportError instanceof ReportPhaseGenerationError) {
+          const errorMsg = getErrorMessage(reportError);
+          log.info('Report phase failed, continuing to status judgment', {
+            step: step.name,
+            error: errorMsg,
+          });
+          this.deps.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, undefined, state.iteration);
+        } else {
+          throw reportError;
+        }
       }
     }
 
@@ -596,6 +609,13 @@ export class StepExecutor {
       updatePersonaSession(sessionKey, response.sessionId);
     }
     this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error, phaseExecutionId, state.iteration);
+
+    // Empty output with done status is treated as an error to prevent
+    // downstream phases from running with no content.
+    if (response.status === 'done' && response.content.trim().length === 0) {
+      log.info('Phase 1 returned empty output, treating as error', { step: step.name });
+      response = { ...response, status: 'error', error: 'Phase 1 returned empty output' };
+    }
 
     // Provider failures should abort immediately.
     if (response.status === 'error' || response.status === 'rate_limited') {
