@@ -2,7 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
+
+const { infoSpy } = vi.hoisted(() => ({
+  infoSpy: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: vi.fn(() => ({
+    debug: vi.fn(),
+    info: infoSpy,
+    error: vi.fn(),
+    trace: vi.fn(),
+    enter: vi.fn(),
+    exit: vi.fn(),
+  })),
+}));
+
+import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 
@@ -30,11 +47,18 @@ function createContext(
   reportDir: string,
   lastResponse?: string,
   initialSessionId?: string,
-): PhaseRunnerContext {
+  providers: {
+    primaryProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
+    fallbackProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
+    fallbackModel?: string;
+  } = {},
+): ReportPhaseRunnerContext {
   const currentLastResponse = arguments.length >= 2 ? lastResponse : 'Phase 1 result';
   let currentSessionId = arguments.length >= 3 ? initialSessionId : 'session-resume-1';
+  const primaryProvider = providers.primaryProvider ?? 'opencode';
+  const fallbackProvider = providers.fallbackProvider ?? 'claude';
 
-  return {
+  const context = {
     cwd: reportDir,
     reportDir,
     language: 'en',
@@ -43,21 +67,48 @@ function createContext(
     getSessionId: (_persona: string) => currentSessionId,
     buildResumeOptions: (_step, sessionId, overrides) => ({
       cwd: reportDir,
+      resolvedProvider: primaryProvider,
       sessionId,
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
     }),
     buildNewSessionReportOptions: (_step, overrides) => ({
       cwd: reportDir,
+      resolvedProvider: primaryProvider,
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
     }),
+    buildFallbackReportOptions: (_step, failedPrimaryOptions, overrides) => {
+      if (failedPrimaryOptions.resolvedProvider !== 'opencode' || fallbackProvider === failedPrimaryOptions.resolvedProvider) {
+        return undefined;
+      }
+
+      return {
+        cwd: reportDir,
+        permissionMode: 'readonly',
+        resolvedProvider: fallbackProvider,
+        resolvedModel: providers.fallbackModel,
+        sessionId: undefined,
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      };
+    },
     updatePersonaSession: (_persona, sessionId) => {
-      if (sessionId) {
+      if (sessionId === undefined) {
+        currentSessionId = undefined;
+      } else {
         currentSessionId = sessionId;
       }
     },
+    resolveReportFallbackProviderModel: () => ({
+      provider: fallbackProvider,
+      model: providers.fallbackModel,
+    }),
+    resolveStepProviderModel: (_step) => ({
+      provider: primaryProvider,
+    }),
   };
+  return context;
 }
 
 function queueRunAgentResponses(responses: AgentResponse[]): void {
@@ -97,6 +148,7 @@ describe('runReportPhase retry with new session', () => {
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'takt-report-retry-'));
     vi.resetAllMocks();
+    infoSpy.mockClear();
   });
 
   afterEach(() => {
@@ -243,11 +295,82 @@ describe('runReportPhase retry with new session', () => {
     expect(retryOptions.sessionId).toBeUndefined();
   });
 
-  it('should fail with a clear error when report phase retry also emits a tool call', async () => {
+  it('should clear the old resume session when a new-session retry succeeds without returning a sessionId', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step: WorkflowStep = {
+      ...createStep('03-retry-clear-first.md'),
+      outputContracts: [{ name: '03-retry-clear-first.md' }, { name: '03-retry-clear-second.md' }],
+    };
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    const freshAttempts: string[] = [];
+    let savedSessionId: string | undefined = 'session-resume-1';
+    const originalBuildNewSessionReportOptions = ctx.buildNewSessionReportOptions;
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+      savedSessionId = sessionId;
+    };
+    ctx.getSessionId = () => savedSessionId;
+    ctx.buildNewSessionReportOptions = (currentStep, overrides) => {
+      freshAttempts.push(currentStep.name);
+      return originalBuildNewSessionReportOptions(currentStep, overrides);
+    };
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-1' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nFirst attempt with tool call',
+          timestamp: new Date('2026-02-11T00:01:20Z'),
+          sessionId: 'session-resume-2',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRetry report without session id',
+          timestamp: new Date('2026-02-11T00:01:21Z'),
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nSecond report from fresh session',
+          timestamp: new Date('2026-02-11T00:01:22Z'),
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(sessionUpdates).toEqual([{ key: 'coder', sessionId: undefined }]);
+    expect(freshAttempts).toEqual(['implement', 'implement']);
+    expect(readFileSync(join(reportDir, '03-retry-clear-first.md'), 'utf-8')).toBe('# Report\nRetry report without session id');
+    expect(readFileSync(join(reportDir, '03-retry-clear-second.md'), 'utf-8')).toBe('# Report\nSecond report from fresh session');
+
+    const secondFileOptions = runAgentMock.mock.calls[2]?.[2] as { sessionId?: string };
+    expect(secondFileOptions.sessionId).toBeUndefined();
+  });
+
+  it('should fall back to Claude when report phase retry also emits a tool call', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-opencode-loop.md');
     const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+    };
     queueRunAgentAttempts([
       {
         streamEvents: [{
@@ -273,15 +396,318 @@ describe('runReportPhase retry with new session', () => {
           timestamp: new Date('2026-02-11T00:01:21Z'),
         },
       },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRecovered by Claude fallback',
+          timestamp: new Date('2026-02-11T00:01:22Z'),
+          sessionId: 'claude-fallback-session',
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    const result = await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(result).toBeUndefined();
+    expect(readFileSync(join(reportDir, '03-opencode-loop.md'), 'utf-8')).toBe('# Report\nRecovered by Claude fallback');
+    expect(runAgentMock).toHaveBeenCalledTimes(3);
+    expect(sessionUpdates).toEqual([]);
+
+    const fallbackInstruction = runAgentMock.mock.calls[2]?.[1] as string;
+    expect(fallbackInstruction).toContain('Implemented feature X');
+
+    const fallbackOptions = runAgentMock.mock.calls[2]?.[2] as {
+      allowedTools?: string[];
+      maxTurns?: number;
+      permissionMode?: string;
+      resolvedProvider?: string;
+      resolvedModel?: string;
+      sessionId?: string;
+    };
+    expect(fallbackOptions).toMatchObject({
+      allowedTools: [],
+      maxTurns: 3,
+      permissionMode: 'readonly',
+      resolvedProvider: 'claude',
+      sessionId: undefined,
+    });
+    expect(fallbackOptions.resolvedModel).toBeUndefined();
+  });
+
+  it('should resume the next report file with the primary session after a fallback report succeeds', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step: WorkflowStep = {
+      ...createStep('03-first.md'),
+      outputContracts: [{ name: '03-first.md' }, { name: '03-second.md' }],
+    };
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+    };
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-1' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nFirst attempt must not be written',
+          timestamp: new Date('2026-02-11T00:01:22Z'),
+        },
+      },
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-2' },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRetry attempt must not be written',
+          timestamp: new Date('2026-02-11T00:01:23Z'),
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nRecovered by Claude fallback',
+          timestamp: new Date('2026-02-11T00:01:24Z'),
+          sessionId: 'claude-fallback-session',
+        },
+      },
+      {
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nSecond file from primary session',
+          timestamp: new Date('2026-02-11T00:01:25Z'),
+          sessionId: 'opencode-session-after-second-file',
+        },
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(readFileSync(join(reportDir, '03-first.md'), 'utf-8')).toBe('# Report\nRecovered by Claude fallback');
+    expect(readFileSync(join(reportDir, '03-second.md'), 'utf-8')).toBe('# Report\nSecond file from primary session');
+    expect(runAgentMock).toHaveBeenCalledTimes(4);
+    expect(sessionUpdates).toEqual([
+      { key: 'coder', sessionId: 'opencode-session-after-second-file' },
+    ]);
+
+    const fallbackOptions = runAgentMock.mock.calls[2]?.[2] as { resolvedProvider?: string; sessionId?: string };
+    expect(fallbackOptions.resolvedProvider).toBe('claude');
+    expect(fallbackOptions.sessionId).toBeUndefined();
+
+    const secondFileOptions = runAgentMock.mock.calls[3]?.[2] as { resolvedProvider?: string; sessionId?: string };
+    expect(secondFileOptions.resolvedProvider).toBe('opencode');
+    expect(secondFileOptions.sessionId).toBe('session-resume-1');
+  });
+
+  it('should log only classified retry failure reasons when fallback succeeds', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-redacted-fallback-log.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const phaseComplete = vi.fn();
+    ctx.onPhaseComplete = phaseComplete;
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '   ',
+        timestamp: new Date('2026-02-11T00:01:23Z'),
+      },
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'SECRET_TOKEN=abc123 from retry content',
+        timestamp: new Date('2026-02-11T00:01:24Z'),
+        error: 'SECRET_TOKEN=abc123 from retry error',
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '# Report\nRecovered by fallback',
+        timestamp: new Date('2026-02-11T00:01:25Z'),
+      },
+    ]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    const infoPayload = JSON.stringify(infoSpy.mock.calls);
+    expect(infoPayload).not.toContain('SECRET_TOKEN');
+    const phaseCompletePayload = JSON.stringify(phaseComplete.mock.calls);
+    expect(phaseCompletePayload).not.toContain('SECRET_TOKEN');
+    expect(phaseComplete).toHaveBeenNthCalledWith(
+      2,
+      step,
+      2,
+      'report',
+      '',
+      'error',
+      'Report phase provider returned status "error"',
+      undefined,
+      undefined,
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      'Report phase failed, retrying with new session',
+      expect.objectContaining({ reason: 'empty_output' }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      'Report phase failed, falling back to report provider',
+      expect.objectContaining({ reason: 'provider_error' }),
+    );
+  });
+
+  it('should throw the fallback error when Claude fallback also fails', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-fallback-failed.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '   ',
+        timestamp: new Date('2026-02-11T00:01:23Z'),
+      },
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'Tool use is not allowed in this phase',
+        timestamp: new Date('2026-02-11T00:01:24Z'),
+        error: 'Tool use is not allowed in this phase',
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '\n\n',
+        timestamp: new Date('2026-02-11T00:01:25Z'),
+      },
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
     // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
-      'Report phase failed for 03-opencode-loop.md: Report phase does not allow tool calls, but provider emitted tool "run".',
+      'Report phase failed for 03-fallback-failed.md: Report output is empty',
     );
-    expect(runAgentMock).toHaveBeenCalledTimes(2);
-    expect(existsSync(join(reportDir, '03-opencode-loop.md'))).toBe(false);
+    expect(runAgentMock).toHaveBeenCalledTimes(3);
+    expect(existsSync(join(reportDir, '03-fallback-failed.md'))).toBe(false);
+  });
+
+  it('should return blocked when Claude fallback is blocked', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-fallback-blocked.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+    };
+    const blockedResponse: AgentResponse = {
+      persona: 'coder',
+      status: 'blocked',
+      content: 'Need permission',
+      timestamp: new Date('2026-02-11T00:01:26Z'),
+    };
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '   ',
+        timestamp: new Date('2026-02-11T00:01:23Z'),
+      },
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'Tool use is not allowed in this phase',
+        timestamp: new Date('2026-02-11T00:01:24Z'),
+        error: 'Tool use is not allowed in this phase',
+      },
+      blockedResponse,
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    const result = await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(result).toEqual({ blocked: true, response: blockedResponse });
+    expect(runAgentMock).toHaveBeenCalledTimes(3);
+    expect(existsSync(join(reportDir, '03-fallback-blocked.md'))).toBe(false);
+    expect(sessionUpdates).toEqual([]);
+    expect(runAgentMock.mock.calls[2]?.[2]).toEqual(expect.objectContaining({
+      resolvedProvider: 'claude',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      sessionId: undefined,
+    }));
+  });
+
+  it('should return rate_limited when Claude fallback is rate limited', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-fallback-rate-limited.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+    };
+    const rateLimitedResponse: AgentResponse = {
+      persona: 'coder',
+      status: 'rate_limited',
+      content: '',
+      timestamp: new Date('2026-02-11T00:01:29Z'),
+      error: RATE_LIMIT_MESSAGE,
+      errorKind: 'rate_limit',
+    };
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '   ',
+        timestamp: new Date('2026-02-11T00:01:27Z'),
+      },
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'Tool use is not allowed in this phase',
+        timestamp: new Date('2026-02-11T00:01:28Z'),
+        error: 'Tool use is not allowed in this phase',
+      },
+      rateLimitedResponse,
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    const result = await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(result).toEqual({ rateLimited: true, response: rateLimitedResponse });
+    expect(runAgentMock).toHaveBeenCalledTimes(3);
+    expect(existsSync(join(reportDir, '03-fallback-rate-limited.md'))).toBe(false);
+    expect(sessionUpdates).toEqual([]);
+    expect(runAgentMock.mock.calls[2]?.[2]).toEqual(expect.objectContaining({
+      resolvedProvider: 'claude',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      sessionId: undefined,
+    }));
   });
 
   it('should fail report phase attempt when provider emits an unavailable tool result', async () => {
@@ -308,6 +734,21 @@ describe('runReportPhase retry with new session', () => {
           timestamp: new Date('2026-02-11T00:01:30Z'),
         },
       },
+      {
+        streamEvents: [{
+          type: 'tool_result',
+          data: {
+            content: rawToolResult,
+            isError: true,
+          },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nFallback should not be written',
+          timestamp: new Date('2026-02-11T00:01:31Z'),
+        },
+      },
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
@@ -325,7 +766,7 @@ describe('runReportPhase retry with new session', () => {
     expect(errorMessage).toBe('Report phase failed for 03-unavailable-tool.md: Report phase does not allow tool results.');
     expect(errorMessage).not.toContain(rawToolResult);
     expect(onStream).not.toHaveBeenCalled();
-    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
     expect(existsSync(join(reportDir, '03-unavailable-tool.md'))).toBe(false);
   });
 
@@ -355,6 +796,21 @@ describe('runReportPhase retry with new session', () => {
           status: 'done',
           content: '# Report\nShould not be written',
           timestamp: new Date('2026-02-11T00:01:32Z'),
+        },
+      },
+      {
+        streamEvents: [{
+          type: 'tool_result',
+          data: {
+            content: rawToolResult,
+            isError: true,
+          },
+        }],
+        response: {
+          persona: 'coder',
+          status: 'done',
+          content: '# Report\nFallback should not be written',
+          timestamp: new Date('2026-02-11T00:01:33Z'),
         },
       },
     ]);
@@ -415,6 +871,25 @@ describe('runReportPhase retry with new session', () => {
         status: 'done',
         content: rawResponseContent,
         timestamp: new Date('2026-02-11T00:01:33Z'),
+      };
+    });
+    vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      options?.onStream?.({
+        type: 'tool_result',
+        data: {
+          content: rawToolResult,
+          isError: true,
+        },
+      });
+      return {
+        persona: 'coder',
+        status: 'done',
+        content: rawResponseContent,
+        timestamp: new Date('2026-02-11T00:01:34Z'),
       };
     });
 
@@ -552,7 +1027,7 @@ describe('runReportPhase retry with new session', () => {
     expect(retryOptions.sessionId).toBeUndefined();
   });
 
-  it('should throw when both attempts return empty output', async () => {
+  it('should fall back to Claude when both primary report attempts return empty output', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
@@ -570,12 +1045,92 @@ describe('runReportPhase retry with new session', () => {
         content: '\n\n',
         timestamp: new Date('2026-02-11T00:02:01Z'),
       },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'Recovered report from fallback',
+        timestamp: new Date('2026-02-11T00:02:02Z'),
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When
+    const result = await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(result).toBeUndefined();
+    expect(readFileSync(join(reportDir, '04-qa.md'), 'utf-8')).toBe('Recovered report from fallback');
+    expect(runAgentMock).toHaveBeenCalledTimes(3);
+    const fallbackOptions = runAgentMock.mock.calls[2]?.[2];
+    expect(fallbackOptions).toEqual(expect.objectContaining({
+      resolvedProvider: 'claude',
+      allowedTools: [],
+      sessionId: undefined,
+    }));
+  });
+
+  it('should not fall back when the retry provider is not OpenCode', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('04-non-opencode.md');
+    const ctx = createContext(reportDir, 'Sensitive Phase 1 output', 'session-resume-1', {
+      primaryProvider: 'codex',
+      fallbackProvider: 'claude',
+    });
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'done',
+        content: ' ',
+        timestamp: new Date('2026-02-11T00:02:03Z'),
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '\n\n',
+        timestamp: new Date('2026-02-11T00:02:04Z'),
+      },
     ]);
     const runAgentMock = vi.mocked(runAgent);
 
     // When / Then
-    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow('Report phase failed for 04-qa.md: Report output is empty');
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
+      'Report phase failed for 04-non-opencode.md: Report output is empty',
+    );
     expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(existsSync(join(reportDir, '04-non-opencode.md'))).toBe(false);
+  });
+
+  it('should not fall back when the fallback provider matches OpenCode primary provider', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('04-same-provider.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1', {
+      primaryProvider: 'opencode',
+      fallbackProvider: 'opencode',
+    });
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'done',
+        content: ' ',
+        timestamp: new Date('2026-02-11T00:02:05Z'),
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '\n\n',
+        timestamp: new Date('2026-02-11T00:02:06Z'),
+      },
+    ]);
+    const runAgentMock = vi.mocked(runAgent);
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
+      'Report phase failed for 04-same-provider.md: Report output is empty',
+    );
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(existsSync(join(reportDir, '04-same-provider.md'))).toBe(false);
   });
 
   it('should fail immediately without retry when resumed session errors and lastResponse is unavailable', async () => {
@@ -698,7 +1253,7 @@ describe('runReportPhase retry with new session', () => {
     expect(runAgentMock).not.toHaveBeenCalled();
   });
 
-  it('should fail immediately without retry when new-session first attempt returns empty output', async () => {
+  it('should fall back to Claude when no-session first attempt returns empty output', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
@@ -708,17 +1263,30 @@ describe('runReportPhase retry with new session', () => {
       status: 'done',
       content: '   ',
       timestamp: new Date('2026-02-11T00:02:45Z'),
+    }, {
+      persona: 'coder',
+      status: 'done',
+      content: 'Recovered report without resumed session',
+      timestamp: new Date('2026-02-11T00:02:46Z'),
     }]);
     const runAgentMock = vi.mocked(runAgent);
 
-    // When / Then
-    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
-      'Report phase failed for 04-qa.md: Report output is empty',
-    );
-    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(readFileSync(join(reportDir, '04-qa.md'), 'utf-8')).toBe('Recovered report without resumed session');
+    const fallbackOptions = runAgentMock.mock.calls[1]?.[2];
+    expect(fallbackOptions).toEqual(expect.objectContaining({
+      resolvedProvider: 'claude',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      sessionId: undefined,
+    }));
   });
 
-  it('should fail immediately without retry when new-session first attempt status is error', async () => {
+  it('should throw fallback error when no-session first attempt and fallback both fail', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('04-qa.md');
@@ -729,14 +1297,20 @@ describe('runReportPhase retry with new session', () => {
       content: 'Tool use is not allowed in this phase',
       timestamp: new Date('2026-02-11T00:02:50Z'),
       error: 'Tool use is not allowed in this phase',
+    }, {
+      persona: 'coder',
+      status: 'done',
+      content: ' ',
+      timestamp: new Date('2026-02-11T00:02:51Z'),
     }]);
     const runAgentMock = vi.mocked(runAgent);
 
     // When / Then
     await expect(runReportPhase(step, 1, ctx)).rejects.toThrow(
-      'Report phase failed for 04-qa.md: Tool use is not allowed in this phase',
+      'Report phase failed for 04-qa.md: Report output is empty',
     );
-    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(existsSync(join(reportDir, '04-qa.md'))).toBe(false);
   });
 
   it('should not retry when first attempt succeeds', async () => {
@@ -881,7 +1455,7 @@ describe('runReportPhase retry with new session', () => {
     ]);
     const updates: Array<{ key: string; sessionId: string | undefined }> = [];
     const resumedSessionIds: string[] = [];
-    const ctx: PhaseRunnerContext = {
+    const ctx: ReportPhaseRunnerContext = {
       cwd: reportDir,
       reportDir,
       language: 'en',
@@ -902,12 +1476,26 @@ describe('runReportPhase retry with new session', () => {
         allowedTools: overrides.allowedTools,
         maxTurns: overrides.maxTurns,
       }),
+      buildFallbackReportOptions: (_step, _failedPrimaryOptions, overrides) => ({
+        cwd: reportDir,
+        permissionMode: 'readonly',
+        resolvedProvider: 'claude',
+        sessionId: undefined,
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      }),
       updatePersonaSession: (key, sessionId) => {
         updates.push({ key, sessionId });
         if (sessionId) {
           sessions.set(key, sessionId);
         }
       },
+      resolveReportFallbackProviderModel: () => ({
+        provider: 'claude',
+      }),
+      resolveStepProviderModel: (_step) => ({
+        provider: 'opencode',
+      }),
     };
     queueRunAgentResponses([{
       persona: 'coder',

@@ -10,10 +10,10 @@ import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } f
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { hasTagBasedRules } from './evaluation/rule-utils.js';
 import type { FindingContractInstructionContext } from './instruction/instruction-context.js';
-export { runReportPhase, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
+export { runReportPhase, ReportPhaseGenerationError, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
-export interface PhaseRunnerContext {
+export interface BasePhaseRunnerContext {
   /** Working directory (agent work dir, may be a clone) */
   cwd: string;
   /** Report directory path */
@@ -36,27 +36,10 @@ export interface PhaseRunnerContext {
   getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  /** Stream callback for provider event logging */
+  onStream?: import('../../agents/types.js').StreamCallback;
   /** Parent workflow iteration for sub-step phase events */
   iteration?: number;
-  /** Get persona session ID */
-  getSessionId: (persona: string) => string | undefined;
-  /** Resolve the session key shared by Phase 1 and resume phases */
-  resolveSessionKey: (step: WorkflowStep) => string;
-  /** Build resume options for a step */
-  buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
-  /** Build options for report phase retry in a new session */
-  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
-  /** Update persona session after a phase run */
-  updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
-  /** Stream callback for provider event logging (passed to judgeStatus) */
-  onStream?: import('../../agents/types.js').StreamCallback;
-  /** Structured caller for phase 3 status judgment */
-  structuredCaller: StructuredCaller;
-  resolveStepProviderModel?: (step: WorkflowStep) => StepProviderInfo;
-  buildFindingContractInstructionContext?: (
-    step: WorkflowStep,
-    includeRawFindingsSchema: boolean,
-  ) => FindingContractInstructionContext | undefined;
   /** Callback for phase lifecycle logging */
   onPhaseStart?: (
     step: WorkflowStep,
@@ -78,6 +61,36 @@ export interface PhaseRunnerContext {
     phaseExecutionId?: string,
     iteration?: number,
   ) => void;
+}
+
+export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
+  /** Get persona session ID */
+  getSessionId: (persona: string) => string | undefined;
+  /** Resolve the session key shared by Phase 1 and resume phases */
+  resolveSessionKey: (step: WorkflowStep) => string;
+  /** Build resume options for a step */
+  buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
+  /** Build options for report phase retry in a new session */
+  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
+  buildFallbackReportOptions: (
+    step: WorkflowStep,
+    failedPrimaryOptions: RunAgentOptions,
+    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+  ) => RunAgentOptions | undefined;
+  resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
+  /** Update persona session after a phase run */
+  updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
+  buildFindingContractInstructionContext?: (
+    step: WorkflowStep,
+    includeRawFindingsSchema: boolean,
+  ) => FindingContractInstructionContext | undefined;
+  resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
+}
+
+export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
+  /** Structured caller for phase 3 status judgment */
+  structuredCaller: StructuredCaller;
+  resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
   /** Callback for Phase 3 internal stage logging */
   onJudgeStage?: (
     step: WorkflowStep,

@@ -4,8 +4,7 @@ import type { WorkflowStep, RuleMatchMethod } from '../models/types.js';
 import { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
 import { getJudgmentReportFiles } from './evaluation/rule-utils.js';
 import { createLogger } from '../../shared/utils/index.js';
-import type { PhaseRunnerContext } from './phase-runner.js';
-import type { StepProviderInfo } from './types.js';
+import type { StatusJudgmentPhaseContext } from './phase-runner.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { recordJudgeStageSpan, runWithPhaseSpan } from './observability/workflowSpans.js';
 
@@ -23,7 +22,7 @@ export interface StatusJudgmentPhaseResult {
  */
 function buildBaseContext(
   step: WorkflowStep,
-  ctx: PhaseRunnerContext,
+  ctx: StatusJudgmentPhaseContext,
 ): Omit<StatusJudgmentContext, 'structuredOutput'> | undefined {
   const reportFiles = getJudgmentReportFiles(step.outputContracts);
 
@@ -56,13 +55,6 @@ function buildBaseContext(
   };
 }
 
-function resolveStepProviderInfo(step: WorkflowStep, ctx: PhaseRunnerContext): StepProviderInfo {
-  if (!ctx.resolveStepProviderModel) {
-    throw new Error(`Status judgment requires provider resolution for step "${step.name}"`);
-  }
-  return ctx.resolveStepProviderModel(step);
-}
-
 /**
  * Phase 3: Status judgment.
  *
@@ -74,7 +66,7 @@ function resolveStepProviderInfo(step: WorkflowStep, ctx: PhaseRunnerContext): S
  */
 export async function runStatusJudgmentPhase(
   step: WorkflowStep,
-  ctx: PhaseRunnerContext,
+  ctx: StatusJudgmentPhaseContext,
 ): Promise<StatusJudgmentPhaseResult> {
   log.debug('Running status judgment phase', { step: step.name });
   if (!step.rules || step.rules.length === 0) {
@@ -121,7 +113,7 @@ export async function runStatusJudgmentPhase(
   }
 
   try {
-    const stepProvider = resolveStepProviderInfo(step, ctx);
+    const stepProvider = ctx.resolveStepProviderModel(step);
     const result = await runWithPhaseSpan(
       {
         enabled: ctx.observabilityEnabled === true,

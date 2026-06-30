@@ -169,10 +169,18 @@ setMockScenario([
 
 ## セッション管理
 
-エージェントセッションは cwd ごとに保存される。worktree/clone 実行時はセッション再開をスキップする。
+エージェントセッションは cwd と provider ごとに保存される。worktree/clone 実行時はセッション再開をスキップする。
+
+通常の Phase 1 応答で `sessionId` が欠落しているだけなら、既存セッションを直ちに破棄する根拠にはならない。既存の resume context を継続してよい経路では、古い sessionId を維持する。
+
+一方、明示的に新しいセッションとして実行した retry/fallback が成功した場合、応答に `sessionId` がなければ古い resumed session を使い続けてはならない。新規実行の結果として sessionId が得られなかったことを保存層へ伝え、古い session を clear または隔離する。
+
+Report Phase は Phase 1 の成果物を読む Phase 2 であり、readonly かつ tool-free の実行契約を持つ。report retry/fallback でも `permissionMode: readonly`、空の tool 許可、provider 能力 override（例: turn 上限）を落としてはならない。
 
 | 基準 | 判定 |
 |------|------|
 | `cwd !== projectCwd` でセッション再開している | REJECT |
 | セッションキーにプロバイダーが含まれない | REJECT（クロスプロバイダー汚染） |
-| Phase 間でセッションが切れている | REJECT（コンテキスト喪失） |
+| 継続すべき Phase 間でセッションが切れている | REJECT（コンテキスト喪失） |
+| 新規セッション retry 成功後に、古い resumed session を残している | REJECT（意図しない resume） |
+| report retry/fallback で readonly、tool-free、能力 override が落ちている | REJECT |

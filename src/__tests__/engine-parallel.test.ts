@@ -202,6 +202,63 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.personaSessions.has('coder:claude')).toBe(false);
   });
 
+  it('should keep an existing parallel sub-step session when the response omits sessionId', async () => {
+    const config = buildDefaultWorkflowConfig({
+      maxSteps: 1,
+      initialStep: 'reviewers',
+      steps: [
+        makeStep('reviewers', {
+          parallel: [
+            makeStep('api-review', {
+              persona: 'coder',
+              personaDisplayName: 'coder',
+              providerRoutingPersonaKey: 'coder',
+              tags: ['implementation'],
+              rules: [
+                makeRule('approved', 'COMPLETE'),
+              ],
+            }),
+          ],
+          rules: [
+            makeRule('all("approved")', 'COMPLETE', {
+              isAggregateCondition: true,
+              aggregateType: 'all',
+              aggregateConditionText: 'approved',
+            }),
+          ],
+        }),
+      ],
+    });
+    const onSessionUpdate = vi.fn();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      initialSessions: {
+        'coder:codex': 'existing-codex-session',
+      },
+      onSessionUpdate,
+      providerRouting: {
+        tags: {
+          implementation: { provider: 'codex', model: 'gpt-5' },
+        },
+      },
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'coder', content: 'approved', sessionId: undefined }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.personaSessions.get('coder:codex')).toBe('existing-codex-session');
+    expect(onSessionUpdate).not.toHaveBeenCalled();
+  });
+
   it('should return the parallel parent step when a sub-step command quality gate fails', async () => {
     const config = normalizeWorkflowConfigWithCommandGateOptIn({
       name: 'parallel-command-gate',

@@ -7,7 +7,7 @@ import type { TaskInfo } from '../infra/task/index.js';
 import type { ProviderPermissionProfiles } from '../core/models/provider-profiles.js';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
 
-const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
+const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, mockExecuteWorkflowForRun, mockLoadWorkflowByIdentifier, mockIsWorkflowPath, mockLoadProjectConfig, mockLoadGlobalConfig, mockResolveWorkflowConfigValues, mockResolveProviderOptionsWithTrace, mockBuildBooleanTaskResult, mockBuildTaskResult, mockPersistExceededTaskResult, mockPersistTaskResult, mockPersistPrFailedTaskResult, mockPersistTaskError, mockPostExecutionFlow, mockUpdateRunningTaskExecution } =
   vi.hoisted(() => ({
     mockResolveTaskExecution: vi.fn(),
     mockResolveTaskIssue: vi.fn(),
@@ -15,6 +15,8 @@ const { mockResolveTaskExecution, mockResolveTaskIssue, mockExecuteWorkflow, moc
     mockExecuteWorkflowForRun: vi.fn(),
     mockLoadWorkflowByIdentifier: vi.fn(),
     mockIsWorkflowPath: vi.fn(() => false),
+    mockLoadProjectConfig: vi.fn(),
+    mockLoadGlobalConfig: vi.fn(),
     mockResolveWorkflowConfigValues: vi.fn(),
     mockResolveProviderOptionsWithTrace: vi.fn(),
     mockBuildBooleanTaskResult: vi.fn(),
@@ -53,6 +55,8 @@ vi.mock('../features/tasks/execute/postExecution.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
   isWorkflowPath: (...args: unknown[]) => mockIsWorkflowPath(...args),
+  loadProjectConfig: (...args: unknown[]) => mockLoadProjectConfig(...args),
+  loadGlobalConfig: (...args: unknown[]) => mockLoadGlobalConfig(...args),
   resolveWorkflowConfigValues: (...args: unknown[]) => mockResolveWorkflowConfigValues(...args),
 }));
 
@@ -140,6 +144,16 @@ describe('executeAndCompleteTask', () => {
       notificationSoundEvents: {},
       concurrency: 1,
       taskPollIntervalMs: 500,
+    });
+    mockLoadProjectConfig.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      taktProviders: undefined,
+    });
+    mockLoadGlobalConfig.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      taktProviders: undefined,
     });
     mockResolveProviderOptionsWithTrace.mockReturnValue({
       value: {
@@ -256,6 +270,117 @@ describe('executeAndCompleteTask', () => {
       providerRouting?: unknown;
     };
     expect(workflowExecutionOptions?.providerRouting).toBe(providerRouting);
+  });
+
+  it('should pass assistant provider config as report fallback provider into executeWorkflow', async () => {
+    mockLoadProjectConfig.mockReturnValueOnce({
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+      taktProviders: {
+        assistant: {
+          provider: 'mock',
+          model: 'mock-report-model',
+        },
+      },
+    });
+    mockLoadGlobalConfig.mockReturnValueOnce({
+      provider: 'claude',
+      model: 'global-claude-model',
+      taktProviders: {
+        assistant: {
+          provider: 'codex',
+          model: 'global-codex-model',
+        },
+      },
+    });
+
+    await executeTask({
+      task: 'Task: report fallback provider',
+      cwd: '/project',
+      projectCwd: '/project',
+      workflowIdentifier: 'default',
+      agentOverrides: {
+        provider: 'opencode',
+        model: 'opencode/qwen3-coder-next',
+      },
+    });
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      reportFallbackProvider?: unknown;
+    };
+    expect(workflowExecutionOptions.reportFallbackProvider).toEqual({
+      provider: 'mock',
+      model: 'mock-report-model',
+    });
+  });
+
+  it('should pass global assistant provider config as report fallback provider when project assistant is absent', async () => {
+    mockLoadProjectConfig.mockReturnValueOnce({
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+      taktProviders: undefined,
+    });
+    mockLoadGlobalConfig.mockReturnValueOnce({
+      provider: 'claude',
+      model: 'global-claude-model',
+      taktProviders: {
+        assistant: {
+          provider: 'codex',
+          model: 'global-codex-report-model',
+        },
+      },
+    });
+
+    await executeTask({
+      task: 'Task: global report fallback provider',
+      cwd: '/project',
+      projectCwd: '/project',
+      workflowIdentifier: 'default',
+      agentOverrides: {
+        provider: 'opencode',
+        model: 'opencode/qwen3-coder-next',
+      },
+    });
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      reportFallbackProvider?: unknown;
+    };
+    expect(workflowExecutionOptions.reportFallbackProvider).toEqual({
+      provider: 'codex',
+      model: 'global-codex-report-model',
+    });
+  });
+
+  it('should not use top-level provider config as report fallback provider', async () => {
+    mockLoadProjectConfig.mockReturnValueOnce({
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+      taktProviders: undefined,
+    });
+    mockLoadGlobalConfig.mockReturnValueOnce({
+      provider: 'claude',
+      model: 'global-claude-model',
+      taktProviders: undefined,
+    });
+
+    await executeTask({
+      task: 'Task: no report fallback provider',
+      cwd: '/project',
+      projectCwd: '/project',
+      workflowIdentifier: 'default',
+      agentOverrides: {
+        provider: 'opencode',
+        model: 'opencode/qwen3-coder-next',
+      },
+    });
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      reportFallbackProvider?: unknown;
+    };
+    expect(workflowExecutionOptions.reportFallbackProvider).toBeUndefined();
   });
 
   it('should merge provider profile overrides with runtime defaults taking priority', async () => {

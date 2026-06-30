@@ -30,6 +30,20 @@ const result = await service.getUser('id')
 expect(result).toEqual(user)
 ```
 
+## Test Double Contract Fidelity
+
+When replacing builders, runners, adapters, providers, or similar dependencies with test doubles, match the production semantic contract, not only the TypeScript shape. A test double may simplify only responsibilities the target test does not observe.
+
+| Aspect | Check |
+|--------|-------|
+| Return value | Required values, optional values, missing values, and partial-success shapes match production |
+| Input propagation | Overrides, context, options, and other branch-relevant inputs can be received and verified |
+| Constraints | Permissions, capabilities, tool restrictions, and limits propagate with the same meaning as production |
+| Side effects | Session updates, event emission, persistence, and invalidation can be observed |
+| Simplification scope | Test names and expectations do not claim behavior the test double cannot prove |
+
+If a test double omits part of the production contract, the test should verify only behavior that does not depend on that omission. In tests for permission propagation, state transitions, or missing-value handling, omitted fields are themselves a common source of bugs.
+
 ## Boundary Value Analysis
 
 Boundary values and equivalence partitioning are fundamental unit testing techniques.

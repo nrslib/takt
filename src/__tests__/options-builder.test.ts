@@ -465,13 +465,15 @@ describe('OptionsBuilder.buildResumeOptions', () => {
   it('should enforce readonly permission and empty allowedTools for report/status phases', () => {
     // Given
     const step = createStep({ requiredPermissionMode: 'full' });
-    const builder = createBuilder(step);
+    const builder = createBuilder(step, { bypassPermissions: true });
 
     // When
     const options = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
 
     // Then
     expect(options.permissionMode).toBe('readonly');
+    expect(options.permissionResolution).toBeUndefined();
+    expect(options.bypassPermissions).toBeUndefined();
     expect(options.allowedTools).toEqual([]);
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(true);
     expect(options.maxTurns).toBe(3);
@@ -533,6 +535,25 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     expect(options.workflowMeta?.processSafety).toBeUndefined();
   });
 
+  it('should enforce readonly permission without provider profile escalation for new-session report phase', () => {
+    const step = createStep({ requiredPermissionMode: 'full' });
+    const builder = createBuilder(step, {
+      bypassPermissions: true,
+      providerProfiles: {
+        codex: { defaultPermissionMode: 'full' },
+      },
+    });
+
+    const options = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    expect(options.permissionMode).toBe('readonly');
+    expect(options.permissionResolution).toBeUndefined();
+    expect(options.bypassPermissions).toBeUndefined();
+  });
+
   it('removes new-session report phase maxTurns when provider does not support it', () => {
     const step = createStep({ provider: 'claude-terminal' });
     const builder = createBuilder(step);
@@ -561,6 +582,167 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     expect(options.allowedTools).toEqual([]);
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();
+  });
+});
+
+describe('OptionsBuilder.buildFallbackReportOptions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should build configured report fallback options without reusing the OpenCode model or session', () => {
+    // Given
+    const step = createStep({
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+      requiredPermissionMode: 'full',
+    });
+    const builder = createBuilder(step, {
+      bypassPermissions: true,
+      reportFallbackProvider: {
+        provider: 'mock',
+        model: 'mock-report-model',
+      },
+    });
+
+    // When
+    const options = builder.buildFallbackReportOptions(step, {
+      cwd: '/project',
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/qwen3-coder-next',
+    }, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    expect(options).toBeDefined();
+    if (options === undefined) {
+      throw new Error('Expected fallback report options');
+    }
+    expect(options.resolvedProvider).toBe('mock');
+    expect(options.resolvedModel).toBe('mock-report-model');
+    expect(options.sessionId).toBeUndefined();
+    expect(options.permissionMode).toBe('readonly');
+    expect(options.permissionResolution).toBeUndefined();
+    expect(options.bypassPermissions).toBeUndefined();
+    expect(options.allowedTools).toEqual([]);
+    expect(options.maxTurns).toBe(3);
+    expect('providerSource' in options).toBe(false);
+    expect('modelSource' in options).toBe(false);
+  });
+
+  it('should not build report fallback options when no report fallback provider is configured', () => {
+    // Given
+    const step = createStep({ provider: 'opencode', model: 'opencode/qwen3-coder-next' });
+    const builder = createBuilder(step);
+
+    // When
+    const options = builder.buildFallbackReportOptions(step, {
+      cwd: '/project',
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/qwen3-coder-next',
+    }, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    expect(options).toBeUndefined();
+  });
+
+  it('should not build report fallback options when the failed report provider is not OpenCode', () => {
+    // Given
+    const step = createStep({ provider: 'codex' });
+    const builder = createBuilder(step, {
+      reportFallbackProvider: {
+        provider: 'mock',
+        model: 'mock-report-model',
+      },
+    });
+
+    // When
+    const options = builder.buildFallbackReportOptions(step, {
+      cwd: '/project',
+      resolvedProvider: 'codex',
+    }, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    expect(options).toBeUndefined();
+  });
+
+  it('should not build report fallback options when fallback provider matches the failed primary provider', () => {
+    // Given
+    const step = createStep({ provider: 'opencode', model: 'opencode/qwen3-coder-next' });
+    const builder = createBuilder(step, {
+      reportFallbackProvider: {
+        provider: 'opencode',
+        model: 'opencode/report-model',
+      },
+    });
+
+    // When
+    const options = builder.buildFallbackReportOptions(step, {
+      cwd: '/project',
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/qwen3-coder-next',
+    }, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    expect(options).toBeUndefined();
+  });
+
+  it('should expose configured report fallback options through report phase context', () => {
+    // Given
+    const step = createStep({ provider: 'opencode', model: 'opencode/qwen3-coder-next' });
+    const builder = createBuilder(step, {
+      reportFallbackProvider: {
+        provider: 'codex',
+        model: 'gpt-5.1-mini',
+      },
+      structuredCaller: {
+        judgeStatus: vi.fn(),
+      },
+    });
+    const state = {
+      currentStep: step.name,
+      stepCount: 1,
+      history: [],
+      personaSessions: new Map<string, string>([
+        ['reviewers:opencode', 'opencode-session'],
+      ]),
+    };
+
+    // When
+    const ctx = builder.buildPhaseRunnerContext(state, 'Phase 1 response', vi.fn());
+    const options = ctx.buildFallbackReportOptions(step, {
+      cwd: '/project',
+      resolvedProvider: 'opencode',
+      resolvedModel: 'opencode/qwen3-coder-next',
+    }, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    expect(options).toBeDefined();
+    if (options === undefined) {
+      throw new Error('Expected fallback report options');
+    }
+    expect(options).toMatchObject({
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5.1-mini',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      maxTurns: 3,
+      sessionId: undefined,
+    });
   });
 });
 
@@ -635,7 +817,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
 
     const options = builder.buildAgentOptions(step);
 
-    expect(options.allowedTools).toEqual(['read', 'grep']);
+    expect(options.allowedTools).toEqual(['read', 'bash', ' Bash ', 'grep']);
   });
 
   it('silently drops claude allowedTools when configured for a non-claude provider', () => {

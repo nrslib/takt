@@ -1,11 +1,14 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { FacetType } from '../paths.js';
 import {
   getBuiltinFacetDir,
+  getGlobalConfigDir,
   getGlobalFacetDir,
+  getProjectConfigDir,
   getProjectFacetDir,
   getRepertoireFacetDir,
 } from '../paths.js';
+import { getLanguageResourcesDir } from '../../resources/index.js';
 import type { Language } from '../../../core/models/index.js';
 
 export interface FacetResolutionContext {
@@ -75,6 +78,27 @@ export function buildCandidateDirsWithPackage(
   dirs.push(getBuiltinFacetDir(context.lang, facetType));
 
   return dirs;
+}
+
+export function buildFacetsRoots(context: FacetResolutionContext): string[] {
+  const roots: string[] = [];
+
+  if (context.workflowDir && context.repertoireDir) {
+    const workflowBaseDir = normalizeWorkflowBaseDir(context.workflowDir);
+    const pkg = getPackageFromWorkflowDir(workflowBaseDir, context.repertoireDir);
+    if (pkg) {
+      const base = context.repertoireDir;
+      roots.push(join(base, `@${pkg.owner}`, pkg.repo, 'facets'));
+    }
+  }
+
+  if (context.projectDir) {
+    roots.push(join(getProjectConfigDir(context.projectDir), 'facets'));
+  }
+  roots.push(join(getGlobalConfigDir(), 'facets'));
+  roots.push(join(getLanguageResourcesDir(context.lang), 'facets'));
+
+  return roots;
 }
 
 export function getWorkflowBaseDir(workflowDir: string): string {

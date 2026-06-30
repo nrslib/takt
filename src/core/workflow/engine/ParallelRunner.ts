@@ -15,7 +15,7 @@ import type {
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
-import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
+import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementStepIteration } from './state-manager.js';
@@ -285,8 +285,18 @@ export class ParallelRunner {
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
         }
-        updatePersonaSession(subSessionKey, subResponse.sessionId);
+        if (subResponse.sessionId !== undefined) {
+          updatePersonaSession(subSessionKey, subResponse.sessionId);
+        }
         this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
+        if (
+          subResponse.status === 'done'
+          && subResponse.structuredOutput === undefined
+          && subResponse.content.trim().length === 0
+        ) {
+          log.info('Phase 1 returned empty output for parallel sub-step, treating as error', { step: subStep.name });
+          subResponse = { ...subResponse, status: 'error', error: 'Phase 1 returned empty output' };
+        }
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
           return { subStep, response: subResponse, instruction: phase1Instruction, providerInfo: subPm };
@@ -306,23 +316,34 @@ export class ParallelRunner {
 
         // Phase 2: report output for sub-step
         if (subStep.outputContracts && subStep.outputContracts.length > 0) {
-          const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
-          if (reportResult && 'blocked' in reportResult) {
-            const blockedResponse: AgentResponse = {
-              ...subResponse,
-              status: 'blocked',
-              content: reportResult.response.content,
-            };
-            state.stepOutputs.set(subStep.name, blockedResponse);
-            return { subStep, response: blockedResponse, instruction: phase1Instruction, providerInfo: subPm };
-          }
-          if (reportResult && 'rateLimited' in reportResult) {
-            const rateLimitedResponse: AgentResponse = {
-              ...reportResult.response,
-              persona: subStep.name,
-            };
-            state.stepOutputs.set(subStep.name, rateLimitedResponse);
-            return { subStep, response: rateLimitedResponse, instruction: phase1Instruction, providerInfo: subPm };
+          try {
+            const reportResult = await runReportPhase(subStep, subIteration, phaseCtx);
+            if (reportResult && 'blocked' in reportResult) {
+              const blockedResponse: AgentResponse = {
+                ...subResponse,
+                status: 'blocked',
+                content: reportResult.response.content,
+              };
+              state.stepOutputs.set(subStep.name, blockedResponse);
+              return { subStep, response: blockedResponse, instruction: phase1Instruction, providerInfo: subPm };
+            }
+            if (reportResult && 'rateLimited' in reportResult) {
+              const rateLimitedResponse: AgentResponse = {
+                ...reportResult.response,
+                persona: subStep.name,
+              };
+              state.stepOutputs.set(subStep.name, rateLimitedResponse);
+              return { subStep, response: rateLimitedResponse, instruction: phase1Instruction, providerInfo: subPm };
+            }
+          } catch (reportError) {
+            if (reportError instanceof ReportPhaseGenerationError) {
+              log.info('Report phase failed for parallel sub-step, continuing to status judgment', {
+                step: subStep.name,
+                error: getErrorMessage(reportError),
+              });
+            } else {
+              throw reportError;
+            }
           }
         }
 

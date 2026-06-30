@@ -14,8 +14,10 @@ import {
 import {
   assertAllowedPersonaPath,
 } from './workflowPersonaPathPolicy.js';
+import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
 import {
   buildCandidateDirsWithPackage,
+  buildFacetsRoots,
   getPackageFromWorkflowDir,
   getWorkflowBaseDir,
   type FacetResolutionContext,
@@ -496,6 +498,23 @@ export function resolveRefToContent(
   return resolveRefToContentWithSource(ref, resolvedMap, workflowDir, facetType, context)?.content;
 }
 
+function applyFacetIncludes(
+  resolved: ResolvedFacetContent | undefined,
+  context?: FacetResolutionContext,
+): ResolvedFacetContent | undefined {
+  if (!resolved || !context || !resolved.sourcePath) return resolved;
+  const facetsRoots = buildFacetsRoots(context);
+  const sourceLayerIndex = findSourceLayerIndex(resolved.sourcePath, facetsRoots);
+  const includeRoots = facetsRoots.slice(sourceLayerIndex ?? 0);
+  const { body } = expandFacetIncludes({
+    body: resolved.content,
+    facetsRoots: includeRoots,
+    repertoireDirs: [],
+    allowedRoots: includeRoots,
+  });
+  return body !== resolved.content ? { ...resolved, content: body } : resolved;
+}
+
 export function resolveRefToContentWithSource(
   ref: string,
   resolvedMap: ResolvedMapInput | undefined,
@@ -505,25 +524,25 @@ export function resolveRefToContentWithSource(
 ): ResolvedFacetContent | undefined {
   const mapped = resolvedMap?.[ref];
   if (mapped !== undefined) {
-    return expandFacetInheritance(toResolvedContent(mapped, facetType, ref), facetType, context);
+    return applyFacetIncludes(expandFacetInheritance(toResolvedContent(mapped, facetType, ref), facetType, context), context);
   }
 
   if (facetType && context && isScopeRef(ref) && context.repertoireDir) {
     const scopeRef = parseScopeRef(ref);
     const filePath = resolveScopeRef(scopeRef, facetType, context.repertoireDir);
     return existsSync(filePath)
-      ? expandFacetInheritance({
+      ? applyFacetIncludes(expandFacetInheritance({
           content: readScopedFacetFile(filePath, context),
           sourcePath: filePath,
           facetType,
           refName: ref,
-        }, facetType, context)
+        }, facetType, context), context)
       : undefined;
   }
 
   if (isResourcePath(ref)) {
     const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context);
-    return resource ? expandFacetInheritance(resource, facetType, context) : undefined;
+    return resource ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context) : undefined;
   }
 
   const candidateDirs = facetType && context
@@ -532,12 +551,12 @@ export function resolveRefToContentWithSource(
   if (candidateDirs) {
     const facetContent = resolveFacetFromCandidateDirs(ref, facetType!, candidateDirs, ref, context);
     if (facetContent !== undefined) {
-      return expandFacetInheritance(facetContent, facetType, context);
+      return applyFacetIncludes(expandFacetInheritance(facetContent, facetType, context), context);
     }
   }
 
   const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context);
-  return resource ? expandFacetInheritance(resource, facetType, context) : undefined;
+  return resource ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context) : undefined;
 }
 
 export function resolveRefList(

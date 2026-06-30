@@ -15,17 +15,22 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run build` | `tsc` plus copy of `src/shared/prompts/{en,ja}/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any of these copies breaks runtime resolution. |
 | `npm run watch` | TypeScript incremental build (no asset copy). |
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
-| `npm test` | Vitest unit suite under `src/__tests__/**/*.test.ts`. Single-thread, 15 s timeout, 5 s teardown — tests are not parallelism-safe. |
+| `npm test` | Fast unit gate. Excludes integration/regression/performance tests. |
+| `npm run test:unit:parallel` | Parallel unit slice (`vitest.config.unit.parallel.ts`). |
+| `npm run test:it` | Integration/regression/performance gate. Runs the parallel IT slice, then the audited serial Git and workflow-loader groups in parallel. |
+| `npm run test:it:parallel` | Parallel IT slice (`vitest.config.it.parallel.ts`). Excludes the audited serial groups. |
+| `npm run test:it:serial` | Runs serial Git and workflow-loader groups concurrently. Use `test:it:serial:git` or `test:it:serial:workflow` for one group. |
 | `npx vitest run src/__tests__/<file>.test.ts` | Run a single file. |
 | `npx vitest run -t "<pattern>"` | Run tests whose name matches `<pattern>`. |
-| `npm run test:e2e:mock` | E2E against the `mock` provider (`vitest.config.e2e.mock.ts`, 240 s timeout). Required when touching execution flow, CLI behavior, workflows, or config loading. |
+| `npm run test:e2e:smoke` | Fast mock-provider E2E smoke check for targeted local iteration. Not a TAKT quality gate. |
+| `npm run test:e2e:mock` | Full mock-provider E2E suite split into parallel shards. This is the TAKT quality gate. Use `test:e2e:mock:serial` for the legacy single-process run. |
 | `npm run test:e2e` | Wrapper around `test:e2e:mock` that also fails on `error connecting to api.github.com` in the output and emits a macOS notification. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
-| `npm run check:release` | Full pre-release gate: `build` + `lint` + `test` + `test:e2e:all`. Used in `.takt/config.yaml` quality_gates. |
+| `npm run check:release` | Full pre-release gate: `build` + `lint` + `test` + `test:it` + `test:e2e:all`. |
 
 ### Local quality gates
 
-`.takt/config.yaml` overrides the `implement`, `fix`, and `ai_fix` step gates to require `npm run build`, `npm run lint`, `npm test`, and `npm run test:e2e:mock` to pass before a TAKT step can complete. Run those four locally before pushing — the review workflow will block on them.
+`.takt/config.yaml` overrides the `implement`, `fix`, and `ai_fix` step gates to require `npm run build`, `npm run lint`, `npm test`, `npm run test:it`, and `npm run test:e2e:mock` to pass before a TAKT step can complete. Run `npm run check:release` when validating the full release path.
 
 ## CLI Surface
 
@@ -179,7 +184,7 @@ builtins/               Bundled defaults (read from dist/ at runtime)
 - ESM (`"type": "module"`). Import paths use `.js` extensions in `.ts` sources.
 - Strict TS with `noUncheckedIndexedAccess`. Node ≥ 18.19.
 - Zod v4 for runtime schemas (`src/core/models/schemas.ts`).
-- Unit tests under `src/__tests__/` (Vitest, single-thread). E2E specs under `e2e/`, with one vitest config per provider (`vitest.config.e2e.*.ts`).
+- Unit and integration tests live under `src/__tests__/` (Vitest). The default `npm test` is the fast unit gate; `npm run test:it` runs `it-*`, `*.integration.test.ts`, `*.regression.test.ts`, and `*.performance.test.ts`, with the audited Git and workflow-loader groups kept serial internally. E2E specs live under `e2e/`, with a smoke config plus one config per provider (`vitest.config.e2e.*.ts`).
 - `src/__tests__/test-setup.ts` clears `TAKT_CONFIG_DIR` and `TAKT_NOTIFY_WEBHOOK` per test — don't rely on inherited env in tests.
 
 ## Debugging

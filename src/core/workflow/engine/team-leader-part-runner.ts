@@ -129,7 +129,9 @@ export async function runTeamLeaderPart(
       error: result.error,
       providerUsage: result.providerUsage,
     }));
-    updatePersonaSession(buildTeamLeaderPartSessionKey(step, partStep, partProviderInfo.provider), response.sessionId);
+    if (response.sessionId !== undefined) {
+      updatePersonaSession(buildTeamLeaderPartSessionKey(step, partStep, partProviderInfo.provider), response.sessionId);
+    }
     return {
       part,
       providerInfo: partProviderInfo,

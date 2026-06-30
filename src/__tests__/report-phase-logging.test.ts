@@ -16,7 +16,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   })),
 }));
 
-import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 
 function createStep(): WorkflowStep {
@@ -30,8 +30,8 @@ function createStep(): WorkflowStep {
   };
 }
 
-function createContext(): PhaseRunnerContext {
-  return {
+function createContext(): ReportPhaseRunnerContext {
+  const context = {
     cwd: '/tmp/report-phase-logging',
     reportDir: '/tmp/report-phase-logging/reports',
     lastResponse: 'Phase 1 result',
@@ -39,8 +39,21 @@ function createContext(): PhaseRunnerContext {
     getSessionId: () => 'sensitive-session-token',
     buildResumeOptions: () => ({ cwd: '/tmp/report-phase-logging' }),
     buildNewSessionReportOptions: () => ({ cwd: '/tmp/report-phase-logging' }),
+    buildFallbackReportOptions: () => ({
+      cwd: '/tmp/report-phase-logging',
+      resolvedProvider: 'claude',
+      allowedTools: [],
+      sessionId: undefined,
+    }),
+    resolveReportFallbackProviderModel: () => ({
+      provider: 'claude',
+    }),
+    resolveStepProviderModel: () => ({
+      provider: 'opencode',
+    }),
     updatePersonaSession: () => {},
   };
+  return context;
 }
 
 describe('runReportPhase logging', () => {

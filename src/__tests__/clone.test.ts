@@ -74,6 +74,10 @@ import {
   createTempCloneForBranch,
   cleanupOrphanedClone,
 } from '../infra/task/clone.js';
+import {
+  fetchRemoteBranchIntoIsolatedClone,
+  fetchRemoteBranchIntoIsolatedCloneAbortable,
+} from '../infra/task/clone-exec.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockSpawn = vi.mocked(spawn);
@@ -864,6 +868,444 @@ describe('branchExists remote tracking branch fallback', () => {
 
     expect(checkoutCalls).toHaveLength(1);
     expect(checkoutCalls[0]).toEqual(['checkout', 'feature/remote-only']);
+  });
+
+  it('should detach HEAD before fetch when clone has the target branch checked out', () => {
+    const callOrder: string[] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        expect(cwd).toBe('/tmp/clone');
+        return Buffer.from('feature/checked-out\n');
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        expect(cwd).toBe('/tmp/clone');
+        callOrder.push('detach');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'fetch') {
+        callOrder.push('fetch');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    fetchRemoteBranchIntoIsolatedClone('/project', '/tmp/clone', 'feature/checked-out');
+
+    expect(callOrder).toEqual(['detach', 'fetch']);
+  });
+
+  it('should skip detach when clone HEAD is on a different branch', () => {
+    const callOrder: string[] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        expect(cwd).toBe('/tmp/clone');
+        return Buffer.from('main\n');
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        callOrder.push('detach');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'fetch') {
+        callOrder.push('fetch');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    fetchRemoteBranchIntoIsolatedClone('/project', '/tmp/clone', 'feature/other-branch');
+
+    expect(callOrder).toEqual(['fetch']);
+  });
+
+  it('should skip detach when HEAD is already detached (exit 1)', () => {
+    const callOrder: string[] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        const err = new Error('not a symbolic ref');
+        (err as Error & { status: number }).status = 1;
+        throw err;
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        callOrder.push('detach');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'fetch') {
+        callOrder.push('fetch');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    fetchRemoteBranchIntoIsolatedClone('/project', '/tmp/clone', 'feature/any');
+
+    expect(callOrder).toEqual(['fetch']);
+  });
+
+  it('should propagate symbolic-ref fatal error (exit 128) instead of treating as detached', () => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        const err = new Error('fatal: not a git repository');
+        (err as Error & { status: number }).status = 128;
+        throw err;
+      }
+
+      return Buffer.from('');
+    });
+
+    expect(() =>
+      fetchRemoteBranchIntoIsolatedClone('/project', '/tmp/clone', 'feature/any'),
+    ).toThrow('fatal: not a git repository');
+  });
+
+  it('should propagate detach failure instead of swallowing it', () => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        return Buffer.from('feature/will-fail-detach\n');
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        throw new Error('checkout --detach failed');
+      }
+
+      return Buffer.from('');
+    });
+
+    expect(() =>
+      fetchRemoteBranchIntoIsolatedClone('/project', '/tmp/clone', 'feature/will-fail-detach'),
+    ).toThrow('checkout --detach failed');
+  });
+
+  it('should detach HEAD before fetch in abortable path and reject without detach', async () => {
+    const callOrder: string[] = [];
+    let detached = false;
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        expect(cwd).toBe('/tmp/clone');
+        return Buffer.from('feature/abortable-checked-out\n');
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        expect(cwd).toBe('/tmp/clone');
+        callOrder.push('detach');
+        detached = true;
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      callOrder.push(`spawn-${argsArr[0]}`);
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      setImmediate(() => {
+        if (argsArr[0] === 'fetch' && !detached) {
+          child.stderr.emit('data', 'fatal: refusing to fetch into checked-out branch');
+          child.emit('close', 128);
+          return;
+        }
+        child.emit('close', 0);
+      });
+
+      return child as never;
+    });
+
+    await fetchRemoteBranchIntoIsolatedCloneAbortable('/project', '/tmp/clone', 'feature/abortable-checked-out');
+
+    expect(callOrder).toEqual(['detach', 'spawn-fetch']);
+  });
+
+  it('should skip detach in abortable path when HEAD is already detached (exit 1)', async () => {
+    const callOrder: string[] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        const err = new Error('not a symbolic ref');
+        (err as Error & { status: number }).status = 1;
+        throw err;
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        callOrder.push('detach');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    mockGitSpawn((args) => {
+      if (args[0] === 'fetch') {
+        callOrder.push('fetch');
+      }
+      return 0;
+    });
+
+    await fetchRemoteBranchIntoIsolatedCloneAbortable('/project', '/tmp/clone', 'feature/any');
+
+    expect(callOrder).toEqual(['fetch']);
+  });
+
+  it('should propagate symbolic-ref fatal error in abortable path', async () => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        const err = new Error('fatal: not a git repository');
+        (err as Error & { status: number }).status = 128;
+        throw err;
+      }
+
+      return Buffer.from('');
+    });
+
+    await expect(
+      fetchRemoteBranchIntoIsolatedCloneAbortable('/project', '/tmp/clone', 'feature/any'),
+    ).rejects.toThrow('fatal: not a git repository');
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('should propagate detach failure in abortable path', async () => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        return Buffer.from('feature/will-fail-detach\n');
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        throw new Error('checkout --detach failed');
+      }
+
+      return Buffer.from('');
+    });
+
+    await expect(
+      fetchRemoteBranchIntoIsolatedCloneAbortable('/project', '/tmp/clone', 'feature/will-fail-detach'),
+    ).rejects.toThrow('checkout --detach failed');
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('should not inspect or detach HEAD in abortable path when already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      fetchRemoteBranchIntoIsolatedCloneAbortable(
+        '/project',
+        '/tmp/clone',
+        'feature/pre-aborted',
+        controller.signal,
+      ),
+    ).rejects.toThrow('Task execution aborted');
+
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('should succeed via createSharedClone when parent HEAD matches the target remote branch', () => {
+    const callOrder: string[] = [];
+    const branch = 'feature/head-matches-target';
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'show-ref') {
+        const ref = argsArr[3];
+        if (typeof ref === 'string' && ref.startsWith('refs/remotes/origin/')) {
+          return Buffer.from('');
+        }
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'clone') return Buffer.from('');
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'fetch' && argsArr[1] === 'origin') return Buffer.from('');
+
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet' && cwd === `/tmp/clone-head-match`) {
+        return Buffer.from(`${branch}\n`);
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach' && cwd === `/tmp/clone-head-match`) {
+        callOrder.push('detach');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'fetch' && argsArr.includes('--no-write-fetch-head')) {
+        callOrder.push('fetch');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === branch) {
+        callOrder.push('checkout');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    const result = createSharedClone('/project', {
+      worktree: '/tmp/clone-head-match',
+      taskSlug: 'head-match-task',
+      branch,
+    });
+
+    expect(result.branch).toBe(branch);
+    expect(callOrder).toEqual(['detach', 'fetch', 'checkout']);
+  });
+
+  it('should succeed via createSharedCloneAbortable when parent HEAD matches the target remote branch', async () => {
+    const callOrder: string[] = [];
+    const branch = 'feature/abortable-head-match';
+
+    mockExecFileSync.mockImplementation((_cmd, args, opts) => {
+      const argsArr = args as string[];
+      const cwd = (opts as { cwd?: string } | undefined)?.cwd;
+
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet' && cwd === '/tmp/clone-abortable-head-match') {
+        return Buffer.from(`${branch}\n`);
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach' && cwd === '/tmp/clone-abortable-head-match') {
+        callOrder.push('detach');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    let detached = false;
+    mockSpawn.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        pid: number;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.pid = 12345;
+      child.kill = vi.fn();
+
+      if (argsArr[0] === 'fetch' && argsArr.includes('--no-write-fetch-head')) {
+        callOrder.push('fetch');
+        detached = callOrder.includes('detach');
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === branch) {
+        callOrder.push('checkout');
+      }
+
+      setImmediate(() => {
+        if (argsArr[0] === 'show-ref') {
+          const ref = String(argsArr[3]);
+          if (ref.startsWith('refs/remotes/origin/')) {
+            child.emit('close', 0);
+          } else {
+            child.emit('close', 1);
+          }
+          return;
+        }
+        if (argsArr[0] === 'fetch' && argsArr.includes('--no-write-fetch-head') && !detached) {
+          child.stderr.emit('data', 'fatal: refusing to fetch into checked-out branch');
+          child.emit('close', 128);
+          return;
+        }
+        child.emit('close', 0);
+      });
+
+      return child as never;
+    });
+
+    const result = await createSharedCloneAbortable('/project', {
+      worktree: '/tmp/clone-abortable-head-match',
+      taskSlug: 'abortable-head-match-task',
+      branch,
+    });
+
+    expect(result.branch).toBe(branch);
+    expect(callOrder).toEqual(['detach', 'fetch', 'checkout']);
+  });
+
+  it('should not detach via createSharedCloneAbortable when aborted before remote branch fetch', async () => {
+    const controller = new AbortController();
+    const callOrder: string[] = [];
+    const branch = 'feature/abort-before-detach';
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'remote') {
+        controller.abort();
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'symbolic-ref' && argsArr[1] === '--quiet') {
+        callOrder.push('symbolic-ref');
+        return Buffer.from(`${branch}\n`);
+      }
+      if (argsArr[0] === 'checkout' && argsArr[1] === '--detach') {
+        callOrder.push('detach');
+        return Buffer.from('');
+      }
+
+      return Buffer.from('');
+    });
+
+    mockGitSpawn((args) => {
+      if (args[0] === 'show-ref') {
+        const ref = String(args[3]);
+        return ref.startsWith('refs/remotes/origin/') ? 0 : 1;
+      }
+      return 0;
+    });
+
+    await expect(
+      createSharedCloneAbortable('/project', {
+        worktree: '/tmp/clone-abort-before-detach',
+        taskSlug: 'abort-before-detach',
+        branch,
+      }, controller.signal),
+    ).rejects.toThrow('Task execution aborted');
+
+    expect(callOrder).toEqual([]);
   });
 
   it('should sanitize remote branch fetch errors before throwing', () => {

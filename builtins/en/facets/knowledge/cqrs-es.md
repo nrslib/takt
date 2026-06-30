@@ -1,5 +1,38 @@
 # CQRS+ES Knowledge
 
+## CQRS+ES Adoption Decision
+
+CQRS+ES stores state changes as domain events and derives current state or Read Models from those events. Even when a backend or workflow uses CQRS+ES, not every new feature needs event sourcing.
+
+| Criteria | Judgment |
+|----------|----------|
+| User request, design material, or existing boundary explicitly requires CQRS+ES | Adopt CQRS+ES |
+| State transitions, lifecycle, and business invariants are central to the feature | Consider CQRS+ES |
+| Change events trigger other aggregates, sagas, or downstream processes | Consider CQRS+ES |
+| Point-in-time restoration, event replay, or audit evidence itself is required | Consider CQRS+ES |
+| Multiple asynchronous read models are required for different query shapes | Consider CQRS+ES |
+| Feature is only current-value lookup and update for admin settings | Prefer CRUD |
+| Security settings, feature flags, allowlists, thresholds, or other immediate-effect settings | Prefer CRUD |
+| No domain vocabulary beyond "create, update, delete" | Prefer CRUD |
+| The work is running in a CQRS+ES workflow only | Not a justification |
+| Task generation adds CQRS+ES requirements that did not exist in the source task | REJECT |
+
+CQRS+ES adoption must come from requirements. An existing system containing CQRS+ES is a reason to align dependency direction and boundaries, but it is not a reason to event-source simple configuration tables.
+
+### During Requirement Translation
+
+If the source task or user request only describes CRUD-equivalent business requirements, do not add "commands, events, and projections" as new requirements in the task specification. If CQRS+ES necessity is unclear, document the adoption reason or leave it as an open question.
+
+| Source request | Task-spec treatment |
+|----------------|--------------------|
+| "Manage allowed IPs per facility" | Treat as CRUD admin settings. Domain vocabulary is just "add/remove" with no business rules |
+| "Manage order approval, cancellation, and returns where billing and inventory react to state changes" | CQRS+ES candidate. Complex state transitions, business invariants, and multiple aggregates in coordination |
+| "Insurance policy amendments with review rules that vary by amendment type, where past assessment history influences future decisions" | CQRS+ES candidate. Business rules are complex and evolving; history itself is input to business decisions |
+| "Show who changed what and when" | Check whether CRUD + audit log is sufficient. Display-only change history can be handled by audit columns |
+| "Toggle notification settings on/off" | Treat as CRUD admin settings. Current-value lookup and update only |
+
+CQRS+ES excels in complex business domains (finance, insurance, healthcare — domains where business rules are complex and evolve). Simple audit requirements or technical async processing alone are not sufficient grounds for CQRS+ES. The deciding factor is the complexity of the business logic.
+
 ## Aggregate Design
 
 Aggregates hold only fields necessary for decision-making.
@@ -602,11 +635,11 @@ Checklist:
 | Query side tests don't create data via Command | Recommended |
 | Integration tests consider Axon async processing | Required |
 
-## Master Data and CRUD
+## Master Data, Settings, and CRUD
 
-Not everything in a CQRS+ES system needs event sourcing. Master data (reference data) with simple characteristics is better implemented as plain CRUD — it's simpler and easier to maintain.
+Not everything in a CQRS+ES system needs event sourcing. Master data (reference data), admin settings, and allowlists with simple characteristics are often better implemented as plain CRUD because it is simpler and easier to maintain.
 
-However, don't mechanically decide "it's master data, so CRUD". The more criteria below that apply, the more CRUD is suitable. Conversely, if even one requirement calls for CQRS+ES, consider adopting it.
+However, don't mechanically decide "it's master data, so CRUD". The more criteria below that apply, the more CRUD is suitable. Conversely, if an explicit requirement matches the CQRS+ES adoption criteria, consider adopting it.
 
 **Criteria for determining CRUD is sufficient:**
 
@@ -623,6 +656,7 @@ However, don't mechanically decide "it's master data, so CRUD". The more criteri
 - Code masters such as prefecture/country codes
 - Classification masters such as categories and tags
 - Configuration values, constant tables
+- Current-value admin settings such as IP allowlists, feature flags, and notification settings
 
 **Cases where CQRS+ES is justified:**
 - Product master, but price change history tracking is needed

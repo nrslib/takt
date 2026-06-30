@@ -350,7 +350,7 @@ describe('WorkflowEngine provider_options resolution', () => {
     await engine.run();
 
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
-    expect(options?.allowedTools).toEqual(['read']);
+    expect(options?.allowedTools).toEqual(['read', 'bash']);
   });
 
   it('should keep claude allowedTools when the provider is mock', async () => {

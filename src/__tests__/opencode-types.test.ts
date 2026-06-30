@@ -168,7 +168,7 @@ describe('OpenCode permissions', () => {
     ]);
   });
 
-  it('should keep readonly mode from widening to explicitly whitelisted write or command tools', () => {
+  it('should keep readonly mode from widening to explicitly whitelisted edit tools but allow bash', () => {
     const ruleset = buildOpenCodePermissionRuleset('readonly', undefined, [
       'Read',
       'Bash',
@@ -178,6 +178,7 @@ describe('OpenCode permissions', () => {
     expect(ruleset).toEqual([
       { permission: '*', pattern: '*', action: 'deny' },
       { permission: 'read', pattern: '*', action: 'allow' },
+      { permission: 'bash', pattern: '*', action: 'allow' },
     ]);
   });
 

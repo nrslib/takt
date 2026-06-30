@@ -7,7 +7,6 @@ const OPENCODE_EDIT_PERMISSION_TOOL_NAMES = new Set([
 
 const OPENCODE_UNSAFE_WITHOUT_EDIT_TOOL_NAMES = new Set([
   ...OPENCODE_EDIT_PERMISSION_TOOL_NAMES,
-  'bash',
 ]);
 
 export function mapsToOpenCodeEditPermission(tool: string): boolean {

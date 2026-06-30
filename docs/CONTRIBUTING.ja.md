@@ -11,8 +11,10 @@ git clone https://github.com/your-username/takt.git
 cd takt
 npm install
 npm run build
-npm test
 npm run lint
+npm test
+npm run test:it
+npm run test:e2e:mock
 ```
 
 Nix flakes を使う場合は、`nix develop` でこのプロジェクト用の Node.js ランタイムと Bun が入ったシェルを開けます:
@@ -38,6 +40,8 @@ nix develop
 npm run build
 npm run lint
 npm test
+npm run test:it
+npm run test:e2e:mock
 ```
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。

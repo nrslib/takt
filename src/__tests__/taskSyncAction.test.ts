@@ -8,7 +8,8 @@ const {
   mockResolveAssistantProviderModelFromConfig: vi.fn(),
 }));
 
-vi.mock('node:fs', () => ({
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
   existsSync: vi.fn(),
 }));
 

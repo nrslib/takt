@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runReportPhase, type PhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { RunAgentOptions } from '../agents/runner.js';
 
@@ -29,13 +29,17 @@ function createContext(
     lastResponse?: string;
     initialSessionId?: string | null;
     onBuildResumeOptions?: (overrides: Pick<RunAgentOptions, 'maxTurns'>) => void;
+    primaryProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
+    fallbackProvider?: 'claude' | 'codex' | 'opencode' | 'mock';
   } = {},
-): PhaseRunnerContext {
+): ReportPhaseRunnerContext {
   const currentLastResponse = options.lastResponse ?? 'Phase 1 result';
   let currentSessionId = options.initialSessionId === undefined
     ? 'session-1'
     : options.initialSessionId ?? undefined;
-  return {
+  const primaryProvider = options.primaryProvider ?? 'opencode';
+  const fallbackProvider = options.fallbackProvider ?? 'claude';
+  const context = {
     cwd: reportDir,
     reportDir,
     lastResponse: currentLastResponse,
@@ -52,13 +56,33 @@ function createContext(
     buildNewSessionReportOptions: (
       _step,
       _overrides,
-    ) => ({ cwd: reportDir }),
+    ) => ({ cwd: reportDir, resolvedProvider: primaryProvider }),
+    buildFallbackReportOptions: (
+      _step,
+      failedPrimaryOptions,
+      _overrides,
+    ) => {
+      if (failedPrimaryOptions.resolvedProvider !== 'opencode' || fallbackProvider === failedPrimaryOptions.resolvedProvider) {
+        return undefined;
+      }
+
+      return { cwd: reportDir, resolvedProvider: fallbackProvider, allowedTools: [], sessionId: undefined };
+    },
     updatePersonaSession: (_persona, sessionId) => {
-      if (sessionId) {
+      if (sessionId === undefined) {
+        currentSessionId = undefined;
+      } else {
         currentSessionId = sessionId;
       }
     },
+    resolveReportFallbackProviderModel: () => ({
+      provider: fallbackProvider,
+    }),
+    resolveStepProviderModel: (_step) => ({
+      provider: primaryProvider,
+    }),
   };
+  return context;
 }
 
 function queueRunAgentResponses(responses: AgentResponse[]): void {
@@ -196,6 +220,50 @@ describe('runReportPhase report history behavior', () => {
 
     // Then
     expect(capturedOverrides).toEqual([{ maxTurns: 3 }]);
+  });
+
+  it('should only build fallback options when the resolved primary provider is opencode', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('07-opencode-fallback-contract.md');
+    const ctx = createContext(reportDir, {
+      primaryProvider: 'claude',
+    });
+    const resolvedPrimaryProviders: Array<string | undefined> = [];
+    const fallbackPrimaryProviders: Array<string | undefined> = [];
+    const originalBuildNewSessionReportOptions = ctx.buildNewSessionReportOptions;
+    const originalBuildFallbackReportOptions = ctx.buildFallbackReportOptions;
+    ctx.buildNewSessionReportOptions = (currentStep, overrides) => {
+      const options = originalBuildNewSessionReportOptions(currentStep, overrides);
+      resolvedPrimaryProviders.push(options.resolvedProvider);
+      return options;
+    };
+    ctx.buildFallbackReportOptions = (currentStep, failedPrimaryOptions, overrides) => {
+      fallbackPrimaryProviders.push(failedPrimaryOptions.resolvedProvider);
+      return originalBuildFallbackReportOptions(currentStep, failedPrimaryOptions, overrides);
+    };
+    queueRunAgentResponses([
+      {
+        persona: 'reviewers',
+        status: 'error',
+        content: 'primary failed',
+        timestamp: new Date('2026-02-10T06:22:17Z'),
+        error: 'primary failed',
+      },
+      {
+        persona: 'reviewers',
+        status: 'error',
+        content: 'retry failed',
+        timestamp: new Date('2026-02-10T06:22:18Z'),
+        error: 'retry failed',
+      },
+    ]);
+
+    // When / Then
+    await expect(runReportPhase(step, 1, ctx)).rejects.toThrow('Report phase failed for 07-opencode-fallback-contract.md');
+    expect(resolvedPrimaryProviders).toEqual(['claude']);
+    expect(fallbackPrimaryProviders).toEqual(['claude']);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
   it('should resume the next report file with the updated sessionId returned by the previous report file', async () => {

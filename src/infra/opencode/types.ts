@@ -226,7 +226,7 @@ export function resolveOpenCodeAllowedPermissions(
     .filter((permission): permission is string => (
       permission !== null
       && isOpenCodePermissionKey(permission)
-      && isAllowedByPermissionMode(permission, mode)
+      && (permission !== 'edit' || isAllowedByPermissionMode(permission, mode))
       && (networkAccess !== false || !isOpenCodeWebPermission(permission))
     ));
   return Array.from(new Set(allowed));
