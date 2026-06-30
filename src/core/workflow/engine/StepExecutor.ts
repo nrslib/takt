@@ -610,7 +610,11 @@ export class StepExecutor {
 
     // Empty output with done status is treated as an error to prevent
     // downstream phases from running with no content.
-    if (response.status === 'done' && response.content.trim().length === 0) {
+    if (
+      response.status === 'done'
+      && response.structuredOutput === undefined
+      && response.content.trim().length === 0
+    ) {
       log.info('Phase 1 returned empty output, treating as error', { step: step.name });
       response = { ...response, status: 'error', error: 'Phase 1 returned empty output' };
     }

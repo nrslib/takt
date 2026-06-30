@@ -289,7 +289,11 @@ export class ParallelRunner {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
         this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
-        if (subResponse.status === 'done' && subResponse.content.trim().length === 0) {
+        if (
+          subResponse.status === 'done'
+          && subResponse.structuredOutput === undefined
+          && subResponse.content.trim().length === 0
+        ) {
           log.info('Phase 1 returned empty output for parallel sub-step, treating as error', { step: subStep.name });
           subResponse = { ...subResponse, status: 'error', error: 'Phase 1 returned empty output' };
         }
