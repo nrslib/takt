@@ -154,15 +154,18 @@ const grandCached = runs.reduce((s, r) => s + r.total.cached, 0);
 const grandInput = runs.reduce((s, r) => s + r.total.input, 0);
 const grandOutput = runs.reduce((s, r) => s + r.total.output, 0);
 
-if (csv) {
-  console.log("task,run_id,provider,model,step,input_tokens,output_tokens,total_tokens,cached_tokens,calls");
-  for (const run of runs.slice(0, top)) {
-    for (const [step, s] of [...run.steps.entries()].sort((a, b) => b[1].total - a[1].total)) {
-      console.log([run.task || "-", run.run_id, run.provider, run.model, step, s.input, s.output, s.total, s.cached, s.count].join(","));
+  if (csv) {
+    console.log("task,run_id,provider,model,step,tags,persona,input_tokens,output_tokens,total_tokens,cached_tokens,calls");
+    for (const run of runs.slice(0, top)) {
+      for (const [step, s] of [...run.steps.entries()].sort((a, b) => b[1].total - a[1].total)) {
+        const stepRecords = records.filter(r => r.step === step && r.run_id === run.run_id);
+        const persona = stepRecords.find(r => r.persona)?.persona || "-";
+        const tags = stepRecords.find(r => r.tags)?.tags?.join(";") || "-";
+        console.log([run.task || "-", run.run_id, run.provider, run.model, step, tags, persona, s.input, s.output, s.total, s.cached, s.count].join(","));
+      }
     }
+    process.exit(0);
   }
-  process.exit(0);
-}
 
 const W = 76;
 const bar = "=".repeat(W);

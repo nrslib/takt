@@ -15,6 +15,8 @@ export interface UsageAnalysisRow {
   phase: string;
   provider: string;
   model: string;
+  tags?: string[];
+  persona?: string;
   runs: number;
   calls: number;
   missing: number;
@@ -35,6 +37,8 @@ interface UsageGroup {
   phase: string;
   provider: string;
   model: string;
+  tags?: string[];
+  persona?: string;
   runs: Set<string>;
   calls: number;
   missing: number;
@@ -52,6 +56,8 @@ const MARKDOWN_COLUMNS: Array<[string, keyof UsageAnalysisRow]> = [
   ['phase', 'phase'],
   ['provider', 'provider'],
   ['model', 'model'],
+  ['tags', 'tags'],
+  ['persona', 'persona'],
   ['runs', 'runs'],
   ['calls', 'calls'],
   ['missing', 'missing'],
@@ -81,6 +87,8 @@ export function analyzeUsage(inputs: string[]): UsageAnalysisRow[] {
           phase: record.phase,
           provider: record.provider,
           model: record.provider_model,
+          tags: record.tags,
+          persona: record.persona,
           runs: new Set<string>(),
           calls: 0,
           missing: 0,
@@ -178,14 +186,23 @@ function isPhaseUsageRecord(value: unknown): value is PhaseUsageEventLogRecord {
     return false;
   }
   const candidate = value as Partial<PhaseUsageEventLogRecord>;
-  return typeof candidate.run_id === 'string'
+  if (!(typeof candidate.run_id === 'string'
     && typeof candidate.provider === 'string'
     && typeof candidate.provider_model === 'string'
     && typeof candidate.step === 'string'
     && typeof candidate.phase === 'string'
     && typeof candidate.usage_missing === 'boolean'
     && candidate.usage !== null
-    && typeof candidate.usage === 'object';
+    && typeof candidate.usage === 'object')) {
+    return false;
+  }
+  if (candidate.tags !== undefined && !Array.isArray(candidate.tags)) {
+    return false;
+  }
+  if (candidate.persona !== undefined && typeof candidate.persona !== 'string') {
+    return false;
+  }
+  return true;
 }
 
 function groupKey(record: PhaseUsageEventLogRecord): string {
@@ -194,6 +211,8 @@ function groupKey(record: PhaseUsageEventLogRecord): string {
     record.phase,
     record.provider,
     record.provider_model,
+    record.persona ?? '',
+    record.tags?.join(';') ?? '',
   ].join('\u0000');
 }
 
@@ -228,6 +247,8 @@ function groupToRow(group: UsageGroup): UsageAnalysisRow {
     phase: group.phase,
     provider: group.provider,
     model: group.model,
+    tags: group.tags,
+    persona: group.persona,
     runs: group.runs.size,
     calls: group.calls,
     missing: group.missing,
@@ -299,7 +320,10 @@ function formatValue(value: UsageAnalysisRow[keyof UsageAnalysisRow]): string {
   if (typeof value === 'number') {
     return Number.isInteger(value) ? String(value) : value.toFixed(2);
   }
-  return value;
+  if (Array.isArray(value)) {
+    return value.join(';');
+  }
+  return value ?? '';
 }
 
 function csvCell(value: string): string {

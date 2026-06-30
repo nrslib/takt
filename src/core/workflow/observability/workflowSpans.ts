@@ -45,7 +45,7 @@ const JUDGE_STAGE_COUNTER_OPTIONS = {
   description: 'Workflow judge stage executions by status',
 };
 
-type AttributeInput = Record<string, string | number | boolean | undefined>;
+type AttributeInput = Record<string, string | number | boolean | string[] | undefined>;
 
 export interface WorkflowSpanParams {
   enabled: boolean;
@@ -274,6 +274,7 @@ function buildStepAttributes(params: StepSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.step.local_iteration': params.stepIteration,
@@ -312,6 +313,7 @@ function buildPhaseAttributes(params: PhaseSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.phase.number': params.phase,
@@ -329,6 +331,7 @@ function buildJudgeStageAttributes(params: JudgeStageSpanParams): Attributes {
     ...workflowStackAttributes(params.workflowStack),
     'takt.step.name': params.step.name,
     'takt.step.persona': params.step.personaDisplayName,
+    'takt.step.tags': params.step.tags,
     'takt.step.type': getWorkflowStepKind(params.step),
     'takt.step.iteration': params.iteration,
     'takt.phase.number': 3,

@@ -87,6 +87,60 @@ describe('analyze usage command', () => {
     ]);
   });
 
+  it('includes tags and persona in aggregation', () => {
+    const root = createTempDir();
+    const file = join(root, 'session-usage-events.phase.jsonl');
+    writeFileSync(file, [
+      record({
+        run_id: 'run-a',
+        total_tokens: 10,
+        input_tokens: 6,
+        output_tokens: 4,
+        tags: ['coding', 'review'],
+        persona: 'coder',
+      }),
+      record({
+        run_id: 'run-a',
+        total_tokens: 15,
+        input_tokens: 10,
+        output_tokens: 5,
+        tags: ['review'],
+        persona: 'reviewer',
+      }),
+      record({
+        run_id: 'run-a',
+        total_tokens: 5,
+        input_tokens: 3,
+        output_tokens: 2,
+        tags: ['review'],
+        persona: 'reviewer',
+      }),
+    ].join('\n') + '\n', 'utf-8');
+
+    const rows = analyzeUsage([file]);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        step: 'implement',
+        phase: 'phase1_execute',
+        tags: ['coding', 'review'],
+        persona: 'coder',
+        runs: 1,
+        calls: 1,
+        totalTokens: 10,
+      }),
+      expect.objectContaining({
+        step: 'implement',
+        phase: 'phase1_execute',
+        tags: ['review'],
+        persona: 'reviewer',
+        runs: 1,
+        calls: 2,
+        totalTokens: 20,
+      }),
+    ]);
+  });
+
   it('formats markdown and csv output', () => {
     const rows = [{
       step: 'implement',

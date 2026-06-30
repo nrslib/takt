@@ -1152,4 +1152,282 @@ describe('workflow OpenTelemetry spans', () => {
     expect(spans[0]?.exceptions).toEqual([error]);
     expect(spans[0]?.ended).toBe(true);
   });
+
+  it('records takt.step.tags and takt.step.persona on step spans for agent steps', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({
+      personaDisplayName: 'coder',
+      tags: ['coding', 'review'],
+    });
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+    }, async () => makeDoneResult());
+
+    const stepSpan = findSpan(spans, 'step.implement');
+    expect(stepSpan.attributes).toMatchObject({
+      'takt.step.tags': ['coding', 'review'],
+      'takt.step.persona': 'coder',
+    });
+  });
+
+  it('does not record takt.step.tags on system step spans (tags is undefined for system steps)', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step: WorkflowStep = {
+      name: 'system-check',
+      kind: 'system',
+      personaDisplayName: 'system',
+      instruction: 'System check',
+      tags: undefined,
+    };
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+    }, async () => makeDoneResult());
+
+    const stepSpan = findSpan(spans, 'step.system-check');
+    expect(stepSpan.attributes['takt.step.tags']).toBeUndefined();
+    expect(stepSpan.attributes['takt.step.persona']).toBe('system');
+  });
+
+  it('records takt.step.tags and takt.step.persona on phase spans', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({
+      name: 'review',
+      personaDisplayName: 'conductor',
+      tags: ['review', 'validation'],
+    });
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 2,
+    }, async () => {
+      await module.runWithPhaseSpan({
+        enabled: true,
+        workflowName: 'test-workflow',
+        step,
+        iteration: 2,
+        phase: 1,
+        phaseName: 'execute',
+        instruction: 'execute',
+        phaseExecutionId: 'review:2:1:1',
+        providerInfo: {
+          provider: 'claude',
+          model: 'claude-sonnet-4',
+          providerSource: 'project',
+          modelSource: 'global',
+        },
+        getPromptParts: () => ({
+          systemPrompt: 'system',
+          userInstruction: 'user',
+        }),
+      }, async () => ({ status: 'done', content: 'ok' }), (result: { status: string; content: string }) => ({
+        status: result.status,
+        content: result.content,
+        providerUsage: {
+          usageMissing: false,
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        },
+      }));
+      return makeDoneResult();
+    });
+
+    const phaseSpan = spans.find((span) => span.name === 'phase.review.execute');
+    expect(phaseSpan).not.toBeUndefined();
+    expect(phaseSpan?.attributes).toMatchObject({
+      'takt.step.tags': ['review', 'validation'],
+      'takt.step.persona': 'conductor',
+    });
+  });
+
+  it('records takt.step.tags and takt.step.persona on judge stage spans', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step = makeStep({
+      name: 'review',
+      personaDisplayName: 'conductor',
+      tags: ['validation', 'review'],
+    });
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 3,
+    }, async () => {
+      await module.runWithPhaseSpan({
+        enabled: true,
+        workflowName: 'test-workflow',
+        step,
+        iteration: 3,
+        phase: 3,
+        phaseName: 'judge',
+        phaseExecutionId: 'review:3:1:1',
+      }, async () => {
+        module.recordJudgeStageSpan({
+          enabled: true,
+          workflowName: 'test-workflow',
+          step,
+          iteration: 3,
+          phaseExecutionId: 'review:3:1:1',
+          entry: {
+            stage: 1,
+            method: 'structured_output',
+            status: 'done',
+            instruction: 'judge instruction',
+            response: 'judge response',
+            providerUsage: {
+              usageMissing: false,
+              inputTokens: 5,
+              outputTokens: 3,
+              totalTokens: 8,
+            },
+          },
+          providerInfo: {
+            provider: 'claude-sdk',
+            model: 'claude-sonnet-4',
+          },
+        });
+        return { ruleIndex: 0, method: 'structured_output' };
+      }, (result: { ruleIndex: number; method: string }) => ({
+        status: 'done',
+        matchedRuleIndex: result.ruleIndex,
+        matchedRuleMethod: result.method,
+      }));
+      return makeDoneResult();
+    });
+
+    const judgeSpan = spans.find((span) => span.name === 'judge_stage.review.1.structured_output');
+    expect(judgeSpan).not.toBeUndefined();
+    expect(judgeSpan?.attributes).toMatchObject({
+      'takt.step.tags': ['validation', 'review'],
+      'takt.step.persona': 'conductor',
+    });
+  });
+
+  it('does not record takt.step.tags on system step phase spans (tags is undefined for system steps)', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step: WorkflowStep = {
+      name: 'system-check',
+      kind: 'system',
+      personaDisplayName: 'system',
+      instruction: 'System check',
+      tags: undefined,
+    };
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+    }, async () => {
+      await module.runWithPhaseSpan({
+        enabled: true,
+        workflowName: 'test-workflow',
+        step,
+        iteration: 1,
+        phase: 1,
+        phaseName: 'execute',
+        phaseExecutionId: 'system-check:1:1:1',
+        providerInfo: {
+          provider: 'codex',
+          model: 'gpt-5',
+          providerSource: 'project',
+          modelSource: 'global',
+        },
+        getPromptParts: () => ({
+          systemPrompt: 'system',
+          userInstruction: 'user',
+        }),
+      }, async () => ({ status: 'done', content: 'ok' }), (result: { status: string; content: string }) => ({
+        status: result.status,
+        content: result.content,
+        providerUsage: {
+          usageMissing: false,
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+        },
+      }));
+      return makeDoneResult();
+    });
+
+    const phaseSpan = spans.find((span) => span.name === 'phase.system-check.execute');
+    expect(phaseSpan).not.toBeUndefined();
+    expect(phaseSpan?.attributes['takt.step.tags']).toBeUndefined();
+    expect(phaseSpan?.attributes['takt.step.persona']).toBe('system');
+  });
+
+  it('does not record takt.step.tags on system step judge stage spans', async () => {
+    const { module, spans } = await loadWorkflowSpansWithMockedApi();
+    const step: WorkflowStep = {
+      name: 'system-check',
+      kind: 'system',
+      personaDisplayName: 'system',
+      instruction: 'System check',
+      tags: undefined,
+    };
+
+    await module.runWithStepSpan({
+      enabled: true,
+      workflowName: 'test-workflow',
+      step,
+      iteration: 1,
+    }, async () => {
+      await module.runWithPhaseSpan({
+        enabled: true,
+        workflowName: 'test-workflow',
+        step,
+        iteration: 1,
+        phase: 3,
+        phaseName: 'judge',
+        phaseExecutionId: 'system-check:3:1:1',
+      }, async () => {
+        module.recordJudgeStageSpan({
+          enabled: true,
+          workflowName: 'test-workflow',
+          step,
+          iteration: 1,
+          phaseExecutionId: 'system-check:3:1:1',
+          entry: {
+            stage: 1,
+            method: 'structured_output',
+            status: 'done',
+            instruction: 'judge instruction',
+            response: 'judge response',
+            providerUsage: {
+              usageMissing: false,
+              inputTokens: 5,
+              outputTokens: 3,
+              totalTokens: 8,
+            },
+          },
+          providerInfo: {
+            provider: 'claude-sdk',
+            model: 'claude-sonnet-4',
+          },
+        });
+        return { ruleIndex: 0, method: 'structured_output' };
+      }, (result: { ruleIndex: number; method: string }) => ({
+        status: 'done',
+        matchedRuleIndex: result.ruleIndex,
+        matchedRuleMethod: result.method,
+      }));
+      return makeDoneResult();
+    });
+
+    const judgeSpan = spans.find((span) => span.name === 'judge_stage.system-check.1.structured_output');
+    expect(judgeSpan).not.toBeUndefined();
+    expect(judgeSpan?.attributes['takt.step.tags']).toBeUndefined();
+    expect(judgeSpan?.attributes['takt.step.persona']).toBe('system');
+  });
 });

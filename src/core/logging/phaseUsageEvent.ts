@@ -31,6 +31,8 @@ export interface PhaseUsageEventLogRecord {
   phase_execution_id?: string;
   judge_stage?: JudgeStage;
   judge_method?: JudgeMethod;
+  persona?: string;
+  tags?: string[];
   timestamp: string;
   success: boolean;
   usage_missing: boolean;
@@ -60,6 +62,8 @@ interface PhaseUsageMeta {
   phaseExecutionId?: string;
   judgeStage?: JudgeStage;
   judgeMethod?: JudgeMethod;
+  persona?: string;
+  tags?: string[];
   success: boolean;
 }
 
@@ -128,7 +132,7 @@ function mapJudgeStageSpan(
   });
 }
 
-function buildCommonMeta(span: SpanSnapshot): Pick<PhaseUsageMeta, 'provider' | 'providerModel' | 'step' | 'stepType'> | undefined {
+function buildCommonMeta(span: SpanSnapshot): Pick<PhaseUsageMeta, 'provider' | 'providerModel' | 'step' | 'stepType' | 'persona' | 'tags'> | undefined {
   const provider = getProvider(span.attributes, 'takt.provider.name');
   const step = getString(span.attributes, 'takt.step.name');
   const stepType = getStepType(span.attributes, 'takt.step.type');
@@ -141,6 +145,8 @@ function buildCommonMeta(span: SpanSnapshot): Pick<PhaseUsageMeta, 'provider' | 
     providerModel: getString(span.attributes, 'takt.model.name') ?? '(default)',
     step,
     stepType,
+    persona: getString(span.attributes, 'takt.step.persona'),
+    tags: getTags(span.attributes, 'takt.step.tags'),
   };
 }
 
@@ -162,6 +168,8 @@ function buildRecord(
     ...(meta.phaseExecutionId ? { phase_execution_id: meta.phaseExecutionId } : {}),
     ...(meta.judgeStage ? { judge_stage: meta.judgeStage } : {}),
     ...(meta.judgeMethod ? { judge_method: meta.judgeMethod } : {}),
+    ...(meta.persona ? { persona: meta.persona } : {}),
+    ...(meta.tags ? { tags: meta.tags } : {}),
     timestamp: hrTimeToIso(span.endTime),
     success: meta.success,
     usage_missing: usage.missing,
@@ -281,6 +289,19 @@ function getJudgeStage(attributes: Record<string, unknown>, key: string): JudgeS
 function getJudgeMethod(attributes: Record<string, unknown>, key: string): JudgeMethod | undefined {
   const value = getString(attributes, key);
   return value === 'structured_output' || value === 'phase3_tag' || value === 'ai_judge' ? value : undefined;
+}
+
+function getTags(attributes: Record<string, unknown>, key: string): string[] | undefined {
+  const value = attributes[key];
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      return undefined;
+    }
+  }
+  return value as string[];
 }
 
 function getUsageMissingReason(value: unknown): UsageMissingReason {
