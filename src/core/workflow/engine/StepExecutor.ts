@@ -464,12 +464,10 @@ export class StepExecutor {
         }
       } catch (reportError) {
         if (reportError instanceof ReportPhaseGenerationError) {
-          const errorMsg = getErrorMessage(reportError);
           log.info('Report phase failed, continuing to status judgment', {
             step: step.name,
-            error: errorMsg,
+            error: getErrorMessage(reportError),
           });
-          this.deps.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, undefined, state.iteration);
         } else {
           throw reportError;
         }

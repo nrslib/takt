@@ -289,6 +289,10 @@ export class ParallelRunner {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
         this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
+        if (subResponse.status === 'done' && subResponse.content.trim().length === 0) {
+          log.info('Phase 1 returned empty output for parallel sub-step, treating as error', { step: subStep.name });
+          subResponse = { ...subResponse, status: 'error', error: 'Phase 1 returned empty output' };
+        }
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
           return { subStep, response: subResponse, instruction: phase1Instruction, providerInfo: subPm };
@@ -329,12 +333,10 @@ export class ParallelRunner {
             }
           } catch (reportError) {
             if (reportError instanceof ReportPhaseGenerationError) {
-              const errorMsg = getErrorMessage(reportError);
               log.info('Report phase failed for parallel sub-step, continuing to status judgment', {
                 step: subStep.name,
-                error: errorMsg,
+                error: getErrorMessage(reportError),
               });
-              this.deps.onPhaseComplete?.(subStep, 2, 'report', '', 'error', errorMsg, undefined, parentIteration);
             } else {
               throw reportError;
             }
