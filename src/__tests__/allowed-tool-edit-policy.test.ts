@@ -98,7 +98,7 @@ describe('allowed-tool-edit-policy', () => {
       false,
       false,
       'opencode',
-    )).toEqual(['read', 'grep']);
+    )).toEqual(['read', 'bash', ' Bash ', 'grep']);
   });
 
   it('should remove edit tools from Claude team leader part_allowed_tools when part_edit is false', () => {
@@ -122,6 +122,6 @@ describe('allowed-tool-edit-policy', () => {
       ['read', 'bash', ' Bash ', 'edit', 'write', 'grep'],
       false,
       'opencode',
-    )).toEqual(['read', 'grep']);
+    )).toEqual(['read', 'bash', ' Bash ', 'grep']);
   });
 });

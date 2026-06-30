@@ -368,8 +368,8 @@ steps:
 
     const result = getWorkflowSummary(workflowPath, tempDir, 1);
 
-    expect(result.firstStep?.allowedTools).toEqual(['read', 'grep']);
-    expect(result.stepPreviews[0]?.allowedTools).toEqual(['read', 'grep']);
+    expect(result.firstStep?.allowedTools).toEqual(['read', 'bash', ' Bash ', 'grep']);
+    expect(result.stepPreviews[0]?.allowedTools).toEqual(['read', 'bash', ' Bash ', 'grep']);
   });
 
   it('should resolve preview tools from persona_providers provider_options', () => {

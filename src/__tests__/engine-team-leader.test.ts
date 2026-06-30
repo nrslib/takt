@@ -723,7 +723,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(partCall?.[2]?.allowedTools).toEqual(['Read', 'Grep']);
   });
 
-  it('OpenCode part では part_edit false の part_allowed_tools から編集系ツールを除去する', async () => {
+  it('OpenCode part では part_edit false の part_allowed_tools から編集系ツールを除去するが bash は残す', async () => {
     const config = buildTeamLeaderConfig();
     const step = config.steps[0];
     if (!step?.teamLeader) {
@@ -768,7 +768,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(state.status).toBe('completed');
     const partCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.resolvedProvider === 'opencode');
     expect(partCall).toBeDefined();
-    expect(partCall?.[2]?.allowedTools).toEqual(['read', 'grep']);
+    expect(partCall?.[2]?.allowedTools).toEqual(['read', 'bash', 'grep']);
   });
 
   it('config 層の claude.allowed_tools は opencode part 実行時に再注入されない', async () => {

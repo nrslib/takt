@@ -817,7 +817,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
 
     const options = builder.buildAgentOptions(step);
 
-    expect(options.allowedTools).toEqual(['read', 'grep']);
+    expect(options.allowedTools).toEqual(['read', 'bash', ' Bash ', 'grep']);
   });
 
   it('silently drops claude allowedTools when configured for a non-claude provider', () => {
