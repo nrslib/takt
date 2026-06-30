@@ -36,7 +36,6 @@ export const commonSrcTestConfig = {
     TAKT_CONFIG_DIR: '',
     TAKT_NOTIFY_WEBHOOK: '',
   },
-  include: srcTestInclude,
   environment: 'node',
   globals: false,
   reporters: ['dot'],

@@ -91,3 +91,31 @@ export const mockE2eShards = [
     'e2e/specs/repertoire-real.e2e.ts',
   ],
 ];
+
+function assertMockE2eShardsCoverSpecs() {
+  const shardSpecs = mockE2eShards.flat();
+  const uniqueShardSpecs = new Set(shardSpecs);
+  const missingSpecs = mockE2eSpecs.filter((spec) => !uniqueShardSpecs.has(spec));
+  const extraSpecs = shardSpecs.filter((spec) => !mockE2eSpecs.includes(spec));
+  const duplicateSpecs = shardSpecs.filter((spec, index) => shardSpecs.indexOf(spec) !== index);
+
+  if (
+    shardSpecs.length !== mockE2eSpecs.length ||
+    missingSpecs.length > 0 ||
+    extraSpecs.length > 0 ||
+    duplicateSpecs.length > 0
+  ) {
+    throw new Error(
+      [
+        'mockE2eShards must contain each mockE2eSpecs entry exactly once.',
+        missingSpecs.length > 0 ? `missing=${missingSpecs.join(', ')}` : '',
+        extraSpecs.length > 0 ? `extra=${extraSpecs.join(', ')}` : '',
+        duplicateSpecs.length > 0 ? `duplicate=${duplicateSpecs.join(', ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+    );
+  }
+}
+
+assertMockE2eShardsCoverSpecs();
