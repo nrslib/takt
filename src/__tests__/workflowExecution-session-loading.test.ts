@@ -777,6 +777,28 @@ describe('executeWorkflow session loading', () => {
     }));
   });
 
+  it('Given workflow run rejects, When flushing failure event sink fails, Then preserves the workflow error', async () => {
+    MockWorkflowEngine.runError = new Error('workflow engine failed');
+    const eventSink = vi.fn(async (event: { type: string }) => {
+      if (event.type === 'completed') {
+        throw new Error('session/update failed');
+      }
+    });
+
+    await expect(
+      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        eventSink,
+      }),
+    ).rejects.toThrow('workflow engine failed');
+
+    expect(eventSink).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'completed',
+      success: false,
+      reason: 'workflow engine failed',
+    }));
+  });
+
   it('Given enabled observability and an existing child env snapshot, When executing workflow, Then passes run-local child process env without mutating process env', async () => {
     process.env.TAKT_OBSERVABILITY = '{"enabled":false}';
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT = ' https://collector.example.test ';

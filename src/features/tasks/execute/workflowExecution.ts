@@ -320,7 +320,13 @@ async function executeWorkflowInternal(
           reportDirectory: bootstrap.runPaths.reportsAbs,
           reason,
         });
-        await eventBridge.flushEventSink();
+        try {
+          await eventBridge.flushEventSink();
+        } catch (flushError) {
+          log.warn('Failed to flush event sink after workflow failure', {
+            error: getErrorMessage(flushError),
+          });
+        }
       }
     }
     throw error;
