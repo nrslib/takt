@@ -292,6 +292,7 @@ When the diff adds or changes a contract such as a config value, state, conditio
 - Verify that definition, production, normalization, validation, evaluation, persistence, output, and event emission all apply the same contract
 - Check derived paths as well as the normal entry: derived conditions, aggregate conditions, parent/child workflows, loop decisions, early exits, and exception paths
 - When persisted data or externally supplied data is re-injected into JSON, Markdown, logs, events, or later instructions, include escaping, boundary handling, and failure behavior in the contract
+- Verify that values normalized or validated at a boundary propagate as the same normalized value through persistence, execution, external calls, and event emission. Treat reuse of pre-normalized values in later stages as a contract inconsistency
 - Search for existing returns, throws, catches, early returns, branches, and call sites with the same responsibility
 - If an existing branch does not satisfy the new contract, treat it as related code even if the code itself predates the change
 - If tests cover only the new path and do not verify existing equivalent branches or derived entries, treat it as a coverage gap
@@ -305,6 +306,7 @@ When a change involves side effects or state changes such as external calls, con
 - Trace entry, normal completion, early return, exception, retry, interruption, and cleanup paths
 - Verify that anything acquired, started, registered, or applied is handled exactly as required on the corresponding paths
 - Verify that the same side effect is not executed more than once, and that required effects are not skipped on failure paths
+- Verify that no new side effect, such as an external notification, confirmation request, tool call, or persistence write, is started after interruption, cancellation, timeout, or any other condition has made continuation invalid
 - For changes that affect shared state or downstream execution, verify that partial failure does not leave state that breaks the next run
 - If these checks have not been performed, do not treat the behavior as functionally verified
 

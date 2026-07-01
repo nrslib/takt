@@ -2,6 +2,7 @@
 
 On the first iteration, review comprehensively and report all issues that need to be flagged.
 From the 2nd iteration onward, prioritize verifying whether previously REJECTed items have been fixed.
+Do not stop at prior-finding verification: also re-check any adapter, normalizer, builder, external notification, and interruption/cancellation path touched by the fix diff.
 
 Review the diff for AI-specific issues.
 

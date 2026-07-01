@@ -233,6 +233,9 @@ steps:
         policy:
           - review
           - coding
+        knowledge:
+          - architecture
+          - takt
         provider_options:
           claude:
             allowed_tools:
