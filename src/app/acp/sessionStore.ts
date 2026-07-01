@@ -37,6 +37,13 @@ export function startOperation(
   return abortController;
 }
 
+function withoutAbortController({
+  abortController: _abortController,
+  ...session
+}: TaktAcpSessionState): Omit<TaktAcpSessionState, 'abortController'> {
+  return session;
+}
+
 export function finishOperation(
   sessions: Map<string, TaktAcpSessionState>,
   sessionId: string,
@@ -47,10 +54,7 @@ export function finishOperation(
     return;
   }
   sessions.set(sessionId, {
-    cwd: session.cwd,
-    conversationSession: session.conversationSession,
-    ...(session.mcpServers ? { mcpServers: session.mcpServers } : {}),
-    confirmationSequence: session.confirmationSequence,
+    ...withoutAbortController(session),
     cancelRequested: abortController.signal.aborted ? false : session.cancelRequested,
   });
 }

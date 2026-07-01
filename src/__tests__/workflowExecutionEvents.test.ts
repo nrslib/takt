@@ -542,7 +542,7 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('event sink へ step completed、rate limited、blocked の専用イベントを渡す', async () => {
+  it('event sink へ step completed の専用イベントを渡す', async () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const { bridge, engine } = createBridgeHarness({ eventSink });
     const step = {
@@ -558,15 +558,6 @@ describe('bindWorkflowExecutionEvents', () => {
       content: 'approved',
       timestamp: new Date(),
     }, 'instruction');
-    engine.emit('step:rate_limited', step, {
-      status: 'rate_limited',
-      content: '',
-      error: 'retry later',
-    });
-    engine.emit('step:blocked', step, {
-      content: '質問: Proceed?',
-      status: 'blocked',
-    });
     await bridge.flushEventSink();
 
     expect(eventSink).toHaveBeenCalledWith({
@@ -574,11 +565,46 @@ describe('bindWorkflowExecutionEvents', () => {
       step: 'review',
       status: 'done',
     });
+  });
+
+  it('event sink へ rate limited の専用イベントを渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:rate_limited', step, {
+      status: 'rate_limited',
+      content: '',
+      error: 'retry later',
+    });
+    await bridge.flushEventSink();
+
     expect(eventSink).toHaveBeenCalledWith({
       type: 'rate_limited',
       step: 'review',
       message: 'retry later',
     });
+  });
+
+  it('event sink へ blocked の専用イベントを渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:blocked', step, {
+      content: '質問: Proceed?',
+      status: 'blocked',
+    });
+    await bridge.flushEventSink();
+
     expect(eventSink).toHaveBeenCalledWith({
       type: 'blocked',
       step: 'review',

@@ -435,7 +435,7 @@ describe('TAKT ACP agent adapter', () => {
       cwd: '/repo',
       mcpServers: [{
         name: 'docs',
-        command: 'docs-mcp',
+        command: ' docs-mcp ',
         args: ['serve'],
         env: [{ name: 'DOCS_TOKEN', value: 'token' }],
       }],
@@ -1116,6 +1116,145 @@ describe('TAKT ACP agent adapter', () => {
     const result = await promptPromise;
 
     expect(result).toEqual({ stopReason: 'cancelled' });
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'workflow_event',
+      event: {
+        type: 'tool_completed',
+        toolCallId: 'confirmation-1',
+        message: 'ACP confirmation cancelled',
+        isError: true,
+      },
+    });
+  });
+
+  it('should not create stale ACP elicitation when confirmation is already cancelled', async () => {
+    const sendSessionUpdate = vi.fn();
+    const createElicitation = vi.fn().mockResolvedValue({
+      action: 'accept',
+      content: { answer: 'yes' },
+    });
+    let resolveWorkflowStarted: (() => void) | undefined;
+    let resolveAskAfterCancel: (() => void) | undefined;
+    const workflowStarted = new Promise<void>((resolve) => {
+      resolveWorkflowStarted = resolve;
+    });
+    const askAfterCancel = new Promise<void>((resolve) => {
+      resolveAskAfterCancel = resolve;
+    });
+    const runWorkflowExecution = vi.fn(async (request) => {
+      resolveWorkflowStarted?.();
+      await askAfterCancel;
+      await expect(request.onAskUserQuestion?.({
+        questions: [{ question: 'Proceed?' }],
+      })).rejects.toThrow(/confirmation cancelled/i);
+      return {
+        success: false,
+        reason: 'cancelled',
+      };
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Implement ACP support',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate,
+      createElicitation,
+    });
+    await agent.handleInitialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const promptPromise = agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    });
+    await workflowStarted;
+    await agent.handleSessionCancel({ sessionId });
+    resolveAskAfterCancel?.();
+    const result = await promptPromise;
+
+    expect(result).toEqual({ stopReason: 'cancelled' });
+    expect(createElicitation).not.toHaveBeenCalled();
+    expect(sendSessionUpdate).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      kind: 'workflow_event',
+      event: expect.objectContaining({
+        type: 'confirmation_requested',
+      }),
+    }));
+  });
+
+  it('should not create stale ACP elicitation when cancellation happens during confirmation update', async () => {
+    let resolveConfirmationUpdateStarted: (() => void) | undefined;
+    let releaseConfirmationUpdate: (() => void) | undefined;
+    const confirmationUpdateStarted = new Promise<void>((resolve) => {
+      resolveConfirmationUpdateStarted = resolve;
+    });
+    const confirmationUpdateReleased = new Promise<void>((resolve) => {
+      releaseConfirmationUpdate = resolve;
+    });
+    const sendSessionUpdate = vi.fn(async (_sessionId, update) => {
+      if (
+        update.kind === 'workflow_event'
+        && update.event.type === 'confirmation_requested'
+      ) {
+        resolveConfirmationUpdateStarted?.();
+        await confirmationUpdateReleased;
+      }
+    });
+    const createElicitation = vi.fn().mockResolvedValue({
+      action: 'accept',
+      content: { answer: 'yes' },
+    });
+    const runWorkflowExecution = vi.fn(async (request) => {
+      await expect(request.onAskUserQuestion?.({
+        questions: [{ question: 'Proceed?' }],
+      })).rejects.toThrow(/confirmation cancelled/i);
+      return {
+        success: false,
+        reason: 'cancelled',
+      };
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Implement ACP support',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate,
+      createElicitation,
+    });
+    await agent.handleInitialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const promptPromise = agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    });
+    await confirmationUpdateStarted;
+    await agent.handleSessionCancel({ sessionId });
+    releaseConfirmationUpdate?.();
+    const result = await promptPromise;
+
+    expect(result).toEqual({ stopReason: 'cancelled' });
+    expect(createElicitation).not.toHaveBeenCalled();
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
       kind: 'workflow_event',
       event: {

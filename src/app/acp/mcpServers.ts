@@ -40,13 +40,14 @@ export function normalizeAcpMcpServers(
     if (Object.prototype.hasOwnProperty.call(normalized, name)) {
       throw new Error(`Duplicate MCP server name: ${name}`);
     }
-    if (!server.command.trim()) {
+    const command = server.command.trim();
+    if (!command) {
       throw new Error(`mcpServers "${name}" command is required`);
     }
     const env = envVariablesToRecord(server.env);
     normalized[name] = {
       type: 'stdio',
-      command: server.command,
+      command,
       args: [...server.args],
       ...(env ? { env } : {}),
     };

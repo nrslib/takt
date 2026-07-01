@@ -112,6 +112,12 @@ function formatElicitationAnswer(
     : formatOpenElicitationAnswer(value);
 }
 
+function throwIfConfirmationCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error('ACP confirmation cancelled');
+  }
+}
+
 async function waitForElicitationResponse(
   elicitation: Promise<AcpElicitationResponse>,
   signal: AbortSignal | undefined,
@@ -156,8 +162,9 @@ export async function askUserQuestionViaAcp(
 
   const answers: Record<string, string> = {};
   for (const question of input.questions) {
-    const confirmationId = nextConfirmationId(sessions, sessionId);
     const abortSignal = requireAcpSession(sessions, sessionId).abortController?.signal;
+    throwIfConfirmationCancelled(abortSignal);
+    const confirmationId = nextConfirmationId(sessions, sessionId);
     const message = formatQuestionMessage(question);
     await sendSessionUpdate?.(sessionId, {
       kind: 'workflow_event',
@@ -169,6 +176,7 @@ export async function askUserQuestionViaAcp(
     });
 
     try {
+      throwIfConfirmationCancelled(abortSignal);
       const elicitation = createElicitation({
         mode: 'form',
         sessionId,
