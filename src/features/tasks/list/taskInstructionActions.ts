@@ -23,6 +23,7 @@ import {
   appendRetryNote,
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
+  resolveSelectedWorkflowOverride,
   selectWorkflowWithOptionalReuse,
   selectRunSessionContext,
 } from './requeueHelpers.js';
@@ -172,7 +173,15 @@ export async function instructBranch(
       const taskDir = preparedSpec?.taskDirRelative;
       const runner = new TaskRunner(projectDir);
       try {
-        runner.requeueTask(target.name, ['completed', 'failed'], undefined, retryNote, undefined, undefined, taskDir);
+        runner.requeueTask(
+          target.name,
+          ['completed', 'failed'],
+          undefined,
+          retryNote,
+          undefined,
+          resolveSelectedWorkflowOverride(target.data?.workflow, selectedWorkflow),
+          taskDir,
+        );
       } catch (error) {
         cleanupPreparedRetryTaskSpec(preparedSpec);
         throw error;
