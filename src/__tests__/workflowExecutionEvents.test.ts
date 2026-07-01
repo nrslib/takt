@@ -42,6 +42,7 @@ function createBridgeHarness(options?: {
   findingIds?: string[];
   traceDiscovery?: { queries: string[] };
   eventSink?: ReturnType<typeof vi.fn>;
+  shouldNotifyRateLimit?: boolean;
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 1,
@@ -114,6 +115,7 @@ function createBridgeHarness(options?: {
     } as never,
     runMetaManager: runMetaManager as never,
     ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
+    shouldNotifyRateLimit: options?.shouldNotifyRateLimit ?? false,
     shouldNotifyWorkflowComplete: false,
     shouldNotifyWorkflowAbort: false,
     writeTraceReportOnce: vi.fn(),

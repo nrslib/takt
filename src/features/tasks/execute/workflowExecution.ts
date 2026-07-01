@@ -252,6 +252,7 @@ async function executeWorkflowInternal(
       sessionLogger: bootstrap.sessionLogger,
       runMetaManager: bootstrap.runMetaManager,
       ndjsonLogPath: bootstrap.ndjsonLogPath,
+      shouldNotifyRateLimit: bootstrap.shouldNotifyRateLimit,
       shouldNotifyWorkflowComplete: bootstrap.shouldNotifyWorkflowComplete,
       shouldNotifyWorkflowAbort: bootstrap.shouldNotifyWorkflowAbort,
       traceDiscovery: bootstrap.traceDiscovery,

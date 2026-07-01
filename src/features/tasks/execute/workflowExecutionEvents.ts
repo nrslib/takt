@@ -54,6 +54,7 @@ interface WorkflowExecutionEventBridgeDeps {
   sessionLogger: import('./sessionLogger.js').SessionLogger;
   runMetaManager: import('./runMeta.js').RunMetaManager;
   ndjsonLogPath: string;
+  shouldNotifyRateLimit: boolean;
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
   traceDiscovery?: WorkflowTraceDiscovery;
@@ -522,8 +523,10 @@ export function bindWorkflowExecutionEvents(
     }
     deps.prefixWriter?.flush();
     const message = response.error ?? `Step "${step.name}" hit a rate limit`;
-    playWarningSound();
-    notifyWarning('TAKT', message);
+    if (deps.shouldNotifyRateLimit) {
+      playWarningSound();
+      notifyWarning('TAKT', message);
+    }
     emitWorkflowExecutionEvent(
       deps.eventSink,
       {

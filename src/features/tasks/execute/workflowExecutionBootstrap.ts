@@ -64,6 +64,7 @@ export interface WorkflowExecutionBootstrap {
   sessionLogger: SessionLogger;
   sanitizeObservabilityText: (text: string) => string;
   shouldNotifyIterationLimit: boolean;
+  shouldNotifyRateLimit: boolean;
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
   currentProvider: WorkflowExecutionOptions['provider'];
@@ -179,8 +180,9 @@ export async function createWorkflowExecutionBootstrap(
     sessionLogger.writeInteractiveMetadata(options.interactiveMetadata);
   }
 
-  const shouldNotify = globalConfig.notificationSound !== false;
+  const shouldNotify = outputMode === 'terminal' && globalConfig.notificationSound !== false;
   const shouldNotifyIterationLimit = shouldNotify && globalConfig.notificationSoundEvents?.iterationLimit !== false;
+  const shouldNotifyRateLimit = shouldNotify;
   const shouldNotifyWorkflowComplete = shouldNotify && globalConfig.notificationSoundEvents?.workflowComplete !== false;
   const shouldNotifyWorkflowAbort = shouldNotify && globalConfig.notificationSoundEvents?.workflowAbort !== false;
   const currentProvider = options.provider ?? globalConfig.provider;
@@ -311,6 +313,7 @@ export async function createWorkflowExecutionBootstrap(
     sessionLogger,
     sanitizeObservabilityText,
     shouldNotifyIterationLimit,
+    shouldNotifyRateLimit,
     shouldNotifyWorkflowComplete,
     shouldNotifyWorkflowAbort,
     currentProvider,

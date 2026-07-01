@@ -50,4 +50,43 @@ describe('ACP session store', () => {
     });
     expect(sessions.get('session-1')).not.toHaveProperty('abortController');
   });
+
+  it('should carry idle cancellation into the next operation', () => {
+    const conversationSession: ConversationSession = {
+      handleUserMessage: vi.fn().mockResolvedValue({
+        kind: 'assistant_response',
+        content: 'ready',
+      }),
+    };
+    const sessions = new Map<string, TaktAcpSessionState>([
+      ['session-1', {
+        cwd: '/repo',
+        conversationSession,
+        cancelRequested: false,
+        confirmationSequence: 0,
+      }],
+    ]);
+
+    requestCancel(sessions, 'session-1');
+    expect(sessions.get('session-1')).toEqual({
+      cwd: '/repo',
+      conversationSession,
+      cancelRequested: true,
+      confirmationSequence: 0,
+    });
+
+    const abortController = startOperation(sessions, 'session-1');
+
+    expect(abortController.signal.aborted).toBe(true);
+    expect(sessions.get('session-1')?.abortController).toBe(abortController);
+
+    finishOperation(sessions, 'session-1', abortController);
+
+    expect(sessions.get('session-1')).toEqual({
+      cwd: '/repo',
+      conversationSession,
+      cancelRequested: false,
+      confirmationSequence: 0,
+    });
+  });
 });
