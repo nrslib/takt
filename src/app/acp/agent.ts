@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { packageVersion } from '../../shared/package-info.js';
 import type { ConversationSessionResult } from '../../features/interactive/conversationSession.js';
+import { defaultSaveTaskFile, enqueueAcpTask } from './enqueue.js';
 import {
   runWorkflowExecution,
 } from '../../features/tasks/execute/workflowExecutionApi.js';
@@ -22,6 +23,7 @@ import { createDefaultConversationSession } from './conversationFactory.js';
 import { contentBlocksToText } from './promptContent.js';
 import { normalizeAcpMcpServers } from './mcpServers.js';
 import {
+  formatEnqueueResult,
   formatWorkflowResult,
   mapTaktAcpUpdateToSessionUpdate,
 } from './sessionUpdates.js';
@@ -33,13 +35,24 @@ import {
   type TaktAcpSessionState,
 } from './sessionStore.js';
 import { askUserQuestionViaAcp } from './confirmationBridge.js';
+import { resolveAcpPromptIntent } from './intent.js';
+import {
+  extractAcpTaskContextFromText,
+  assertValidAcpTaskContext,
+  hasAcpTaskContext,
+  mergeAcpTaskContext,
+} from './taskContext.js';
 import type {
+  AcpDefaultAction,
+  AcpTaskContext,
   TaktAcpAgentDependencies,
   TaktAcpSessionUpdate,
 } from './types.js';
 
 type SessionNewParams = Partial<NewSessionRequest> & {
   cwd?: string;
+  defaultAction?: AcpDefaultAction;
+  taskContext?: AcpTaskContext;
 };
 
 type SessionPromptParams = PromptRequest;
@@ -93,12 +106,24 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function resolveDefaultAction(value: AcpDefaultAction | undefined): AcpDefaultAction {
+  if (value === undefined) {
+    return 'enqueue';
+  }
+  if (value === 'enqueue' || value === 'direct') {
+    return value;
+  }
+  throw new Error(`Unsupported ACP defaultAction: ${String(value)}`);
+}
+
 export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcpAgent {
   const createSession = deps.createConversationSession ?? createDefaultConversationSession;
   const executeWorkflowRequest = deps.runWorkflowExecution ?? runWorkflowExecution;
+  const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
   const sendSessionUpdate = deps.sendSessionUpdate;
   const createElicitation = deps.createElicitation;
   const defaultWorkflowIdentifier = deps.workflowIdentifier ?? DEFAULT_WORKFLOW_NAME;
+  const agentDefaultAction = resolveDefaultAction(deps.defaultAction);
   const sessions = new Map<string, TaktAcpSessionState>();
   let supportsFormElicitation = false;
 
@@ -112,8 +137,8 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
   async function executeRequestedWorkflow(
     sessionId: string,
     result: ConversationSessionResult & { kind: 'workflow_execution_requested' },
+    abortSignal: AbortSignal,
   ): Promise<PromptResponse> {
-    const abortController = startOperation(sessions, sessionId);
     const session = requireAcpSession(sessions, sessionId);
     try {
       const workflowResult = await executeWorkflowRequest({
@@ -123,7 +148,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
         workflowIdentifier: resolveWorkflowIdentifier(result, defaultWorkflowIdentifier),
         outputMode: 'silent',
         interactiveMetadata: result.interactiveMetadata,
-        abortSignal: abortController.signal,
+        abortSignal,
         eventSink: async (event) => {
           await sendSessionUpdate?.(sessionId, {
             kind: 'workflow_event',
@@ -143,10 +168,10 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
       });
       await sendAgentMessage(sessionId, formatWorkflowResult(workflowResult));
       return {
-        stopReason: resolveWorkflowStopReason(workflowResult, abortController.signal),
+        stopReason: resolveWorkflowStopReason(workflowResult, abortSignal),
       };
     } catch (error) {
-      if (abortController.signal.aborted) {
+      if (abortSignal.aborted) {
         return { stopReason: 'cancelled' };
       }
       const reason = getErrorMessage(error);
@@ -168,8 +193,51 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
       });
       await sendAgentMessage(sessionId, message);
       return { stopReason: 'refusal' };
-    } finally {
-      finishOperation(sessions, sessionId, abortController);
+    }
+  }
+
+  async function handleWorkflowInstruction(
+    sessionId: string,
+    result: ConversationSessionResult,
+    action: AcpDefaultAction,
+    abortSignal: AbortSignal,
+  ): Promise<PromptResponse> {
+    if (abortSignal.aborted) {
+      return { stopReason: 'cancelled' };
+    }
+    if (result.kind === 'error') {
+      await sendAgentMessage(sessionId, result.message);
+      return { stopReason: 'refusal' };
+    }
+    if (result.kind !== 'workflow_execution_requested') {
+      await sendAgentMessage(sessionId, 'Task instruction was not created.');
+      return { stopReason: 'refusal' };
+    }
+
+    const workflow = resolveWorkflowIdentifier(result, defaultWorkflowIdentifier);
+    if (action === 'direct') {
+      await sendAgentMessage(sessionId, `Starting direct workflow execution: ${workflow}`);
+      return executeRequestedWorkflow(sessionId, result, abortSignal);
+    }
+
+    const session = requireAcpSession(sessions, sessionId);
+    try {
+      const created = await enqueueAcpTask({
+        cwd: session.cwd,
+        instruction: result,
+        workflow,
+        saveTaskFile,
+        taskContext: session.taskContext,
+        abortSignal,
+      });
+      await sendAgentMessage(sessionId, formatEnqueueResult(created));
+      return { stopReason: 'end_turn' };
+    } catch (error) {
+      if (abortSignal.aborted) {
+        return { stopReason: 'cancelled' };
+      }
+      await sendAgentMessage(sessionId, `Failed to enqueue task: ${getErrorMessage(error)}`);
+      return { stopReason: 'refusal' };
     }
   }
 
@@ -197,6 +265,10 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
       requireAbsolutePath(cwd, 'cwd');
       requireNoAdditionalDirectories(params.additionalDirectories);
       const mcpServers = normalizeAcpMcpServers(params.mcpServers);
+      const sessionDefaultAction = resolveDefaultAction(params.defaultAction ?? agentDefaultAction);
+      if (params.taskContext && hasAcpTaskContext(params.taskContext)) {
+        assertValidAcpTaskContext(params.taskContext);
+      }
 
       const sessionId = randomUUID();
       const conversationSession = createSession({
@@ -206,6 +278,10 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
       sessions.set(sessionId, {
         cwd,
         conversationSession,
+        defaultAction: sessionDefaultAction,
+        ...(params.taskContext && hasAcpTaskContext(params.taskContext)
+          ? { taskContext: params.taskContext }
+          : {}),
         ...(mcpServers ? { mcpServers } : {}),
         cancelRequested: false,
         confirmationSequence: 0,
@@ -220,9 +296,31 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
       }
 
       const abortController = startOperation(sessions, params.sessionId);
-      const session = requireAcpSession(sessions, params.sessionId);
-
       try {
+        let session = requireAcpSession(sessions, params.sessionId);
+        const intent = resolveAcpPromptIntent(text, session.defaultAction);
+        if (intent.kind === 'task_instruction') {
+          const promptTaskContext = extractAcpTaskContextFromText(text);
+          if (promptTaskContext) {
+            const mergedTaskContext = mergeAcpTaskContext(session.taskContext, promptTaskContext);
+            sessions.set(params.sessionId, {
+              ...session,
+              taskContext: mergedTaskContext,
+            });
+            session = requireAcpSession(sessions, params.sessionId);
+          }
+          const result = await session.conversationSession.createTaskInstruction({
+            userNote: intent.userNote,
+            abortSignal: abortController.signal,
+          });
+          if (abortController.signal.aborted) {
+            return {
+              stopReason: 'cancelled',
+            };
+          }
+          return await handleWorkflowInstruction(params.sessionId, result, intent.action, abortController.signal);
+        }
+
         const result = await session.conversationSession.handleUserMessage({
           text,
           abortSignal: abortController.signal,
@@ -244,7 +342,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
             stopReason: 'refusal',
           };
         }
-        return executeRequestedWorkflow(params.sessionId, result);
+        return await handleWorkflowInstruction(params.sessionId, result, 'direct', abortController.signal);
       } catch (error) {
         if (abortController.signal.aborted) {
           return {
@@ -264,4 +362,4 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
 }
 
 export { mapTaktAcpUpdateToSessionUpdate };
-export type { TaktAcpAgentDependencies, TaktAcpSessionUpdate };
+export type { AcpDefaultAction, AcpTaskContext, TaktAcpAgentDependencies, TaktAcpSessionUpdate };

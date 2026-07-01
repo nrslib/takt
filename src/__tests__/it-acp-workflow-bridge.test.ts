@@ -23,7 +23,7 @@ describe('ACP conversation to workflow integration', () => {
     vi.clearAllMocks();
   });
 
-  it('should bridge prompt execution through conversation session and workflow API', async () => {
+  it('should bridge explicit natural language direct execution through conversation session and workflow API', async () => {
     const sendSessionUpdate = vi.fn();
     const runWorkflowExecution = vi.fn(async (request: {
       eventSink: (event: unknown) => void | Promise<void>;
@@ -32,21 +32,21 @@ describe('ACP conversation to workflow integration', () => {
         type: 'run_started',
         runDirectory: '/repo/.takt/runs/run-1',
       });
-	      await request.eventSink({
-	        type: 'step_started',
-	        step: 'draft',
-	        iteration: 1,
-	        maxSteps: 5,
-	      });
-	      await request.eventSink({
-	        type: 'output',
-	        outputType: 'text',
-	        message: 'streamed answer',
-	        step: 'draft',
-	      });
-	      await request.eventSink({
-	        type: 'completed',
-	        success: true,
+      await request.eventSink({
+        type: 'step_started',
+        step: 'draft',
+        iteration: 1,
+        maxSteps: 5,
+      });
+      await request.eventSink({
+        type: 'output',
+        outputType: 'text',
+        message: 'streamed answer',
+        step: 'draft',
+      });
+      await request.eventSink({
+        type: 'completed',
+        success: true,
         reportDirectory: '/repo/.takt/runs/run-1/reports',
       });
       return {
@@ -59,6 +59,10 @@ describe('ACP conversation to workflow integration', () => {
       };
     });
     const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'conversation path should not be used',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue({
       kind: 'workflow_execution_requested',
       task: 'Implement ACP support',
       workflowIdentifier: 'takt-default',
@@ -68,7 +72,7 @@ describe('ACP conversation to workflow integration', () => {
       },
     });
     const agent = createTaktAcpAgent({
-      createConversationSession: vi.fn(() => ({ handleUserMessage })),
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction })),
       runWorkflowExecution,
       sendSessionUpdate,
     });
@@ -76,9 +80,14 @@ describe('ACP conversation to workflow integration', () => {
 
     const result = await agent.handleSessionPrompt({
       sessionId,
-      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+      prompt: [{ type: 'text', text: '今すぐ実行して' }],
     });
 
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: '今すぐ実行して',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(handleUserMessage).not.toHaveBeenCalled();
     expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
       task: 'Implement ACP support',
       workflowIdentifier: 'takt-default',
@@ -91,6 +100,25 @@ describe('ACP conversation to workflow integration', () => {
       },
       eventSink: expect.any(Function),
     }));
+    const sessionUpdates = sendSessionUpdate.mock.calls
+      .filter((call) => call[0] === sessionId)
+      .map((call) => call[1]);
+    expect(sessionUpdates.map((update) => (
+      update.kind === 'workflow_event'
+        ? update.event.type
+        : update.kind
+    ))).toEqual([
+      'agent_message',
+      'run_started',
+      'step_started',
+      'output',
+      'completed',
+      'agent_message',
+    ]);
+    expect(sessionUpdates[0]).toEqual({
+      kind: 'agent_message',
+      text: expect.stringMatching(/direct[\s\S]*workflow|workflow[\s\S]*direct/i),
+    });
     const workflowEvents = sendSessionUpdate.mock.calls
       .filter((call) => call[0] === sessionId && call[1]?.kind === 'workflow_event')
       .map((call) => call[1].event);

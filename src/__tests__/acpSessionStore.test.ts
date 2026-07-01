@@ -14,11 +14,13 @@ describe('ACP session store', () => {
         kind: 'assistant_response',
         content: 'ready',
       }),
+      createTaskInstruction: vi.fn(),
     };
     const sessions = new Map<string, TaktAcpSessionState>([
       ['session-1', {
         cwd: '/repo',
         conversationSession,
+        defaultAction: 'enqueue',
         mcpServers: {
           docs: {
             type: 'stdio',
@@ -38,6 +40,7 @@ describe('ACP session store', () => {
     expect(sessions.get('session-1')).toEqual({
       cwd: '/repo',
       conversationSession,
+      defaultAction: 'enqueue',
       mcpServers: {
         docs: {
           type: 'stdio',
@@ -57,11 +60,13 @@ describe('ACP session store', () => {
         kind: 'assistant_response',
         content: 'ready',
       }),
+      createTaskInstruction: vi.fn(),
     };
     const sessions = new Map<string, TaktAcpSessionState>([
       ['session-1', {
         cwd: '/repo',
         conversationSession,
+        defaultAction: 'enqueue',
         cancelRequested: false,
         confirmationSequence: 0,
       }],
@@ -71,6 +76,7 @@ describe('ACP session store', () => {
     expect(sessions.get('session-1')).toEqual({
       cwd: '/repo',
       conversationSession,
+      defaultAction: 'enqueue',
       cancelRequested: true,
       confirmationSequence: 0,
     });
@@ -85,6 +91,7 @@ describe('ACP session store', () => {
     expect(sessions.get('session-1')).toEqual({
       cwd: '/repo',
       conversationSession,
+      defaultAction: 'enqueue',
       cancelRequested: false,
       confirmationSequence: 0,
     });

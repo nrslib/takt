@@ -154,6 +154,134 @@ describe('conversation session application API', () => {
     });
   });
 
+  it('should create a task instruction through the semantic API without a slash command', async () => {
+    const session = createSession();
+    await session.handleUserMessage({ text: 'implement ACP support' });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: {
+        content: 'Implement ACP support with enqueue-first ACP.',
+        sessionId: 'provider-session-2',
+        success: true,
+      },
+      sessionId: 'provider-session-2',
+    });
+    const abortController = new AbortController();
+
+    const result = await session.createTaskInstruction({
+      userNote: 'worktree で実行できるように積んで',
+      abortSignal: abortController.signal,
+    });
+
+    expect(mockBuildSummaryPrompt).toHaveBeenCalledWith(
+      [{ role: 'user', content: 'implement ACP support' }, { role: 'assistant', content: 'Assistant answer' }],
+      'worktree で実行できるように積んで',
+      'en',
+      'summary context',
+    );
+    expect(mockCallAIWithRetry).toHaveBeenCalledWith(
+      'summary prompt',
+      'summary prompt',
+      ['Read'],
+      '/repo',
+      expect.objectContaining({
+        sessionId: undefined,
+      }),
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+      }),
+    );
+    expect(result).toEqual({
+      kind: 'workflow_execution_requested',
+      task: 'Implement ACP support with enqueue-first ACP.',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement ACP support with enqueue-first ACP.',
+      },
+      sessionId: 'provider-session-2',
+    });
+  });
+
+  it('should include a workflow identifier from the task instruction note', async () => {
+    const session = createSession();
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: {
+        content: 'Implement ACP support.',
+        sessionId: 'provider-session-2',
+        success: true,
+      },
+      sessionId: 'provider-session-2',
+    });
+
+    const result = await session.createTaskInstruction({
+      userNote: 'この内容をタスクに積んで。workflow: review',
+    });
+
+    expect(result).toEqual({
+      kind: 'workflow_execution_requested',
+      task: 'Implement ACP support.',
+      workflowIdentifier: 'review',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement ACP support.',
+      },
+      sessionId: 'provider-session-2',
+    });
+  });
+
+  it('should include a workflow identifier from user conversation history', async () => {
+    const session = createSession();
+    await session.handleUserMessage({ text: 'workflow: review で ACP enqueue の実装方針を相談したい' });
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: {
+        content: 'Implement ACP support.',
+        sessionId: 'provider-session-2',
+        success: true,
+      },
+      sessionId: 'provider-session-2',
+    });
+
+    const result = await session.createTaskInstruction({
+      userNote: 'この内容をタスクに積んで',
+    });
+
+    expect(result).toEqual({
+      kind: 'workflow_execution_requested',
+      task: 'Implement ACP support.',
+      workflowIdentifier: 'review',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement ACP support.',
+      },
+      sessionId: 'provider-session-2',
+    });
+  });
+
+  it('should not infer a workflow identifier from generated task text', async () => {
+    const session = createSession();
+    mockCallAIWithRetry.mockResolvedValueOnce({
+      result: {
+        content: 'Implement workflow review support.',
+        sessionId: 'provider-session-2',
+        success: true,
+      },
+      sessionId: 'provider-session-2',
+    });
+
+    const result = await session.createTaskInstruction({
+      userNote: 'この内容をタスクに積んで',
+    });
+
+    expect(result).toEqual({
+      kind: 'workflow_execution_requested',
+      task: 'Implement workflow review support.',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement workflow review support.',
+      },
+      sessionId: 'provider-session-2',
+    });
+  });
+
   it('should reject an empty /go summary instead of requesting workflow execution', async () => {
     const session = createSession();
     await session.handleUserMessage({ text: 'implement ACP support' });

@@ -46,6 +46,42 @@ export type ConversationSessionResult =
 
 export interface ConversationSession {
   handleUserMessage(input: { text: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult>;
+  createTaskInstruction(input: { userNote: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult>;
+}
+
+const WORKFLOW_IDENTIFIER_PATTERNS = [
+  /(?:^|[\s,.;!?。、])--workflow(?:=|\s+)([^\s,.;!?。、]+)/iu,
+  /(?:^|[\s,.;!?。、])workflow\s*[:=]\s*([^\s,.;!?。、]+)/iu,
+];
+
+function extractWorkflowIdentifier(text: string): string | undefined {
+  for (const pattern of WORKFLOW_IDENTIFIER_PATTERNS) {
+    const match = pattern.exec(text);
+    const value = match?.[1]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function resolveWorkflowIdentifierFromUserInputs(history: ConversationMessage[], userNote: string): string | undefined {
+  const noteWorkflowIdentifier = extractWorkflowIdentifier(userNote);
+  if (noteWorkflowIdentifier) {
+    return noteWorkflowIdentifier;
+  }
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (!message || message.role !== 'user') {
+      continue;
+    }
+    const historyWorkflowIdentifier = extractWorkflowIdentifier(message.content);
+    if (historyWorkflowIdentifier) {
+      return historyWorkflowIdentifier;
+    }
+  }
+  return undefined;
 }
 
 export function createConversationSession(options: ConversationSessionOptions): ConversationSession {
@@ -125,9 +161,11 @@ export function createConversationSession(options: ConversationSessionOptions): 
     if (!task) {
       return { kind: 'error', message: 'Task text is required' };
     }
+    const workflowIdentifier = resolveWorkflowIdentifierFromUserInputs(history, userNote);
     return {
       kind: 'workflow_execution_requested',
       task,
+      ...(workflowIdentifier ? { workflowIdentifier } : {}),
       interactiveMetadata: {
         confirmed: true,
         task,
@@ -137,6 +175,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
   }
 
   return {
+    createTaskInstruction(input: { userNote: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult> {
+      return handleGoCommand(input.userNote, input.abortSignal);
+    },
+
     async handleUserMessage(input: { text: string; abortSignal?: AbortSignal }): Promise<ConversationSessionResult> {
       const message = input.text.trim();
       if (!message) {

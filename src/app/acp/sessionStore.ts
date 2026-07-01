@@ -1,9 +1,12 @@
 import type { ConversationSession } from '../../features/interactive/conversationSession.js';
 import type { McpServerConfig } from '../../core/models/index.js';
+import type { AcpDefaultAction, AcpTaskContext } from './types.js';
 
 export interface TaktAcpSessionState {
   cwd: string;
   conversationSession: ConversationSession;
+  defaultAction: AcpDefaultAction;
+  taskContext?: AcpTaskContext;
   mcpServers?: Record<string, McpServerConfig>;
   abortController?: AbortController;
   cancelRequested: boolean;

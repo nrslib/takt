@@ -1,5 +1,6 @@
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import type { WorkflowExecutionEvent, WorkflowExecutionResult } from '../../features/tasks/execute/types.js';
+import type { AcpEnqueueResult } from './enqueue.js';
 import type { TaktAcpSessionUpdate } from './types.js';
 
 function textContent(text: string): { type: 'text'; text: string } {
@@ -15,6 +16,18 @@ export function formatWorkflowResult(result: WorkflowExecutionResult): string {
   return result.reason
     ? `Workflow failed: ${result.reason}`
     : 'Workflow failed.';
+}
+
+export function formatEnqueueResult(result: AcpEnqueueResult): string {
+  return [
+    'Task added to the TAKT queue.',
+    'status: pending',
+    'worktree: true',
+    `workflow: ${result.workflow}`,
+    `task: ${result.taskName}`,
+    `file: ${result.tasksFile}`,
+    'Run it later with `takt run`.',
+  ].join('\n');
 }
 
 function workflowEventToText(event: WorkflowExecutionEvent): string {

@@ -3,11 +3,20 @@ import type {
   CreateElicitationResponse,
 } from '@agentclientprotocol/sdk';
 import type { ConversationSession, ConversationSessionOptions } from '../../features/interactive/conversationSession.js';
+import type { saveTaskFile } from '../../features/tasks/add/index.js';
 import type {
   WorkflowExecutionEvent,
   WorkflowExecutionResult,
 } from '../../features/tasks/execute/types.js';
 import type { WorkflowExecutionRequest } from '../../features/tasks/execute/workflowExecutionApi.js';
+
+export type AcpDefaultAction = 'enqueue' | 'direct';
+
+export interface AcpTaskContext {
+  branch?: string;
+  baseBranch?: string;
+  prNumber?: number;
+}
 
 export type TaktAcpSessionUpdate = {
   kind: 'workflow_event';
@@ -34,7 +43,9 @@ export type AcpConversationSessionOptions = Pick<
 export interface TaktAcpAgentDependencies {
   createConversationSession?: (options: AcpConversationSessionOptions) => ConversationSession;
   runWorkflowExecution?: (request: WorkflowExecutionRequest) => Promise<WorkflowExecutionResult>;
+  saveTaskFile?: typeof saveTaskFile;
   sendSessionUpdate?: SendSessionUpdate;
   createElicitation?: CreateAcpElicitation;
   workflowIdentifier?: string;
+  defaultAction?: AcpDefaultAction;
 }

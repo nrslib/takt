@@ -115,7 +115,9 @@ takt --task "Add authentication" --workflow dual
 takt-acp
 ```
 
-ACP session の `cwd` は絶対パスである必要があります。TAKT はこのディレクトリを会話の基点かつ workflow project root として扱い、CLI と同じ application-level workflow API 経由で workflow を実行します。会話結果が workflow を明示しない場合は `default` workflow を使います。
+ACP session の `cwd` は絶対パスである必要があります。TAKT はこのディレクトリを会話の基点かつ workflow project root として扱います。既定の `session/prompt` は enqueue-first の会話入口です。「タスクに積んで」「pending task にして」のような依頼は、`worktree: true` の pending タスクとして `.takt/tasks.yaml` に追加され、後で `takt run` で実行できます。direct workflow execution は「そのまま実行して」「今すぐ実行して」のように明示された場合だけ行います。曖昧な依頼は会話として扱われます。ACP の主 UX は `/go` や `/play` に依存しません。`/go` は session の `defaultAction` に従い既定では enqueue され、`/play <task>` は互換用の明示 direct execution command として残ります。
+
+ACP prompt がタスクを作成または直接実行する場合、会話結果が workflow を明示しない限り `default` workflow を使います。
 
 `session/new` は `mcpServers` を省略できます。省略または空の `mcpServers: []` は MCP server なしとして扱われます。stdio MCP server は workflow 実行へ渡されますが、step の実効 provider が MCP server に非対応の場合、TAKT は実行前に fail fast します。stdio 以外の MCP transport、重複した MCP server 名、trim 後に重複する MCP env 名は session 作成時に拒否されます。
 

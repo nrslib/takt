@@ -16,14 +16,19 @@ import { z } from 'zod/v4';
 import {
   createTaktAcpAgent,
   mapTaktAcpUpdateToSessionUpdate,
+  type AcpDefaultAction,
+  type AcpTaskContext,
   type TaktAcpAgentDependencies,
 } from './agent.js';
+import { isValidAcpBranchName } from './taskContext.js';
 import { createLogger } from '../../shared/utils/debug.js';
 
 const log = createLogger('acp');
 
 type StreamSessionNewRequest = Omit<NewSessionRequest, 'mcpServers'> & {
   mcpServers?: NewSessionRequest['mcpServers'];
+  defaultAction?: AcpDefaultAction;
+  taskContext?: AcpTaskContext;
 };
 
 const acpMetadataSchema = z.record(z.string(), z.unknown()).nullish();
@@ -68,11 +73,23 @@ const acpMcpServerSchema = z.union([
   }),
 ]);
 
+const acpBranchSchema = z.string().min(1).refine(isValidAcpBranchName, {
+  message: 'branch must be a valid ACP branch name',
+});
+
+const acpTaskContextSchema = z.object({
+  branch: acpBranchSchema.optional(),
+  baseBranch: acpBranchSchema.optional(),
+  prNumber: z.number().int().positive().optional(),
+}).strict().optional();
+
 const streamSessionNewRequestParser = {
   parse(params: unknown): StreamSessionNewRequest {
     const request = z.object({
       cwd: z.string(),
       additionalDirectories: z.array(z.string()).optional(),
+      defaultAction: z.enum(['enqueue', 'direct']).optional(),
+      taskContext: acpTaskContextSchema,
       mcpServers: z.array(acpMcpServerSchema).optional(),
       _meta: acpMetadataSchema,
     }).parse(params);

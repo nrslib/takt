@@ -1,13 +1,20 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CreateElicitationRequest } from '@agentclientprotocol/sdk';
 import type { AskUserQuestionInput } from '../core/workflow/types.js';
+import { saveTaskFile } from '../features/tasks/add/index.js';
 
 const {
   mockSelectAndExecuteTask,
   mockExecuteDefaultAction,
+  mockCallAIWithRetry,
 } = vi.hoisted(() => ({
   mockSelectAndExecuteTask: vi.fn(),
   mockExecuteDefaultAction: vi.fn(),
+  mockCallAIWithRetry: vi.fn(),
 }));
 
 vi.mock('../features/tasks/execute/selectAndExecute.js', () => ({
@@ -18,7 +25,12 @@ vi.mock('../app/cli/routing.js', () => ({
   executeDefaultAction: (...args: unknown[]) => mockExecuteDefaultAction(...args),
 }));
 
+vi.mock('../features/interactive/aiCaller.js', () => ({
+  callAIWithRetry: (...args: unknown[]) => mockCallAIWithRetry(...args),
+}));
+
 import { createTaktAcpAgent, mapTaktAcpUpdateToSessionUpdate } from '../app/acp/agent.js';
+import { createConversationSession } from '../features/interactive/conversationSession.js';
 
 function newSessionParams(overrides: Record<string, unknown> = {}) {
   return {
@@ -26,6 +38,45 @@ function newSessionParams(overrides: Record<string, unknown> = {}) {
     mcpServers: [],
     ...overrides,
   };
+}
+
+function createTaskInstructionResult(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: 'workflow_execution_requested',
+    task: 'Implement ACP support',
+    interactiveMetadata: {
+      confirmed: true,
+      task: 'Implement ACP support',
+    },
+    ...overrides,
+  };
+}
+
+function createRealConversationSessionForAcp(input: {
+  cwd: string;
+  outputMode?: 'terminal' | 'silent';
+}) {
+  return createConversationSession({
+    cwd: input.cwd,
+    outputMode: input.outputMode,
+    ctx: {
+      provider: {
+        setup: vi.fn(),
+        getRuntimeInstructions: vi.fn(() => null),
+      },
+      providerType: 'mock',
+      model: 'mock-model',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    },
+    strategy: {
+      systemPrompt: 'system prompt',
+      allowedTools: ['Read'],
+      transformPrompt: (message: string) => `transformed: ${message}`,
+      summaryPromptContext: 'summary context',
+    },
+  });
 }
 
 async function captureElicitationRequest(
@@ -534,6 +585,1097 @@ describe('TAKT ACP agent adapter', () => {
     });
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
     expect(mockExecuteDefaultAction).not.toHaveBeenCalled();
+  });
+
+  it('should enqueue an explicit natural language task request without running the workflow', async () => {
+    const sendSessionUpdate = vi.fn();
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'conversation path should not be used',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult({
+      workflowIdentifier: 'review',
+    }));
+    const deps = {
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate,
+    };
+    const agent = createTaktAcpAgent(deps);
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'この会話をタスクに積んで' }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'この会話をタスクに積んで',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'review',
+      worktree: true,
+      autoPr: false,
+    });
+    expect(createTaskInstruction.mock.invocationCallOrder[0]).toBeLessThan(
+      saveTaskFile.mock.invocationCallOrder[0],
+    );
+    expect(saveTaskFile.mock.invocationCallOrder[0]).toBeLessThan(
+      sendSessionUpdate.mock.invocationCallOrder[0],
+    );
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(handleUserMessage).not.toHaveBeenCalled();
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'agent_message',
+      text: expect.stringMatching(/pending[\s\S]*worktree: true[\s\S]*workflow: review[\s\S]*takt run/i),
+    });
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should pass explicit PR context from enqueue prompt text to task saving', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{
+        type: 'text',
+        text: 'この内容をタスクに積んで branch: takt/123/fix-acp base_branch: main PR #123',
+      }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'この内容をタスクに積んで branch: takt/123/fix-acp base_branch: main PR #123',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'default',
+      worktree: true,
+      autoPr: false,
+      branch: 'takt/123/fix-acp',
+      baseBranch: 'main',
+      prNumber: 123,
+    });
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it.each([
+    'pending task にして prNumber: -1',
+    'タスクに積んで。今すぐ実行して PR #0',
+  ])('should reject invalid explicit PR number prompt text before side effects: %s', async (text) => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await expect(agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text }],
+    })).rejects.toThrow('ACP prNumber must be a positive integer.');
+
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('should reject refspec branch context from enqueue prompt text before task saving', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await expect(agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{
+        type: 'text',
+        text: 'この内容をタスクに積んで branch=HEAD:refs/heads/takt/injected',
+      }],
+    })).rejects.toThrow('ACP branch must be a branch name, not a refspec');
+
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('should reject reflog branch context from enqueue prompt text before task saving', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await expect(agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{
+        type: 'text',
+        text: 'この内容をタスクに積んで branch=@{-1}',
+      }],
+    })).rejects.toThrow('ACP branch must be a plain branch name, not a reflog selector');
+
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('should reject Git option branch context from enqueue prompt text before task saving', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await expect(agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{
+        type: 'text',
+        text: 'この内容をタスクに積んで branch=--upload-pack=echo',
+      }],
+    })).rejects.toThrow('ACP branch must be a plain local branch name, not a Git option');
+
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('should reject remote-tracking baseBranch context from enqueue prompt text before task saving', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await expect(agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{
+        type: 'text',
+        text: 'この内容をタスクに積んで baseBranch=origin/main',
+      }],
+    })).rejects.toThrow('ACP branch must be a branch name, not a remote-tracking ref');
+
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('should keep the session usable after invalid enqueue branch rejection', async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const handleUserMessage = vi.fn((input: { abortSignal?: AbortSignal }) => {
+      receivedSignal = input.abortSignal;
+      return Promise.resolve({
+        kind: 'assistant_response' as const,
+        content: 'ready',
+      });
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await expect(agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{
+        type: 'text',
+        text: 'この内容をタスクに積んで branch=--help',
+      }],
+    })).rejects.toThrow('ACP branch must be a plain local branch name, not a Git option');
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '次の通常会話です' }],
+    });
+
+    expect(receivedSignal?.aborted).toBe(false);
+    expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: '次の通常会話です',
+    }));
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should reject reflog branch context from session/new before task saving', async () => {
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction: vi.fn(),
+      })),
+      runWorkflowExecution: vi.fn(),
+      saveTaskFile: vi.fn(),
+      sendSessionUpdate: vi.fn(),
+    });
+
+    await expect(agent.handleSessionNew(newSessionParams({
+      taskContext: {
+        branch: '@{-1}',
+      },
+    }))).rejects.toThrow('ACP branch must be a plain branch name, not a reflog selector');
+  });
+
+  it('should reject Git option branch context from session/new before task saving', async () => {
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction: vi.fn(),
+      })),
+      runWorkflowExecution: vi.fn(),
+      saveTaskFile: vi.fn(),
+      sendSessionUpdate: vi.fn(),
+    });
+
+    await expect(agent.handleSessionNew(newSessionParams({
+      taskContext: {
+        branch: '--upload-pack=echo',
+      },
+    }))).rejects.toThrow('ACP branch must be a plain local branch name, not a Git option');
+  });
+
+  it('should reject remote-tracking baseBranch context from session/new before task saving', async () => {
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction: vi.fn(),
+      })),
+      runWorkflowExecution: vi.fn(),
+      saveTaskFile: vi.fn(),
+      sendSessionUpdate: vi.fn(),
+    });
+
+    await expect(agent.handleSessionNew(newSessionParams({
+      taskContext: {
+        baseBranch: 'origin/main',
+      },
+    }))).rejects.toThrow('ACP branch must be a branch name, not a remote-tracking ref');
+  });
+
+  it('should reject invalid PR number context from session/new before session state is created', async () => {
+    const createTaskInstruction = vi.fn();
+    const saveTaskFile = vi.fn();
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution: vi.fn(),
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+
+    await expect(agent.handleSessionNew(newSessionParams({
+      taskContext: {
+        prNumber: 0,
+      },
+    }))).rejects.toThrow('ACP prNumber must be a positive integer.');
+
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('should use PR context from session state when enqueue prompt has no PR context', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams({
+      taskContext: {
+        branch: 'takt/321/session-context',
+        baseBranch: 'develop',
+        prNumber: 321,
+      },
+    }));
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'pending task にして' }],
+    });
+
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'default',
+      worktree: true,
+      autoPr: false,
+      branch: 'takt/321/session-context',
+      baseBranch: 'develop',
+      prNumber: 321,
+    });
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should enqueue mixed intent text when the direct phrase is negated', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '今すぐ実行してではなくタスクに積んで' }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: '今すぐ実行してではなくタスクに積んで',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'default',
+      worktree: true,
+      autoPr: false,
+    });
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should directly execute mixed intent text when direct execution is positively explicit', async () => {
+    const runWorkflowExecution = vi.fn().mockResolvedValue({
+      success: true,
+      reportDirectory: '/repo/.takt/runs/run-1/reports',
+    });
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'タスクに積んで。今すぐ実行して' }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'タスクに積んで。今すぐ実行して',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
+      task: 'Implement ACP support',
+      workflowIdentifier: 'default',
+      outputMode: 'silent',
+    }));
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should retain direct prompt PR context for a later enqueue prompt', async () => {
+    const runWorkflowExecution = vi.fn().mockResolvedValue({
+      success: true,
+      reportDirectory: '/repo/.takt/runs/run-1/reports',
+    });
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const directResult = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{
+        type: 'text',
+        text: '今すぐ実行して。 branch: takt/654/direct-context baseBranch=main prNumber=654',
+      }],
+    });
+    const enqueueResult = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'pending task にして' }],
+    });
+
+    expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
+      task: 'Implement ACP support',
+      workflowIdentifier: 'default',
+      outputMode: 'silent',
+    }));
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'default',
+      worktree: true,
+      autoPr: false,
+      branch: 'takt/654/direct-context',
+      baseBranch: 'main',
+      prNumber: 654,
+    });
+    expect(directResult).toEqual({ stopReason: 'end_turn' });
+    expect(enqueueResult).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should reject invalid branch context from direct prompt before workflow execution', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await expect(agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '今すぐ実行して。 branch=--help' }],
+    })).rejects.toThrow('ACP branch must be a plain local branch name, not a Git option');
+
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('should default /go task instructions to enqueue instead of direct execution', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'conversation path should not be used',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/go include progress updates' }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'include progress updates',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'default',
+      worktree: true,
+      autoPr: false,
+    });
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(handleUserMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should use dependency defaultAction direct for /go when session does not override it', async () => {
+    const runWorkflowExecution = vi.fn().mockResolvedValue({
+      success: true,
+      reportDirectory: '/repo/.takt/runs/run-1/reports',
+    });
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      defaultAction: 'direct',
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/go include progress updates' }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'include progress updates',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
+      task: 'Implement ACP support',
+      workflowIdentifier: 'default',
+      outputMode: 'silent',
+    }));
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should write a pending task file through the ACP enqueue path', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-acp-save-'));
+    const sendSessionUpdate = vi.fn();
+    const runWorkflowExecution = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult({
+      task: 'Implement ACP support with queue storage',
+      workflowIdentifier: 'review',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement ACP support with queue storage',
+      },
+    }));
+    try {
+      const agent = createTaktAcpAgent({
+        createConversationSession: vi.fn(() => ({
+          handleUserMessage: vi.fn().mockResolvedValue({
+            kind: 'assistant_response',
+            content: 'conversation path should not be used',
+          }),
+          createTaskInstruction,
+        })),
+        runWorkflowExecution,
+        saveTaskFile,
+        sendSessionUpdate,
+      });
+      const { sessionId } = await agent.handleSessionNew(newSessionParams({ cwd: projectDir }));
+
+      const result = await agent.handleSessionPrompt({
+        sessionId,
+        prompt: [{ type: 'text', text: 'この内容をタスクに積んで。workflow: review' }],
+      });
+
+      const tasksFile = join(projectDir, '.takt', 'tasks.yaml');
+      const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+        tasks: Array<Record<string, unknown>>;
+      };
+      expect(parsed.tasks).toHaveLength(1);
+      expect(parsed.tasks[0]).toEqual(expect.objectContaining({
+        status: 'pending',
+        workflow: 'review',
+        worktree: true,
+        auto_pr: false,
+      }));
+      expect(parsed.tasks[0]?.content).toBeUndefined();
+      expect(parsed.tasks[0]?.task_dir).toBeTypeOf('string');
+      expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+        kind: 'agent_message',
+        text: expect.stringMatching(/pending[\s\S]*worktree: true[\s\S]*workflow: review[\s\S]*takt run/i),
+      });
+      expect(runWorkflowExecution).not.toHaveBeenCalled();
+      expect(result).toEqual({ stopReason: 'end_turn' });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should preserve PR context in tasks.yaml through the ACP enqueue path', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-acp-pr-context-'));
+    const runWorkflowExecution = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult({
+      task: 'Fix ACP review comments',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Fix ACP review comments',
+      },
+    }));
+    try {
+      const agent = createTaktAcpAgent({
+        createConversationSession: vi.fn(() => ({
+          handleUserMessage: vi.fn().mockResolvedValue({
+            kind: 'assistant_response',
+            content: 'conversation path should not be used',
+          }),
+          createTaskInstruction,
+        })),
+        runWorkflowExecution,
+        saveTaskFile,
+        sendSessionUpdate: vi.fn(),
+      });
+      const { sessionId } = await agent.handleSessionNew(newSessionParams({ cwd: projectDir }));
+
+      const result = await agent.handleSessionPrompt({
+        sessionId,
+        prompt: [{
+          type: 'text',
+          text: 'この内容をタスクに積んで branch=takt/456/acp-review baseBranch=main prNumber=456',
+        }],
+      });
+
+      const tasksFile = join(projectDir, '.takt', 'tasks.yaml');
+      const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+        tasks: Array<Record<string, unknown>>;
+      };
+      expect(parsed.tasks).toHaveLength(1);
+      expect(parsed.tasks[0]).toEqual(expect.objectContaining({
+        status: 'pending',
+        workflow: 'default',
+        worktree: true,
+        auto_pr: false,
+        branch: 'takt/456/acp-review',
+        base_branch: 'main',
+        source: 'pr_review',
+        pr_number: 456,
+      }));
+      expect(runWorkflowExecution).not.toHaveBeenCalled();
+      expect(result).toEqual({ stopReason: 'end_turn' });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should save a workflow specified in conversation history through the real conversation and queue path', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-acp-real-chain-'));
+    const sendSessionUpdate = vi.fn();
+    const runWorkflowExecution = vi.fn();
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({
+        result: {
+          success: true,
+          content: 'I can help turn that into a task.',
+          sessionId: 'provider-session-1',
+        },
+        sessionId: 'provider-session-1',
+      })
+      .mockResolvedValueOnce({
+        result: {
+          success: true,
+          content: 'Implement ACP support with queue storage.',
+          sessionId: 'provider-session-2',
+        },
+        sessionId: 'provider-session-2',
+      });
+
+    try {
+      const agent = createTaktAcpAgent({
+        createConversationSession: createRealConversationSessionForAcp,
+        runWorkflowExecution,
+        saveTaskFile,
+        sendSessionUpdate,
+      });
+      const { sessionId } = await agent.handleSessionNew(newSessionParams({ cwd: projectDir }));
+
+      await agent.handleSessionPrompt({
+        sessionId,
+        prompt: [{ type: 'text', text: 'workflow: review で ACP の実装方針を相談したい' }],
+      });
+      const result = await agent.handleSessionPrompt({
+        sessionId,
+        prompt: [{ type: 'text', text: 'この内容をタスクに積んで' }],
+      });
+
+      const tasksFile = join(projectDir, '.takt', 'tasks.yaml');
+      const parsed = parseYaml(readFileSync(tasksFile, 'utf-8')) as {
+        tasks: Array<Record<string, unknown>>;
+      };
+      expect(parsed.tasks).toHaveLength(1);
+      expect(parsed.tasks[0]).toEqual(expect.objectContaining({
+        status: 'pending',
+        workflow: 'review',
+        worktree: true,
+        auto_pr: false,
+      }));
+      const taskOrderFile = join(projectDir, String(parsed.tasks[0]?.task_dir), 'order.md');
+      expect(readFileSync(taskOrderFile, 'utf-8')).toBe('Implement ACP support with queue storage.');
+      expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+        kind: 'agent_message',
+        text: expect.stringMatching(/pending[\s\S]*workflow: review[\s\S]*takt run/i),
+      });
+      expect(runWorkflowExecution).not.toHaveBeenCalled();
+      expect(result).toEqual({ stopReason: 'end_turn' });
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should return refusal and report the cause when enqueue saving fails', async () => {
+    const sendSessionUpdate = vi.fn();
+    const saveTaskFile = vi.fn().mockRejectedValue(new Error('disk full'));
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const runWorkflowExecution = vi.fn();
+    const deps = {
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate,
+    };
+    const agent = createTaktAcpAgent(deps);
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'pending task にして' }],
+    });
+
+    expect(result).toEqual({ stopReason: 'refusal' });
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'agent_message',
+      text: expect.stringContaining('disk full'),
+    });
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(sendSessionUpdate).not.toHaveBeenCalledWith(sessionId, {
+      kind: 'agent_message',
+      text: expect.stringMatching(/Task added|status: pending|takt run/i),
+    });
+  });
+
+  it('should report success when session/cancel happens after enqueue saving completes', async () => {
+    let resolveSave: ((value: { taskName: string; tasksFile: string }) => void) | undefined;
+    const saveTaskFile = vi.fn(() => new Promise<{ taskName: string; tasksFile: string }>((resolve) => {
+      resolveSave = resolve;
+    }));
+    const sendSessionUpdate = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution: vi.fn(),
+      saveTaskFile,
+      sendSessionUpdate,
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const promptPromise = agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'この内容をタスクに積んで' }],
+    });
+    await vi.waitFor(() => {
+      expect(saveTaskFile).toHaveBeenCalled();
+    });
+    await agent.handleSessionCancel({ sessionId });
+    resolveSave?.({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const result = await promptPromise;
+
+    expect(result).toEqual({ stopReason: 'end_turn' });
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'agent_message',
+      text: expect.stringMatching(/Task added|pending|takt run/i),
+    });
+  });
+
+  it('should keep ambiguous prompts in normal conversation without enqueueing or executing', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'Let us discuss the approach.',
+    });
+    const deps = {
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction: vi.fn(),
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    };
+    const agent = createTaktAcpAgent(deps);
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'この修正方針を相談したい' }],
+    });
+
+    expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'この修正方針を相談したい',
+    }));
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should keep branch-like text in normal conversation without task context validation', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'Branch syntax can be discussed here.',
+    });
+    const createTaskInstruction = vi.fn();
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'branch=HEAD:refs/heads/foo とは何ですか' }],
+    });
+
+    expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'branch=HEAD:refs/heads/foo とは何ですか',
+    }));
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should keep advisory enqueue phrasing in normal conversation', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'Let us discuss whether to enqueue it.',
+    });
+    const createTaskInstruction = vi.fn();
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'タスクに積んでいいか相談したい' }],
+    });
+
+    expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'タスクに積んでいいか相談したい',
+    }));
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should keep advisory direct phrasing in normal conversation', async () => {
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn();
+    const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'Let us discuss whether to run it.',
+    });
+    const createTaskInstruction = vi.fn();
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate: vi.fn(),
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '今すぐ実行していいか相談したい' }],
+    });
+
+    expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: '今すぐ実行していいか相談したい',
+    }));
+    expect(createTaskInstruction).not.toHaveBeenCalled();
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should directly execute only when natural language explicitly requests immediate execution', async () => {
+    const sendSessionUpdate = vi.fn();
+    const runWorkflowExecution = vi.fn().mockResolvedValue({
+      success: true,
+      reportDirectory: '/repo/.takt/runs/run-1/reports',
+    });
+    const saveTaskFile = vi.fn();
+    const handleUserMessage = vi.fn().mockResolvedValue({
+      kind: 'assistant_response',
+      content: 'conversation path should not be used',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult({
+      workflowIdentifier: 'takt-default',
+    }));
+    const deps = {
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage,
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      sendSessionUpdate,
+    };
+    const agent = createTaktAcpAgent(deps);
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '今すぐ実行して' }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: '今すぐ実行して',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
+      task: 'Implement ACP support',
+      workflowIdentifier: 'takt-default',
+      outputMode: 'silent',
+      eventSink: expect.any(Function),
+    }));
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(handleUserMessage).not.toHaveBeenCalled();
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'agent_message',
+      text: expect.stringMatching(/direct[\s\S]*workflow|workflow[\s\S]*direct/i),
+    });
+    expect(result).toEqual({ stopReason: 'end_turn' });
   });
 
   it.each([

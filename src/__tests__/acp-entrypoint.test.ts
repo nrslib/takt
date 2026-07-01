@@ -296,6 +296,339 @@ describe('ACP package entrypoint', () => {
     }));
   });
 
+  it('should reject invalid session/new defaultAction over the SDK stream transport', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const app = createTaktAcpAgentApp({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+      })),
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    await expect(client({ name: 'takt-acp-invalid-default-action-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        return agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          defaultAction: 'invalid',
+          mcpServers: [],
+        } as never);
+      })).rejects.toThrow(/defaultAction|invalid/i);
+  });
+
+  it('should pass session/new defaultAction from root params into enqueue handling', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const updates: string[] = [];
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue({
+      kind: 'workflow_execution_requested',
+      task: 'Implement ACP support',
+      workflowIdentifier: 'review',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement ACP support',
+      },
+    });
+    const deps = {
+      defaultAction: 'direct' as const,
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+    };
+    const app = createTaktAcpAgentApp(deps);
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    const result = await client({ name: 'takt-acp-default-action-test-client' })
+      .onNotification(methods.client.session.update, ({ params }) => {
+        if (
+          params.update.sessionUpdate === 'agent_message_chunk'
+          && params.update.content.type === 'text'
+        ) {
+          updates.push(params.update.content.text);
+        }
+      })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        const sessionNewRequest = {
+          cwd: '/repo',
+          defaultAction: 'enqueue',
+          mcpServers: [],
+        };
+        const sessionResponse = await agent.request(methods.agent.session.new, sessionNewRequest);
+        return agent.request(methods.agent.session.prompt, {
+          sessionId: sessionResponse.sessionId,
+          prompt: [{ type: 'text', text: '/go include progress updates' }],
+        });
+      });
+
+    expect(result).toEqual({ stopReason: 'end_turn' });
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'include progress updates',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'review',
+      worktree: true,
+      autoPr: false,
+    });
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(updates).toContainEqual(
+      expect.stringMatching(/pending[\s\S]*worktree: true[\s\S]*workflow: review[\s\S]*takt run/i),
+    );
+  });
+
+  it('should pass session/new defaultAction direct from root params into workflow execution', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const updates: string[] = [];
+    const runWorkflowExecution = vi.fn(async (request: {
+      eventSink?: (event: unknown) => void | Promise<void>;
+    }) => {
+      await request.eventSink?.({
+        type: 'progress',
+        message: 'workflow running from root direct defaultAction',
+      });
+      return {
+        success: true,
+        reportDirectory: '/repo/.takt/runs/run-1/reports',
+      };
+    });
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue({
+      kind: 'workflow_execution_requested',
+      task: 'Implement ACP support',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement ACP support',
+      },
+    });
+    const app = createTaktAcpAgentApp({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    const result = await client({ name: 'takt-acp-root-direct-default-action-test-client' })
+      .onNotification(methods.client.session.update, ({ params }) => {
+        if (
+          params.update.sessionUpdate === 'agent_message_chunk'
+          && params.update.content.type === 'text'
+        ) {
+          updates.push(params.update.content.text);
+        }
+      })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        const sessionResponse = await agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          defaultAction: 'direct',
+          mcpServers: [],
+        });
+        return agent.request(methods.agent.session.prompt, {
+          sessionId: sessionResponse.sessionId,
+          prompt: [{ type: 'text', text: '/go include progress updates' }],
+        });
+      });
+
+    expect(result).toEqual({ stopReason: 'end_turn' });
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'include progress updates',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(runWorkflowExecution).toHaveBeenCalledWith(expect.objectContaining({
+      task: 'Implement ACP support',
+      cwd: '/repo',
+      projectCwd: '/repo',
+      workflowIdentifier: 'default',
+      outputMode: 'silent',
+    }));
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(updates).toContain('Starting direct workflow execution: default');
+    expect(updates).toContain('workflow running from root direct defaultAction');
+  });
+
+  it('should pass session/new taskContext from root params into enqueue handling', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const runWorkflowExecution = vi.fn();
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue({
+      kind: 'workflow_execution_requested',
+      task: 'Implement ACP support',
+      workflowIdentifier: 'review',
+      interactiveMetadata: {
+        confirmed: true,
+        task: 'Implement ACP support',
+      },
+    });
+    const app = createTaktAcpAgentApp({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    const result = await client({ name: 'takt-acp-task-context-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        const sessionNewRequest = {
+          cwd: '/repo',
+          mcpServers: [],
+          taskContext: {
+            branch: 'takt/789/entrypoint-context',
+            baseBranch: 'main',
+            prNumber: 789,
+          },
+        };
+        const sessionResponse = await agent.request(methods.agent.session.new, sessionNewRequest);
+        return agent.request(methods.agent.session.prompt, {
+          sessionId: sessionResponse.sessionId,
+          prompt: [{ type: 'text', text: 'pending task にして' }],
+        });
+      });
+
+    expect(result).toEqual({ stopReason: 'end_turn' });
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'review',
+      worktree: true,
+      autoPr: false,
+      branch: 'takt/789/entrypoint-context',
+      baseBranch: 'main',
+      prNumber: 789,
+    });
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('should reject invalid session/new taskContext branch over the SDK stream transport', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const saveTaskFile = vi.fn();
+    const app = createTaktAcpAgentApp({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction: vi.fn(),
+      })),
+      saveTaskFile,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    await expect(client({ name: 'takt-acp-invalid-task-context-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        return agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          mcpServers: [],
+          taskContext: {
+            branch: 'HEAD:refs/heads/takt/injected',
+          },
+        });
+      })).rejects.toThrow('Invalid params');
+    expect(saveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('should reject Git option session/new taskContext branch over the SDK stream transport', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const saveTaskFile = vi.fn();
+    const app = createTaktAcpAgentApp({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction: vi.fn(),
+      })),
+      saveTaskFile,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    await expect(client({ name: 'takt-acp-git-option-task-context-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        return agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          mcpServers: [],
+          taskContext: {
+            branch: '--upload-pack=echo',
+          },
+        });
+      })).rejects.toThrow('Invalid params');
+    expect(saveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('should reject invalid session/new taskContext baseBranch over the SDK stream transport', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const saveTaskFile = vi.fn();
+    const app = createTaktAcpAgentApp({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction: vi.fn(),
+      })),
+      saveTaskFile,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    await expect(client({ name: 'takt-acp-invalid-base-branch-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        return agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          mcpServers: [],
+          taskContext: {
+            baseBranch: 'origin/main',
+          },
+        });
+      })).rejects.toThrow('Invalid params');
+    expect(saveTaskFile).not.toHaveBeenCalled();
+  });
+
   it('should execute a real workflow API run through the SDK stream transport', async () => {
     const projectDir = join(tmpdir(), `takt-acp-entrypoint-${Date.now()}`);
     try {
