@@ -88,7 +88,7 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string) => key),
 }));
 
-import { executeAndCompleteTask, executeTask } from '../features/tasks/execute/taskExecution.js';
+import { executeAndCompleteTask, executeTask, executeTaskAndCompleteWithDetails } from '../features/tasks/execute/taskExecution.js';
 import { executeRunTaskAndComplete } from '../features/tasks/execute/runTaskExecution.js';
 import { error, info } from '../shared/ui/index.js';
 
@@ -114,6 +114,19 @@ const executeAndCompleteTaskWithoutWorkflow = executeAndCompleteTask as (
   executeOptions?: unknown,
   parallelOptions?: unknown,
 ) => Promise<boolean>;
+const executeTaskAndCompleteWithDetailsWithoutWorkflow = executeTaskAndCompleteWithDetails as (
+  task: TaskInfo,
+  taskRunner: unknown,
+  projectCwd: string,
+  taskExecutor: unknown,
+  executeOptions?: unknown,
+  parallelOptions?: unknown,
+  taskContext?: unknown,
+) => Promise<{
+  success: boolean;
+  prFailed?: boolean;
+  postExecutionFailureReason?: string;
+}>;
 const executeRunTaskAndCompleteWithRunOptions = executeRunTaskAndComplete as unknown as (
   task: TaskInfo,
   taskRunner: unknown,
@@ -233,6 +246,178 @@ describe('executeAndCompleteTask', () => {
     expect(mockUpdateRunningTaskExecution).toHaveBeenCalledWith('task-with-issue', {
       runSlug: '20260216-task',
     });
+  });
+
+  it('Given silent task adapter options, When a task is executed, Then outputMode reaches executeWorkflow', async () => {
+    const task = createTask('task-silent-output');
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      {
+        outputMode: 'silent',
+      } as never,
+    );
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      outputMode?: string;
+    };
+    expect(workflowExecutionOptions?.outputMode).toBe('silent');
+  });
+
+  it('Given silent task adapter options, When a worktree task succeeds, Then post execution and task result logs are muted', async () => {
+    const task = createTask('task-silent-post-execution');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: '20260216-task-silent-post-execution',
+      branch: 'takt/task-silent-post-execution',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/1' });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      { outputMode: 'silent' } as never,
+    );
+
+    expect(mockPostExecutionFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputMode: 'silent',
+      }),
+    );
+    expect(mockPersistTaskResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { emitStatusLog: false },
+    );
+  });
+
+  it('Given silent task adapter options, When workflow execution fails, Then failure task result logs are muted', async () => {
+    const task = createTask('task-silent-failure');
+    mockExecuteWorkflow.mockResolvedValue({ success: false, reason: 'review rejected' });
+    mockBuildTaskResult.mockReturnValue({ task, success: false });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      { outputMode: 'silent' } as never,
+    );
+
+    expect(mockPersistTaskResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { emitStatusLog: false },
+    );
+  });
+
+  it('Given silent task adapter options, When workflow exceeds the iteration limit, Then exceeded logs are muted', async () => {
+    const task = createTask('task-silent-exceeded');
+    mockExecuteWorkflow.mockResolvedValue({
+      success: false,
+      exceeded: true,
+      exceededInfo: {
+        currentStep: 'review',
+        newMaxSteps: 60,
+        currentIteration: 50,
+      },
+    });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      { outputMode: 'silent' } as never,
+    );
+
+    expect(mockPersistExceededTaskResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        currentStep: 'review',
+      }),
+      expect.anything(),
+      { emitStatusLog: false },
+    );
+  });
+
+  it('Given silent task adapter options, When PR creation fails after task success, Then PR failure logs are muted', async () => {
+    const task = createTask('task-silent-pr-failed');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: '20260216-task-silent-pr-failed',
+      branch: 'takt/task-silent-pr-failed',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockPostExecutionFlow.mockResolvedValue({
+      prFailed: true,
+      prError: 'Failed to create pull request.',
+    });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      { outputMode: 'silent' } as never,
+    );
+
+    expect(mockPersistPrFailedTaskResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'Failed to create pull request.',
+      { emitStatusLog: false },
+    );
+  });
+
+  it('Given silent task adapter options, When task resolution throws, Then error logs are muted', async () => {
+    const task = createTask('task-silent-error');
+    mockResolveTaskExecution.mockRejectedValue(new Error('resolve failed'));
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      { outputMode: 'silent' } as never,
+    );
+
+    expect(mockPersistTaskError).toHaveBeenCalledWith(
+      expect.anything(),
+      task,
+      expect.any(String),
+      expect.any(String),
+      expect.any(Error),
+      { emitStatusLog: false },
+    );
   });
 
   it('should pass providerRouting from resolved config into executeWorkflow', async () => {
@@ -465,6 +650,31 @@ describe('executeAndCompleteTask', () => {
     };
     expect(workflowExecutionOptions?.projectCwd).toBe('/project');
     expect(runContext?.ignoreIterationLimit).toBe(true);
+  });
+
+  it('should pass run taskContext into task execution resolution', async () => {
+    const task = createTask('task-runtime-context');
+    const taskContext = {
+      branch: 'takt/938/add-mcp',
+      baseBranch: 'main',
+      prNumber: 938,
+    };
+
+    await executeRunTaskAndCompleteWithRunOptions(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      undefined,
+      { taskContext },
+    );
+
+    expect(mockResolveTaskExecution).toHaveBeenCalledWith(
+      task,
+      '/project',
+      undefined,
+      { taskContext },
+    );
   });
 
   it('should not pass config provider/model to executeWorkflow when agent overrides are absent', async () => {
@@ -855,8 +1065,42 @@ describe('executeAndCompleteTask', () => {
       expect.anything(),
       expect.anything(),
       'Base ref must be a branch',
+      { emitStatusLog: true },
     );
     expect(mockPersistTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('should expose PR creation failure in the detailed task result', async () => {
+    const task = createTask('task-with-pr-failure-details');
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: '20260216-task-with-pr-failure-details',
+      branch: 'takt/task-with-pr-failure-details',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+    });
+    mockExecuteWorkflow.mockResolvedValue({ success: true });
+    mockPostExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'Base ref must be a branch' });
+
+    const result = await executeTaskAndCompleteWithDetailsWithoutWorkflow(
+      task,
+      createTaskRunnerMock(),
+      '/project',
+      mockExecuteWorkflow,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.prFailed).toBe(true);
+    expect(result.postExecutionFailureReason).toBe('Base ref must be a branch');
   });
 
   it('should persist full projectDir pushBranch non-fast-forward diagnostics in pr_failed', async () => {
@@ -891,6 +1135,7 @@ describe('executeAndCompleteTask', () => {
       expect.anything(),
       expect.anything(),
       prError,
+      { emitStatusLog: true },
     );
     expect(mockPersistTaskResult).not.toHaveBeenCalled();
   });
@@ -1095,6 +1340,7 @@ describe('executeAndCompleteTask', () => {
       expect.anything(),
       expect.anything(),
       'Failed to push branch to origin. non-fast-forward',
+      { emitStatusLog: true },
     );
     expect(mockBuildBooleanTaskResult).not.toHaveBeenCalled();
     expect(mockPersistTaskResult).not.toHaveBeenCalled();

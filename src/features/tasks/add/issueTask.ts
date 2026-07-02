@@ -121,14 +121,25 @@ type CreateIssueFromTaskOptions = {
   outputMode?: 'terminal' | 'silent';
 };
 
+export type CreateIssueFromTaskResult =
+  | { success: true; issueNumber: number }
+  | { success: false; error: string };
+
 function shouldWriteIssueOutput(options: CreateIssueFromTaskOptions | undefined): boolean {
   return options?.outputMode !== 'silent';
 }
 
-export function createIssueFromTask(
+function requireIssueFailureMessage(message: string | undefined): string {
+  if (!message) {
+    throw new Error('Issue creation failed without an error message');
+  }
+  return message;
+}
+
+export function createIssueFromTaskResult(
   task: string,
   options?: CreateIssueFromTaskOptions,
-): number | undefined {
+): CreateIssueFromTaskResult {
   if (shouldWriteIssueOutput(options)) {
     info('Creating issue...');
   }
@@ -145,7 +156,7 @@ export function createIssueFromTask(
       used_structured_output: false,
       fallback_reason: getStructuredTitleFallbackReason(options?.title),
     });
-    return undefined;
+    return { success: false, error: message };
   }
   const { title, usedStructuredOutput, fallbackReason } = resolvedTitle;
   const effectiveLabels = options?.labels?.filter((l) => l.length > 0) ?? [];
@@ -154,30 +165,32 @@ export function createIssueFromTask(
   const issueResult = getGitProvider().createIssue({ title, body: task, labels }, options?.cwd);
   if (issueResult.success) {
     if (!issueResult.url) {
+      const message = 'Failed to extract issue number from URL';
       if (shouldWriteIssueOutput(options)) {
-        error('Failed to extract issue number from URL');
+        error(message);
       }
       log.error('Failed to create issue', {
-        error: 'Failed to extract issue number from URL',
+        error: message,
         used_structured_output: usedStructuredOutput,
         ...(fallbackReason !== undefined ? { fallback_reason: fallbackReason } : {}),
       });
-      return undefined;
+      return { success: false, error: message };
     }
     if (shouldWriteIssueOutput(options)) {
       success(`Issue created: ${issueResult.url}`);
     }
     const num = Number(issueResult.url.split('/').pop());
     if (Number.isNaN(num)) {
+      const message = 'Failed to extract issue number from URL';
       if (shouldWriteIssueOutput(options)) {
-        error('Failed to extract issue number from URL');
+        error(message);
       }
       log.error('Failed to create issue', {
-        error: 'Failed to extract issue number from URL',
+        error: message,
         used_structured_output: usedStructuredOutput,
         ...(fallbackReason !== undefined ? { fallback_reason: fallbackReason } : {}),
       });
-      return undefined;
+      return { success: false, error: message };
     }
     log.info('Issue created', {
       url: issueResult.url,
@@ -185,16 +198,25 @@ export function createIssueFromTask(
       used_structured_output: usedStructuredOutput,
       ...(fallbackReason !== undefined ? { fallback_reason: fallbackReason } : {}),
     });
-    return num;
+    return { success: true, issueNumber: num };
   } else {
+    const message = requireIssueFailureMessage(issueResult.error);
     if (shouldWriteIssueOutput(options)) {
-      error(`Failed to create issue: ${issueResult.error}`);
+      error(`Failed to create issue: ${message}`);
     }
     log.error('Failed to create issue', {
-      error: issueResult.error,
+      error: message,
       used_structured_output: usedStructuredOutput,
       ...(fallbackReason !== undefined ? { fallback_reason: fallbackReason } : {}),
     });
-    return undefined;
+    return { success: false, error: message };
   }
+}
+
+export function createIssueFromTask(
+  task: string,
+  options?: CreateIssueFromTaskOptions,
+): number | undefined {
+  const result = createIssueFromTaskResult(task, options);
+  return result.success ? result.issueNumber : undefined;
 }

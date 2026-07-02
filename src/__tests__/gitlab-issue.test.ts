@@ -25,7 +25,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   getErrorMessage: (e: unknown) => String(e),
 }));
 
-import { fetchIssue, listOpenIssues, createIssue } from '../infra/gitlab/issue.js';
+import { closeIssue, fetchIssue, listOpenIssues, createIssue } from '../infra/gitlab/issue.js';
 
 function withGlabApiResponse(body: unknown, nextPath?: string): string {
   const headers = [
@@ -500,5 +500,85 @@ describe('createIssue', () => {
     // Then: third call is glab issue create which also receives cwd
     const createCall = mockExecFileSync.mock.calls[2];
     expect(createCall[2]).toHaveProperty('cwd', '/specific/dir');
+  });
+});
+
+describe('closeIssue', () => {
+  it('成功時は issue note を追加してから issue close を実行する', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('');
+
+    const result = closeIssue(938, 'Compensation comment', '/my/project');
+
+    expect(result).toEqual({ success: true });
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      3,
+      'glab',
+      ['issue', 'note', '938', '--message', 'Compensation comment'],
+      expect.objectContaining({ cwd: '/my/project' }),
+    );
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      4,
+      'glab',
+      ['issue', 'close', '938'],
+      expect.objectContaining({ cwd: '/my/project' }),
+    );
+  });
+
+  it('glab CLI が利用不可の場合は issue note と close を実行しない', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockImplementationOnce(() => { throw new Error('not logged in'); })
+      .mockImplementationOnce(() => { throw new Error('command not found'); });
+
+    const result = closeIssue(938, 'Compensation comment', '/my/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
+    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('glab issue note が失敗した場合は success: false を返す', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => { throw new Error('note failed'); });
+
+    const result = closeIssue(938, 'Compensation comment', '/my/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
+    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('glab issue close が失敗した場合は success: false を返す', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('')
+      .mockImplementationOnce(() => { throw new Error('close failed'); });
+
+    const result = closeIssue(938, 'Compensation comment', '/my/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
+    expect(mockExecFileSync).toHaveBeenCalledTimes(4);
+  });
+
+  it('cwd を checkGlabCli と issue note / close に伝搬する', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('');
+
+    closeIssue(938, 'Compensation comment', '/specific/dir');
+
+    for (const call of mockExecFileSync.mock.calls) {
+      expect(call[2]).toHaveProperty('cwd', '/specific/dir');
+    }
   });
 });

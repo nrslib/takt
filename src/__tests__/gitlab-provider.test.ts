@@ -12,6 +12,7 @@ const {
   mockFetchIssue,
   mockListOpenIssues,
   mockCreateIssue,
+  mockCloseIssue,
   mockFindExistingMr,
   mockCommentOnMr,
   mockCloseMr,
@@ -23,6 +24,7 @@ const {
   mockFetchIssue: vi.fn(),
   mockListOpenIssues: vi.fn(),
   mockCreateIssue: vi.fn(),
+  mockCloseIssue: vi.fn(),
   mockFindExistingMr: vi.fn(),
   mockCommentOnMr: vi.fn(),
   mockCloseMr: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock('../infra/gitlab/issue.js', () => ({
   fetchIssue: (...args: unknown[]) => mockFetchIssue(...args),
   listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
   createIssue: (...args: unknown[]) => mockCreateIssue(...args),
+  closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
 }));
 
 vi.mock('../infra/gitlab/pr.js', () => ({
@@ -259,6 +262,37 @@ describe('GitLabProvider', () => {
 
       // Then
       expect(mockCreateIssue).toHaveBeenCalledWith(opts, process.cwd());
+    });
+  });
+
+  describe('closeIssue', () => {
+    it('closeIssue(issueNumber, comment, cwd) に委譲し結果を返す', () => {
+      const closeResult = { success: true };
+      mockCloseIssue.mockReturnValue(closeResult);
+      const provider = new GitLabProvider();
+
+      const result = provider.closeIssue(938, 'Compensation comment', '/project');
+
+      expect(mockCloseIssue).toHaveBeenCalledWith(938, 'Compensation comment', '/project');
+      expect(result).toBe(closeResult);
+    });
+
+    it('失敗時はエラー結果を委譲して返す', () => {
+      mockCloseIssue.mockReturnValue({ success: false, error: 'close blocked' });
+      const provider = new GitLabProvider();
+
+      const result = provider.closeIssue(938, 'Compensation comment', '/project');
+
+      expect(result).toEqual({ success: false, error: 'close blocked' });
+    });
+
+    it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
+      mockCloseIssue.mockReturnValue({ success: true });
+      const provider = new GitLabProvider();
+
+      provider.closeIssue(938, 'Compensation comment');
+
+      expect(mockCloseIssue).toHaveBeenCalledWith(938, 'Compensation comment', process.cwd());
     });
   });
 

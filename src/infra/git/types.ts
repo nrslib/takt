@@ -72,6 +72,11 @@ export interface CreateIssueResult {
   error?: string;
 }
 
+export interface CloseIssueResult {
+  success: boolean;
+  error?: string;
+}
+
 export type PrReviewThreadState = 'active' | 'outdated-unresolved' | 'resolved';
 
 export interface PrReviewComment {
@@ -103,6 +108,8 @@ export interface GitProvider {
   fetchIssue(issueNumber: number, cwd?: string): Issue;
 
   createIssue(options: CreateIssueOptions, cwd?: string): CreateIssueResult;
+
+  closeIssue(issueNumber: number, comment: string, cwd?: string): CloseIssueResult;
 
   fetchPrReviewComments(prNumber: number, cwd?: string): PrReviewData;
 

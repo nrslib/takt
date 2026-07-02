@@ -22,7 +22,7 @@ vi.mock('../../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { createIssue } from '../infra/github/issue.js';
+import { closeIssue, createIssue } from '../infra/github/issue.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -183,5 +183,58 @@ describe('createIssue', () => {
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toContain('repo not found');
+  });
+});
+
+describe('closeIssue', () => {
+  it('should close a GitHub issue with a compensation comment', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce(Buffer.from(''));
+
+    const result = closeIssue(938, 'Compensation comment', '/project');
+
+    expect(result).toEqual({ success: true });
+    expect(mockExecFileSync).toHaveBeenNthCalledWith(
+      2,
+      'gh',
+      ['issue', 'close', '938', '--comment', 'Compensation comment'],
+      expect.objectContaining({ cwd: '/project' }),
+    );
+  });
+
+  it('should return an error when gh CLI is unavailable', () => {
+    mockExecFileSync
+      .mockImplementationOnce(() => { throw new Error('not authenticated'); })
+      .mockReturnValueOnce(Buffer.from('gh version 2.0.0'));
+
+    const result = closeIssue(938, 'Compensation comment', '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not authenticated');
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should return an error when gh issue close fails', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockImplementationOnce(() => { throw new Error('close failed'); });
+
+    const result = closeIssue(938, 'Compensation comment', '/project');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('close failed');
+  });
+
+  it('should pass cwd to all gh commands', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce(Buffer.from(''));
+
+    closeIssue(938, 'Compensation comment', '/worktree/clone');
+
+    for (const call of mockExecFileSync.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ cwd: '/worktree/clone' }));
+    }
   });
 });

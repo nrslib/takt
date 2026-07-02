@@ -6,7 +6,13 @@
 
 import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
-import type { Issue, IssueListItem, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
+import type {
+  CloseIssueResult,
+  CreateIssueOptions,
+  CreateIssueResult,
+  Issue,
+  IssueListItem,
+} from '../git/types.js';
 import { checkGlabCli, fetchAllPages, parseJson, ITEMS_PER_PAGE } from './utils.js';
 
 const log = createLogger('gitlab');
@@ -116,6 +122,31 @@ export function createIssue(options: CreateIssueOptions, cwd: string): CreateIss
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('Issue creation failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
+export function closeIssue(issueNumber: number, comment: string, cwd: string): CloseIssueResult {
+  const glabStatus = checkGlabCli(cwd);
+  if (!glabStatus.available) {
+    return { success: false, error: glabStatus.error };
+  }
+
+  try {
+    execFileSync('glab', ['issue', 'note', String(issueNumber), '--message', comment], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    execFileSync('glab', ['issue', 'close', String(issueNumber)], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('Issue close failed', { issueNumber, error: errorMessage });
     return { success: false, error: errorMessage };
   }
 }
