@@ -1431,6 +1431,19 @@ unexpected_overrides:
       expect(saved).toContain('auto_requeue_max_attempts: 2');
       expect(saved).toContain('ignore_exceed: true');
     });
+
+    it.each([
+      ['negative auto_requeue_max_attempts', 'auto_requeue_max_attempts: -1'],
+      ['non-integer auto_requeue_max_attempts', 'auto_requeue_max_attempts: 1.5'],
+      ['string auto_requeue_max_attempts', 'auto_requeue_max_attempts: "2"'],
+      ['numeric ignore_exceed', 'ignore_exceed: 1'],
+      ['string ignore_exceed', 'ignore_exceed: "true"'],
+    ])('should reject invalid %s through loadProjectConfig', (_caseName, yaml) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, `${yaml}\n`, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/auto_requeue_max_attempts|ignore_exceed/i);
+    });
   });
 
   describe('workflow_mcp_servers round-trip', () => {

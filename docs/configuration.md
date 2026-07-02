@@ -29,7 +29,7 @@ concurrency: 1                # Parallel task count for takt run (1-10, default:
 task_poll_interval_ms: 500    # Polling interval for new tasks during takt run (100-5000, default: 500)
 interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default: 3)
 auto_requeue_max_attempts: 0  # Auto-requeue failed workflow tasks during takt run (non-negative integer, default: 0 = disabled)
-ignore_exceed: false          # Same behavior as takt run --ignore-exceed (default: false)
+ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed (default: false)
 # auto_fetch: false           # Fetch remote before cloning (default: false)
 # base_branch: main           # Base branch for clone creation (default: remote default branch)
 
@@ -163,7 +163,7 @@ ignore_exceed: false          # Same behavior as takt run --ignore-exceed (defau
 | `task_poll_interval_ms` | number (100-5000) | `500` | Polling interval for new tasks |
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
-| `ignore_exceed` | boolean | `false` | Config equivalent of `takt run --ignore-exceed`; a CLI `--ignore-exceed` flag also enables this behavior for that run |
+| `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
@@ -213,7 +213,7 @@ logging:
   level: info                 # Console log level: debug | info | warn | error
 concurrency: 2                # Parallel task count for takt run in this project (1-10)
 auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt run (non-negative integer)
-ignore_exceed: false          # Same behavior as takt run --ignore-exceed
+ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed
 # base_branch: main           # Base branch for clone creation (overrides global, default: remote default branch)
 
 # Explicit initial context files for interactive assistant mode only (project config only)
@@ -256,7 +256,7 @@ ignore_exceed: false          # Same behavior as takt run --ignore-exceed
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
 | `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` |
 | `auto_requeue_max_attempts` | non-negative integer | `0` (from global/default) | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
-| `ignore_exceed` | boolean | `false` (from global/default) | Config equivalent of `takt run --ignore-exceed`; a CLI `--ignore-exceed` flag also enables this behavior for that run |
+| `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
 | `provider_options` | object | - | Provider-specific options |
@@ -272,11 +272,11 @@ ignore_exceed: false          # Same behavior as takt run --ignore-exceed
 
 Project config values override global config when both are set.
 
-### Run Config Environment Overrides
+### Task Execution Config Environment Overrides
 
 `auto_requeue_max_attempts` and `ignore_exceed` can also be set with
 `TAKT_AUTO_REQUEUE_MAX_ATTEMPTS` and `TAKT_IGNORE_EXCEED`. These values use the
-same config resolution order as other env-backed run settings:
+same config resolution order as other env-backed task execution settings:
 
 1. Environment variable
 2. Project `.takt/config.yaml`

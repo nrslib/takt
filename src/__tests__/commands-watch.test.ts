@@ -145,7 +145,7 @@ describe('CLI watch command', () => {
   });
 
   it('watch 実行時に ignoreExceed を agentOverrides と合わせて watchTasks へ渡す', async () => {
-    mockProgramOpts.provider = 'openai';
+    mockProgramOpts.provider = 'codex';
     mockProgramOpts.model = 'gpt-5';
     mockWatchCommandOpts.ignoreExceed = true;
 
@@ -159,7 +159,7 @@ describe('CLI watch command', () => {
 
     expect(watchCommand?.optsWithGlobals).toHaveBeenCalled();
     expect(mockWatchTasks).toHaveBeenCalledWith('/test/cwd', {
-      provider: 'openai',
+      provider: 'codex',
       providerSource: 'cli',
       model: 'gpt-5',
       modelSource: 'cli',
@@ -168,7 +168,7 @@ describe('CLI watch command', () => {
   });
 
   it('watch 実行時に --ignore-exceed 未指定なら ignoreExceed を渡さない', async () => {
-    mockProgramOpts.provider = 'openai';
+    mockProgramOpts.provider = 'codex';
 
     const watchAction = commandActions.get('root.watch');
     const watchCommand = commandMocks.get('root.watch');
@@ -176,8 +176,17 @@ describe('CLI watch command', () => {
     await watchAction?.(undefined, watchCommand as never);
 
     expect(mockWatchTasks).toHaveBeenCalledWith('/test/cwd', {
-      provider: 'openai',
+      provider: 'codex',
       providerSource: 'cli',
     });
+  });
+
+  it('watch 実行時に --ignore-exceed 未指定なら config 由来 ignore_exceed を上書きしない', async () => {
+    const watchAction = commandActions.get('root.watch');
+    const watchCommand = commandMocks.get('root.watch');
+
+    await watchAction?.(undefined, watchCommand as never);
+
+    expect(mockWatchTasks).toHaveBeenCalledWith('/test/cwd', {});
   });
 });

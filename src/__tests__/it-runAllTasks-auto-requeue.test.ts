@@ -144,4 +144,23 @@ describe('IT: runAllTasks auto requeue', () => {
     expect(tasks[0]?.auto_requeue_count).toBe(1);
     expect(tasks[0]?.retry_note).toEqual(expect.stringContaining('自動 Requeue による再実行です'));
   });
+
+  it('leaves the task failed when auto requeue reaches the configured max attempts', async () => {
+    const runner = new TaskRunner(env.projectDir);
+    runner.addTask('retry reaches max attempts', { workflow: 'auto-requeue-it' });
+    setMockScenario([
+      { persona: 'planner', status: 'blocked', content: 'blocked first attempt' },
+      { persona: 'planner', status: 'blocked', content: 'blocked after requeue' },
+    ]);
+
+    await runAllTasks(env.projectDir);
+
+    const tasks = loadTasks(env.projectDir);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.status).toBe('failed');
+    expect(tasks[0]?.auto_requeue_count).toBe(1);
+    expect(tasks[0]?.failure).toEqual(expect.objectContaining({
+      step: 'plan',
+    }));
+  });
 });

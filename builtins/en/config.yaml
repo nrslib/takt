@@ -18,7 +18,7 @@ language: en        # UI language: en | ja
 # concurrency: 1                   # Number of tasks to run concurrently in takt run (1-10)
 # task_poll_interval_ms: 500       # Polling interval in ms for picking up new tasks (100-5000)
 # auto_requeue_max_attempts: 0     # Auto-requeue failed workflow tasks during takt run (non-negative integer; 0 disables)
-# ignore_exceed: false             # Same behavior as takt run --ignore-exceed
+# ignore_exceed: false             # Applies to takt run and takt watch like --ignore-exceed
 # sync_project_local_takt_on_retry: true # Sync root project-local .takt before retry / re-execution. Set false to keep the worktree copy
 
 # PR / branch
