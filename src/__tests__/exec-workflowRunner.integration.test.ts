@@ -10,6 +10,7 @@ import {
   buildExecReadonlyProviderProfileOverrides,
   runGeneratedWorkflow,
 } from '../features/exec/workflowRunner.js';
+import type { TaskAttachment } from '../features/tasks/attachments.js';
 import type { ResolvedExecConfig } from '../features/exec/types.js';
 
 vi.mock('../features/tasks/index.js', () => ({
@@ -244,6 +245,34 @@ describe('runGeneratedWorkflow integration', () => {
 
     expect(mockSelectAndExecuteTask.mock.calls[0]?.[3]).toEqual(agentOverrides);
     expect(mockSelectAndExecuteTask.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      interactiveUserInput: true,
+      skipTaskList: true,
+      interactiveMetadata: { confirmed: true, task },
+    }));
+  });
+
+  it('should pass image attachments to the existing task execution boundary', async () => {
+    const task = 'Executable task with image attachment';
+    const imagePath = join(projectDir, 'image-1.png');
+    writeFileSync(imagePath, Buffer.from('image-bytes'));
+    const attachments: TaskAttachment[] = [
+      {
+        placeholder: '[Image #1]',
+        tempPath: imagePath,
+        fileName: 'image-1.png',
+      },
+    ];
+    mockSelectAndExecuteTask.mockImplementation(async (cwd, executedTask, options) => {
+      if (!options?.reportDirName) {
+        throw new Error('reportDirName is required');
+      }
+      writeCompletedRun(cwd, options.reportDirName, executedTask);
+    });
+
+    await runGeneratedWorkflow(projectDir, createTwoJudgeConfig(), task, undefined, attachments);
+
+    expect(mockSelectAndExecuteTask.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
+      attachments,
       interactiveUserInput: true,
       skipTaskList: true,
       interactiveMetadata: { confirmed: true, task },

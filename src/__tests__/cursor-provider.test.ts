@@ -12,6 +12,15 @@ const {
   mockCallCursorCustom: vi.fn(),
 }));
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 const {
   mockResolveCursorApiKey,
   mockResolveCursorCliPath,
@@ -32,6 +41,14 @@ vi.mock('../infra/config/index.js', () => ({
   resolveCursorCliPath: mockResolveCursorCliPath,
   loadProjectConfig: mockLoadProjectConfig,
 }));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...actual,
+    createLogger: vi.fn(() => mockLogger),
+  };
+});
 
 import { CursorProvider } from '../infra/providers/cursor.js';
 import { ProviderRegistry } from '../infra/providers/index.js';
@@ -175,6 +192,28 @@ describe('CursorProvider', () => {
 
     const opts = mockCallCursor.mock.calls[0]?.[2];
     expect(opts.cursorCliPath).toBeUndefined();
+  });
+
+  it('should ignore unsupported image attachments and log only when non-empty', async () => {
+    mockCallCursor.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new CursorProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+    });
+
+    const options = mockCallCursor.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.imageAttachments).toBeUndefined();
+    expect(mockLogger.info).toHaveBeenCalledWith('Cursor provider does not support imageAttachments; ignoring');
+
+    mockLogger.info.mockClear();
+    await agent.call('implement', { cwd: '/tmp/work', imageAttachments: [] });
+    await agent.call('implement', { cwd: '/tmp/work' });
+
+    expect(mockLogger.info).not.toHaveBeenCalledWith('Cursor provider does not support imageAttachments; ignoring');
   });
 });
 

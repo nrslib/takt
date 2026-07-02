@@ -3,6 +3,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -197,8 +198,36 @@ function createOscImagePaste(): string {
   return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
 }
 
+function createInvalidSizeOscImagePaste(): string {
+  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length + 1}:${imageData.toString('base64')}\x07`;
+}
+
 function trackAttachmentSession(tempPath: string): void {
   attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
+}
+
+function createIsolatedTmpRoot(prefix: string): string {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  attachmentSessionDirs.add(tmpRoot);
+  return tmpRoot;
+}
+
+function listTaktTempSessionDirs(): Set<string> {
+  const taktTempRoot = path.join(os.tmpdir(), 'takt');
+  if (!fs.existsSync(taktTempRoot)) {
+    return new Set();
+  }
+  return new Set(
+    fs.readdirSync(taktTempRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(taktTempRoot, entry.name)),
+  );
+}
+
+function expectNoNewTaktTempSessionDirs(previous: Set<string>): void {
+  const leaked = [...listTaktTempSessionDirs()].filter((sessionDir) => !previous.has(sessionDir));
+  expect(leaked).toEqual([]);
 }
 
 // ── InteractiveMode type & constants tests ──
@@ -375,6 +404,30 @@ describe('passthroughMode', () => {
     expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
   });
 
+  it('should cleanup pasted image session directory when input processing throws after image paste', async () => {
+    const tmpRoot = createIsolatedTmpRoot('takt-passthrough-cleanup-');
+    const originalTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = tmpRoot;
+    const previousSessionDirs = listTaktTempSessionDirs();
+    setupRawStdin([
+      `use ${createOscImagePaste()} ${createInvalidSizeOscImagePaste()}\r`,
+    ]);
+
+    try {
+      await expect(passthroughMode('en')).rejects.toThrow(
+        'Pasted inline image data does not match its declared size.',
+      );
+
+      expectNoNewTaktTempSessionDirs(previousSessionDirs);
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+    }
+  });
+
   it('should trim whitespace from user input', async () => {
     // Given
     setupRawStdin(toRawInputs(['  my task  ']));
@@ -473,6 +526,31 @@ describe('quietMode', () => {
     expect(result.attachments?.[0]?.tempPath).toBeDefined();
     trackAttachmentSession(result.attachments![0]!.tempPath);
     expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+  });
+
+  it('should cleanup pasted image session directory when prompted input processing throws after image paste', async () => {
+    const tmpRoot = createIsolatedTmpRoot('takt-quiet-cleanup-');
+    const originalTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = tmpRoot;
+    const previousSessionDirs = listTaktTempSessionDirs();
+    setupRawStdin([
+      `use ${createOscImagePaste()} ${createInvalidSizeOscImagePaste()}\r`,
+    ]);
+    setupMockProvider([]);
+
+    try {
+      await expect(quietMode('/project')).rejects.toThrow(
+        'Pasted inline image data does not match its declared size.',
+      );
+
+      expectNoNewTaktTempSessionDirs(previousSessionDirs);
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+    }
   });
 
   it('should include workflow context in summary generation', async () => {

@@ -8,6 +8,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 // ── Mocks ─────────────────────────────────────────────────────────────
 
@@ -51,12 +54,14 @@ import { quietMode } from '../features/interactive/quietMode.js';
 import { callAIWithRetry } from '../features/interactive/conversationLoop.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 import { buildSummaryPrompt, selectPostSummaryAction } from '../features/interactive/interactive.js';
+import { error as logError } from '../shared/ui/index.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
 
 const mockInitializeSession = vi.mocked(initializeSession);
 const mockCallAIWithRetry = vi.mocked(callAIWithRetry);
 const mockBuildSummaryPrompt = vi.mocked(buildSummaryPrompt);
 const mockSelectPostSummaryAction = vi.mocked(selectPostSummaryAction);
+const mockLogError = vi.mocked(logError);
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -68,6 +73,17 @@ function createMockSessionContext(sessionId: string | undefined): SessionContext
     lang: 'en',
     personaName: 'interactive',
     sessionId,
+  };
+}
+
+function createMissingImageAttachment() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-quiet-missing-image-'));
+  const tempPath = path.join(tempDir, 'missing-image.png');
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  return {
+    placeholder: '[Image #1]',
+    tempPath,
+    fileName: 'image-1.png',
   };
 }
 
@@ -159,6 +175,20 @@ describe('quietMode: summary AI session isolation', () => {
 
     // Then: short-circuits before callAIWithRetry
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should return cancel before calling AI when a referenced image is missing', async () => {
+    mockInitializeSession.mockReturnValue(createMockSessionContext(undefined));
+    mockBuildSummaryPrompt.mockReturnValue('Summary prompt with [Image #1]');
+
+    const result = await quietMode('/test/cwd', {
+      userMessage: 'inspect [Image #1]',
+      attachments: [createMissingImageAttachment()],
+    });
+
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
     expect(result.action).toBe('cancel');
   });
 });

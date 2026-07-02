@@ -14,6 +14,7 @@ import {
   dispatchConversationAction,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
+import { cleanupInteractiveResultAttachments } from '../../features/interactive/imageAttachments.js';
 import { INTERACTIVE_MODES } from '../../core/models/index.js';
 import {
   getWorkflowDescription,
@@ -241,48 +242,52 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
   }
 
-  await dispatchConversationAction(result, {
-    execute: async ({ task: confirmedTask }) => {
-      if (prBranch) {
-        info(`Fetching and checking out PR branch: ${prBranch}`);
-        checkoutBranch(resolvedCwd, prBranch);
-        success(`Checked out PR branch: ${prBranch}`);
-      }
-      selectOptions.interactiveUserInput = true;
-      selectOptions.workflow = workflowId;
-      selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
-      selectOptions.skipTaskList = true;
-      if (result.attachments) {
-        selectOptions.attachments = result.attachments;
-      }
-      await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
-    },
-    create_issue: async ({ task: confirmedTask }) => {
-      const labels = await promptLabelSelection(lang);
-      await createIssueAndSaveTask(resolvedCwd, confirmedTask, workflowId, {
-        confirmAtEndMessage: 'Add this issue to tasks?',
-        labels,
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-    },
-    save_task: async ({ task: confirmedTask }) => {
-      const presetSettings = prBranch
-        ? {
-          worktree: true as const,
-          branch: prBranch,
-          autoPr: true,
-          ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+  try {
+    await dispatchConversationAction(result, {
+      execute: async ({ task: confirmedTask }) => {
+        if (prBranch) {
+          info(`Fetching and checking out PR branch: ${prBranch}`);
+          checkoutBranch(resolvedCwd, prBranch);
+          success(`Checked out PR branch: ${prBranch}`);
         }
-        : undefined;
-      await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
-        presetSettings,
-        ...(prNumber !== undefined ? { prNumber } : {}),
-        ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-    },
-    cancel: () => undefined,
-  });
+        selectOptions.interactiveUserInput = true;
+        selectOptions.workflow = workflowId;
+        selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
+        selectOptions.skipTaskList = true;
+        if (result.attachments) {
+          selectOptions.attachments = result.attachments;
+        }
+        await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
+      },
+      create_issue: async ({ task: confirmedTask }) => {
+        const labels = await promptLabelSelection(lang);
+        await createIssueAndSaveTask(resolvedCwd, confirmedTask, workflowId, {
+          confirmAtEndMessage: 'Add this issue to tasks?',
+          labels,
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        });
+      },
+      save_task: async ({ task: confirmedTask }) => {
+        const presetSettings = prBranch
+          ? {
+            worktree: true as const,
+            branch: prBranch,
+            autoPr: true,
+            ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+          }
+          : undefined;
+        await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
+          presetSettings,
+          ...(prNumber !== undefined ? { prNumber } : {}),
+          ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        });
+      },
+      cancel: () => undefined,
+    });
+  } finally {
+    cleanupInteractiveResultAttachments(result);
+  }
 }
 
 program

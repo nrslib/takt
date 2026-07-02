@@ -20,6 +20,9 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
   if (options.outputSchema) {
     log.info('Cursor provider does not support outputSchema; ignoring');
   }
+  if (options.imageAttachments && options.imageAttachments.length > 0) {
+    log.info('Cursor provider does not support imageAttachments; ignoring');
+  }
 
   return {
     cwd: options.cwd,

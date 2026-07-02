@@ -12,6 +12,7 @@ import { readMultilineInput } from './lineEditor.js';
 import type { InteractiveModeResult } from './interactive.js';
 import {
   buildInteractiveResultWithAttachments,
+  cleanupImageAttachmentStore,
   createClipboardImagePasteHandler,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
@@ -38,6 +39,7 @@ export async function passthroughMode(
 
   const attachmentStore = createSessionImageAttachmentStore();
 
+  try {
   info(getLabel('interactive.ui.introPassthrough', lang));
   blankLine();
 
@@ -60,4 +62,8 @@ export async function passthroughMode(
   }
 
   return buildInteractiveResultWithAttachments({ action: 'execute', task: trimmed }, attachmentStore);
+  } catch (caught) {
+    cleanupImageAttachmentStore(attachmentStore);
+    throw caught;
+  }
 }

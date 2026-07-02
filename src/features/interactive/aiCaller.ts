@@ -15,7 +15,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
-import type { ProviderImageAttachment } from '../../infra/providers/types.js';
+import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import { expandImageAttachmentPlaceholders } from '../../infra/providers/imageAttachmentPrompt.js';
 import { buildProviderRuntimeSystemPrompt } from '../../infra/providers/runtimeSystemPrompt.js';
@@ -41,7 +41,7 @@ export interface SessionContext {
 }
 
 interface CallAIWithRetryOptions {
-  imageAttachments?: ProviderImageAttachment[];
+  imageAttachments?: ImageAttachmentReference[];
   permissionMode?: PermissionMode;
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
@@ -99,10 +99,16 @@ export async function callAIWithRetry(
       ctx.provider.getRuntimeInstructions(),
     );
     const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
-    const promptForProvider = expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
+    const hasImageAttachments = options.imageAttachments !== undefined && options.imageAttachments.length > 0;
     const nativeImageAttachments = ctx.provider.supportsNativeImageInput
       ? options.imageAttachments
       : undefined;
+    const promptForProvider = ctx.provider.supportsNativeImageInput
+      ? prompt
+      : expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
+    if (hasImageAttachments && nativeImageAttachments === undefined) {
+      info(`Provider "${ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
+    }
     const response = await agent.call(promptForProvider, {
       cwd,
       model: ctx.model,

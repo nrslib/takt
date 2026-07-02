@@ -40,7 +40,7 @@ import {
   buildConversationSummaryPrompt,
 } from './interactiveApplication.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
-import type { InteractiveImageAttachment } from './imageAttachments.js';
+import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
@@ -189,6 +189,8 @@ export interface InteractiveSeedInput {
   userMessage?: string;
   /** Untrusted reference context loaded from PR/Issue sources. */
   sourceContext?: string;
+  /** Images already associated with the seeded user input. */
+  attachments?: InteractiveImageAttachment[];
 }
 
 export async function interactiveMode(
@@ -270,7 +272,7 @@ export {
   BASE_SUMMARY_ACTIONS,
 } from './interactive-summary.js';
 
-export interface InteractiveModeResult {
+export interface InteractiveModeResult extends ImageAttachmentCleanupOwner {
   /** The action selected by the user */
   action: InteractiveModeAction;
   /** The assembled task text (only meaningful when action is not 'cancel') */
