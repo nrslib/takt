@@ -21,6 +21,8 @@ export { TaskSummarizer } from './summarize.js';
 export { BranchManager } from './branchList.js';
 
 export { TaskRunner } from './runner.js';
+export type { AutoRequeueResult, AutoRequeueSkipReason } from './taskRetryService.js';
+export { buildAutoRequeueNote } from './retryNote.js';
 
 export { showTaskList } from './display.js';
 export {

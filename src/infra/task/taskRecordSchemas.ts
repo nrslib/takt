@@ -30,6 +30,7 @@ export const TaskRecordSchema = buildTaskSchema(
     completed_at: z.string().nullable(),
     owner_pid: z.number().int().positive().nullable().optional(),
     failure: TaskFailureSchema.optional(),
+    auto_requeue_count: z.number().int().min(0).optional(),
   }),
 ).superRefine((value, ctx) => {
   const sourceFields = [value.content, value.content_file, value.task_dir].filter((field) => field !== undefined);

@@ -76,6 +76,12 @@ function createMockTaskRunner(taskBatches: TaskInfo[][]) {
     }),
     completeTask: vi.fn(),
     failTask: vi.fn(),
+    autoRequeueFailedTask: vi.fn(() => ({
+      requeued: false,
+      attempt: 0,
+      maxAttempts: 1,
+      reason: 'max_attempts_reached',
+    })),
   };
 }
 
@@ -242,6 +248,90 @@ describe('runWithWorkerPool', () => {
     });
   });
 
+  it('should auto-requeue a failed task and continue polling without counting the requeued attempt as failed', async () => {
+    const initialTask = createTask('retry-me');
+    const requeuedTask = createTask('retry-me');
+    const runner = createMockTaskRunner([[requeuedTask], []]);
+    runner.autoRequeueFailedTask.mockReturnValue({
+      requeued: true,
+      attempt: 1,
+      maxAttempts: 1,
+      reason: 'requeued',
+    });
+    mockExecuteRunTaskAndComplete
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const result = await runWithWorkerPool(
+      runner as never,
+      [initialTask],
+      1,
+      '/cwd',
+      undefined,
+      { autoRequeueMaxAttempts: 1 } as never,
+      TEST_POLL_INTERVAL_MS,
+    );
+
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('retry-me', {
+      maxAttempts: 1,
+    });
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledTimes(2);
+    expect(mockInfo).toHaveBeenCalledWith('Task "retry-me" auto-requeued (1/1)');
+    expect(result.success).toBe(1);
+    expect(result.fail).toBe(0);
+  });
+
+  it('should count a failed task as failed when auto requeue is disabled', async () => {
+    const task = createTask('no-auto-requeue');
+    const runner = createMockTaskRunner([]);
+    mockExecuteRunTaskAndComplete.mockResolvedValueOnce(false);
+
+    const result = await runWithWorkerPool(
+      runner as never,
+      [task],
+      1,
+      '/cwd',
+      undefined,
+      { autoRequeueMaxAttempts: 0 } as never,
+      TEST_POLL_INTERVAL_MS,
+    );
+
+    expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
+    expect(result.success).toBe(0);
+    expect(result.fail).toBe(1);
+  });
+
+  it('should count a failed task as failed when auto requeue limit has been reached', async () => {
+    const task = createTask('auto-requeue-limit');
+    const runner = createMockTaskRunner([]);
+    runner.autoRequeueFailedTask.mockReturnValue({
+      requeued: false,
+      attempt: 2,
+      maxAttempts: 2,
+      reason: 'max_attempts_reached',
+    });
+    mockExecuteRunTaskAndComplete.mockResolvedValueOnce(false);
+
+    const result = await runWithWorkerPool(
+      runner as never,
+      [task],
+      1,
+      '/cwd',
+      undefined,
+      { autoRequeueMaxAttempts: 2 } as never,
+      TEST_POLL_INTERVAL_MS,
+    );
+
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('auto-requeue-limit', {
+      maxAttempts: 2,
+    });
+    expect(mockInfo).toHaveBeenCalledWith(
+      'Task "auto-requeue-limit" was not auto-requeued: max attempts reached (2/2)',
+    );
+    expect(result.success).toBe(0);
+    expect(result.fail).toBe(1);
+  });
+
   it('should respect concurrency limit', async () => {
     // Given: 4 tasks, concurrency=2
     const tasks = Array.from({ length: 4 }, (_, i) => createTask(`task-${i}`));
@@ -361,6 +451,49 @@ describe('runWithWorkerPool', () => {
     // Then: pool returns after in-flight tasks settle, counting them as failures.
     const result = await resultPromise;
     expect(result).toEqual({ success: 0, fail: 2, executedTaskNames: ['t1', 't2'] });
+  });
+
+  it('should not auto-requeue a failed in-flight task after SIGINT', async () => {
+    const task = createTask('interrupted-failure');
+    const runner = createMockTaskRunner([]);
+    let resolveTask: ((value: boolean) => void) | undefined;
+    const startedSignals: AbortSignal[] = [];
+
+    mockExecuteRunTaskAndComplete.mockImplementation((_task, _runner, _cwd, _opts, parallelOpts) => {
+      const signal = parallelOpts?.abortSignal;
+      if (signal) startedSignals.push(signal);
+      return new Promise<boolean>((resolve) => {
+        resolveTask = resolve;
+      });
+    });
+
+    const resultPromise = runWithWorkerPool(
+      runner as never,
+      [task],
+      1,
+      '/cwd',
+      undefined,
+      { autoRequeueMaxAttempts: 1 } as never,
+      TEST_POLL_INTERVAL_MS,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const sigintListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
+    const handler = sigintListeners[sigintListeners.length - 1];
+    expect(handler).toBeDefined();
+    handler!();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(startedSignals).toHaveLength(1);
+    expect(startedSignals[0]!.aborted).toBe(true);
+
+    expect(resolveTask).toBeDefined();
+    resolveTask!(false);
+
+    const result = await resultPromise;
+    expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: 0, fail: 1, executedTaskNames: ['interrupted-failure'] });
   });
 
   describe('polling', () => {

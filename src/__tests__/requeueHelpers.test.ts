@@ -77,6 +77,19 @@ describe('buildAutoRequeueNote', () => {
     ].join('\n'));
   });
 
+  it('自動 Requeue の note はユーザー操作として扱わない', () => {
+    const failure: TaskFailure = {
+      step: 'review',
+      error: 'Lint error in src/index.ts',
+    };
+
+    const note = buildAutoRequeueNote(failure, { attempt: 1, maxAttempts: 2 });
+
+    expect(note).toContain('[Auto-requeue] 自動 Requeue 試行: 1/2');
+    expect(note).toContain('自動 Requeue による再実行です');
+    expect(note).not.toContain('ユーザーがリキューしたため');
+  });
+
   it('step が未記録なら step 名なしの note を生成しない', () => {
     const failure: TaskFailure = {
       error: 'Boom',

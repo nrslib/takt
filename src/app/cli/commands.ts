@@ -39,7 +39,7 @@ program
     const opts = command.optsWithGlobals();
     await runAllTasks(resolvedCwd, {
       ...resolveAgentOverrides(program),
-      ignoreExceed: opts.ignoreExceed === true,
+      ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
     });
   });
 
@@ -51,7 +51,7 @@ program
     const opts = command.optsWithGlobals();
     await watchTasks(resolvedCwd, {
       ...resolveAgentOverrides(program),
-      ignoreExceed: opts.ignoreExceed === true,
+      ...(opts.ignoreExceed === true ? { ignoreExceed: true } : {}),
     });
   });
 
