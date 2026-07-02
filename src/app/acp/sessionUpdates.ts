@@ -22,6 +22,7 @@ export function formatEnqueueResult(result: AcpEnqueueResult): string {
   return [
     'Task added to the TAKT queue.',
     'status: pending',
+    ...(result.issueNumber !== undefined ? [`issue: #${result.issueNumber}`] : []),
     'worktree: true',
     `workflow: ${result.workflow}`,
     `task: ${result.taskName}`,

@@ -114,17 +114,32 @@ function resolveIssueTitle(
   };
 }
 
+type CreateIssueFromTaskOptions = {
+  labels?: string[];
+  cwd?: string;
+  title?: string;
+  outputMode?: 'terminal' | 'silent';
+};
+
+function shouldWriteIssueOutput(options: CreateIssueFromTaskOptions | undefined): boolean {
+  return options?.outputMode !== 'silent';
+}
+
 export function createIssueFromTask(
   task: string,
-  options?: { labels?: string[]; cwd?: string; title?: string },
+  options?: CreateIssueFromTaskOptions,
 ): number | undefined {
-  info('Creating issue...');
+  if (shouldWriteIssueOutput(options)) {
+    info('Creating issue...');
+  }
   let resolvedTitle: ReturnType<typeof resolveIssueTitle>;
   try {
     resolvedTitle = resolveIssueTitle(task, options?.title);
   } catch (titleError) {
     const message = titleError instanceof Error ? titleError.message : String(titleError);
-    error(`Failed to create issue: ${message}`);
+    if (shouldWriteIssueOutput(options)) {
+      error(`Failed to create issue: ${message}`);
+    }
     log.error('Failed to create issue', {
       error: message,
       used_structured_output: false,
@@ -139,7 +154,9 @@ export function createIssueFromTask(
   const issueResult = getGitProvider().createIssue({ title, body: task, labels }, options?.cwd);
   if (issueResult.success) {
     if (!issueResult.url) {
-      error('Failed to extract issue number from URL');
+      if (shouldWriteIssueOutput(options)) {
+        error('Failed to extract issue number from URL');
+      }
       log.error('Failed to create issue', {
         error: 'Failed to extract issue number from URL',
         used_structured_output: usedStructuredOutput,
@@ -147,10 +164,14 @@ export function createIssueFromTask(
       });
       return undefined;
     }
-    success(`Issue created: ${issueResult.url}`);
+    if (shouldWriteIssueOutput(options)) {
+      success(`Issue created: ${issueResult.url}`);
+    }
     const num = Number(issueResult.url.split('/').pop());
     if (Number.isNaN(num)) {
-      error('Failed to extract issue number from URL');
+      if (shouldWriteIssueOutput(options)) {
+        error('Failed to extract issue number from URL');
+      }
       log.error('Failed to create issue', {
         error: 'Failed to extract issue number from URL',
         used_structured_output: usedStructuredOutput,
@@ -166,7 +187,9 @@ export function createIssueFromTask(
     });
     return num;
   } else {
-    error(`Failed to create issue: ${issueResult.error}`);
+    if (shouldWriteIssueOutput(options)) {
+      error(`Failed to create issue: ${issueResult.error}`);
+    }
     log.error('Failed to create issue', {
       error: issueResult.error,
       used_structured_output: usedStructuredOutput,

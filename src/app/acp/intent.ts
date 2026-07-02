@@ -1,6 +1,6 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { matchSlashCommand } from '../../features/interactive/commandMatcher.js';
-import type { AcpDefaultAction } from './types.js';
+import type { AcpDefaultAction, AcpTaskInstructionAction } from './types.js';
 
 export type AcpPromptIntent =
   | {
@@ -8,9 +8,28 @@ export type AcpPromptIntent =
     }
   | {
       kind: 'task_instruction';
-      action: AcpDefaultAction;
+      action: AcpTaskInstructionAction;
       userNote: string;
     };
+
+const ISSUE_AND_ENQUEUE_PHRASES = [
+  'issueを作ってタスクに積んで',
+  'issueを作ってタスクに積む',
+  'issue作ってタスクに積んで',
+  'issue を作ってタスクに積んで',
+  'issue を作ってタスクに積む',
+  'github issueを作ってタスクに積んで',
+  'github issueを作ってタスクに積む',
+  'github issue を作ってタスクに積んで',
+  'github issue を作ってタスクに積む',
+  'issueを作ってpending taskにして',
+  'issue を作って pending task にして',
+  'create issue and enqueue',
+  'create an issue and enqueue',
+  'create a github issue and enqueue',
+  'create issue and make it a pending task',
+  'create an issue and make it a pending task',
+];
 
 const ENQUEUE_PHRASES = [
   'タスクに積んで',
@@ -184,6 +203,11 @@ function hasEnqueueInstruction(text: string): boolean {
     || hasTaskQueueCommand(text);
 }
 
+function hasIssueAndEnqueueInstruction(text: string): boolean {
+  return findPhraseMatches(text, ISSUE_AND_ENQUEUE_PHRASES)
+    .some((match) => !isNegatedPhrase(text, match) && !isAdvisoryInstructionPhrase(text, match));
+}
+
 function hasDirectInstruction(text: string): boolean {
   return findPhraseMatches(text, DIRECT_PHRASES)
     .some((match) => !isNegatedPhrase(text, match) && !isIndirectDirectPhrase(text, match));
@@ -203,12 +227,20 @@ export function resolveAcpPromptIntent(
   }
 
   const hasDirect = hasDirectInstruction(text);
+  const hasIssueAndEnqueue = hasIssueAndEnqueueInstruction(text);
   const hasEnqueue = hasEnqueueInstruction(text);
 
   if (hasDirect) {
     return {
       kind: 'task_instruction',
       action: 'direct',
+      userNote: text,
+    };
+  }
+  if (hasIssueAndEnqueue) {
+    return {
+      kind: 'task_instruction',
+      action: 'create_issue_and_enqueue',
       userNote: text,
     };
   }

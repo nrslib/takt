@@ -34,11 +34,12 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { success, error } from '../shared/ui/index.js';
+import { success, info, error } from '../shared/ui/index.js';
 import { createIssueFromTask } from '../features/tasks/index.js';
 import { extractTitle } from '../features/tasks/add/index.js';
 
 const mockSuccess = vi.mocked(success);
+const mockInfo = vi.mocked(info);
 const mockError = vi.mocked(error);
 
 beforeEach(() => {
@@ -131,6 +132,24 @@ describe('createIssueFromTask', () => {
 
       // Then
       expect(result).toBe(42);
+    });
+
+    it('should create the issue without UI output in silent mode', () => {
+      // Given
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
+
+      // When
+      const result = createIssueFromTask('Test task', { cwd: '/repo', outputMode: 'silent' });
+
+      // Then
+      expect(result).toBe(42);
+      expect(mockCreateIssue).toHaveBeenCalledWith(
+        { title: 'Test task', body: 'Test task' },
+        '/repo',
+      );
+      expect(mockInfo).not.toHaveBeenCalled();
+      expect(mockSuccess).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
     });
 
     it('should return undefined when creation fails', () => {

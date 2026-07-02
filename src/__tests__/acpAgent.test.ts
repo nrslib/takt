@@ -687,6 +687,101 @@ describe('TAKT ACP agent adapter', () => {
     expect(result).toEqual({ stopReason: 'end_turn' });
   });
 
+  it('should create an issue and enqueue the generated task instruction', async () => {
+    const sendSessionUpdate = vi.fn();
+    const runWorkflowExecution = vi.fn();
+    const createIssueFromTask = vi.fn().mockReturnValue(913);
+    const saveTaskFile = vi.fn().mockResolvedValue({
+      taskName: '20260701-implement-acp-support',
+      tasksFile: '/repo/.takt/tasks.yaml',
+    });
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult({
+      workflowIdentifier: 'review',
+    }));
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      createIssueFromTask,
+      sendSessionUpdate,
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'Issueを作ってタスクに積んで' }],
+    });
+
+    expect(createTaskInstruction).toHaveBeenCalledWith(expect.objectContaining({
+      userNote: 'Issueを作ってタスクに積んで',
+      abortSignal: expect.any(AbortSignal),
+    }));
+    expect(createIssueFromTask).toHaveBeenCalledWith('Implement ACP support', {
+      cwd: '/repo',
+      outputMode: 'silent',
+    });
+    expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
+      workflow: 'review',
+      worktree: true,
+      autoPr: false,
+      issue: 913,
+    });
+    expect(createIssueFromTask.mock.invocationCallOrder[0]).toBeLessThan(
+      saveTaskFile.mock.invocationCallOrder[0],
+    );
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'agent_message',
+      text: expect.stringMatching(/issue: #913[\s\S]*workflow: review[\s\S]*takt run/i),
+    });
+    expect(result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('should not enqueue when ACP issue creation fails', async () => {
+    const sendSessionUpdate = vi.fn();
+    const runWorkflowExecution = vi.fn();
+    const createIssueFromTask = vi.fn().mockReturnValue(undefined);
+    const saveTaskFile = vi.fn();
+    const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'assistant_response',
+          content: 'conversation path should not be used',
+        }),
+        createTaskInstruction,
+      })),
+      runWorkflowExecution,
+      saveTaskFile,
+      createIssueFromTask,
+      sendSessionUpdate,
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    const result = await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'create an issue and enqueue' }],
+    });
+
+    expect(createIssueFromTask).toHaveBeenCalledWith('Implement ACP support', {
+      cwd: '/repo',
+      outputMode: 'silent',
+    });
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'agent_message',
+      text: 'Failed to enqueue task: Issue creation failed',
+    });
+    expect(result).toEqual({ stopReason: 'refusal' });
+  });
+
   it.each([
     'pending task にして prNumber: -1',
     'タスクに積んで。今すぐ実行して PR #0',

@@ -3,7 +3,12 @@ import { isAbsolute } from 'node:path';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { packageVersion } from '../../shared/package-info.js';
 import type { ConversationSessionResult } from '../../features/interactive/conversationSession.js';
-import { defaultSaveTaskFile, enqueueAcpTask } from './enqueue.js';
+import {
+  createIssueAndEnqueueAcpTask,
+  defaultCreateIssueFromTask,
+  defaultSaveTaskFile,
+  enqueueAcpTask,
+} from './enqueue.js';
 import {
   runWorkflowExecution,
 } from '../../features/tasks/execute/workflowExecutionApi.js';
@@ -44,6 +49,7 @@ import {
 } from './taskContext.js';
 import type {
   AcpDefaultAction,
+  AcpTaskInstructionAction,
   AcpTaskContext,
   TaktAcpAgentDependencies,
   TaktAcpSessionUpdate,
@@ -120,6 +126,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
   const createSession = deps.createConversationSession ?? createDefaultConversationSession;
   const executeWorkflowRequest = deps.runWorkflowExecution ?? runWorkflowExecution;
   const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
+  const createIssueFromTask = deps.createIssueFromTask ?? defaultCreateIssueFromTask;
   const sendSessionUpdate = deps.sendSessionUpdate;
   const createElicitation = deps.createElicitation;
   const defaultWorkflowIdentifier = deps.workflowIdentifier ?? DEFAULT_WORKFLOW_NAME;
@@ -199,7 +206,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
   async function handleWorkflowInstruction(
     sessionId: string,
     result: ConversationSessionResult,
-    action: AcpDefaultAction,
+    action: AcpTaskInstructionAction,
     abortSignal: AbortSignal,
   ): Promise<PromptResponse> {
     if (abortSignal.aborted) {
@@ -222,14 +229,24 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
 
     const session = requireAcpSession(sessions, sessionId);
     try {
-      const created = await enqueueAcpTask({
-        cwd: session.cwd,
-        instruction: result,
-        workflow,
-        saveTaskFile,
-        taskContext: session.taskContext,
-        abortSignal,
-      });
+      const created = action === 'create_issue_and_enqueue'
+        ? await createIssueAndEnqueueAcpTask({
+          cwd: session.cwd,
+          instruction: result,
+          workflow,
+          saveTaskFile,
+          createIssueFromTask,
+          taskContext: session.taskContext,
+          abortSignal,
+        })
+        : await enqueueAcpTask({
+          cwd: session.cwd,
+          instruction: result,
+          workflow,
+          saveTaskFile,
+          taskContext: session.taskContext,
+          abortSignal,
+        });
       await sendAgentMessage(sessionId, formatEnqueueResult(created));
       return { stopReason: 'end_turn' };
     } catch (error) {
