@@ -158,6 +158,7 @@ steps:
     persona: ai-antipattern-reviewer
     policy:
       - review
+      - review-finding-contract
       - ai-antipattern
       - existing-system-respect
     knowledge:
@@ -222,6 +223,7 @@ steps:
     persona: architecture-reviewer
     policy:
       - review
+      - review-finding-contract
       - existing-system-respect
     knowledge:
       - existing-system
@@ -248,6 +250,7 @@ steps:
         persona: architecture-reviewer
         policy:
           - review
+          - review-finding-contract
           - existing-system-respect
         knowledge:
           - architecture
@@ -276,6 +279,7 @@ steps:
         persona: testing-reviewer
         policy:
           - review
+          - review-finding-contract
           - testing
           - existing-system-respect
         knowledge:
@@ -305,6 +309,7 @@ steps:
         persona: ai-antipattern-reviewer
         policy:
           - review
+          - review-finding-contract
           - ai-antipattern
           - existing-system-respect
         knowledge:
@@ -341,6 +346,7 @@ steps:
         persona: security-reviewer
         policy:
           - review
+          - review-finding-contract
           - existing-system-respect
         knowledge:
           - security
@@ -368,6 +374,7 @@ steps:
         persona: qa-reviewer
         policy:
           - review
+          - review-finding-contract
           - qa
           - existing-system-respect
         knowledge:
@@ -393,7 +400,9 @@ steps:
           - review
         edit: false
         persona: pure-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         provider_options:
           claude:
             allowed_tools:
@@ -418,6 +427,7 @@ steps:
         persona: coding-reviewer
         policy:
           - review
+          - review-finding-contract
           - coding
         provider_options:
           claude:
@@ -481,6 +491,7 @@ steps:
     persona: dual-supervisor
     policy:
       - review
+      - review-finding-contract
       - existing-system-respect
     knowledge:
       - existing-system

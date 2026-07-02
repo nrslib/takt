@@ -55,6 +55,7 @@ steps:
     persona: testing-reviewer
     policy:
       - review
+      - review-finding-contract
       - testing
     knowledge:
       - architecture
@@ -77,7 +78,9 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - e2e-testing
     instruction: e2e-audit-supervise
@@ -95,6 +98,7 @@ steps:
     persona: testing-reviewer
     policy:
       - review
+      - review-finding-contract
       - testing
     knowledge:
       - e2e-testing

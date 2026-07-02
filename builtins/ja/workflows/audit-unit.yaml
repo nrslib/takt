@@ -57,6 +57,7 @@ steps:
     persona: testing-reviewer
     policy:
       - review
+      - review-finding-contract
       - testing
     knowledge:
       - architecture
@@ -79,7 +80,9 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - unit-testing
     instruction: unit-audit-supervise
@@ -97,6 +100,7 @@ steps:
     persona: testing-reviewer
     policy:
       - review
+      - review-finding-contract
       - testing
     knowledge:
       - unit-testing

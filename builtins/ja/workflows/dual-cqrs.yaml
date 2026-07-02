@@ -118,6 +118,7 @@ steps:
     persona: ai-antipattern-reviewer
     policy:
       - review
+      - review-finding-contract
       - ai-antipattern
     provider_options:
       claude:
@@ -179,7 +180,9 @@ steps:
       - review
     edit: false
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     provider_options:
       claude:
         allowed_tools:
@@ -201,7 +204,9 @@ steps:
           - review
         edit: false
         persona: cqrs-es-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         knowledge:
           - cqrs-es
           - backend
@@ -228,6 +233,7 @@ steps:
         persona: frontend-reviewer
         policy:
           - review
+          - review-finding-contract
           - design-fidelity
         knowledge: frontend
         provider_options:
@@ -251,7 +257,9 @@ steps:
           - review
         edit: false
         persona: security-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         knowledge: security
         provider_options:
           claude:
@@ -276,6 +284,7 @@ steps:
         persona: qa-reviewer
         policy:
           - review
+          - review-finding-contract
           - qa
         provider_options:
           claude:
@@ -300,6 +309,7 @@ steps:
         persona: ai-antipattern-reviewer
         policy:
           - review
+          - review-finding-contract
           - ai-antipattern
         provider_options:
           claude:
@@ -322,7 +332,9 @@ steps:
           - review
         edit: false
         persona: pure-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         provider_options:
           claude:
             allowed_tools:
@@ -347,6 +359,7 @@ steps:
         persona: coding-reviewer
         policy:
           - review
+          - review-finding-contract
           - coding
         provider_options:
           claude:
@@ -410,7 +423,9 @@ steps:
       - review
     edit: false
     persona: dual-supervisor
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     provider_options:
       claude:
         allowed_tools:

@@ -86,6 +86,7 @@ steps:
         persona: terraform-reviewer
         policy:
           - review
+          - review-finding-contract
           - terraform
         knowledge: terraform-aws
         provider_options:
@@ -112,6 +113,7 @@ steps:
         persona: ai-antipattern-reviewer
         policy:
           - review
+          - review-finding-contract
           - ai-antipattern
         provider_options:
           claude:
@@ -134,7 +136,9 @@ steps:
           - review
         edit: false
         persona: pure-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         provider_options:
           claude:
             allowed_tools:
@@ -159,6 +163,7 @@ steps:
         persona: coding-reviewer
         policy:
           - review
+          - review-finding-contract
           - coding
         provider_options:
           claude:
@@ -187,7 +192,9 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge: terraform-aws
     provider_options:
       claude:

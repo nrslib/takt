@@ -96,6 +96,7 @@ steps:
     persona: ai-antipattern-reviewer
     policy:
       - review
+      - review-finding-contract
       - ai-antipattern
     provider_options:
       extends: review-readonly
@@ -137,7 +138,9 @@ steps:
       - review
     edit: false
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     provider_options:
       extends: review-files
     rules:
