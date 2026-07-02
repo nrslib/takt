@@ -158,6 +158,13 @@ const testAttachment = {
   fileName: 'image-1.png',
 };
 
+function withAttachmentCleanup(result: InteractiveModeResult, cleanupAttachments: () => void): InteractiveModeResult {
+  return {
+    ...result,
+    cleanupAttachments,
+  };
+}
+
 function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: string }> = {}): PrReviewData {
   return {
     number: 456,
@@ -194,11 +201,12 @@ beforeEach(() => {
 
 describe('interactive image attachment routing', () => {
   it('should pass attachments from interactive execute result to selectAndExecuteTask', async () => {
-    mockInteractiveMode.mockResolvedValue({
+    const cleanupAttachments = vi.fn();
+    mockInteractiveMode.mockResolvedValue(withAttachmentCleanup({
       action: 'execute',
       task: 'Use [Image #1] as reference.',
       attachments: [testAttachment],
-    } satisfies InteractiveModeResult);
+    } satisfies InteractiveModeResult, cleanupAttachments));
 
     await executeDefaultAction();
 
@@ -210,6 +218,21 @@ describe('interactive image attachment routing', () => {
       }),
       undefined,
     );
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('should cleanup attachments when interactive execute handling throws', async () => {
+    const cleanupAttachments = vi.fn();
+    mockInteractiveMode.mockResolvedValue(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Use [Image #1] as reference.',
+      attachments: [testAttachment],
+    } satisfies InteractiveModeResult, cleanupAttachments));
+    mockSelectAndExecuteTask.mockRejectedValueOnce(new Error('execute failed'));
+
+    await expect(executeDefaultAction()).rejects.toThrow('execute failed');
+
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 
   it('should pass attachments from interactive save_task result to saveTaskFromInteractive', async () => {
@@ -251,17 +274,19 @@ describe('interactive image attachment routing', () => {
   });
 
   it('should not promote pasted image attachments when interactive input is cancelled', async () => {
-    mockInteractiveMode.mockResolvedValue({
+    const cleanupAttachments = vi.fn();
+    mockInteractiveMode.mockResolvedValue(withAttachmentCleanup({
       action: 'cancel',
       task: '',
       attachments: [testAttachment],
-    } satisfies InteractiveModeResult);
+    } satisfies InteractiveModeResult, cleanupAttachments));
 
     await executeDefaultAction();
 
     expect(mockSelectAndExecuteTask).not.toHaveBeenCalled();
     expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
     expect(mockCreateIssueAndSaveTask).not.toHaveBeenCalled();
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 });
 

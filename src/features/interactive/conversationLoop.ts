@@ -40,6 +40,7 @@ import {
 import { prependInitialPromptContext } from './promptSections.js';
 import {
   buildInteractiveResultWithAttachments,
+  cleanupImageAttachmentStore,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
@@ -138,6 +139,7 @@ export async function runConversationLoop(
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
   const attachmentStore = createSessionImageAttachmentStore(initialInput?.attachments);
 
+  try {
   info(strategy.introMessage);
   if (sessionId) {
     info(ui.resume);
@@ -354,5 +356,9 @@ export async function runConversationLoop(
         continue;
       }
     }
+  }
+  } catch (caught) {
+    cleanupImageAttachmentStore(attachmentStore);
+    throw caught;
   }
 }

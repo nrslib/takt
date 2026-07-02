@@ -34,7 +34,7 @@ import {
   selectSummaryAction,
 } from './interactive-summary.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
-import type { InteractiveImageAttachment } from './imageAttachments.js';
+import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
@@ -221,7 +221,7 @@ export {
   BASE_SUMMARY_ACTIONS,
 } from './interactive-summary.js';
 
-export interface InteractiveModeResult {
+export interface InteractiveModeResult extends ImageAttachmentCleanupOwner {
   /** The action selected by the user */
   action: InteractiveModeAction;
   /** The assembled task text (only meaningful when action is not 'cancel') */

@@ -84,11 +84,13 @@ export async function callAIWithRetry(
       ctx.provider.getRuntimeInstructions(),
     );
     const agent = ctx.provider.setup({ name: ctx.personaName, systemPrompt: resolvedSystemPrompt });
-    const promptForProvider = expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
     const hasImageAttachments = options.imageAttachments !== undefined && options.imageAttachments.length > 0;
     const nativeImageAttachments = ctx.provider.supportsNativeImageInput
       ? options.imageAttachments
       : undefined;
+    const promptForProvider = ctx.provider.supportsNativeImageInput
+      ? prompt
+      : expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
     if (hasImageAttachments && nativeImageAttachments === undefined) {
       info(`Provider "${ctx.providerType}" does not support native image input; image paths were added to the prompt.`);
     }

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ImageAttachmentReference, StoredImageAttachment } from '../types/image-attachments.js';
 
-export const IMAGE_ATTACHMENT_PLACEHOLDER_PATTERN = /\[Image #\d+\]/g;
+const IMAGE_ATTACHMENT_PLACEHOLDER_PATTERN = /\[Image #\d+\]/g;
 
 const IMAGE_ATTACHMENT_PLACEHOLDER_EXACT_PATTERN = /^\[Image #[1-9]\d*\]$/;
 const SUPPORTED_IMAGE_ATTACHMENT_EXTENSIONS = new Set(['.gif', '.jpeg', '.jpg', '.png', '.webp']);
@@ -57,7 +57,6 @@ export function resolveReferencedImageAttachments(
 
   const attachmentByPlaceholder = new Map<string, StoredImageAttachment>();
   for (const attachment of attachments) {
-    validateStoredImageAttachment(attachment);
     if (attachmentByPlaceholder.has(attachment.placeholder)) {
       throw new Error(`Duplicate image attachment placeholder: ${attachment.placeholder}`);
     }
@@ -69,6 +68,7 @@ export function resolveReferencedImageAttachments(
     if (attachment === undefined) {
       return [];
     }
+    validateStoredImageAttachment(attachment);
     assertRegularImageAttachmentFile(attachment.tempPath);
     return [{
       placeholder: attachment.placeholder,

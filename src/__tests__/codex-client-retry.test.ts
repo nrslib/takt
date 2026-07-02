@@ -195,9 +195,37 @@ describe('CodexClient retry', () => {
     expect(result.status).toBe('done');
     expect(runStreamedInputs[0]).toEqual([
       { type: 'text', text: 'この画像を見て [Image #1]' },
-      { type: 'text', text: `[Image #1] path: \`${imagePath}\`` },
+      { type: 'text', text: '[Image #1]' },
       { type: 'local_image', path: imagePath },
     ]);
+  });
+
+  it('imageAttachments の validation error は reject せず AgentResponse.error として返す', async () => {
+    const client = new CodexClient();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-missing-image-test-'));
+    tempRoots.add(root);
+    const missingPath = path.join(root, 'missing.png');
+    const onStream = vi.fn();
+
+    const result = await client.call('coder', 'この画像を見て [Image #1]', {
+      cwd: '/tmp',
+      imageAttachments: [{ placeholder: '[Image #1]', path: missingPath }],
+      onStream,
+    });
+
+    expect(startThreadCalls).toHaveLength(0);
+    expect(runStreamedInputs).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.error).toContain(`Failed to read image attachment at ${missingPath}`);
+    expect(result.failureCategory).toBe('provider_error');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining(`Failed to read image attachment at ${missingPath}`),
+        failureCategory: 'provider_error',
+      }),
+    });
   });
 
   it('turn.failed の at capacity を 1 秒後に retry して成功を返す', async () => {

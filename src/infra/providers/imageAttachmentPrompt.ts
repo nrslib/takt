@@ -1,6 +1,6 @@
 import type { ProviderImageAttachment } from './types.js';
 
-export function formatImageAttachmentPathReference(attachment: ProviderImageAttachment): string {
+function formatImageAttachmentPathReference(attachment: ProviderImageAttachment): string {
   return `${attachment.placeholder} path: \`${attachment.path}\``;
 }
 

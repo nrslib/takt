@@ -1,8 +1,8 @@
-import type { InteractiveImageAttachment } from './imageAttachments.js';
+import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
 
 export type InstructModeAction = 'execute' | 'save_task' | 'cancel';
 
-export interface InstructModeResult {
+export interface InstructModeResult extends ImageAttachmentCleanupOwner {
   action: InstructModeAction;
   task: string;
   attachments?: InteractiveImageAttachment[];

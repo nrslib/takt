@@ -221,8 +221,85 @@ describe('exec command setup', () => {
       expect.objectContaining({
         saveImage: expect.any(Function),
         listAttachments: expect.any(Function),
+        cleanup: expect.any(Function),
       }),
     );
+  });
+
+  it('should cleanup pasted image session directory when exec is cancelled', async () => {
+    let sessionDir: string | undefined;
+    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
+      const store = requireImageAttachmentStore(imageAttachmentStore);
+      const attachment = await store.saveImage(Buffer.from('cancel-image'), 'image/png');
+      sessionDir = dirname(dirname(attachment.tempPath));
+      expect(existsSync(sessionDir)).toBe(true);
+      return '/cancel';
+    });
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    if (sessionDir === undefined) {
+      throw new Error('Expected the test to create an exec image attachment session directory.');
+    }
+    expect(existsSync(sessionDir)).toBe(false);
+  });
+
+  it('should cleanup pasted image session directory when interactive input returns null', async () => {
+    let sessionDir: string | undefined;
+    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
+      const store = requireImageAttachmentStore(imageAttachmentStore);
+      const attachment = await store.saveImage(Buffer.from('null-image'), 'image/png');
+      sessionDir = dirname(dirname(attachment.tempPath));
+      expect(existsSync(sessionDir)).toBe(true);
+      return null;
+    });
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    if (sessionDir === undefined) {
+      throw new Error('Expected the test to create an exec image attachment session directory.');
+    }
+    expect(existsSync(sessionDir)).toBe(false);
+  });
+
+  it('should cleanup pasted image session directory when interactive input throws', async () => {
+    let sessionDir: string | undefined;
+    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
+      const store = requireImageAttachmentStore(imageAttachmentStore);
+      const attachment = await store.saveImage(Buffer.from('throw-image'), 'image/png');
+      sessionDir = dirname(dirname(attachment.tempPath));
+      expect(existsSync(sessionDir)).toBe(true);
+      throw new Error('input failed');
+    });
+
+    await expect(runExecCommand(projectDir, {})).rejects.toThrow('input failed');
+
+    if (sessionDir === undefined) {
+      throw new Error('Expected the test to create an exec image attachment session directory.');
+    }
+    expect(existsSync(sessionDir)).toBe(false);
+  });
+
+  it('should keep exec cancellation flow when image attachment cleanup fails', async () => {
+    let sessionDir: string | undefined;
+    mockReadInteractiveInput.mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
+      const store = requireImageAttachmentStore(imageAttachmentStore);
+      const attachment = await store.saveImage(Buffer.from('cleanup-failure-image'), 'image/png');
+      sessionDir = dirname(dirname(attachment.tempPath));
+      const cleanup = store.cleanup.bind(store);
+      store.cleanup = () => {
+        cleanup();
+        throw new Error('cleanup failed');
+      };
+      return '/cancel';
+    });
+
+    await expect(runExecCommand(projectDir, {})).resolves.toBeUndefined();
+
+    if (sessionDir === undefined) {
+      throw new Error('Expected the test to create an exec image attachment session directory.');
+    }
+    expect(existsSync(sessionDir)).toBe(false);
   });
 
   it('should pass referenced pasted images to exec assistant provider calls', async () => {
@@ -302,7 +379,7 @@ describe('exec command setup', () => {
     expect(output).toContain('Cancelled');
   });
 
-  it('should pass /go referenced pasted images to workflow and completion when summary and run artifacts omit placeholders', async () => {
+  it('should pass /go referenced pasted images to workflow but not completion when only run artifacts mention placeholders', async () => {
     let pastedAttachment: InteractiveImageAttachment | undefined;
     mockReadInteractiveInput
       .mockImplementationOnce(async (_prompt, _lang, _availability, imageAttachmentStore) => {
@@ -323,8 +400,8 @@ describe('exec command setup', () => {
       });
     mockFormatRunSessionForPrompt.mockReturnValue({
       runStatus: 'completed',
-      runReports: '# Review Result\n\napproved without image placeholders',
-      runStepLogs: 'execute/review logs without image placeholders',
+      runReports: '# Review Result\n\nuntrusted report mentions [Image #1]',
+      runStepLogs: 'untrusted step log mentions [Image #1]',
     });
 
     await expect(runExecCommand(projectDir, { preset: 'backend' })).resolves.toBeUndefined();
@@ -342,12 +419,7 @@ describe('exec command setup', () => {
     });
     expect(mockCallAIWithRetry.mock.calls[1]?.[5]).toEqual({
       permissionMode: 'readonly',
-      imageAttachments: [
-        {
-          placeholder: pastedAttachment.placeholder,
-          path: pastedAttachment.tempPath,
-        },
-      ],
+      imageAttachments: [],
     });
     expect(mockSelectAndExecuteTask.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
       attachments: [pastedAttachment],
@@ -452,7 +524,7 @@ describe('exec command setup', () => {
     }));
     expect(mockCallAIWithRetry.mock.calls[2]?.[5]).toEqual({
       permissionMode: 'readonly',
-      imageAttachments: [referencedImageAttachment],
+      imageAttachments: [],
     });
   });
 

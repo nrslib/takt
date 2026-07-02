@@ -178,8 +178,36 @@ function createOscImagePaste(): string {
   return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length}:${imageData.toString('base64')}\x07`;
 }
 
+function createInvalidSizeOscImagePaste(): string {
+  const imageData = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  return `\x1B]1337;File=inline=1;name=reference.png;size=${imageData.length + 1}:${imageData.toString('base64')}\x07`;
+}
+
 function trackAttachmentSession(tempPath: string): void {
   attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
+}
+
+function createIsolatedTmpRoot(prefix: string): string {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  attachmentSessionDirs.add(tmpRoot);
+  return tmpRoot;
+}
+
+function listTaktTempSessionDirs(): Set<string> {
+  const taktTempRoot = path.join(os.tmpdir(), 'takt');
+  if (!fs.existsSync(taktTempRoot)) {
+    return new Set();
+  }
+  return new Set(
+    fs.readdirSync(taktTempRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(taktTempRoot, entry.name)),
+  );
+}
+
+function expectNoNewTaktTempSessionDirs(previous: Set<string>): void {
+  const leaked = [...listTaktTempSessionDirs()].filter((sessionDir) => !previous.has(sessionDir));
+  expect(leaked).toEqual([]);
 }
 
 function createMissingImageAttachment() {
@@ -302,6 +330,38 @@ describe('callAIWithRetry', () => {
     expect(capture.imageAttachments).toEqual([undefined]);
     expect(mockLogInfo).toHaveBeenCalledWith(
       'Provider "mock" does not support native image input; image paths were added to the prompt.',
+    );
+  });
+
+  it('keeps local image paths out of prompts for native providers and stale-session retry', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ], { supportsNativeImageInput: true });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex',
+      model: 'gpt-5',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+    };
+    const imageAttachments = [{ placeholder: '[Image #1]', path: '/tmp/takt-image-1.png' }];
+
+    await callAIWithRetry('inspect [Image #1]', 'base system prompt', [], '/repo', ctx, {
+      imageAttachments,
+    });
+
+    expect(capture.prompts).toEqual([
+      'inspect [Image #1]',
+      'inspect [Image #1]',
+    ]);
+    for (const prompt of capture.prompts) {
+      expect(prompt).not.toContain('/tmp/takt-image-1.png');
+    }
+    expect(capture.imageAttachments).toEqual([imageAttachments, imageAttachments]);
+    expect(mockLogInfo).not.toHaveBeenCalledWith(
+      'Provider "codex" does not support native image input; image paths were added to the prompt.',
     );
   });
 });
@@ -513,6 +573,31 @@ describe('/go command', () => {
     expect(result.attachments?.[0]?.tempPath).toBeDefined();
     trackAttachmentSession(result.attachments![0]!.tempPath);
     expect(fs.existsSync(result.attachments![0]!.tempPath)).toBe(true);
+  });
+
+  it('should cleanup pasted image session directory when input processing throws after image paste', async () => {
+    const tmpRoot = createIsolatedTmpRoot('takt-conversation-cleanup-');
+    const originalTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = tmpRoot;
+    const previousSessionDirs = listTaktTempSessionDirs();
+    setupRawStdin([
+      `use ${createOscImagePaste()} ${createInvalidSizeOscImagePaste()}\r`,
+    ]);
+    const ctx = createSessionContext();
+
+    try {
+      await expect(
+        runConversationLoop('/test', ctx, defaultStrategy, undefined, undefined),
+      ).rejects.toThrow('Pasted inline image data does not match its declared size.');
+
+      expectNoNewTaktTempSessionDirs(previousSessionDirs);
+    } finally {
+      if (originalTmpDir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpDir;
+      }
+    }
   });
 
   it('should pass image attachment bodies only to native image providers', async () => {

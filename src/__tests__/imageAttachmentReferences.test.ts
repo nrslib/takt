@@ -70,6 +70,47 @@ describe('resolveReferencedImageAttachments', () => {
     expect(result).toEqual([]);
   });
 
+  it('should ignore invalid unreferenced attachments when resolving valid referenced attachments', () => {
+    const imagePath = createTempImage('image-1.png');
+
+    const result = resolveReferencedImageAttachments('Use [Image #1].', [
+      {
+        placeholder: '[Image #1]',
+        tempPath: imagePath,
+        fileName: 'image-1.png',
+      },
+      {
+        placeholder: '[Image #2]',
+        tempPath: '',
+        fileName: 'note.txt',
+      },
+    ]);
+
+    expect(result).toEqual([{ placeholder: '[Image #1]', path: imagePath }]);
+  });
+
+  it('should reject duplicate placeholders even when the duplicated attachment is unreferenced', () => {
+    const imagePath = createTempImage('image-1.png');
+
+    expect(() => resolveReferencedImageAttachments('Use [Image #1].', [
+      {
+        placeholder: '[Image #1]',
+        tempPath: imagePath,
+        fileName: 'image-1.png',
+      },
+      {
+        placeholder: '[Image #2]',
+        tempPath: '',
+        fileName: 'note.txt',
+      },
+      {
+        placeholder: '[Image #2]',
+        tempPath: '',
+        fileName: 'note.txt',
+      },
+    ])).toThrow('Duplicate image attachment placeholder: [Image #2]');
+  });
+
 });
 
 describe('validateStoredImageAttachment', () => {

@@ -27,6 +27,7 @@ import {
 import { initializeSession } from './sessionInitialization.js';
 import {
   buildInteractiveResultWithAttachments,
+  cleanupImageAttachmentStore,
   createClipboardImagePasteHandler,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
@@ -62,6 +63,7 @@ export async function quietMode(
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
 
+  try {
   if (history.length === 0 && !sourceContext) {
     info(getLabel('interactive.ui.introQuiet', ctx.lang));
     blankLine();
@@ -131,4 +133,8 @@ export async function quietMode(
 
   log.info('Quiet mode action selected', { action: selectedAction });
   return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
+  } catch (caught) {
+    cleanupImageAttachmentStore(attachmentStore);
+    throw caught;
+  }
 }

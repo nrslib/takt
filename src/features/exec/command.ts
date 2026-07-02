@@ -70,6 +70,14 @@ function buildUserControlledAttachmentPrompt(history: ConversationMessage[], inl
   ].join('\n');
 }
 
+function cleanupExecImageAttachmentStore(attachmentStore: ImageAttachmentStore): void {
+  try {
+    attachmentStore.cleanup();
+  } catch (error) {
+    debugLog('exec', 'Failed to cleanup exec image attachment store', error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function runGoCommand(
   cwd: string,
   runtimeConfig: ResolvedExecConfig,
@@ -113,6 +121,7 @@ async function runGoCommand(
     '',
     'Summarize the result for the user.',
   ].join('\n');
+  const completionImageAttachments = resolvePromptImageAttachments(summary.content, taskAttachments);
   const completion = await askExecAssistant(
     cwd,
     summaryCtx,
@@ -120,7 +129,7 @@ async function runGoCommand(
     loadTemplate('exec_assistant_summary', ctx.lang),
     {
       permissionMode: 'readonly',
-      imageAttachments: trustedImageAttachments,
+      imageAttachments: completionImageAttachments,
     },
   );
   info(sanitizeTerminalText(completion.content));
@@ -139,74 +148,79 @@ async function runExecConversation(
   let ctx = createExecSessionContext(cwd, currentRuntimeConfig);
   let history: ConversationMessage[] = [];
   const attachmentStore = createSessionImageAttachmentStore();
-  info('Starting exec mode');
-  info(formatExecConfigSummary(currentRuntimeConfig));
-  info('/setup to edit configuration, /go to execute, /cancel to exit');
-  blankLine();
+  try {
+    info('Starting exec mode');
+    info(formatExecConfigSummary(currentRuntimeConfig));
+    info('/setup to edit configuration, /go to execute, /cancel to exit');
+    blankLine();
 
-  while (true) {
-    const input = await readInteractiveInput('Assistant> ', ctx.lang, EXEC_CONVERSATION_COMMAND_AVAILABILITY, attachmentStore);
-    if (input === null) {
-      info('Cancelled');
-      return;
-    }
-    const trimmed = input.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const match = matchSlashCommand(trimmed, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
-    if (match?.command === SlashCommand.Setup) {
-      try {
-        const previousSessionConfig = currentRuntimeConfig.session;
-        const previousConfig = currentConfig;
-        const nextConfig = await runSetupMenu(cwd, currentConfig, ctx, providerModelDefaults);
-        if (!isSameExecConfig(previousConfig, nextConfig)) {
-          saveExecConfigForNextRun(nextConfig);
+    while (true) {
+      const input = await readInteractiveInput('Assistant> ', ctx.lang, EXEC_CONVERSATION_COMMAND_AVAILABILITY, attachmentStore);
+      if (input === null) {
+        info('Cancelled');
+        return;
+      }
+      const trimmed = input.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const match = matchSlashCommand(trimmed, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
+      if (match?.command === SlashCommand.Setup) {
+        try {
+          const previousSessionConfig = currentRuntimeConfig.session;
+          const previousConfig = currentConfig;
+          const nextConfig = await runSetupMenu(cwd, currentConfig, ctx, providerModelDefaults);
+          if (!isSameExecConfig(previousConfig, nextConfig)) {
+            saveExecConfigForNextRun(nextConfig);
+          }
+          currentConfig = nextConfig;
+          currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
+          const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
+          ctx = createExecSessionContext(cwd, currentRuntimeConfig, nextSessionId);
+          info(formatExecConfigSummary(currentRuntimeConfig));
+        } catch (error) {
+          info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+          blankLine();
         }
-        currentConfig = nextConfig;
-        currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
-        const nextSessionId = shouldKeepExecSession(previousSessionConfig, currentRuntimeConfig.session) ? ctx.sessionId : undefined;
-        ctx = createExecSessionContext(cwd, currentRuntimeConfig, nextSessionId);
-        info(formatExecConfigSummary(currentRuntimeConfig));
+        continue;
+      }
+
+      if (match?.command === SlashCommand.Cancel) {
+        info('Cancelled');
+        return;
+      }
+      if (match?.command === SlashCommand.Go) {
+        try {
+          ctx = await runGoCommand(cwd, currentRuntimeConfig, history, match.text, ctx, agentOverrides, attachmentStore);
+        } catch (error) {
+          info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+        }
+        continue;
+      }
+      if (match?.command === SlashCommand.PasteImage) {
+        info('/paste-image is only available while editing the input line.');
+        continue;
+      }
+
+      try {
+        const response = await askExecAssistant(
+          cwd,
+          ctx,
+          trimmed,
+          loadTemplate('exec_assistant_clarify', ctx.lang),
+          { imageAttachments: resolvePromptImageAttachments(trimmed, attachmentStore.listAttachments()) },
+        );
+        ctx = { ...ctx, sessionId: response.sessionId };
+        history = [...history, { role: 'user', content: trimmed }, { role: 'assistant', content: response.content }];
+        info(sanitizeTerminalText(response.content));
+        blankLine();
       } catch (error) {
         info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
         blankLine();
       }
-      continue;
     }
-
-    if (match?.command === SlashCommand.Cancel) {
-      info('Cancelled');
-      return;
-    }
-    if (match?.command === SlashCommand.Go) {
-      try {
-        ctx = await runGoCommand(cwd, currentRuntimeConfig, history, match.text, ctx, agentOverrides, attachmentStore);
-      } catch (error) {
-        info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
-      }
-      continue;
-    }
-    if (match?.command === SlashCommand.PasteImage) {
-      info('/paste-image is only available while editing the input line.');
-      continue;
-    }
-
-    try {
-      const response = await askExecAssistant(
-        cwd,
-        ctx,
-        trimmed,
-        loadTemplate('exec_assistant_clarify', ctx.lang),
-        { imageAttachments: resolvePromptImageAttachments(trimmed, attachmentStore.listAttachments()) },
-      );
-      ctx = { ...ctx, sessionId: response.sessionId };
-      history = [...history, { role: 'user', content: trimmed }, { role: 'assistant', content: response.content }];
-      info(sanitizeTerminalText(response.content));
-      blankLine();
-    } catch (error) {
-      info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
-    }
+  } finally {
+    cleanupExecImageAttachmentStore(attachmentStore);
   }
 }
 

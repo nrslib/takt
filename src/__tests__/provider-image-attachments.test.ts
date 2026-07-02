@@ -74,7 +74,7 @@ describe('buildClaudePromptInput', () => {
           role: 'user',
           content: [
             { type: 'text', text: '見て [Image #1]' },
-            { type: 'text', text: `[Image #1] path: \`${imagePath}\`` },
+            { type: 'text', text: '[Image #1]' },
             {
               type: 'image',
               source: {

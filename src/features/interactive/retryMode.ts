@@ -29,6 +29,7 @@ import { loadTemplate } from '../../shared/prompts/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { resolveConfigValues } from '../../infra/config/index.js';
 import type { InstructModeResult, InstructUIText } from './instructModeTypes.js';
+import { attachImageAttachmentCleanup } from './imageAttachments.js';
 
 /** Failure information for a retry task */
 export interface RetryFailureInfo {
@@ -180,18 +181,18 @@ async function runRetryConversation(
   const result = await runConversationLoop(cwd, ctx, strategy, retryContext.workflowContext, undefined);
 
   if (result.action === 'cancel') {
-    return {
+    return attachImageAttachmentCleanup({
       action: 'cancel',
       task: '',
       ...(result.attachments ? { attachments: result.attachments } : {}),
-    };
+    }, result.cleanupAttachments);
   }
 
-  return {
+  return attachImageAttachmentCleanup({
     action: result.action as InstructModeResult['action'],
     task: result.task,
     ...(result.attachments ? { attachments: result.attachments } : {}),
-  };
+  }, result.cleanupAttachments);
 }
 
 export async function runTaskRetryMode(

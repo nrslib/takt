@@ -1,11 +1,12 @@
 import * as path from 'node:path';
-import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from '../attachments.js';
-import type { TaskAttachment } from '../attachments.js';
-import { readTaskSpecFile } from '../taskSpecFile.js';
+import { prepareTaskSpecDirectory, cleanupPreparedTaskSpec } from './attachments.js';
+import type { TaskAttachment } from './attachments.js';
+import { readTaskSpecFile } from './taskSpecFile.js';
 
 export interface PreparedRetryTaskSpec {
   taskDir: string;
   taskDirRelative: string;
+  retryNote: string;
 }
 
 function hasAttachments(attachments: readonly TaskAttachment[] | undefined): attachments is readonly TaskAttachment[] {
@@ -108,6 +109,7 @@ export function prepareRetryTaskSpecWithAttachments(
   return {
     taskDir: preparedSpec.taskDir,
     taskDirRelative: preparedSpec.taskDirRelative,
+    retryNote: adjusted.retryNote,
   };
 }
 
