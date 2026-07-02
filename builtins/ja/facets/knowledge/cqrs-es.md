@@ -402,7 +402,8 @@ UseCaseが不要なケース:
 | ControllerがRepository直接参照してバリデーション | UseCase層に分離 |
 | UseCaseがHTTPリクエスト/レスポンスに依存 | REJECT。UseCaseはプロトコル非依存 |
 | UseCaseがAggregate内部状態を直接変更 | REJECT。CommandGateway経由 |
-| UseCaseがSubscription Queryで結果を待機 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
+| UseCaseがAxon Serverなど通知配送が保証されたSubscription Queryで結果を待機 | OK |
+| UseCaseが配送保証不明なSubscription Queryで結果を待機 | REJECT。リアクティブポーリングを使う |
 | UseCaseが別の問い合わせ層やコマンド送信への薄い委譲だけで終わる | 削除を検討 |
 
 ## プロジェクション設計
@@ -488,14 +489,15 @@ class InventoryReleaseHandler(private val commandGateway: CommandGateway) {
 
 Query側はイベント駆動のPubSubモデルで動作する。Projection が EventHandler でRead Modelを更新し、Query側はRead Modelを参照する。
 
-イベント配信はPubSub（メッセージブローカー経由）で全インスタンスに配信する。同一インスタンスへの配信を前提とする仕組みは使わない。
+イベント配信はPubSub（メッセージブローカー経由）で全インスタンスに配信する。同一インスタンスへの配信を前提とする仕組みは、配送保証が確認できない限り使わない。
 
-- **Subscription Query**（たとえばAxonの `subscriptionQuery()`）: クエリ結果の変更通知を購読元インスタンスに返す仕組みだが、分散配置やサードパーティのイベントストアプラグイン使用時に、購読を発行したインスタンスと通知を受け取るインスタンスが異なり、同一筐体でレスポンスを返せない。同期的な応答が必要な場合はリアクティブポーリングで Read Model の更新を待機する。
+- **Subscription Query**（たとえばAxonの `subscriptionQuery()`）: クエリ結果の変更通知を購読元へ返す仕組み。Axon Server などで購読元への通知配送が保証される構成なら使用できる。分散配置やサードパーティのイベントストアプラグイン使用時に配送先が保証されない場合、同期的な応答が必要ならリアクティブポーリングで Read Model の更新を待機する。
 - **Subscribing イベントプロセッサ**（たとえばAxonの `SubscribingEventProcessor`）: ローカルのイベントバスからの直接購読に依存し、イベントを発行したインスタンスのみがイベントを受け取る。分散環境では他インスタンスの Projection が更新されない。PubSubで全インスタンスにイベントが配信される構成にする。
 
 | 基準 | 判定 |
 |------|------|
-| Subscription Query（たとえばAxonの `subscriptionQuery()`）の使用 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
+| Axon Server など配送保証が確認できる Subscription Query（たとえばAxonの `subscriptionQuery()`）の使用 | OK |
+| 配送保証が確認できない Subscription Query（たとえばAxonの `subscriptionQuery()`）の使用 | REJECT。リアクティブポーリングを使う |
 | Subscribing イベントプロセッサ（たとえばAxonの `SubscribingEventProcessor`）の使用 | REJECT。ローカル配信のみ。分散環境で他インスタンスが更新されない |
 | Controller から Repository を直接参照 | REJECT。UseCase層を経由 |
 | Query側が Command Model を参照 | REJECT |
@@ -581,11 +583,14 @@ Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
 
 ## 結果整合性
 
-コマンド発行後に同期的なレスポンスが必要な場合、リアクティブポーリングで Projection の更新を待機する。
+コマンド発行後に同期的なレスポンスが必要で、待機中の処理へ確実に届くイベント通知を利用できない場合、リアクティブポーリングで Projection の更新を待機する。
 
 | 基準 | 判定 |
 |------|------|
-| Subscription Query で Projection 更新を待機 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
+| 待機中の処理へ Projection 更新通知が確実に配送される基盤がある | OK。通知駆動で待機してよい |
+| Axon Server を利用した Subscription Query など、購読元へ更新通知が届く構成が確認できている | OK |
+| Kafka などを使い、通知の配送先と再配送・欠落時の扱いが運用上保証されている | OK |
+| Subscription Query やイベント通知の配送先が単一プロセス・単一インスタンス前提、または保証不明 | REJECT。リアクティブポーリングを使う |
 | `Thread.sleep` や同等の待機でリクエストスレッドをブロックして Projection 更新を待つ | REJECT。高並行時にスレッド枯渇を起こす |
 | 同一HTTPレスポンスで更新後状態を返す必要がある | リアクティブHTTPスタックで非ブロッキングに待機 |
 | 同一HTTPレスポンスで待つ必要がない | `202 Accepted` + フロントエンドのロングポーリング、通常ポーリング、SSE、WebSocket |
@@ -596,6 +601,8 @@ Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
 ### リアクティブポーリング
 
 コマンド発行 → Projection更新完了を非ブロッキングなポーリングで待機するパターン。リアクティブポーリングはリクエストスレッドを占有しない待機であり、`while` ループと `Thread.sleep` で同期的に待つ実装ではない。
+
+ポーリングの判定はイベント通知ではなく、Read Model を再取得して期待する状態になったかを predicate で確認する。条件を満たすまで一定間隔で再取得し、timeout または maxAttempts に達したら待機を打ち切る。
 
 ```kotlin
 // UseCase: コマンド送信 → ポーリングで完了待機

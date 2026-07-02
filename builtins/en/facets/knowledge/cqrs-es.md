@@ -226,7 +226,8 @@ Cases where UseCase is unnecessary:
 | Controller directly references Repository for validation | Separate into UseCase layer |
 | UseCase depends on HTTP requests/responses | REJECT. UseCase must be protocol-independent |
 | UseCase directly modifies Aggregate internal state | REJECT. Use CommandGateway |
-| UseCase waits for results via Subscription Query | REJECT. Does not work in distributed environments. Use reactive polling |
+| UseCase waits for results via Subscription Query with guaranteed notification delivery, such as Axon Server | OK |
+| UseCase waits for results via Subscription Query with unverified delivery guarantees | REJECT. Use reactive polling |
 | UseCase only delegates to a query boundary or command dispatch | Consider deleting |
 
 ## Projection Design
@@ -260,14 +261,15 @@ External workers and asynchronous work should start from domain events confirmed
 
 Query side operates on an event-driven PubSub model. Projections update Read Models via EventHandler, and queries read from Read Models.
 
-Event distribution uses PubSub (via message broker) to deliver events to all instances. Do not use mechanisms that assume delivery to the same instance.
+Event distribution uses PubSub (via message broker) to deliver events to all instances. Do not use mechanisms that assume delivery to the same instance unless their delivery guarantees are verified.
 
-- **Subscription Query** (e.g., Axon's `subscriptionQuery()`): delivers change notifications back to the subscribing instance, but in distributed environments or when using third-party event store plugins, the subscribing instance and the notified instance may differ, making it impossible to return the response on the same machine. When synchronous response is needed, use reactive polling to wait for Read Model updates.
+- **Subscription Query** (e.g., Axon's `subscriptionQuery()`): delivers change notifications back to the subscriber. It is allowed when Axon Server or another verified setup guarantees delivery to the subscriber. If delivery is not guaranteed in a distributed deployment or with a third-party event store plugin, use reactive polling to wait for Read Model updates when synchronous response is needed.
 - **Subscribing event processor** (e.g., Axon's `SubscribingEventProcessor`): relies on local event bus subscription, so only the instance that emitted the event receives it. In distributed environments, other instances' Projections are not updated. Use PubSub to distribute events to all instances.
 
 | Criteria | Judgment |
 |----------|----------|
-| Using Subscription Query (e.g., Axon's `subscriptionQuery()`) | REJECT. Does not work in distributed environments. Use reactive polling |
+| Using Subscription Query (e.g., Axon's `subscriptionQuery()`) with verified delivery guarantees such as Axon Server | OK |
+| Using Subscription Query (e.g., Axon's `subscriptionQuery()`) without verified delivery guarantees | REJECT. Use reactive polling |
 | Using Subscribing event processor (e.g., Axon's `SubscribingEventProcessor`) | REJECT. Local delivery only. Other instances not updated in distributed environments |
 | Controller directly referencing Repository | REJECT. Must go through UseCase layer |
 | Query side referencing Command Model | REJECT |
@@ -353,11 +355,14 @@ Completion notifications for asynchronous work must assume duplicates, delays, a
 
 ## Eventual Consistency
 
-When synchronous response is needed after command dispatch, use reactive polling to wait for Projection updates.
+When synchronous response is needed after command dispatch and no reliable event notification can reach the waiting process, use reactive polling to wait for Projection updates.
 
 | Criteria | Judgment |
 |----------|----------|
-| Using Subscription Query to wait for Projection updates | REJECT. Does not work in distributed environments. Use reactive polling |
+| A notification mechanism reliably delivers Projection-update notifications to the waiting process | OK. Notification-driven waiting is allowed |
+| Subscription Query is backed by Axon Server or another verified setup that delivers update notifications to the subscriber | OK |
+| Kafka or a similar system is used and routing, redelivery, and missing-notification behavior are operationally guaranteed | OK |
+| Subscription Query or event notification delivery is single-process, single-instance, or unverified | REJECT. Use reactive polling |
 | Blocking the request thread with `Thread.sleep` or equivalent while waiting for Projection updates | REJECT. It can exhaust request threads under concurrency |
 | Updated state must be returned in the same HTTP response | Wait non-blockingly on a reactive HTTP stack |
 | The same HTTP response does not need to wait | `202 Accepted` + frontend long polling, regular polling, SSE, or WebSocket |
@@ -368,6 +373,8 @@ When synchronous response is needed after command dispatch, use reactive polling
 ### Reactive Polling
 
 Pattern: dispatch command → wait for Projection update completion with non-blocking polling. Reactive polling means waiting without occupying a request thread; it is not a synchronous `while` loop with `Thread.sleep`.
+
+The polling condition is evaluated by re-reading the Read Model, not by relying on an event notification. Re-read at intervals until the expected predicate is satisfied, and stop when timeout or maxAttempts is reached.
 
 ```kotlin
 // UseCase: send command → poll for completion
