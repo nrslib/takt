@@ -626,6 +626,24 @@ describe('config traced env overrides', () => {
     expect(config.syncProjectLocalTaktOnRetry).toBe(true);
   });
 
+  it('project config は auto_requeue_max_attempts と ignore_exceed の env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-run-retry-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      ['auto_requeue_max_attempts: 1', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_AUTO_REQUEUE_MAX_ATTEMPTS = '2';
+    process.env.TAKT_IGNORE_EXCEED = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.autoRequeueMaxAttempts).toBe(2);
+    expect(config.ignoreExceed).toBe(true);
+  });
+
   it('global config は enable_builtin_workflows の新 env 名を反映する', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, 'language: ja\n', 'utf-8');
@@ -747,6 +765,22 @@ describe('config traced env overrides', () => {
     const config = loadGlobalConfig();
 
     expect(config.syncProjectLocalTaktOnRetry).toBe(false);
+  });
+
+  it('global config は auto_requeue_max_attempts と ignore_exceed の env override を反映する', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(
+      globalConfigPath,
+      ['language: ja', 'auto_requeue_max_attempts: 1', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_AUTO_REQUEUE_MAX_ATTEMPTS = '4';
+    process.env.TAKT_IGNORE_EXCEED = 'true';
+
+    const config = loadGlobalConfig();
+
+    expect(config.autoRequeueMaxAttempts).toBe(4);
+    expect(config.ignoreExceed).toBe(true);
   });
 
   it('global config は workflow 系 leaf env を反映する', () => {

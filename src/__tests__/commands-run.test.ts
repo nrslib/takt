@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockProgramOpts: Record<string, unknown> = {};
-const mockWatchCommandOpts: Record<string, unknown> = {};
-const mockWatchTasks = vi.fn();
+const mockRunCommandOpts: Record<string, unknown> = {};
+const mockRunAllTasks = vi.fn();
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   const commandActions = new Map<string, (...args: unknown[]) => void>();
@@ -22,7 +22,7 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
       argument: vi.fn().mockReturnThis(),
       option: vi.fn().mockReturnThis(),
       opts: vi.fn(() => mockProgramOpts),
-      optsWithGlobals: vi.fn(() => mockWatchCommandOpts),
+      optsWithGlobals: vi.fn(() => mockRunCommandOpts),
     };
     commandMocks.set(actionKey, command);
 
@@ -72,10 +72,11 @@ vi.mock('../shared/ui/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/index.js', () => ({
-  runAllTasks: vi.fn(),
+  runAllTasks: (...args: unknown[]) => mockRunAllTasks(...args),
   addTask: vi.fn(),
-  watchTasks: (...args: unknown[]) => mockWatchTasks(...args),
+  watchTasks: vi.fn(),
   listTasks: vi.fn(),
+  resumeDirectRun: vi.fn(),
 }));
 
 vi.mock('../features/config/index.js', () => ({
@@ -123,42 +124,38 @@ vi.mock('../commands/repertoire/list.js', () => ({
 
 import '../app/cli/commands.js';
 
-describe('CLI watch command', () => {
+describe('CLI run command', () => {
   beforeEach(() => {
-    mockWatchTasks.mockClear();
+    mockRunAllTasks.mockClear();
     for (const key of Object.keys(mockProgramOpts)) {
       delete mockProgramOpts[key];
     }
-    for (const key of Object.keys(mockWatchCommandOpts)) {
-      delete mockWatchCommandOpts[key];
+    for (const key of Object.keys(mockRunCommandOpts)) {
+      delete mockRunCommandOpts[key];
     }
   });
 
-  it('watch コマンドに --ignore-exceed オプションを登録する', () => {
-    const watchCommand = commandMocks.get('root.watch');
+  it('run コマンドに --ignore-exceed オプションを登録する', () => {
+    const runCommand = commandMocks.get('root.run');
 
-    expect(watchCommand).toBeTruthy();
-    expect(watchCommand?.option).toHaveBeenCalledWith(
+    expect(runCommand).toBeTruthy();
+    expect(runCommand?.option).toHaveBeenCalledWith(
       '--ignore-exceed',
       'Ignore workflow max_steps and continue running tasks',
     );
   });
 
-  it('watch 実行時に ignoreExceed を agentOverrides と合わせて watchTasks へ渡す', async () => {
+  it('run 実行時に --ignore-exceed 指定がある場合だけ ignoreExceed を渡す', async () => {
     mockProgramOpts.provider = 'openai';
     mockProgramOpts.model = 'gpt-5';
-    mockWatchCommandOpts.ignoreExceed = true;
+    mockRunCommandOpts.ignoreExceed = true;
 
-    const watchAction = commandActions.get('root.watch');
-    const watchCommand = commandMocks.get('root.watch');
+    const runAction = commandActions.get('root.run');
+    const runCommand = commandMocks.get('root.run');
 
-    expect(watchAction).toBeTypeOf('function');
-    expect(watchCommand).toBeTruthy();
+    await runAction?.(undefined, runCommand as never);
 
-    await watchAction?.(undefined, watchCommand as never);
-
-    expect(watchCommand?.optsWithGlobals).toHaveBeenCalled();
-    expect(mockWatchTasks).toHaveBeenCalledWith('/test/cwd', {
+    expect(mockRunAllTasks).toHaveBeenCalledWith('/test/cwd', {
       provider: 'openai',
       providerSource: 'cli',
       model: 'gpt-5',
@@ -167,15 +164,15 @@ describe('CLI watch command', () => {
     });
   });
 
-  it('watch 実行時に --ignore-exceed 未指定なら ignoreExceed を渡さない', async () => {
+  it('run 実行時に --ignore-exceed 未指定なら config 値を潰す false を渡さない', async () => {
     mockProgramOpts.provider = 'openai';
 
-    const watchAction = commandActions.get('root.watch');
-    const watchCommand = commandMocks.get('root.watch');
+    const runAction = commandActions.get('root.run');
+    const runCommand = commandMocks.get('root.run');
 
-    await watchAction?.(undefined, watchCommand as never);
+    await runAction?.(undefined, runCommand as never);
 
-    expect(mockWatchTasks).toHaveBeenCalledWith('/test/cwd', {
+    expect(mockRunAllTasks).toHaveBeenCalledWith('/test/cwd', {
       provider: 'openai',
       providerSource: 'cli',
     });

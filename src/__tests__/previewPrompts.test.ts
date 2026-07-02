@@ -67,11 +67,7 @@ describe('previewPrompts', () => {
     mockInstructionBuild.mockReturnValue('phase1');
     mockReportBuild.mockReturnValue('phase2');
     mockJudgmentBuild.mockReturnValue('phase3');
-    mockResolveWorkflowConfigValue.mockImplementation((_: string, key: string) => {
-      if (key === 'workflow') return undefined;
-      if (key === 'language') return 'en';
-      return undefined;
-    });
+    mockResolveWorkflowConfigValue.mockReturnValue('en');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
       maxSteps: 1,
@@ -106,6 +102,15 @@ describe('previewPrompts', () => {
     await previewPrompts('/project');
 
     expect(mockInfo).toHaveBeenCalledWith('Steps: 1');
+  });
+
+  it('解決済み言語を表示する', async () => {
+    mockResolveWorkflowConfigValue.mockReturnValueOnce('ja');
+
+    await previewPrompts('/project');
+
+    expect(mockResolveWorkflowConfigValue).toHaveBeenCalledWith('/project', 'language');
+    expect(mockInfo).toHaveBeenCalledWith('Language: ja');
   });
 
   it('ヘッダーを workflow 用語で表示する', async () => {

@@ -16,6 +16,8 @@ export const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'task_poll_interval_ms', type: 'number' },
   { path: 'interactive_preview_steps', type: 'number' },
   { path: 'sync_project_local_takt_on_retry', type: 'boolean' },
+  { path: 'auto_requeue_max_attempts', type: 'number' },
+  { path: 'ignore_exceed', type: 'boolean' },
   { path: 'analytics', type: 'json' },
   { path: 'analytics.enabled', type: 'boolean' },
   { path: 'analytics.events_path', type: 'string' },

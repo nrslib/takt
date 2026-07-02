@@ -56,6 +56,10 @@ describe('traced config boundaries', () => {
     expect(getGlobalTracedSchema()['observability.usage_events_phase']?.sources?.env).toBe(true);
     expect(getProjectTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
     expect(getGlobalTracedSchema().sync_project_local_takt_on_retry?.sources?.env).toBe(true);
+    expect(getProjectTracedSchema().auto_requeue_max_attempts?.sources?.env).toBe(true);
+    expect(getGlobalTracedSchema().auto_requeue_max_attempts?.sources?.env).toBe(true);
+    expect(getProjectTracedSchema().ignore_exceed?.sources?.env).toBe(true);
+    expect(getGlobalTracedSchema().ignore_exceed?.sources?.env).toBe(true);
   });
 
   it('project traced schema は非許可 env を runtime bridge でも無視する', () => {
@@ -186,6 +190,44 @@ describe('traced config boundaries', () => {
       expect(projectTraceResult.trace.getOrigin('sync_project_local_takt_on_retry')).toBe('env');
       expect(globalTraceResult.rawConfig.sync_project_local_takt_on_retry).toBe(true);
       expect(globalTraceResult.trace.getOrigin('sync_project_local_takt_on_retry')).toBe('env');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('project/global config loader は run retry config の origin を env として記録する', () => {
+    const tempDir = join(tmpdir(), `takt-traced-run-retry-${randomUUID()}`);
+    const projectConfigDir = join(tempDir, 'project', '.takt');
+    const globalConfigDir = join(tempDir, 'global');
+    const projectConfigPath = join(projectConfigDir, 'config.yaml');
+    const globalConfigPath = join(globalConfigDir, 'config.yaml');
+    mkdirSync(projectConfigDir, { recursive: true });
+    mkdirSync(globalConfigDir, { recursive: true });
+    writeFileSync(
+      projectConfigPath,
+      ['auto_requeue_max_attempts: 1', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(
+      globalConfigPath,
+      ['language: ja', 'auto_requeue_max_attempts: 2', 'ignore_exceed: false'].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_AUTO_REQUEUE_MAX_ATTEMPTS = '3';
+    process.env.TAKT_IGNORE_EXCEED = 'true';
+
+    try {
+      const projectTraceResult = loadProjectConfigTrace(projectConfigPath, []);
+      const globalTraceResult = loadGlobalConfigTrace(globalConfigPath, (value) => value, []);
+
+      expect(projectTraceResult.rawConfig.auto_requeue_max_attempts).toBe(3);
+      expect(projectTraceResult.rawConfig.ignore_exceed).toBe(true);
+      expect(projectTraceResult.trace.getOrigin('auto_requeue_max_attempts')).toBe('env');
+      expect(projectTraceResult.trace.getOrigin('ignore_exceed')).toBe('env');
+      expect(globalTraceResult.rawConfig.auto_requeue_max_attempts).toBe(3);
+      expect(globalTraceResult.rawConfig.ignore_exceed).toBe(true);
+      expect(globalTraceResult.trace.getOrigin('auto_requeue_max_attempts')).toBe('env');
+      expect(globalTraceResult.trace.getOrigin('ignore_exceed')).toBe('env');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

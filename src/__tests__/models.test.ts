@@ -1196,4 +1196,32 @@ describe('ProjectConfigSchema', () => {
     expect(project.sync_project_local_takt_on_retry).toBe(false);
     expect(global.sync_project_local_takt_on_retry).toBe(true);
   });
+
+  it('should parse auto_requeue_max_attempts and ignore_exceed in project and global config schemas', () => {
+    const project = ProjectConfigSchema.parse({
+      auto_requeue_max_attempts: 2,
+      ignore_exceed: true,
+    } as unknown) as Record<string, unknown>;
+    const global = GlobalConfigSchema.parse({
+      auto_requeue_max_attempts: 3,
+      ignore_exceed: false,
+    } as unknown) as Record<string, unknown>;
+
+    expect(project.auto_requeue_max_attempts).toBe(2);
+    expect(project.ignore_exceed).toBe(true);
+    expect(global.auto_requeue_max_attempts).toBe(3);
+    expect(global.ignore_exceed).toBe(false);
+  });
+
+  it('should reject invalid auto_requeue_max_attempts values', () => {
+    expect(() => ProjectConfigSchema.parse({
+      auto_requeue_max_attempts: -1,
+    } as unknown)).toThrow();
+    expect(() => ProjectConfigSchema.parse({
+      auto_requeue_max_attempts: 1.5,
+    } as unknown)).toThrow();
+    expect(() => GlobalConfigSchema.parse({
+      auto_requeue_max_attempts: '2',
+    } as unknown)).toThrow();
+  });
 });

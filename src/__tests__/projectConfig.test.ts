@@ -1391,6 +1391,48 @@ unexpected_overrides:
     });
   });
 
+  describe('run retry config round-trip', () => {
+    it('should load auto_requeue_max_attempts and ignore_exceed config keys', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['auto_requeue_max_attempts: 2', 'ignore_exceed: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(loaded.autoRequeueMaxAttempts).toBe(2);
+      expect(loaded.ignoreExceed).toBe(true);
+    });
+
+    it('should round-trip auto_requeue_max_attempts and ignore_exceed config keys', () => {
+      const config = {
+        autoRequeueMaxAttempts: 2,
+        ignoreExceed: true,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(reloaded.autoRequeueMaxAttempts).toBe(2);
+      expect(reloaded.ignoreExceed).toBe(true);
+    });
+
+    it('should save run retry config using snake_case keys', () => {
+      const config = {
+        autoRequeueMaxAttempts: 2,
+        ignoreExceed: true,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('auto_requeue_max_attempts: 2');
+      expect(saved).toContain('ignore_exceed: true');
+    });
+  });
+
   describe('workflow_mcp_servers round-trip', () => {
     it('should load workflow_mcp_servers config block', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');

@@ -226,6 +226,10 @@ export interface ProjectConfig {
   interactivePreviewSteps?: number;
   /** Sync project-local .takt resources from root when retry reuses a worktree */
   syncProjectLocalTaktOnRetry?: boolean;
+  /** Maximum automatic requeue attempts for failed tasks */
+  autoRequeueMaxAttempts?: number;
+  /** Continue takt run when a workflow reaches the iteration limit */
+  ignoreExceed?: boolean;
   /** Project-level analytics overrides */
   analytics?: AnalyticsConfig;
   /** Project-level observability opt-in overrides */
