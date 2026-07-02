@@ -46,7 +46,9 @@ steps:
     tags:
       - review
     persona: frontend-reviewer
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - frontend
       - react
@@ -69,7 +71,9 @@ steps:
     tags:
       - review
     persona: supervisor
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - frontend
       - react
@@ -87,7 +91,9 @@ steps:
     tags:
       - review
     persona: frontend-reviewer
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - frontend
       - react

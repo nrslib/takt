@@ -50,7 +50,9 @@ steps:
           - review
         edit: false
         persona: architecture-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         knowledge:
           $param: arch_knowledge
         provider_options:
@@ -68,7 +70,9 @@ steps:
           - review
         edit: false
         persona: security-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         knowledge: security
         provider_options:
           extends: review-readonly
@@ -87,6 +91,7 @@ steps:
         persona: qa-reviewer
         policy:
           - review
+          - review-finding-contract
           - qa
         provider_options:
           extends: review-readonly
@@ -105,6 +110,7 @@ steps:
         persona: testing-reviewer
         policy:
           - review
+          - review-finding-contract
           - testing
         knowledge:
           - unit-testing
@@ -124,7 +130,9 @@ steps:
           - review
         edit: false
         persona: pure-reviewer
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         provider_options:
           extends: review-readonly
         rules:
@@ -142,6 +150,7 @@ steps:
         persona: coding-reviewer
         policy:
           - review
+          - review-finding-contract
           - coding
         pass_previous_response: false
         provider_options:
@@ -161,6 +170,7 @@ steps:
         persona: ai-antipattern-reviewer
         policy:
           - review
+          - review-finding-contract
           - ai-antipattern
         provider_options:
           extends: review-readonly

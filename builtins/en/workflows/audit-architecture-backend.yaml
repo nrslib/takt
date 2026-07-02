@@ -45,7 +45,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - backend
       - architecture
@@ -67,7 +69,9 @@ steps:
     tags:
       - review
     persona: supervisor
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - backend
       - architecture
@@ -84,7 +88,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge:
       - backend
       - architecture

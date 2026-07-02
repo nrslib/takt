@@ -173,6 +173,7 @@ steps:
     session: refresh
     policy:
       - review
+      - review-finding-contract
       - ai-antipattern
     provider_options:
       claude:
@@ -231,7 +232,9 @@ steps:
     edit: false
     persona: architecture-reviewer
     session: refresh
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     provider_options:
       claude:
         allowed_tools:
@@ -254,7 +257,9 @@ steps:
         edit: false
         persona: architecture-reviewer
         session: refresh
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         knowledge:
           - architecture
           - takt
@@ -281,7 +286,9 @@ steps:
         edit: false
         persona: security-reviewer
         session: refresh
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         knowledge: security
         provider_options:
           claude:
@@ -308,6 +315,7 @@ steps:
         session: refresh
         policy:
           - review
+          - review-finding-contract
           - qa
         provider_options:
           claude:
@@ -334,6 +342,7 @@ steps:
         session: refresh
         policy:
           - review
+          - review-finding-contract
           - testing
         knowledge:
           - unit-testing
@@ -361,7 +370,9 @@ steps:
         edit: false
         persona: pure-reviewer
         session: refresh
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         provider_options:
           claude:
             allowed_tools:
@@ -386,6 +397,7 @@ steps:
         persona: ai-antipattern-reviewer
         policy:
           - review
+          - review-finding-contract
           - ai-antipattern
         provider_options:
           claude:
@@ -445,7 +457,9 @@ steps:
     edit: false
     persona: supervisor
     session: refresh
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge: architecture
     provider_options:
       claude:

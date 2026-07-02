@@ -113,7 +113,9 @@ steps:
       - review
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - review
+      - review-finding-contract
     knowledge: architecture
     provider_options:
       claude:

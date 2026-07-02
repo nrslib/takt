@@ -103,6 +103,7 @@ steps:
         persona: ai-antipattern-reviewer
         policy:
           - review
+          - review-finding-contract
           - ai-antipattern
         provider_options:
           claude:
@@ -125,7 +126,9 @@ steps:
           - review
         edit: false
         persona: supervisor
-        policy: review
+        policy:
+          - review
+          - review-finding-contract
         knowledge:
           - backend
           - security
