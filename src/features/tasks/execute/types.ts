@@ -210,6 +210,12 @@ export interface TaskExecutionOptions {
   modelSource?: ProviderResolutionSource;
 }
 
+export interface TaskExecutionContextOverride {
+  branch?: string;
+  baseBranch?: string;
+  prNumber?: number;
+}
+
 export interface RunAllTasksOptions extends TaskExecutionOptions {
   ignoreExceed?: boolean;
 }
@@ -219,6 +225,7 @@ export interface TaskExecutionParallelOptions {
   taskPrefix?: string;
   taskColorIndex?: number;
   taskDisplayLabel?: string;
+  outputMode?: 'terminal' | 'silent';
 }
 
 export interface ExecuteTaskOptions {

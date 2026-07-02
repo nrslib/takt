@@ -8,7 +8,8 @@
     "takt": "./bin/takt",
     "takt-dev": "./bin/takt",
     "takt-cli": "./dist/app/cli/index.js",
-    "takt-acp": "./dist/app/acp/index.js"
+    "takt-acp": "./dist/app/acp/index.js",
+    "takt-mcp": "./dist/app/mcp/index.js"
   },
   "scripts": {
     "build": "tsc && mkdir -p dist/shared/prompts/en dist/shared/prompts/ja dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
@@ -60,6 +61,8 @@
     "github-copilot",
     "kiro",
     "llm",
+    "mcp",
+    "model-context-protocol",
     "openai",
     "opencode",
     "orchestration",
@@ -88,6 +91,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.0.0",
     "@anthropic-ai/claude-agent-sdk": "^0.3.170",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex-sdk": "^0.137.0",
     "@opencode-ai/sdk": "^1.17.3",
     "@opentelemetry/api": "^1.9.1",

@@ -6,7 +6,14 @@ import { execFileSync } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { resolveRepositoryNameWithOwner } from './repository.js';
-import type { CliStatus, Issue, IssueListItem, CreateIssueOptions, CreateIssueResult } from '../git/types.js';
+import type {
+  CliStatus,
+  CloseIssueResult,
+  CreateIssueOptions,
+  CreateIssueResult,
+  Issue,
+  IssueListItem,
+} from '../git/types.js';
 
 const log = createLogger('github');
 const OPEN_ISSUES_PER_PAGE = 100;
@@ -153,6 +160,26 @@ export function createIssue(options: CreateIssueOptions, cwd: string): CreateIss
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('Issue creation failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
+export function closeIssue(issueNumber: number, comment: string, cwd: string): CloseIssueResult {
+  const ghStatus = checkGhCli(cwd);
+  if (!ghStatus.available) {
+    return { success: false, error: ghStatus.error };
+  }
+
+  try {
+    execFileSync('gh', ['issue', 'close', String(issueNumber), '--comment', comment], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { success: true };
+  } catch (err) {
+    const errorMessage = getErrorMessage(err);
+    log.error('Issue close failed', { issueNumber, error: errorMessage });
     return { success: false, error: errorMessage };
   }
 }

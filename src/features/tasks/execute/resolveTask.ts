@@ -23,6 +23,7 @@ import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
+import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
 
 const log = createLogger('task');
 
@@ -30,9 +31,29 @@ function resolveTaskDataBaseBranch(taskData: TaskInfo['data']): string | undefin
   return taskData?.base_branch;
 }
 
-function resolveTaskBaseBranch(projectDir: string, taskData: TaskInfo['data']): string {
-  const preferredBaseBranch = resolveTaskDataBaseBranch(taskData);
+function resolveTaskBaseBranch(projectDir: string, preferredBaseBranch: string | undefined): string {
   return resolveBaseBranch(projectDir, preferredBaseBranch).branch;
+}
+
+function assertReusedWorktreeContext(
+  task: TaskInfo,
+  reusedWorktree: { branch?: string; worktreePath: string },
+  contextOverride: TaskExecutionContextOverride | undefined,
+): void {
+  if (contextOverride?.branch !== undefined && contextOverride.branch !== reusedWorktree.branch) {
+    throw new Error(
+      `Task "${task.name}" has existing worktree ${reusedWorktree.worktreePath} for branch "${reusedWorktree.branch ?? '<none>'}", ` +
+      `but runtime taskContext.branch is "${contextOverride.branch}".`,
+    );
+  }
+
+  const savedBaseBranch = resolveTaskDataBaseBranch(task.data);
+  if (contextOverride?.baseBranch !== undefined && contextOverride.baseBranch !== savedBaseBranch) {
+    throw new Error(
+      `Task "${task.name}" has existing worktree ${reusedWorktree.worktreePath} with base_branch "${savedBaseBranch ?? '<none>'}", ` +
+      `but runtime taskContext.baseBranch is "${contextOverride.baseBranch}".`,
+    );
+  }
 }
 
 export interface ResolvedTaskExecution {
@@ -53,8 +74,14 @@ export interface ResolvedTaskExecution {
   managedPr: boolean;
   shouldPublishBranchToOrigin: boolean;
   issueNumber?: number;
+  prNumber?: number;
   maxStepsOverride?: number;
   initialIterationOverride?: number;
+}
+
+export interface ResolveTaskExecutionOptions {
+  outputMode?: ExecuteTaskOptions['outputMode'];
+  taskContext?: TaskExecutionContextOverride;
 }
 
 function resolveRetryResume(
@@ -108,6 +135,18 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+async function runWithTaskProgress<T>(
+  outputMode: ExecuteTaskOptions['outputMode'],
+  message: string,
+  successMessage: string | ((result: T) => string),
+  action: () => Promise<T>,
+): Promise<T> {
+  if (outputMode === 'silent') {
+    return action();
+  }
+  return withProgress(message, successMessage, action);
+}
+
 export function resolveTaskIssue(issueNumber: number | undefined, projectCwd: string): Issue[] | undefined {
   if (issueNumber === undefined) {
     return undefined;
@@ -133,6 +172,7 @@ export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
   abortSignal?: AbortSignal,
+  options?: ResolveTaskExecutionOptions,
 ): Promise<ResolvedTaskExecution> {
   throwIfAborted(abortSignal);
 
@@ -161,7 +201,12 @@ export async function resolveTaskExecution(
   let branch: string | undefined;
   let worktreePath: string | undefined;
   let baseBranch: string | undefined;
-  const preferredBaseBranch = resolveTaskDataBaseBranch(data);
+  const contextOverride = options?.taskContext;
+  if (contextOverride?.baseBranch !== undefined) {
+    baseBranch = contextOverride.baseBranch;
+  }
+  const preferredBaseBranch = contextOverride?.baseBranch ?? resolveTaskDataBaseBranch(data);
+  const contextBranch = contextOverride?.branch;
   if (task.taskDir) {
     const taskSlug = getTaskSlugFromTaskDir(task.taskDir);
     if (!taskSlug) {
@@ -171,10 +216,10 @@ export async function resolveTaskExecution(
 
   if (data.worktree) {
     throwIfAborted(abortSignal);
-    const targetBranch = data.branch;
+    const targetBranch = contextBranch ?? data.branch;
     const needsBaseBranch = !targetBranch || !branchExists(defaultCwd, targetBranch);
     baseBranch = needsBaseBranch
-      ? resolveTaskBaseBranch(defaultCwd, data)
+      ? resolveTaskBaseBranch(defaultCwd, preferredBaseBranch)
       : preferredBaseBranch;
 
     const reusedWorktree = resolveReusedWorktreeExecution(
@@ -185,24 +230,27 @@ export async function resolveTaskExecution(
       retryNote,
     );
     if (reusedWorktree) {
+      assertReusedWorktreeContext(task, reusedWorktree, contextOverride);
       execCwd = reusedWorktree.execCwd;
       branch = reusedWorktree.branch;
       worktreePath = reusedWorktree.worktreePath;
       isWorktree = reusedWorktree.isWorktree;
     } else {
-      const taskSlug = task.slug ?? await withProgress(
+      const taskSlug = task.slug ?? await runWithTaskProgress(
+        options?.outputMode,
         'Generating branch name...',
         (slug) => `Branch name generated: ${slug}`,
         () => summarizeTaskName(task.content, { cwd: defaultCwd }),
       );
 
       throwIfAborted(abortSignal);
-      const result = await withProgress(
+      const result = await runWithTaskProgress(
+        options?.outputMode,
         'Creating clone...',
         (cloneResult) => `Clone created: ${cloneResult.path} (branch: ${cloneResult.branch})`,
         async () => createSharedCloneAbortable(defaultCwd, {
           worktree: data.worktree!,
-          branch: data.branch,
+          branch: targetBranch,
           ...(preferredBaseBranch ? { baseBranch: preferredBaseBranch } : {}),
           taskSlug,
           issueNumber: data.issue,
@@ -214,6 +262,8 @@ export async function resolveTaskExecution(
       worktreePath = result.path;
       isWorktree = true;
     }
+  } else if (contextBranch !== undefined) {
+    branch = contextBranch;
   }
 
   if (task.taskDir) {
@@ -259,6 +309,7 @@ export async function resolveTaskExecution(
     ...(resolvedRetryNote ? { retryNote: resolvedRetryNote } : {}),
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
+    ...(contextOverride?.prNumber !== undefined ? { prNumber: contextOverride.prNumber } : {}),
     ...(maxStepsOverride !== undefined ? { maxStepsOverride } : {}),
     ...(initialIterationOverride !== undefined ? { initialIterationOverride } : {}),
   };

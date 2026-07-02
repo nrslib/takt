@@ -79,6 +79,7 @@ import {
   postExecutionFlow,
   type PostExecutionOptions,
 } from '../features/tasks/execute/postExecution.js';
+import { error, info, success } from '../shared/ui/index.js';
 
 const MOCK_NFF_DIAGNOSTIC_TAIL =
   'Push rejected (non-fast-forward): remote is ahead; resync or recreate worktree; stale local branch may apply.';
@@ -93,6 +94,10 @@ const baseOptions = {
   draftPr: false,
   workflowIdentifier: 'default',
 };
+
+const mockInfo = vi.mocked(info);
+const mockError = vi.mocked(error);
+const mockSuccess = vi.mocked(success);
 
 describe('postExecutionFlow', () => {
   beforeEach(() => {
@@ -624,6 +629,21 @@ describe('postExecutionFlow', () => {
 
     expect(result.prFailed).toBeUndefined();
     expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
+  });
+
+  it('outputMode が silent の場合は通常 UI ログを出力しない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      outputMode: 'silent',
+    });
+
+    expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
+    expect(mockInfo).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('issues が渡された場合、PRタイトルにIssue番号プレフィックスが付与される', async () => {

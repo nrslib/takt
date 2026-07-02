@@ -21,14 +21,14 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
 import type { PrReviewData } from '../../../infra/git/index.js';
 import { firstLine } from '../../../infra/task/naming.js';
-import { extractTitle, createIssueFromTask } from './issueTask.js';
+import { extractTitle, createIssueFromTask, createIssueFromTaskResult } from './issueTask.js';
 import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
 import {
   cleanupPreparedTaskSpec,
   prepareTaskSpecDirectory,
   type TaskAttachment,
 } from '../attachments.js';
-export { extractTitle, createIssueFromTask };
+export { extractTitle, createIssueFromTask, createIssueFromTaskResult };
 
 const log = createLogger('add-task');
 
