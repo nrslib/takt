@@ -20,6 +20,9 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
   if (options.outputSchema) {
     log.info('Copilot provider does not support outputSchema; ignoring');
   }
+  if (options.imageAttachments && options.imageAttachments.length > 0) {
+    log.info('Copilot provider does not support imageAttachments; ignoring');
+  }
 
   return {
     cwd: options.cwd,

@@ -1,6 +1,12 @@
 import { matchSlashCommand } from '../interactive/commandMatcher.js';
 import { readInteractiveInput } from '../interactive/interactiveInput.js';
 import type { ConversationMessage } from '../interactive/interactive.js';
+import {
+  createSessionImageAttachmentStore,
+  resolvePromptImageAttachments,
+  type InteractiveImageAttachment,
+  type ImageAttachmentStore,
+} from '../interactive/imageAttachments.js';
 import { formatRunSessionForPrompt } from '../interactive/runSessionReader.js';
 import type { TaskExecutionOptions } from '../tasks/index.js';
 import { SlashCommand } from '../../shared/constants.js';
@@ -44,6 +50,26 @@ function saveExecConfigForNextRun(config: ExecConfig): void {
   }
 }
 
+function selectReferencedTaskAttachments(
+  prompt: string,
+  attachments: readonly InteractiveImageAttachment[],
+): InteractiveImageAttachment[] {
+  const references = resolvePromptImageAttachments(prompt, attachments);
+  const referencedPlaceholders = new Set(references.map((reference) => reference.placeholder));
+  return attachments.filter((attachment) => referencedPlaceholders.has(attachment.placeholder));
+}
+
+function buildUserControlledAttachmentPrompt(history: ConversationMessage[], inlineText: string): string {
+  const userMessages = history
+    .filter((message) => message.role === 'user')
+    .map((message) => message.content);
+  const normalizedInlineText = inlineText.trim();
+  return [
+    ...userMessages,
+    ...(normalizedInlineText.length > 0 ? [normalizedInlineText] : []),
+  ].join('\n');
+}
+
 async function runGoCommand(
   cwd: string,
   runtimeConfig: ResolvedExecConfig,
@@ -51,41 +77,51 @@ async function runGoCommand(
   inlineText: string,
   ctx: ReturnType<typeof createExecSessionContext>,
   agentOverrides: TaskExecutionOptions | undefined,
+  attachmentStore: ImageAttachmentStore,
 ): Promise<ReturnType<typeof createExecSessionContext>> {
   const summaryPrompt = buildTaskInstructionPrompt(history, ctx.sessionId !== undefined, inlineText);
   if (summaryPrompt === null) {
     info('Conversation or task text is required for /go.');
     return ctx;
   }
+  const savedAttachments = attachmentStore.listAttachments();
+  const userAttachmentPrompt = buildUserControlledAttachmentPrompt(history, inlineText);
+  const taskAttachments = selectReferencedTaskAttachments(userAttachmentPrompt, savedAttachments);
+  const trustedImageAttachments = resolvePromptImageAttachments(userAttachmentPrompt, taskAttachments);
   const summary = await askExecAssistant(
     cwd,
     ctx,
     summaryPrompt,
     loadTemplate('exec_assistant_instruct', ctx.lang),
+    { imageAttachments: trustedImageAttachments },
   );
   const summaryCtx = { ...ctx, sessionId: summary.sessionId };
-  const runContext = await runGeneratedWorkflow(cwd, runtimeConfig, summary.content, agentOverrides);
+  const runContext = await runGeneratedWorkflow(cwd, runtimeConfig, summary.content, agentOverrides, taskAttachments);
   const formattedRun = formatRunSessionForPrompt(runContext);
+  const completionPrompt = [
+    `The generated workflow completed for this task:\n${summary.content}`,
+    '',
+    `Workflow status: ${formattedRun.runStatus}`,
+    '',
+    RUN_ARTIFACT_SECURITY_NOTE,
+    '',
+    'Review reports:',
+    formattedRun.runReports,
+    '',
+    'Step logs:',
+    formattedRun.runStepLogs,
+    '',
+    'Summarize the result for the user.',
+  ].join('\n');
   const completion = await askExecAssistant(
     cwd,
     summaryCtx,
-    [
-      `The generated workflow completed for this task:\n${summary.content}`,
-      '',
-      `Workflow status: ${formattedRun.runStatus}`,
-      '',
-      RUN_ARTIFACT_SECURITY_NOTE,
-      '',
-      'Review reports:',
-      formattedRun.runReports,
-      '',
-      'Step logs:',
-      formattedRun.runStepLogs,
-      '',
-      'Summarize the result for the user.',
-    ].join('\n'),
+    completionPrompt,
     loadTemplate('exec_assistant_summary', ctx.lang),
-    { permissionMode: 'readonly' },
+    {
+      permissionMode: 'readonly',
+      imageAttachments: trustedImageAttachments,
+    },
   );
   info(sanitizeTerminalText(completion.content));
   blankLine();
@@ -102,13 +138,14 @@ async function runExecConversation(
   let currentRuntimeConfig = resolveExecConfigProviderModel(currentConfig, providerModelDefaults);
   let ctx = createExecSessionContext(cwd, currentRuntimeConfig);
   let history: ConversationMessage[] = [];
+  const attachmentStore = createSessionImageAttachmentStore();
   info('Starting exec mode');
   info(formatExecConfigSummary(currentRuntimeConfig));
   info('/setup to edit configuration, /go to execute, /cancel to exit');
   blankLine();
 
   while (true) {
-    const input = await readInteractiveInput('Assistant> ', ctx.lang, EXEC_CONVERSATION_COMMAND_AVAILABILITY);
+    const input = await readInteractiveInput('Assistant> ', ctx.lang, EXEC_CONVERSATION_COMMAND_AVAILABILITY, attachmentStore);
     if (input === null) {
       info('Cancelled');
       return;
@@ -144,10 +181,14 @@ async function runExecConversation(
     }
     if (match?.command === SlashCommand.Go) {
       try {
-        ctx = await runGoCommand(cwd, currentRuntimeConfig, history, match.text, ctx, agentOverrides);
+        ctx = await runGoCommand(cwd, currentRuntimeConfig, history, match.text, ctx, agentOverrides, attachmentStore);
       } catch (error) {
         info(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
       }
+      continue;
+    }
+    if (match?.command === SlashCommand.PasteImage) {
+      info('/paste-image is only available while editing the input line.');
       continue;
     }
 
@@ -157,6 +198,7 @@ async function runExecConversation(
         ctx,
         trimmed,
         loadTemplate('exec_assistant_clarify', ctx.lang),
+        { imageAttachments: resolvePromptImageAttachments(trimmed, attachmentStore.listAttachments()) },
       );
       ctx = { ...ctx, sessionId: response.sessionId };
       history = [...history, { role: 'user', content: trimmed }, { role: 'assistant', content: response.content }];

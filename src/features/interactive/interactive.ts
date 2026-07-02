@@ -138,6 +138,8 @@ export interface InteractiveSeedInput {
   userMessage?: string;
   /** Untrusted reference context loaded from PR/Issue sources. */
   sourceContext?: string;
+  /** Images already associated with the seeded user input. */
+  attachments?: InteractiveImageAttachment[];
 }
 
 export async function interactiveMode(

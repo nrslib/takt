@@ -4,6 +4,7 @@ import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import { formatImageAttachmentPathReference } from '../providers/imageAttachmentPrompt.js';
+import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 
 type ClaudeImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 
@@ -49,6 +50,7 @@ async function buildContentBlocks(
   prompt: string,
   imageAttachments: readonly ProviderImageAttachment[],
 ): Promise<ContentBlockParam[]> {
+  validateProviderImageAttachments(imageAttachments);
   const attachmentBlocks = await Promise.all(imageAttachments.map(buildAttachmentContentBlocks));
   return [
     { type: 'text', text: prompt },

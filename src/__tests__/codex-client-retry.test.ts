@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -11,6 +14,7 @@ let runPlanIndex = 0;
 let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
 let runStreamedInputs: unknown[] = [];
+const tempRoots = new Set<string>();
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -101,6 +105,14 @@ function createThread(id: string) {
   };
 }
 
+function createTempImage(fileName: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-image-test-'));
+  tempRoots.add(root);
+  const filePath = path.join(root, fileName);
+  fs.writeFileSync(filePath, Buffer.from('image-bytes'));
+  return filePath;
+}
+
 vi.mock('@openai/codex-sdk', () => {
   return {
     Codex: class MockCodex {
@@ -133,6 +145,10 @@ describe('CodexClient retry', () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    for (const root of tempRoots) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
   });
 
   it('turn.failed が rate limit を示す場合は retry せず rate_limited を返す', async () => {
@@ -169,17 +185,18 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
+    const imagePath = createTempImage('image-1.png');
 
     const result = await client.call('coder', 'この画像を見て [Image #1]', {
       cwd: '/tmp',
-      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+      imageAttachments: [{ placeholder: '[Image #1]', path: imagePath }],
     });
 
     expect(result.status).toBe('done');
     expect(runStreamedInputs[0]).toEqual([
       { type: 'text', text: 'この画像を見て [Image #1]' },
-      { type: 'text', text: '[Image #1] path: `/tmp/image-1.png`' },
-      { type: 'local_image', path: '/tmp/image-1.png' },
+      { type: 'text', text: `[Image #1] path: \`${imagePath}\`` },
+      { type: 'local_image', path: imagePath },
     ]);
   });
 

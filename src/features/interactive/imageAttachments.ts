@@ -2,16 +2,13 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { ProviderImageAttachment } from '../../infra/providers/types.js';
+import type { ImageAttachmentReference, StoredImageAttachment } from '../../shared/types/image-attachments.js';
+import { resolveReferencedImageAttachments } from '../../shared/utils/imageAttachmentReferences.js';
 import type { InteractiveModeResult } from './interactive.js';
 import type { ImagePasteHandler } from './inlineImagePaste.js';
 import { readClipboardImage } from './clipboardImage.js';
 
-export interface InteractiveImageAttachment {
-  placeholder: string;
-  tempPath: string;
-  fileName: string;
-}
+export type InteractiveImageAttachment = StoredImageAttachment;
 
 export interface ImageAttachmentStore {
   saveImage(data: Buffer, mimeType: string): Promise<InteractiveImageAttachment>;
@@ -21,11 +18,11 @@ export interface ImageAttachmentStore {
 export interface ImageAttachmentStoreOptions {
   tmpRoot: string;
   sessionId: string;
+  initialAttachments?: readonly InteractiveImageAttachment[];
 }
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-const IMAGE_PLACEHOLDER_PATTERN = /\[Image #\d+\]/g;
 
 function extensionForMimeType(mimeType: string): string {
   switch (mimeType) {
@@ -68,7 +65,9 @@ export function createImageAttachmentStore(
     throw new Error('Image attachment sessionId is required.');
   }
 
-  let attachments: InteractiveImageAttachment[] = [];
+  let attachments: InteractiveImageAttachment[] = options.initialAttachments
+    ? [...options.initialAttachments]
+    : [];
   const sessionDir = path.join(options.tmpRoot, 'takt', options.sessionId);
   const attachmentDir = path.join(sessionDir, 'attachments');
 
@@ -96,10 +95,13 @@ export function createImageAttachmentStore(
   };
 }
 
-export function createSessionImageAttachmentStore(): ImageAttachmentStore {
+export function createSessionImageAttachmentStore(
+  initialAttachments?: readonly InteractiveImageAttachment[],
+): ImageAttachmentStore {
   return createImageAttachmentStore({
     tmpRoot: os.tmpdir(),
     sessionId: randomUUID(),
+    ...(initialAttachments ? { initialAttachments } : {}),
   });
 }
 
@@ -121,12 +123,6 @@ export function createClipboardImagePasteHandler(attachmentStore: ImageAttachmen
 export function resolvePromptImageAttachments(
   prompt: string,
   attachments: readonly InteractiveImageAttachment[],
-): ProviderImageAttachment[] {
-  const referencedPlaceholders = new Set(prompt.match(IMAGE_PLACEHOLDER_PATTERN) ?? []);
-  return attachments
-    .filter((attachment) => referencedPlaceholders.has(attachment.placeholder))
-    .map((attachment) => ({
-      placeholder: attachment.placeholder,
-      path: attachment.tempPath,
-    }));
+): ImageAttachmentReference[] {
+  return resolveReferencedImageAttachments(prompt, attachments);
 }

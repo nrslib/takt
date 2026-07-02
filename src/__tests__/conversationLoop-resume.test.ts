@@ -116,13 +116,14 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
-import { info as logInfo } from '../shared/ui/index.js';
+import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogInfo = vi.mocked(logInfo);
+const mockLogError = vi.mocked(logError);
 const attachmentSessionDirs = new Set<string>();
 
 // --- Helpers ---
@@ -181,6 +182,17 @@ function trackAttachmentSession(tempPath: string): void {
   attachmentSessionDirs.add(path.dirname(path.dirname(tempPath)));
 }
 
+function createMissingImageAttachment() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-missing-image-'));
+  const tempPath = path.join(tempDir, 'missing-image.png');
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  return {
+    placeholder: '[Image #1]',
+    tempPath,
+    fileName: 'image-1.png',
+  };
+}
+
 // =================================================================
 // initializeSession: no implicit session auto-load
 // =================================================================
@@ -236,6 +248,61 @@ describe('callAIWithRetry', () => {
 
     expect(capture.permissionModes).toEqual(['readonly', 'readonly']);
     expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+  });
+
+  it('expands image placeholders and omits native attachments for non-native providers', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'stale', status: 'error' },
+      { content: 'ok', sessionId: 'fresh-session' },
+    ], { supportsNativeImageInput: false });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: 'stale-session',
+    };
+
+    await callAIWithRetry('inspect [Image #1]', 'base system prompt', [], '/repo', ctx, {
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/takt-image-1.png' }],
+    });
+
+    expect(capture.prompts).toEqual([
+      'inspect [Image #1] (`/tmp/takt-image-1.png`)',
+      'inspect [Image #1] (`/tmp/takt-image-1.png`)',
+    ]);
+    expect(capture.imageAttachments).toEqual([undefined, undefined]);
+    expect(capture.sessionIds).toEqual(['stale-session', undefined]);
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Provider "mock" does not support native image input; image paths were added to the prompt.',
+    );
+  });
+
+  it('appends image paths for non-native providers when prompts omit placeholders', async () => {
+    const { provider, capture } = createScenarioProvider([
+      { content: 'ok', sessionId: 'fresh-session' },
+    ], { supportsNativeImageInput: false });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    await callAIWithRetry('Summarize the completed run.', 'base system prompt', [], '/repo', ctx, {
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/takt-image-1.png' }],
+    });
+
+    expect(capture.prompts).toEqual([
+      'Summarize the completed run.\n\n[Image #1] path: `/tmp/takt-image-1.png`',
+    ]);
+    expect(capture.imageAttachments).toEqual([undefined]);
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      'Provider "mock" does not support native image input; image paths were added to the prompt.',
+    );
   });
 });
 
@@ -476,6 +543,50 @@ describe('/go command', () => {
     expect(capture.imageAttachments[1]?.[0]?.placeholder).toBe('[Image #1]');
     expect(result.action).toBe('execute');
     trackAttachmentSession(result.attachments![0]!.tempPath);
+  });
+
+  it('should report missing stored images in regular input and continue without calling AI', async () => {
+    setupRawStdin(toRawInputs(['inspect [Image #1]', '/cancel']));
+    const missingAttachment = createMissingImageAttachment();
+    const { provider, capture } = createScenarioProvider([], { supportsNativeImageInput: true });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, {
+      attachments: [missingAttachment],
+    });
+
+    expect(capture.callCount).toBe(0);
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
+    expect(result.action).toBe('cancel');
+  });
+
+  it('should report missing stored images in /go summary and continue without calling AI', async () => {
+    setupRawStdin(toRawInputs(['/go inspect [Image #1]', '/cancel']));
+    const missingAttachment = createMissingImageAttachment();
+    const { provider, capture } = createScenarioProvider([], { supportsNativeImageInput: true });
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'codex' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    const result = await runConversationLoop('/test', ctx, defaultStrategy, undefined, {
+      attachments: [missingAttachment],
+    });
+
+    expect(capture.callCount).toBe(0);
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('missing-image.png'));
+    expect(result.action).toBe('cancel');
   });
 
   it('should not create formal task assets when image input is cancelled', async () => {

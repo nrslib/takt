@@ -12,7 +12,7 @@ import {
   loadSessionState,
   clearSessionState,
 } from '../../infra/config/index.js';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readInteractiveInput } from './interactiveInput.js';
@@ -136,7 +136,7 @@ export async function runConversationLoop(
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
-  const attachmentStore = createSessionImageAttachmentStore();
+  const attachmentStore = createSessionImageAttachmentStore(initialInput?.attachments);
 
   info(strategy.introMessage);
   if (sessionId) {
@@ -146,7 +146,14 @@ export async function runConversationLoop(
 
   /** Helper: call AI with current session and update session state */
   async function doCallAI(prompt: string, sysPrompt: string, tools: string[]): Promise<CallAIResult | null> {
-    const imageAttachments = resolvePromptImageAttachments(prompt, attachmentStore.listAttachments());
+    let imageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+    try {
+      imageAttachments = resolvePromptImageAttachments(prompt, attachmentStore.listAttachments());
+    } catch (caught) {
+      error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+      blankLine();
+      return null;
+    }
     const { result, sessionId: newSessionId } = await callAIWithRetry(
       prompt, sysPrompt, tools, cwd, { ...ctx, sessionId }, { imageAttachments },
     );
@@ -287,11 +294,19 @@ export async function runConversationLoop(
         }
         process.stdin.pause();
         info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
+        let summaryImageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+        try {
+          summaryImageAttachments = resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments());
+        } catch (caught) {
+          error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+          blankLine();
+          continue;
+        }
         // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
         const { result: summaryResult } = await callAIWithRetry(
           summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
           { ...ctx, sessionId: undefined },
-          { imageAttachments: resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments()) },
+          { imageAttachments: summaryImageAttachments },
         );
         if (!summaryResult) {
           info(ui.summarizeFailed);

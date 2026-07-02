@@ -22,6 +22,7 @@ import {
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
 import { mapToCodexSandboxMode, type CodexCallOptions } from './types.js';
 import { formatImageAttachmentPathReference } from '../providers/imageAttachmentPrompt.js';
+import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import {
   type CodexEvent,
   type CodexItem,
@@ -286,6 +287,7 @@ export class CodexClient {
     const fullPrompt = options.systemPrompt
       ? `${options.systemPrompt}\n\n${prompt}`
       : prompt;
+    validateProviderImageAttachments(options.imageAttachments);
     const input: Input = options.imageAttachments && options.imageAttachments.length > 0
       ? [
         { type: 'text', text: fullPrompt },
