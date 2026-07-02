@@ -586,13 +586,16 @@ Aggregate → Event Bus → Projection(@EventHandler) → Repository(Read Model)
 | 基準 | 判定 |
 |------|------|
 | Subscription Query で Projection 更新を待機 | REJECT。分散環境で動作しない。リアクティブポーリングを使う |
-| UIが即座に更新を期待している | ポーリング or WebSocket |
+| `Thread.sleep` や同等の待機でリクエストスレッドをブロックして Projection 更新を待つ | REJECT。高並行時にスレッド枯渇を起こす |
+| 同一HTTPレスポンスで更新後状態を返す必要がある | リアクティブHTTPスタックで非ブロッキングに待機 |
+| 同一HTTPレスポンスで待つ必要がない | `202 Accepted` + フロントエンドのロングポーリング、通常ポーリング、SSE、WebSocket |
+| UIが即座に更新を期待している | フロントエンドポーリング、SSE、WebSocket、またはサーバー側のリアクティブ待機 |
 | 整合性遅延が許容範囲を超える | アーキテクチャ再検討 |
 | 補償トランザクションが未定義 | 障害シナリオの検討を要求 |
 
 ### リアクティブポーリング
 
-コマンド発行 → Projection更新完了をポーリングで待機するパターン。
+コマンド発行 → Projection更新完了を非ブロッキングなポーリングで待機するパターン。リアクティブポーリングはリクエストスレッドを占有しない待機であり、`while` ループと `Thread.sleep` で同期的に待つ実装ではない。
 
 ```kotlin
 // UseCase: コマンド送信 → ポーリングで完了待機
@@ -620,6 +623,20 @@ private fun pollForCompletion(orderId: String): Mono<Void> {
 }
 ```
 
+ブロッキング待機は避ける:
+
+```kotlin
+// NG - リクエストスレッドを占有し、負荷時にスレッド枯渇を起こす
+while (Instant.now().isBefore(deadline)) {
+    val order = orderRepository.findById(orderId).orElse(null)
+    if (order?.status == OrderStatus.CONFIRMED) return PlaceOrderOutput(orderId)
+    Thread.sleep(100)
+}
+
+// OK - 同一レスポンスで待つならリアクティブな待機へ載せる
+return pollForCompletion(orderId).thenReturn(PlaceOrderOutput(orderId))
+```
+
 ポーリングが適切なケース:
 - Saga が完了するまでレスポンスを返したくない場合
 - コマンド発行後に作成されたリソースのIDを返す場合
@@ -627,6 +644,8 @@ private fun pollForCompletion(orderId: String): Mono<Void> {
 ポーリングが不要なケース:
 - コマンド発行だけで完了する単純な操作（結果を待たない）
 - UIがリアルタイム更新を必要としない場合
+
+サーバー側で待たない場合は、コマンド受付後に `202 Accepted` と追跡IDを返し、フロントエンドが読み取りAPIをロングポーリングまたは通常ポーリングする。ユーザー体験上の即時性が必要なら SSE や WebSocket も選択肢に含める。
 
 ## Saga vs EventHandler
 

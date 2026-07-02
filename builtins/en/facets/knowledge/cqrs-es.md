@@ -358,13 +358,16 @@ When synchronous response is needed after command dispatch, use reactive polling
 | Criteria | Judgment |
 |----------|----------|
 | Using Subscription Query to wait for Projection updates | REJECT. Does not work in distributed environments. Use reactive polling |
-| UI expects immediate updates | Polling or WebSocket |
+| Blocking the request thread with `Thread.sleep` or equivalent while waiting for Projection updates | REJECT. It can exhaust request threads under concurrency |
+| Updated state must be returned in the same HTTP response | Wait non-blockingly on a reactive HTTP stack |
+| The same HTTP response does not need to wait | `202 Accepted` + frontend long polling, regular polling, SSE, or WebSocket |
+| UI expects immediate updates | Frontend polling, SSE, WebSocket, or server-side reactive waiting |
 | Consistency delay exceeds tolerance | Reconsider architecture |
 | Compensating transactions undefined | Request failure scenario review |
 
 ### Reactive Polling
 
-Pattern: dispatch command → poll for Projection update completion.
+Pattern: dispatch command → wait for Projection update completion with non-blocking polling. Reactive polling means waiting without occupying a request thread; it is not a synchronous `while` loop with `Thread.sleep`.
 
 ```kotlin
 // UseCase: send command → poll for completion
@@ -392,6 +395,20 @@ private fun pollForCompletion(orderId: String): Mono<Void> {
 }
 ```
 
+Avoid blocking waits:
+
+```kotlin
+// NG - Occupies the request thread and can exhaust the pool under load
+while (Instant.now().isBefore(deadline)) {
+    val order = orderRepository.findById(orderId).orElse(null)
+    if (order?.status == OrderStatus.CONFIRMED) return PlaceOrderOutput(orderId)
+    Thread.sleep(100)
+}
+
+// OK - If the same response must wait, move the wait onto a reactive path
+return pollForCompletion(orderId).thenReturn(PlaceOrderOutput(orderId))
+```
+
 When polling is appropriate:
 - Need to wait for Saga completion before returning response
 - Need to return created resource ID after command dispatch
@@ -399,6 +416,8 @@ When polling is appropriate:
 When polling is not needed:
 - Simple operations that complete with just command dispatch (no result waiting)
 - UI does not require real-time updates
+
+When the server does not wait, return `202 Accepted` with a tracking ID after accepting the command, then let the frontend long-poll or regularly poll a read API. If the user experience requires immediate updates, SSE or WebSocket are also options.
 
 ## Saga vs EventHandler
 
