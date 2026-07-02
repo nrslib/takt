@@ -31,8 +31,8 @@ export function createTaktMcpServer(deps: McpOperationDependencies = {}): McpSer
   server.registerTool(
     'takt_create_issue_and_enqueue_task',
     {
-      title: 'Create GitHub issue and enqueue TAKT task',
-      description: 'Create a GitHub Issue, then save a pending TAKT task with the issue number.',
+      title: 'Create issue and enqueue TAKT task',
+      description: 'Create an issue with the configured issue provider, then save a pending TAKT task with the issue number.',
       inputSchema: createIssueAndEnqueueTaskInputSchema,
     },
     (input) => createIssueAndEnqueueTaktTask(input, deps),

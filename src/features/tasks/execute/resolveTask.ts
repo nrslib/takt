@@ -15,7 +15,7 @@ import {
 } from '../../../infra/task/index.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
-import { getGitProvider, type Issue } from '../../../infra/git/index.js';
+import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
@@ -48,7 +48,11 @@ function assertReusedWorktreeContext(
   }
 
   const savedBaseBranch = resolveTaskDataBaseBranch(task.data);
-  if (contextOverride?.baseBranch !== undefined && contextOverride.baseBranch !== savedBaseBranch) {
+  if (
+    contextOverride?.baseBranch !== undefined
+    && savedBaseBranch !== undefined
+    && contextOverride.baseBranch !== savedBaseBranch
+  ) {
     throw new Error(
       `Task "${task.name}" has existing worktree ${reusedWorktree.worktreePath} with base_branch "${savedBaseBranch ?? '<none>'}", ` +
       `but runtime taskContext.baseBranch is "${contextOverride.baseBranch}".`,
@@ -147,20 +151,24 @@ async function runWithTaskProgress<T>(
   return withProgress(message, successMessage, action);
 }
 
-export function resolveTaskIssue(issueNumber: number | undefined, projectCwd: string): Issue[] | undefined {
+export function resolveTaskIssue(
+  issueNumber: number | undefined,
+  projectCwd: string,
+  gitProvider?: GitProvider,
+): Issue[] | undefined {
   if (issueNumber === undefined) {
     return undefined;
   }
 
-  const gitProvider = getGitProvider();
-  const cliStatus = gitProvider.checkCliStatus(projectCwd);
+  const resolvedGitProvider = gitProvider ?? getGitProvider();
+  const cliStatus = resolvedGitProvider.checkCliStatus(projectCwd);
   if (!cliStatus.available) {
     log.info('VCS CLI unavailable, skipping issue resolution for PR body', { issueNumber });
     return undefined;
   }
 
   try {
-    const issue = gitProvider.fetchIssue(issueNumber, projectCwd);
+    const issue = resolvedGitProvider.fetchIssue(issueNumber, projectCwd);
     return [issue];
   } catch (e) {
     log.info('Failed to fetch issue for PR body, continuing without issue info', { issueNumber, error: getErrorMessage(e) });
@@ -309,7 +317,9 @@ export async function resolveTaskExecution(
     ...(resolvedRetryNote ? { retryNote: resolvedRetryNote } : {}),
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
-    ...(contextOverride?.prNumber !== undefined ? { prNumber: contextOverride.prNumber } : {}),
+    ...(contextOverride?.prNumber !== undefined
+      ? { prNumber: contextOverride.prNumber }
+      : data.context_pr_number !== undefined ? { prNumber: data.context_pr_number } : {}),
     ...(maxStepsOverride !== undefined ? { maxStepsOverride } : {}),
     ...(initialIterationOverride !== undefined ? { initialIterationOverride } : {}),
   };

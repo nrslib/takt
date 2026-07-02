@@ -268,6 +268,24 @@ describe('executeAndCompleteTask', () => {
     expect(workflowExecutionOptions?.outputMode).toBe('silent');
   });
 
+  it('Given run context with git provider, When run-next executes a task, Then workflow execution receives the run context', async () => {
+    const task = createTask('task-with-request-provider');
+    const gitProvider = { provider: 'request' };
+
+    await executeRunTaskAndCompleteWithRunOptions(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+      undefined,
+      { outputMode: 'silent' } as never,
+      { gitProvider },
+    );
+
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflowForRun).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflowForRun.mock.calls[0]?.[4]).toEqual({ gitProvider });
+  });
+
   it('Given silent task adapter options, When a worktree task succeeds, Then post execution and task result logs are muted', async () => {
     const task = createTask('task-silent-post-execution');
     mockResolveTaskExecution.mockResolvedValue({
@@ -742,12 +760,57 @@ describe('executeAndCompleteTask', () => {
     expect(workflowExecutionOptions?.traceTaskMetadata).toEqual({
       taskSlug: 'trace-metadata',
       taskSummary: 'Fix the branch-specific bug',
-      taskSource: 'pr_review',
+      taskSource: 'issue',
       issueNumber: 827,
       prNumber: 826,
       gitBranch: 'takt/827/trace-metadata',
       gitBaseBranch: 'main',
       worktreePath: '/project/.takt/worktrees/trace-metadata',
+    });
+  });
+
+  it('should include saved context_pr_number in trace task metadata after task resolution', async () => {
+    const task = {
+      ...createTask('task-with-saved-pr-context'),
+      data: {
+        task: 'Task: task-with-saved-pr-context',
+        workflow: 'default',
+        context_pr_number: 938,
+      },
+    };
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/project',
+      workflowIdentifier: 'default',
+      isWorktree: false,
+      autoPr: false,
+      draftPr: false,
+      shouldPublishBranchToOrigin: false,
+      taskPrompt: undefined,
+      reportDirName: '20260702-task-with-saved-pr-context',
+      branch: undefined,
+      worktreePath: undefined,
+      baseBranch: undefined,
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: undefined,
+      prNumber: 938,
+    });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+    );
+
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      traceTaskMetadata?: unknown;
+    };
+    expect(workflowExecutionOptions?.traceTaskMetadata).toMatchObject({
+      taskName: 'task-with-saved-pr-context',
+      taskSummary: 'Task: task-with-saved-pr-context',
+      taskSource: 'manual',
+      prNumber: 938,
     });
   });
 
@@ -1204,6 +1267,49 @@ describe('executeAndCompleteTask', () => {
         execCwd: '/worktree/clone',
         projectCwd: '/project',
         issues: [issue],
+      }),
+    );
+  });
+
+  it('should pass request git provider into issue resolution and post execution', async () => {
+    const task = createTask('task-request-provider');
+    const requestProvider = {
+      checkCliStatus: vi.fn(),
+      fetchIssue: vi.fn(),
+    };
+    mockResolveTaskExecution.mockResolvedValue({
+      execCwd: '/worktree/clone',
+      workflowIdentifier: 'default',
+      isWorktree: true,
+      autoPr: true,
+      draftPr: false,
+      shouldPublishBranchToOrigin: true,
+      taskPrompt: undefined,
+      reportDirName: '20260702-task-request-provider',
+      branch: 'takt/task-request-provider',
+      worktreePath: '/worktree/clone',
+      baseBranch: 'main',
+      startStep: undefined,
+      retryNote: undefined,
+      issueNumber: 938,
+    });
+    mockResolveTaskIssue.mockReturnValue(undefined);
+    mockPostExecutionFlow.mockResolvedValue({ prUrl: 'https://github.com/org/repo/pull/938' });
+
+    const result = await executeRunTaskAndCompleteWithRunOptions(
+      task,
+      createTaskRunnerMock(),
+      '/project',
+      undefined,
+      undefined,
+      { gitProvider: requestProvider },
+    );
+
+    expect(result).toBe(true);
+    expect(mockResolveTaskIssue).toHaveBeenCalledWith(938, '/project', requestProvider);
+    expect(mockPostExecutionFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gitProvider: requestProvider,
       }),
     );
   });

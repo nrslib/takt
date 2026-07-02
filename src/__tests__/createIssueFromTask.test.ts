@@ -36,7 +36,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { success, info, error } from '../shared/ui/index.js';
 import { createIssueFromTask } from '../features/tasks/index.js';
-import { extractTitle } from '../features/tasks/add/index.js';
+import { createIssueFromTaskResult, extractTitle } from '../features/tasks/add/index.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
@@ -172,7 +172,42 @@ describe('createIssueFromTask', () => {
 
       // Then
       expect(result).toBeUndefined();
-      expect(mockError).toHaveBeenCalledWith('Failed to extract issue number from URL');
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Failed to extract issue number from URL'));
+    });
+
+    it('should return issue number from provider result before parsing URL', () => {
+      mockCreateIssue.mockReturnValue({
+        success: true,
+        issueNumber: 42,
+        url: 'https://github.com/owner/repo/issues/not-a-number',
+      });
+
+      const result = createIssueFromTask('Test task');
+
+      expect(result).toBe(42);
+    });
+
+    it('should reject issue URL with trailing slash instead of treating it as issue 0', () => {
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42/' });
+
+      const result = createIssueFromTaskResult('Test task', { outputMode: 'silent' });
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('Issue URL must end with a positive issue number'),
+      });
+      expect(mockError).not.toHaveBeenCalled();
+    });
+
+    it('should reject invalid issue URLs with a clear error', () => {
+      mockCreateIssue.mockReturnValue({ success: true, url: 'not a url' });
+
+      const result = createIssueFromTaskResult('Test task', { outputMode: 'silent' });
+
+      expect(result).toEqual({
+        success: false,
+        error: expect.stringContaining('Issue URL is invalid'),
+      });
     });
   });
 
@@ -304,6 +339,17 @@ describe('createIssueFromTask', () => {
         url: 'https://github.com/owner/repo/issues/7',
         issueNumber: 7,
         used_structured_output: true,
+      }));
+    });
+
+    it('does not log a fallback reason when the structured output title is valid', () => {
+      const task = '## Generic task heading\nImplement AI issue title generation';
+      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/15' });
+
+      createIssueFromTask(task, { title: 'Generate concise issue titles with AI' });
+
+      expect(mockLogInfo).toHaveBeenCalledWith('Issue created', expect.not.objectContaining({
+        fallback_reason: expect.anything(),
       }));
     });
 

@@ -176,7 +176,7 @@ export function closeIssue(issueNumber: number, comment: string, cwd: string): C
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return { success: true };
+    return { success: true, commentCreated: true };
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('Issue close failed', { issueNumber, error: errorMessage });

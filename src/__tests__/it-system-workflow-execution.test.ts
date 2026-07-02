@@ -14,7 +14,8 @@ const {
   mockClosePr,
   mockMergePr,
   mockSaveTaskFile,
-  mockCreateIssueFromTask,
+  mockCreateIssueFromTaskResult,
+  mockCloseIssue,
   mockCreateBaseBranchIfMissing,
   mockResolveBaseBranch,
   mockFindExistingPr,
@@ -28,7 +29,8 @@ const {
   mockClosePr: vi.fn(),
   mockMergePr: vi.fn(),
   mockSaveTaskFile: vi.fn(),
-  mockCreateIssueFromTask: vi.fn(),
+  mockCreateIssueFromTaskResult: vi.fn(),
+  mockCloseIssue: vi.fn(),
   mockCreateBaseBranchIfMissing: vi.fn(),
   mockResolveBaseBranch: vi.fn(),
   mockFindExistingPr: vi.fn(),
@@ -54,6 +56,7 @@ vi.mock('../infra/git/index.js', () => ({
     commentOnPr: (...args: unknown[]) => mockCommentOnPr(...args),
     closePr: (...args: unknown[]) => mockClosePr(...args),
     mergePr: (...args: unknown[]) => mockMergePr(...args),
+    closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
     findExistingPr: (...args: unknown[]) => mockFindExistingPr(...args),
     fetchPrReviewComments: (...args: unknown[]) => mockFetchPrReviewComments(...args),
     listOpenIssues: (...args: unknown[]) => mockListOpenIssues(...args),
@@ -62,9 +65,12 @@ vi.mock('../infra/git/index.js', () => ({
   })),
 }));
 
-vi.mock('../features/tasks/add/index.js', () => ({
-  saveTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
-  createIssueFromTask: (...args: unknown[]) => mockCreateIssueFromTask(...args),
+vi.mock('../infra/task/enqueuedTaskFile.js', () => ({
+  saveEnqueuedTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
+}));
+
+vi.mock('../infra/task/issueTask.js', () => ({
+  createIssueFromTaskResult: (...args: unknown[]) => mockCreateIssueFromTaskResult(...args),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -225,7 +231,8 @@ describe('system workflow execution integration', () => {
     vi.useRealTimers();
     projectDir = mkdtempSync(join(tmpdir(), 'takt-system-it-'));
     mockSaveTaskFile.mockResolvedValue({ taskName: 'task-1', tasksFile: join(projectDir, '.takt', 'tasks.yaml') });
-    mockCreateIssueFromTask.mockReturnValue(586);
+    mockCreateIssueFromTaskResult.mockReturnValue({ success: true, issueNumber: 586 });
+    mockCloseIssue.mockReturnValue({ success: true });
     mockCreateBaseBranchIfMissing.mockImplementation((_cwd: string, config: { name: string }) => ({
       branch: config.name,
       created: true,
@@ -883,10 +890,14 @@ describe('system workflow execution integration', () => {
       '- [ ] Validation passes',
     ].join('\n');
     expect(state.status).toBe('completed');
-    expect(mockCreateIssueFromTask).toHaveBeenCalledWith(renderedTask, {
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, {
       cwd: projectDir,
       title: 'Implement follow-up issue title',
       labels: ['automation'],
+      outputMode: 'silent',
+      gitProvider: expect.objectContaining({
+        closeIssue: expect.any(Function),
+      }),
     });
     expect(mockSaveTaskFile).toHaveBeenCalledWith(projectDir, renderedTask, {
       workflow: 'takt-default',
@@ -976,11 +987,12 @@ describe('system workflow execution integration', () => {
     ].join('\n');
 
     expect(state.status).toBe('completed');
-    expect(mockCreateIssueFromTask).toHaveBeenCalledWith(renderedTask, {
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, expect.objectContaining({
       cwd: projectDir,
       title: 'Implement unlabeled follow-up issue',
-      labels: undefined,
-    });
+      outputMode: 'silent',
+    }));
+    expect(mockCreateIssueFromTaskResult.mock.calls.at(-1)?.[1]).not.toHaveProperty('labels');
   });
 
   it('followup-task の structured output 検証失敗時は task_markdown 経路へフォールバックする', async () => {
@@ -1074,7 +1086,7 @@ describe('system workflow execution integration', () => {
         },
       }),
     );
-    expect(mockCreateIssueFromTask).toHaveBeenCalledWith([
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith([
       '## Summary',
       'Implement fallback follow-up',
       '',
@@ -1086,7 +1098,10 @@ describe('system workflow execution integration', () => {
       '- [ ] Completion can be verified against the task instruction.',
     ].join('\n'), {
       cwd: projectDir,
-      labels: undefined,
+      outputMode: 'silent',
+      gitProvider: expect.objectContaining({
+        closeIssue: expect.any(Function),
+      }),
     });
     expect(mockLogInfo).toHaveBeenCalledWith(
       'Structured output failed, falling back to task_markdown issue flow',
@@ -1157,10 +1172,10 @@ describe('system workflow execution integration', () => {
 
     expect(state.status).toBe('completed');
     const renderedTask = renderExpectedFallbackTask('Implement missing structured output fallback');
-    expect(mockCreateIssueFromTask).toHaveBeenCalledWith(renderedTask, {
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, expect.objectContaining({
       cwd: projectDir,
-      labels: undefined,
-    });
+      outputMode: 'silent',
+    }));
     expect(mockSaveTaskFile).toHaveBeenCalledWith(projectDir, renderedTask, {
       workflow: 'takt-default',
       issue: 586,
@@ -1236,10 +1251,10 @@ describe('system workflow execution integration', () => {
 
     expect(state.status).toBe('completed');
     const renderedTask = renderExpectedFallbackTask('Implement provider error fallback');
-    expect(mockCreateIssueFromTask).toHaveBeenCalledWith(renderedTask, {
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, expect.objectContaining({
       cwd: projectDir,
-      labels: undefined,
-    });
+      outputMode: 'silent',
+    }));
     expect(mockSaveTaskFile).toHaveBeenCalledWith(projectDir, renderedTask, {
       workflow: 'takt-default',
       issue: 586,
@@ -1328,10 +1343,10 @@ describe('system workflow execution integration', () => {
 
     expect(state.status).toBe('completed');
     const renderedTask = renderExpectedFallbackTask(input.contentTitle);
-    expect(mockCreateIssueFromTask).toHaveBeenCalledWith(renderedTask, {
+    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, expect.objectContaining({
       cwd: projectDir,
-      labels: undefined,
-    });
+      outputMode: 'silent',
+    }));
     expect(mockSaveTaskFile).toHaveBeenCalledWith(projectDir, renderedTask, {
       workflow: 'takt-default',
       issue: 586,
@@ -1384,7 +1399,7 @@ describe('system workflow execution integration', () => {
     ).run();
 
     expect(state.status).toBe('aborted');
-    expect(mockCreateIssueFromTask).not.toHaveBeenCalled();
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
     expect(mockLogInfo).toHaveBeenCalledWith(
       'Structured output failed',
@@ -1435,7 +1450,7 @@ describe('system workflow execution integration', () => {
     ).run();
 
     expect(state.status).toBe('aborted');
-    expect(mockCreateIssueFromTask).not.toHaveBeenCalled();
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
     expect(mockLogInfo).toHaveBeenCalledWith(
       'Structured output failed',
@@ -1466,7 +1481,7 @@ describe('system workflow execution integration', () => {
     ).run();
 
     expect(state.status).toBe('aborted');
-    expect(mockCreateIssueFromTask).not.toHaveBeenCalled();
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
     expect(mockLogInfo).toHaveBeenCalledWith(
       'Structured output failed',

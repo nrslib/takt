@@ -55,12 +55,12 @@ function getTaskContextBranchNameError(branch: string, labels: BranchValidationL
 
 export function assertValidTaskContextPrNumber(prNumber: number, label: string): void {
   if (!isValidTaskContextPrNumber(prNumber)) {
-    throw new Error(`${label} must be a positive integer.`);
+    throw new Error(`${label} must be a positive safe integer.`);
   }
 }
 
 export function isValidTaskContextPrNumber(prNumber: number): boolean {
-  return Number.isInteger(prNumber) && prNumber > 0;
+  return Number.isSafeInteger(prNumber) && prNumber > 0;
 }
 
 function isValidGitBranchRefName(branch: string): boolean {

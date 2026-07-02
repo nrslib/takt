@@ -195,11 +195,11 @@ describe('MCP package entrypoint', () => {
         worktree: true,
         autoPr: false,
       });
-      expect(createIssueFromTaskResult).toHaveBeenCalledWith('Implement MCP support', {
+      expect(createIssueFromTaskResult).toHaveBeenCalledWith('Implement MCP support', expect.objectContaining({
         cwd: '/repo',
         labels: ['enhancement'],
         outputMode: 'silent',
-      });
+      }));
       expect(saveTaskFile).toHaveBeenNthCalledWith(2, '/repo', 'Implement MCP support', {
         workflow: 'default',
         worktree: true,
@@ -218,7 +218,9 @@ describe('MCP package entrypoint', () => {
         expect.objectContaining({
           outputMode: 'silent',
         }),
-        undefined,
+        expect.objectContaining({
+          gitProvider: expect.any(Object),
+        }),
       );
     } finally {
       await client.close();

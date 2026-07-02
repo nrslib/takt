@@ -132,21 +132,23 @@ export function closeIssue(issueNumber: number, comment: string, cwd: string): C
     return { success: false, error: glabStatus.error };
   }
 
+  let commentCreated = false;
   try {
     execFileSync('glab', ['issue', 'note', String(issueNumber), '--message', comment], {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    commentCreated = true;
     execFileSync('glab', ['issue', 'close', String(issueNumber)], {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return { success: true };
+    return { success: true, commentCreated };
   } catch (err) {
     const errorMessage = getErrorMessage(err);
-    log.error('Issue close failed', { issueNumber, error: errorMessage });
-    return { success: false, error: errorMessage };
+    log.error('Issue close failed', { issueNumber, commentCreated, error: errorMessage });
+    return { success: false, commentCreated, error: errorMessage };
   }
 }

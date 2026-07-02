@@ -64,7 +64,7 @@ function extractPrNumber(text: string): number | undefined {
   }
 
   if (!/^-?\d+$/u.test(value)) {
-    throw new Error('ACP prNumber must be a positive integer.');
+    throw new Error('ACP prNumber must be a positive safe integer.');
   }
 
   const parsed = Number.parseInt(value, 10);

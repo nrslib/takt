@@ -1,12 +1,18 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import { TaskRunner, type TaskInfo } from '../../infra/task/index.js';
-import { getGitProvider, initGitProvider, type CloseIssueResult } from '../../infra/git/index.js';
+import { getGitProvider, initGitProvider, type CloseIssueResult, type GitProvider } from '../../infra/git/index.js';
 import {
   createIssueFromTaskResult as defaultCreateIssueFromTaskResult,
   saveTaskFile as defaultSaveTaskFile,
 } from '../tasks/add/index.js';
+import {
+  createIssueAndEnqueueTask,
+  enqueueTask,
+  type IssueEnqueueCompensationInput,
+  type IssueEnqueueFailure,
+} from '../../infra/task/enqueueService.js';
 import {
   executeRunTaskAndCompleteWithDetails as defaultExecuteRunTaskAndCompleteWithDetails,
   type TaskCompletionResult,
@@ -23,10 +29,7 @@ type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 type ExecuteRunTaskAndCompleteWithDetails = typeof defaultExecuteRunTaskAndCompleteWithDetails;
 type CreateTaskRunner = (cwd: string) => TaskRunner;
-type CompensateCreatedIssue = (input: {
-  cwd: string;
-  issueNumber: number;
-}) => CloseIssueResult;
+type CompensateCreatedIssue = (input: IssueEnqueueCompensationInput) => CloseIssueResult;
 
 export interface McpOperationDependencies {
   saveTaskFile?: SaveTaskFile;
@@ -47,24 +50,8 @@ function jsonResult(value: Record<string, unknown>): CallToolResult {
   return textResult(JSON.stringify(value));
 }
 
-const POSIX_ABSOLUTE_PATH_PATTERN = /(?<![\w:])\/[^\s'"`<>|]*/g;
-const WINDOWS_ABSOLUTE_PATH_PATTERN = /[A-Za-z]:\\[^\s'"`<>|]*/g;
-
-function sanitizeMcpText(text: string): string {
-  return text
-    .replace(POSIX_ABSOLUTE_PATH_PATTERN, '[path]')
-    .replace(WINDOWS_ABSOLUTE_PATH_PATTERN, '[path]');
-}
-
 function safeMcpErrorCause(error: unknown): string {
-  const message = getErrorMessage(error);
-  if (/EACCES|EPERM|permission denied/i.test(message)) {
-    return 'permission denied';
-  }
-  if (/ENOENT|no such file or directory/i.test(message)) {
-    return 'not found';
-  }
-  return sanitizeMcpText(message);
+  return safeExternalErrorMessage(error);
 }
 
 function errorResult(action: string, error: unknown): CallToolResult {
@@ -73,18 +60,6 @@ function errorResult(action: string, error: unknown): CallToolResult {
 
 function resolveWorkflow(workflow: string | undefined): string {
   return workflow ?? DEFAULT_WORKFLOW_NAME;
-}
-
-function buildSaveTaskOptions(input: EnqueueTaskInput, issueNumber?: number): Parameters<SaveTaskFile>[2] {
-  return {
-    workflow: resolveWorkflow(input.workflow),
-    worktree: input.worktree ?? true,
-    autoPr: input.autoPr ?? false,
-    ...(issueNumber !== undefined ? { issue: issueNumber } : {}),
-    ...(input.taskContext?.branch !== undefined ? { branch: input.taskContext.branch } : {}),
-    ...(input.taskContext?.baseBranch !== undefined ? { baseBranch: input.taskContext.baseBranch } : {}),
-    ...(input.taskContext?.prNumber !== undefined ? { prNumber: input.taskContext.prNumber } : {}),
-  };
 }
 
 function buildTaskExecutionOptions(input: RunNextTaskInput): TaskExecutionOptions | undefined {
@@ -101,8 +76,14 @@ function buildSilentParallelOptions(): TaskExecutionParallelOptions {
   return { outputMode: 'silent' };
 }
 
-function buildRunTaskExecutionContext(input: RunNextTaskInput): RunTaskExecutionContext | undefined {
-  return input.taskContext === undefined ? undefined : { taskContext: input.taskContext };
+function buildRunTaskExecutionContext(
+  input: RunNextTaskInput,
+  gitProvider: GitProvider,
+): RunTaskExecutionContext {
+  return {
+    gitProvider,
+    ...(input.taskContext === undefined ? {} : { taskContext: input.taskContext }),
+  };
 }
 
 function buildTaskFailureText(taskName: string, result: TaskCompletionResult): string {
@@ -123,25 +104,6 @@ function buildIssueSaveFailureText(issueNumber: number, error: unknown): string 
   return `Issue #${issueNumber} was created, but task saving failed: ${safeMcpErrorCause(error)}`;
 }
 
-function buildIssueCompensationComment(): string {
-  return [
-    'TAKT MCP created this issue, but saving the pending task failed.',
-    '',
-    'The issue is being closed to keep the repository state consistent.',
-  ].join('\n');
-}
-
-function compensateCreatedIssue(input: {
-  cwd: string;
-  issueNumber: number;
-}): CloseIssueResult {
-  return getGitProvider().closeIssue(
-    input.issueNumber,
-    buildIssueCompensationComment(),
-    input.cwd,
-  );
-}
-
 function buildCompensatedIssueSaveFailureText(issueNumber: number, saveError: unknown): string {
   return `Issue #${issueNumber} was created and closed because task saving failed: ${safeMcpErrorCause(saveError)}`;
 }
@@ -149,16 +111,56 @@ function buildCompensatedIssueSaveFailureText(issueNumber: number, saveError: un
 function buildUncompensatedIssueSaveFailureText(
   issueNumber: number,
   saveError: unknown,
-  compensationError: string | undefined,
+  compensation: Extract<CloseIssueResult, { success: false }>,
 ): string {
-  if (compensationError === undefined) {
-    throw new Error(`Issue compensation failed without an error message: #${issueNumber}`);
-  }
+  const compensationFailure = compensation.commentCreated === true
+    ? `Issue compensation comment was created, but issue close failed: ${safeMcpErrorCause(compensation.error)}`
+    : `Issue close failed: ${safeMcpErrorCause(compensation.error)}`;
   return [
     buildIssueSaveFailureText(issueNumber, saveError),
     '',
-    `Issue close failed: ${safeMcpErrorCause(compensationError)}`,
+    compensationFailure,
   ].join('\n');
+}
+
+function buildCancelledIssueEnqueueFailureText(
+  issueNumber: number,
+  compensation: CloseIssueResult,
+): string {
+  if (compensation.success) {
+    return `Issue #${issueNumber} was created and closed because task enqueue was cancelled`;
+  }
+  const compensationFailure = compensation.commentCreated === true
+    ? `Issue compensation comment was created, but issue close failed: ${safeMcpErrorCause(compensation.error)}`
+    : `Issue close failed: ${safeMcpErrorCause(compensation.error)}`;
+  return [
+    `Issue #${issueNumber} was created, but task enqueue was cancelled`,
+    '',
+    compensationFailure,
+  ].join('\n');
+}
+
+function buildIssueEnqueueFailureResult(failure: IssueEnqueueFailure): CallToolResult {
+  if (failure.stage === 'issue_creation') {
+    return textResult(safeMcpErrorCause(failure.error), true);
+  }
+  if (failure.stage === 'cancelled_after_issue_creation') {
+    return textResult(
+      buildCancelledIssueEnqueueFailureText(failure.issueNumber, failure.compensation),
+      true,
+    );
+  }
+  if (!failure.compensation.success) {
+    return textResult(
+      buildUncompensatedIssueSaveFailureText(
+        failure.issueNumber,
+        failure.error,
+        failure.compensation,
+      ),
+      true,
+    );
+  }
+  return textResult(buildCompensatedIssueSaveFailureText(failure.issueNumber, failure.error), true);
 }
 
 export async function enqueueTaktTask(
@@ -168,11 +170,15 @@ export async function enqueueTaktTask(
   try {
     const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
     const workflow = resolveWorkflow(input.workflow);
-    const created = await saveTaskFile(input.cwd, input.task, buildSaveTaskOptions(input));
-    return jsonResult({
-      ...created,
+    const created = await enqueueTask({
+      cwd: input.cwd,
+      task: input.task,
       workflow,
-    });
+      worktree: input.worktree ?? true,
+      autoPr: input.autoPr ?? false,
+      taskContext: input.taskContext,
+    }, saveTaskFile);
+    return jsonResult(created);
   } catch (error) {
     return errorResult('Task saving failed', error);
   }
@@ -184,44 +190,26 @@ export async function createIssueAndEnqueueTaktTask(
 ): Promise<CallToolResult> {
   try {
     initGitProvider(input.cwd);
-    const createIssueFromTaskResult = deps.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult;
-    const issueResult = createIssueFromTaskResult(input.task, {
+    const gitProvider = getGitProvider();
+    const workflow = resolveWorkflow(input.workflow);
+    const issueResult = await createIssueAndEnqueueTask({
       cwd: input.cwd,
+      task: input.task,
+      workflow,
+      worktree: input.worktree ?? true,
+      autoPr: input.autoPr ?? false,
       labels: input.labels,
-      outputMode: 'silent',
+      taskContext: input.taskContext,
+      gitProvider,
+    }, {
+      saveTaskFile: deps.saveTaskFile ?? defaultSaveTaskFile,
+      createIssueFromTaskResult: deps.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult,
+      compensateCreatedIssue: deps.compensateCreatedIssue,
     });
     if (!issueResult.success) {
-      return textResult(safeMcpErrorCause(issueResult.error), true);
+      return buildIssueEnqueueFailureResult(issueResult.failure);
     }
-
-    const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
-    const workflow = resolveWorkflow(input.workflow);
-    let created: Awaited<ReturnType<SaveTaskFile>>;
-    try {
-      created = await saveTaskFile(
-        input.cwd,
-        input.task,
-        buildSaveTaskOptions(input, issueResult.issueNumber),
-      );
-    } catch (saveError) {
-      const compensate = deps.compensateCreatedIssue ?? compensateCreatedIssue;
-      const compensationResult = compensate({
-        cwd: input.cwd,
-        issueNumber: issueResult.issueNumber,
-      });
-      if (!compensationResult.success) {
-        return textResult(
-          buildUncompensatedIssueSaveFailureText(issueResult.issueNumber, saveError, compensationResult.error),
-          true,
-        );
-      }
-      return textResult(buildCompensatedIssueSaveFailureText(issueResult.issueNumber, saveError), true);
-    }
-    return jsonResult({
-      ...created,
-      workflow,
-      issueNumber: issueResult.issueNumber,
-    });
+    return jsonResult(issueResult.created);
   } catch (error) {
     return errorResult('Issue task enqueue failed', error);
   }
@@ -233,6 +221,7 @@ export async function runNextTaktTask(
 ): Promise<CallToolResult> {
   try {
     initGitProvider(input.cwd);
+    const gitProvider = getGitProvider();
     const createTaskRunner = deps.createTaskRunner ?? ((cwd: string) => new TaskRunner(cwd));
     const executeRunTaskAndCompleteWithDetails = deps.executeRunTaskAndCompleteWithDetails
       ?? defaultExecuteRunTaskAndCompleteWithDetails;
@@ -253,7 +242,7 @@ export async function runNextTaktTask(
       input.cwd,
       buildTaskExecutionOptions(input),
       buildSilentParallelOptions(),
-      buildRunTaskExecutionContext(input),
+      buildRunTaskExecutionContext(input, gitProvider),
     );
     if (!executionResult.success) {
       return textResult(buildTaskFailureText(task.name, executionResult), true);

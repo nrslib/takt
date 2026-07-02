@@ -194,7 +194,7 @@ describe('closeIssue', () => {
 
     const result = closeIssue(938, 'Compensation comment', '/project');
 
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, commentCreated: true });
     expect(mockExecFileSync).toHaveBeenNthCalledWith(
       2,
       'gh',

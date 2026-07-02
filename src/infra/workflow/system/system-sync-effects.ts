@@ -39,7 +39,7 @@ export async function syncWithRootEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Promise<Record<string, unknown>> {
-  const pr = fetchPrContext(options.projectCwd, payload.pr);
+  const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
   const baseRefName = pr.baseRefName;
   if (!baseRefName) {
     return { success: false, failed: true, conflicted: false, error: 'PR base branch is not available' };
@@ -92,7 +92,7 @@ export async function resolveConflictsWithAiEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number },
 ): Promise<Record<string, unknown>> {
-  const pr = fetchPrContext(options.projectCwd, payload.pr);
+  const pr = fetchPrContext(options.projectCwd, payload.pr, options.gitProvider);
   const baseRefName = pr.baseRefName;
   if (!baseRefName) {
     return { success: false, failed: true, conflicted: false, error: 'PR base branch is not available' };

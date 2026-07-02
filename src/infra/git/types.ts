@@ -68,14 +68,14 @@ export interface CreateIssueOptions {
 
 export interface CreateIssueResult {
   success: boolean;
+  issueNumber?: number;
   url?: string;
   error?: string;
 }
 
-export interface CloseIssueResult {
-  success: boolean;
-  error?: string;
-}
+export type CloseIssueResult =
+  | { success: true; commentCreated?: boolean }
+  | { success: false; error: string; commentCreated?: boolean };
 
 export type PrReviewThreadState = 'active' | 'outdated-unresolved' | 'resolved';
 

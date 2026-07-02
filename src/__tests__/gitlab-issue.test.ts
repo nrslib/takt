@@ -513,7 +513,7 @@ describe('closeIssue', () => {
 
     const result = closeIssue(938, 'Compensation comment', '/my/project');
 
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, commentCreated: true });
     expect(mockExecFileSync).toHaveBeenNthCalledWith(
       3,
       'glab',
@@ -550,11 +550,12 @@ describe('closeIssue', () => {
     const result = closeIssue(938, 'Compensation comment', '/my/project');
 
     expect(result.success).toBe(false);
+    expect(result.commentCreated).toBe(false);
     expect(result.error).toBeDefined();
     expect(mockExecFileSync).toHaveBeenCalledTimes(3);
   });
 
-  it('glab issue close が失敗した場合は success: false を返す', () => {
+  it('glab issue close が失敗した場合は note 作成済みの partial result を返す', () => {
     mockExecFileSync
       .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
       .mockReturnValueOnce('')
@@ -564,6 +565,7 @@ describe('closeIssue', () => {
     const result = closeIssue(938, 'Compensation comment', '/my/project');
 
     expect(result.success).toBe(false);
+    expect(result.commentCreated).toBe(true);
     expect(result.error).toBeDefined();
     expect(mockExecFileSync).toHaveBeenCalledTimes(4);
   });

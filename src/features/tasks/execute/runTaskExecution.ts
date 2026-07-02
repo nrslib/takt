@@ -1,4 +1,5 @@
 import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
+import type { GitProvider } from '../../../infra/git/index.js';
 import {
   executeTaskAndCompleteWithDetails,
   executeTaskWithResult,
@@ -18,6 +19,7 @@ export type { TaskCompletionResult } from './taskExecution.js';
 export interface RunTaskExecutionContext {
   ignoreIterationLimit?: boolean;
   taskContext?: TaskExecutionContextOverride;
+  gitProvider?: GitProvider;
 }
 
 async function executeTaskWithRunResult(
@@ -54,9 +56,9 @@ export async function executeRunTaskAndCompleteWithDetails(
   parallelOptions?: TaskExecutionParallelOptions,
   runContext?: RunTaskExecutionContext,
 ): Promise<TaskCompletionResult> {
-  const taskExecutor = runContext?.ignoreIterationLimit === true
-    ? (options: ExecuteTaskOptions) => executeTaskWithRunResult(options, runContext)
-    : executeTaskWithResult;
+  const taskExecutor = runContext === undefined
+    ? executeTaskWithResult
+    : (options: ExecuteTaskOptions) => executeTaskWithRunResult(options, runContext);
   return executeTaskAndCompleteWithDetails(
     task,
     taskRunner,
@@ -65,5 +67,6 @@ export async function executeRunTaskAndCompleteWithDetails(
     taskExecutionOptions,
     parallelOptions,
     runContext?.taskContext,
+    runContext?.gitProvider,
   );
 }

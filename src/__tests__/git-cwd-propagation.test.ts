@@ -285,6 +285,12 @@ describe('cwd propagation: addTask wiring', () => {
     vi.mock('../infra/task/naming.js', () => ({
       firstLine: vi.fn(() => 'line'),
     }));
+    vi.mock('../infra/task/enqueuedTaskFile.js', () => ({
+      saveEnqueuedTaskFile: vi.fn(async () => ({
+        taskName: 'task-1',
+        tasksFile: '/worktree/clone/.takt/tasks.yaml',
+      })),
+    }));
     vi.mock('../features/tasks/add/worktree-settings.js', () => ({
       displayTaskCreationResult: vi.fn(),
       promptWorktreeSettings: vi.fn(),
@@ -292,6 +298,8 @@ describe('cwd propagation: addTask wiring', () => {
     vi.mock('node:fs', () => ({
       existsSync: vi.fn(() => false),
       mkdirSync: vi.fn(),
+      mkdtempSync: vi.fn(() => '/tmp/takt-traced-config-test'),
+      rmSync: vi.fn(),
       writeFileSync: vi.fn(),
     }));
     vi.mock('../shared/i18n/index.js', () => ({

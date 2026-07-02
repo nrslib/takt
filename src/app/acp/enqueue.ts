@@ -1,8 +1,15 @@
 import type { ConversationSessionResult } from '../../features/interactive/conversationSession.js';
+import { getGitProvider, initGitProvider, type CloseIssueResult } from '../../infra/git/index.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import {
-  createIssueFromTask as defaultCreateIssueFromTask,
+  createIssueFromTaskResult as defaultCreateIssueFromTaskResult,
   saveTaskFile as defaultSaveTaskFile,
 } from '../../features/tasks/add/index.js';
+import {
+  createIssueAndEnqueueTask,
+  enqueueTask,
+  type IssueEnqueueFailure,
+} from '../../infra/task/enqueueService.js';
 import type { AcpTaskContext } from './types.js';
 
 type WorkflowTaskInstruction = ConversationSessionResult & {
@@ -10,7 +17,7 @@ type WorkflowTaskInstruction = ConversationSessionResult & {
 };
 
 export type SaveAcpTaskFile = typeof defaultSaveTaskFile;
-export type CreateAcpIssueFromTask = typeof defaultCreateIssueFromTask;
+export type CreateAcpIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface AcpEnqueueResult {
   taskName: string;
@@ -25,22 +32,6 @@ function throwIfAbortRequested(abortSignal: AbortSignal | undefined): void {
   }
 }
 
-function buildTaskSaveOptions(input: {
-  workflow: string;
-  taskContext?: AcpTaskContext;
-  issueNumber?: number;
-}): Parameters<SaveAcpTaskFile>[2] {
-  return {
-    workflow: input.workflow,
-    worktree: true,
-    autoPr: false,
-    ...(input.issueNumber !== undefined && { issue: input.issueNumber }),
-    ...(input.taskContext?.branch !== undefined && { branch: input.taskContext.branch }),
-    ...(input.taskContext?.baseBranch !== undefined && { baseBranch: input.taskContext.baseBranch }),
-    ...(input.taskContext?.prNumber !== undefined && { prNumber: input.taskContext.prNumber }),
-  };
-}
-
 export async function enqueueAcpTask(input: {
   cwd: string;
   instruction: WorkflowTaskInstruction;
@@ -50,18 +41,42 @@ export async function enqueueAcpTask(input: {
   abortSignal?: AbortSignal;
 }): Promise<AcpEnqueueResult> {
   throwIfAbortRequested(input.abortSignal);
-  const created = await input.saveTaskFile(
-    input.cwd,
-    input.instruction.task,
-    buildTaskSaveOptions({
-      workflow: input.workflow,
-      taskContext: input.taskContext,
-    }),
-  );
-  return {
-    ...created,
+  return enqueueTask({
+    cwd: input.cwd,
+    task: input.instruction.task,
     workflow: input.workflow,
-  };
+    worktree: true,
+    autoPr: false,
+    taskContext: input.taskContext,
+  }, input.saveTaskFile);
+}
+
+function formatIssueEnqueueFailure(failure: IssueEnqueueFailure): string {
+  if (failure.stage === 'issue_creation') {
+    return safeExternalErrorMessage(failure.error);
+  }
+  if (failure.stage === 'cancelled_after_issue_creation') {
+    if (failure.compensation.success) {
+      return `Issue #${failure.issueNumber} was created and closed because task enqueue was cancelled`;
+    }
+    return [
+      `Issue #${failure.issueNumber} was created, but task enqueue was cancelled`,
+      formatIssueCloseFailure(failure.compensation),
+    ].join('\n');
+  }
+  if (failure.compensation.success) {
+    return `Issue #${failure.issueNumber} was created and closed because task saving failed: ${safeExternalErrorMessage(failure.error)}`;
+  }
+  return [
+    `Issue #${failure.issueNumber} was created, but task saving failed: ${safeExternalErrorMessage(failure.error)}`,
+    formatIssueCloseFailure(failure.compensation),
+  ].join('\n');
+}
+
+function formatIssueCloseFailure(compensation: Extract<CloseIssueResult, { success: false }>): string {
+  return compensation.commentCreated === true
+    ? `Issue compensation comment was created, but issue close failed: ${safeExternalErrorMessage(compensation.error)}`
+    : `Issue close failed: ${safeExternalErrorMessage(compensation.error)}`;
 }
 
 export async function createIssueAndEnqueueAcpTask(input: {
@@ -69,33 +84,31 @@ export async function createIssueAndEnqueueAcpTask(input: {
   instruction: WorkflowTaskInstruction;
   workflow: string;
   saveTaskFile: SaveAcpTaskFile;
-  createIssueFromTask: CreateAcpIssueFromTask;
+  createIssueFromTaskResult?: CreateAcpIssueFromTaskResult;
   taskContext?: AcpTaskContext;
   abortSignal?: AbortSignal;
 }): Promise<AcpEnqueueResult> {
   throwIfAbortRequested(input.abortSignal);
-  const issueNumber = input.createIssueFromTask(input.instruction.task, {
-    cwd: input.cwd,
-    outputMode: 'silent',
-  });
-  if (issueNumber === undefined) {
-    throw new Error('Issue creation failed');
-  }
+  initGitProvider(input.cwd);
+  const gitProvider = getGitProvider();
   throwIfAbortRequested(input.abortSignal);
-  const created = await input.saveTaskFile(
-    input.cwd,
-    input.instruction.task,
-    buildTaskSaveOptions({
-      workflow: input.workflow,
-      taskContext: input.taskContext,
-      issueNumber,
-    }),
-  );
-  return {
-    ...created,
+  const result = await createIssueAndEnqueueTask({
+    cwd: input.cwd,
+    task: input.instruction.task,
     workflow: input.workflow,
-    issueNumber,
-  };
+    worktree: true,
+    autoPr: false,
+    taskContext: input.taskContext,
+    gitProvider,
+    abortSignal: input.abortSignal,
+  }, {
+    saveTaskFile: input.saveTaskFile,
+    createIssueFromTaskResult: input.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult,
+  });
+  if (!result.success) {
+    throw new Error(formatIssueEnqueueFailure(result.failure));
+  }
+  return result.created;
 }
 
-export { defaultCreateIssueFromTask, defaultSaveTaskFile };
+export { defaultCreateIssueFromTaskResult, defaultSaveTaskFile };

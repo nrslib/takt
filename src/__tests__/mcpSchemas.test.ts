@@ -104,11 +104,17 @@ describe('MCP tool input schemas', () => {
     expect(parsed.task).toBe('Implement MCP support');
   });
 
-  it('Given an invalid run-next PR number, When run-next input is parsed, Then it is rejected', () => {
-    expect(() => runNextTaskInputSchema.parse({
-      cwd: '/repo',
-      taskContext: { prNumber: 0 },
-    })).toThrow(/prNumber|positive/i);
+  it.each([
+    ['enqueue', enqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support' }],
+    ['issue enqueue', createIssueAndEnqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support' }],
+    ['run-next', runNextTaskInputSchema, { cwd: '/repo' }],
+  ])('Given unsafe PR numbers, When %s input is parsed, Then they are rejected', (_name, schema, baseInput) => {
+    for (const prNumber of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => schema.parse({
+        ...baseInput,
+        taskContext: { prNumber },
+      })).toThrow(/prNumber|safe integer|positive/i);
+    }
   });
 
   it('Given run-next task context, When run-next input is parsed, Then context fields are preserved', () => {

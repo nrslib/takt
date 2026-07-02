@@ -319,6 +319,23 @@ describe('postExecutionFlow', () => {
     expect(result.prUrl).toBeUndefined();
   });
 
+  it('outputMode が silent の場合は PR 作成失敗時も通常 UI ログを出力しない', async () => {
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCreatePullRequest.mockReturnValue({ success: false, error: 'Base ref must be a branch' });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      outputMode: 'silent',
+    });
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toBe('Failed to create pull request. Base ref must be a branch');
+    expect(result.prUrl).toBeUndefined();
+    expect(mockInfo).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
   it('ローカルpush失敗後も commitHash があれば（localPushFailed なし）PR 作成失敗を prFailed として返す', async () => {
     // relay push 済みのケースでは、PR 作成まで継続して失敗理由を返す。
     mockAutoCommitAndPush.mockReturnValue({
@@ -606,6 +623,23 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toBe('Failed to update pull request comment.');
     expect(result.prUrl).toBeUndefined();
+  });
+
+  it('outputMode が silent の場合は PR コメント失敗時も通常 UI ログを出力しない', async () => {
+    mockFindExistingPr.mockReturnValue({ number: 42, url: 'https://github.com/org/repo/pull/42' });
+    mockCommentOnPr.mockReturnValue({ success: false, error: 'Permission denied' });
+
+    const result = await postExecutionFlow({
+      ...baseOptions,
+      outputMode: 'silent',
+    });
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError).toBe('Failed to update pull request comment.');
+    expect(result.prUrl).toBeUndefined();
+    expect(mockInfo).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('PRプロバイダーの詳細エラーは UI 用 prError に露出しない', async () => {

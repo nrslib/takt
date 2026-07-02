@@ -20,6 +20,7 @@ import {
   resolveOtlpExporterConfig,
   pickNestedOtelExporterOptionEnv,
 } from '../../../shared/telemetry/index.js';
+import type { GitProvider } from '../../../infra/git/index.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -27,6 +28,7 @@ const log = createLogger('workflow-execution');
 
 export type WorkflowRunContext = {
   ignoreIterationLimit?: boolean;
+  gitProvider?: GitProvider;
 };
 
 function serializeObservabilityForNestedRuns(observability: {
@@ -231,7 +233,10 @@ async function executeWorkflowInternal(
       currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
       traceTaskMetadata: options.traceTaskMetadata,
       phase1ProcessSafetyByStep,
-      systemStepServicesFactory: createDefaultSystemStepServices,
+      systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
+        ...serviceOptions,
+        ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
+      }),
       workflowCallResolver: createWorkflowCallResolver(workflowExecutionContext),
     });
 

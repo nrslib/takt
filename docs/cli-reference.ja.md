@@ -125,7 +125,7 @@ ACP prompt がタスクを作成または直接実行する場合、会話結果
 
 ## MCP Server
 
-`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から、shell 経由で `takt add` や `takt run` を直接呼ばずに、TAKT タスクの enqueue、GitHub Issue 作成付き enqueue、次の pending タスク実行を行いたい場合に登録します。
+`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から、shell 経由で `takt add` や `takt run` を直接呼ばずに、TAKT タスクの enqueue、設定済み issue provider による Issue 作成付き enqueue、次の pending タスク実行を行いたい場合に登録します。
 
 ```bash
 takt-mcp
@@ -149,7 +149,7 @@ codex mcp add takt -- takt-mcp
 | Tool | 説明 |
 |------|------|
 | `takt_enqueue_task` | pending タスクを `.takt/tasks.yaml` に保存する。 |
-| `takt_create_issue_and_enqueue_task` | GitHub Issue を作成し、作成された Issue 番号付きで pending タスクを保存する。 |
+| `takt_create_issue_and_enqueue_task` | 設定済み issue provider で Issue を作成し、作成された Issue 番号付きで pending タスクを保存する。 |
 | `takt_run_next_task` | 次の pending タスクを取得し、TAKT の既存タスク実行経路で実行する。 |
 
 ### `takt_enqueue_task`
@@ -170,7 +170,7 @@ codex mcp add takt -- takt-mcp
 | `autoPr` | boolean | 自動 PR を有効にしたタスクとして保存する。省略時は `false`。 |
 | `taskContext.branch` | string | タスクに保存するローカルブランチ名。 |
 | `taskContext.baseBranch` | string | タスクに保存するベースブランチ名。 |
-| `taskContext.prNumber` | positive integer | タスクに保存する Pull Request 番号。 |
+| `taskContext.prNumber` | 正の safe integer | タスクに保存する Pull Request 番号。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |
 
 ### `takt_create_issue_and_enqueue_task`
 
@@ -178,9 +178,9 @@ codex mcp add takt -- takt-mcp
 
 | フィールド | 型 | 説明 |
 |-----------|----|------|
-| `labels` | string array | GitHub Issue 作成時に付与する label。 |
+| `labels` | string array | Issue 作成時に要求する label。 |
 
-GitHub Issue 作成は既存の TAKT GitHub Issue 経路を使用し、silent output mode で実行されます。Issue 作成に失敗した場合、tool は MCP error result を返し、タスクは保存しません。Issue 作成後にタスク保存が失敗した場合、TAKT は作成済み Issue に固定の補償コメントを追加して close し、pending タスクのない Issue がリポジトリに残らないようにします。close に成功した場合、MCP error result は Issue が作成後に close されたこととローカルのタスク保存エラーを返します。close に失敗した場合、MCP error result はタスク保存エラーと Issue close エラーの両方を返します。
+Issue 作成は設定済み TAKT issue provider を使用し、silent output mode で実行されます。Issue 作成に失敗した場合、tool は MCP error result を返し、タスクは保存しません。Issue 作成後にタスク保存が失敗した場合、TAKT は作成済み Issue に固定の補償コメントを追加して close し、pending タスクのない Issue がリポジトリに残らないようにします。close に成功した場合、MCP error result は Issue が作成後に close されたこととローカルのタスク保存エラーを返します。close に失敗した場合、MCP error result はタスク保存エラーと Issue close エラーの両方を返します。
 
 ### `takt_run_next_task`
 
@@ -198,7 +198,7 @@ GitHub Issue 作成は既存の TAKT GitHub Issue 経路を使用し、silent ou
 | `model` | string | タスク実行時の model 上書き。 |
 | `taskContext.branch` | string | ローカルブランチ context。 |
 | `taskContext.baseBranch` | string | ベースブランチ context。 |
-| `taskContext.prNumber` | positive integer | Pull Request context。 |
+| `taskContext.prNumber` | 正の safe integer | Pull Request context。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |
 
 この tool は最大 1 件の pending タスクだけを実行し、stdio を MCP message 専用に保つため通常の workflow 出力を抑制します。pending タスクがない場合は `{ "ran": false }` を返します。
 

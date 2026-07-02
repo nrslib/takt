@@ -44,7 +44,7 @@ You can also save tasks from interactive mode. After refining requirements throu
 
 ### Saving Tasks from MCP Clients
 
-MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`. `takt_create_issue_and_enqueue_task` first creates a GitHub Issue through the existing TAKT issue path, then writes the pending record with the issue number. If task saving fails after Issue creation, TAKT adds a fixed compensation comment to the created Issue and closes it; if that close also fails, the MCP error result reports both failures. Both tools require an absolute `cwd` and a non-empty task body. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
+MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`. `takt_create_issue_and_enqueue_task` first creates an issue through the configured TAKT issue provider, then writes the pending record with the issue number. If task saving fails after issue creation, TAKT adds a fixed compensation comment to the created issue and closes it; if that close also fails, the MCP error result reports both failures. Both tools require an absolute `cwd` and a non-empty task body. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
 
 ## Task Directory Format
 
@@ -74,7 +74,7 @@ Fields:
 | `worktree` | `true` (auto), a path string, or omitted (run in current directory) |
 | `branch` | Branch name (auto-generated if omitted) |
 | `auto_pr` | Whether to auto-create a PR after execution |
-| `issue` | GitHub Issue number (if applicable) |
+| `issue` | Issue number from the configured issue provider (if applicable) |
 | `created_at` | ISO 8601 timestamp |
 | `started_at` | ISO 8601 timestamp (set when execution begins) |
 | `completed_at` | ISO 8601 timestamp (set when execution finishes) |

@@ -4,8 +4,9 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
-const { mockCreateIssue } = vi.hoisted(() => ({
+const { mockCreateIssue, mockCloseIssue } = vi.hoisted(() => ({
   mockCreateIssue: vi.fn(),
+  mockCloseIssue: vi.fn(),
 }));
 
 vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
@@ -24,6 +25,7 @@ vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
 vi.mock('../shared/ui/index.js', () => ({
   success: vi.fn(),
   info: vi.fn(),
+  error: vi.fn(),
   blankLine: vi.fn(),
 }));
 
@@ -50,10 +52,11 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: () => ({
     createIssue: (...args: unknown[]) => mockCreateIssue(...args),
+    closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
   }),
 }));
 
-import { success, info } from '../shared/ui/index.js';
+import { success, info, error } from '../shared/ui/index.js';
 import { confirm, promptInput } from '../shared/prompt/index.js';
 import { createIssueAndSaveTask, saveTaskFile, saveTaskFromInteractive } from '../features/tasks/add/index.js';
 import { getCurrentBranch, branchExists } from '../infra/task/index.js';
@@ -61,6 +64,7 @@ import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
+const mockError = vi.mocked(error);
 const mockConfirm = vi.mocked(confirm);
 const mockPromptInput = vi.mocked(promptInput);
 const mockGetCurrentBranch = vi.mocked(getCurrentBranch);
@@ -105,6 +109,7 @@ beforeEach(() => {
   mockGetCurrentBranch.mockReturnValue('main');
   mockBranchExists.mockReturnValue(true);
   mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
+  mockCloseIssue.mockReturnValue({ success: true });
 });
 
 afterEach(() => {
@@ -421,6 +426,18 @@ describe('saveTaskFromInteractive', () => {
     expect(task.pr_number).toBe(456);
   });
 
+  it('should record PR context without PR review metadata when contextPrNumber option is provided', async () => {
+    await saveTaskFile(testDir, 'Fix context-linked task', {
+      workflow: 'default',
+      contextPrNumber: 456,
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.context_pr_number).toBe(456);
+    expect(task).not.toHaveProperty('source');
+    expect(task).not.toHaveProperty('pr_number');
+  });
+
   it('should persist image attachments when saving an interactive task with preset settings', async () => {
     const attachment = createTempAttachment(testDir, 'image-1.png', 'interactive-image');
 
@@ -507,5 +524,83 @@ describe('createIssueAndSaveTask', () => {
     expect(orderContent).toContain('Review [Image #1].');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('issue-image');
+  });
+
+  it('should close the created issue when the user declines saving the issue task', async () => {
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await createIssueAndSaveTask(testDir, 'Create issue only', 'default', {
+      confirmAtEndMessage: 'Add this issue to tasks?',
+    });
+
+    expect(mockCreateIssue).toHaveBeenCalledWith(
+      { title: 'Create issue only', body: 'Create issue only', labels: undefined },
+      testDir,
+    );
+    expect(mockCloseIssue).toHaveBeenCalledWith(
+      42,
+      expect.stringContaining('task enqueue was cancelled before saving the pending task'),
+      testDir,
+    );
+    const compensationComment = String(mockCloseIssue.mock.calls[0]?.[1]);
+    expect(compensationComment).not.toContain('saving the pending task failed');
+    expectNoTaskArtifacts(testDir);
+  });
+
+  it('should close the created issue when interactive task saving fails', async () => {
+    const directoryAttachment = path.join(testDir, 'attachment-dir');
+    fs.mkdirSync(directoryAttachment);
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
+      attachments: [{
+        placeholder: '[Image #1]',
+        tempPath: directoryAttachment,
+        fileName: 'image-1.png',
+      }],
+    });
+
+    expect(mockCloseIssue).toHaveBeenCalledWith(
+      42,
+      expect.stringContaining('TAKT created this issue'),
+      testDir,
+    );
+    expectNoTaskArtifacts(testDir);
+  });
+
+  it('should report partial success when closing the created issue fails after task saving fails', async () => {
+    const directoryAttachment = path.join(testDir, 'attachment-dir');
+    fs.mkdirSync(directoryAttachment);
+    mockCloseIssue.mockReturnValue({
+      success: false,
+      commentCreated: true,
+      error: 'glab issue close failed',
+    });
+    mockPromptInput.mockResolvedValueOnce('');
+    mockPromptInput.mockResolvedValueOnce('');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    await createIssueAndSaveTask(testDir, 'Review [Image #1].', 'default', {
+      attachments: [{
+        placeholder: '[Image #1]',
+        tempPath: directoryAttachment,
+        fileName: 'image-1.png',
+      }],
+    });
+
+    expect(mockCloseIssue).toHaveBeenCalledWith(
+      42,
+      expect.stringContaining('TAKT created this issue'),
+      testDir,
+    );
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
+      'Issue #42 was created, but task saving failed:',
+    ));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining(
+      'Issue compensation comment was created, but issue close failed: glab issue close failed',
+    ));
+    expectNoTaskArtifacts(testDir);
   });
 });

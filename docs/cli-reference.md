@@ -126,7 +126,7 @@ TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/
 
 ## MCP Server
 
-`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want the client to enqueue TAKT tasks, create a GitHub Issue and enqueue the task, or run the next pending task without shelling out to `takt add` or `takt run`.
+`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want the client to enqueue TAKT tasks, create an issue through the configured issue provider and enqueue the task, or run the next pending task without shelling out to `takt add` or `takt run`.
 
 ```bash
 takt-mcp
@@ -150,7 +150,7 @@ The server exposes these tools:
 | Tool | Description |
 |------|-------------|
 | `takt_enqueue_task` | Save a pending task to `.takt/tasks.yaml`. |
-| `takt_create_issue_and_enqueue_task` | Create a GitHub Issue, then save a pending task with the created issue number. |
+| `takt_create_issue_and_enqueue_task` | Create an issue through the configured issue provider, then save a pending task with the created issue number. |
 | `takt_run_next_task` | Claim and execute the next pending task through TAKT's existing task execution path. |
 
 ### `takt_enqueue_task`
@@ -171,7 +171,7 @@ Optional input:
 | `autoPr` | boolean | Save the task with auto-PR enabled. Defaults to `false`. |
 | `taskContext.branch` | string | Local branch name to save with the task. |
 | `taskContext.baseBranch` | string | Base branch name to save with the task. |
-| `taskContext.prNumber` | positive integer | Pull request number to save with the task. |
+| `taskContext.prNumber` | positive safe integer | Pull request number to save with the task. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
 
 ### `takt_create_issue_and_enqueue_task`
 
@@ -179,9 +179,9 @@ This tool accepts the same fields as `takt_enqueue_task`, plus:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `labels` | string array | Labels to apply when creating the GitHub Issue. |
+| `labels` | string array | Labels to request when creating the issue. |
 
-GitHub Issue creation uses the existing TAKT GitHub Issue path and runs in silent output mode. If issue creation fails, the tool returns an MCP error result and does not save the task. If task saving fails after the Issue is created, TAKT adds a fixed compensation comment to the created Issue and closes it so the repository does not retain an Issue without a pending task. When that close succeeds, the MCP error result reports that the Issue was created and closed along with the local task saving error. When that close fails, the MCP error result includes both the task saving error and the Issue close error.
+Issue creation uses the configured TAKT issue provider and runs in silent output mode. If issue creation fails, the tool returns an MCP error result and does not save the task. If task saving fails after the issue is created, TAKT adds a fixed compensation comment to the created issue and closes it so the repository does not retain an issue without a pending task. When that close succeeds, the MCP error result reports that the issue was created and closed along with the local task saving error. When that close fails, the MCP error result includes both the task saving error and the issue close error.
 
 ### `takt_run_next_task`
 
@@ -199,7 +199,7 @@ Optional input:
 | `model` | string | Model override for the task execution. |
 | `taskContext.branch` | string | Local branch context. |
 | `taskContext.baseBranch` | string | Base branch context. |
-| `taskContext.prNumber` | positive integer | Pull request context. |
+| `taskContext.prNumber` | positive safe integer | Pull request context. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
 
 The tool executes at most one pending task and suppresses normal workflow output so stdout remains reserved for MCP messages. When no pending task exists, it returns `{ "ran": false }`.
 

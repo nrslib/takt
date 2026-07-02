@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createIssueAndEnqueueTaktTask,
   enqueueTaktTask,
+  type McpOperationDependencies,
   runNextTaktTask,
 } from '../features/mcp/operations.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
@@ -15,22 +16,36 @@ vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
   summarizeTaskName: vi.fn().mockResolvedValue('implement-mcp-support'),
 }));
 
-const { mockCreateIssue, mockCloseIssue, mockInitGitProvider, mockIssueInfo, mockIssueSuccess, mockIssueError } = vi.hoisted(() => ({
+const {
+  mockCreateIssue,
+  mockCloseIssue,
+  mockInitGitProvider,
+  mockIssueInfo,
+  mockIssueSuccess,
+  mockIssueError,
+  mockGitProvider,
+  mockGetGitProvider,
+} = vi.hoisted(() => {
+  const gitProvider = {
+    createIssue: vi.fn(),
+    closeIssue: vi.fn(),
+  };
+  return {
   mockCreateIssue: vi.fn(),
   mockCloseIssue: vi.fn(),
   mockInitGitProvider: vi.fn(),
   mockIssueInfo: vi.fn(),
-  mockIssueSuccess: vi.fn(),
-  mockIssueError: vi.fn(),
-}));
+    mockIssueSuccess: vi.fn(),
+    mockIssueError: vi.fn(),
+    mockGitProvider: gitProvider,
+    mockGetGitProvider: vi.fn(() => gitProvider),
+  };
+});
 
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   initGitProvider: (...args: unknown[]) => mockInitGitProvider(...args),
-  getGitProvider: () => ({
-    createIssue: (...args: unknown[]) => mockCreateIssue(...args),
-    closeIssue: (...args: unknown[]) => mockCloseIssue(...args),
-  }),
+  getGitProvider: () => mockGetGitProvider(),
 }));
 
 vi.mock('../shared/ui/index.js', async (importOriginal) => ({
@@ -93,6 +108,9 @@ function createTask(name: string): TaskInfo {
 describe('MCP task operations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGitProvider.createIssue.mockImplementation((...args: unknown[]) => mockCreateIssue(...args));
+    mockGitProvider.closeIssue.mockImplementation((...args: unknown[]) => mockCloseIssue(...args));
+    mockGetGitProvider.mockReturnValue(mockGitProvider);
   });
 
   it('Given minimal enqueue input, When takt_enqueue_task runs, Then saveTaskFile receives MCP defaults', async () => {
@@ -181,8 +199,32 @@ describe('MCP task operations', () => {
       autoPr: true,
       branch: 'takt/938/add-mcp',
       baseBranch: 'main',
-      prNumber: 938,
+      contextPrNumber: 938,
     });
+  });
+
+  it('Given PR context on normal enqueue, When the task is saved, Then it does not become PR review provenance', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-pr-context-'));
+    try {
+      const result = await enqueueTaktTask({
+        cwd,
+        task: 'Implement MCP support',
+        taskContext: {
+          prNumber: 938,
+        },
+      });
+      const task = loadTasks(cwd).tasks[0];
+
+      expect(result.isError).toBeUndefined();
+      expect(task).toMatchObject({
+        context_pr_number: 938,
+        workflow: 'default',
+      });
+      expect(task).not.toHaveProperty('source');
+      expect(task).not.toHaveProperty('pr_number');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('Given real issue and task dependencies, When issue creation succeeds, Then the task is saved with the issue number', async () => {
@@ -333,7 +375,10 @@ describe('MCP task operations', () => {
       issueNumber: 938,
     });
     const saveTaskFile = vi.fn().mockRejectedValue(new Error('EACCES: permission denied'));
-    const compensateCreatedIssue = vi.fn().mockReturnValue({ success: true });
+    const compensateCreatedIssue: NonNullable<McpOperationDependencies['compensateCreatedIssue']> = vi.fn((input) => {
+      expect(input.stage).toBe('task_saving');
+      return { success: true };
+    });
 
     const result = await createIssueAndEnqueueTaktTask({
       cwd: '/repo',
@@ -343,7 +388,9 @@ describe('MCP task operations', () => {
     expect(result.isError).toBe(true);
     expect(compensateCreatedIssue).toHaveBeenCalledWith({
       cwd: '/repo',
+      gitProvider: mockGitProvider,
       issueNumber: 938,
+      stage: 'task_saving',
     });
     expect(getToolText(result)).toContain('Issue #938 was created and closed');
     expect(getToolText(result)).toContain('task saving failed: permission denied');
@@ -368,7 +415,7 @@ describe('MCP task operations', () => {
     expect(mockCloseIssue).toHaveBeenCalledWith(
       938,
       [
-        'TAKT MCP created this issue, but saving the pending task failed.',
+        'TAKT created this issue, but saving the pending task failed.',
         '',
         'The issue is being closed to keep the repository state consistent.',
       ].join('\n'),
@@ -400,13 +447,153 @@ describe('MCP task operations', () => {
     expect(result.isError).toBe(true);
     expect(mockCloseIssue).toHaveBeenCalledWith(
       938,
-      expect.stringContaining('TAKT MCP created this issue'),
+      expect.stringContaining('TAKT created this issue'),
       '/repo',
     );
     expect(getToolText(result)).toContain('Issue #938 was created, but task saving failed');
     expect(getToolText(result)).toContain('task saving failed: permission denied');
     expect(getToolText(result)).toContain('Issue close failed: permission denied');
     expectNoRawLocalError(result);
+  });
+
+  it('Given the global provider changes while saving, When compensation runs, Then the request provider closes the issue', async () => {
+    const requestProvider = {
+      createIssue: vi.fn(),
+      closeIssue: vi.fn().mockReturnValue({ success: true }),
+    };
+    const laterProvider = {
+      createIssue: vi.fn(),
+      closeIssue: vi.fn().mockReturnValue({ success: true }),
+    };
+    mockGetGitProvider.mockReturnValueOnce(requestProvider).mockReturnValue(laterProvider);
+    const saveTaskFile = vi.fn().mockImplementation(async () => {
+      throw new Error('EACCES: permission denied');
+    });
+    requestProvider.createIssue.mockReturnValue({
+      success: true,
+      issueNumber: 938,
+    });
+
+    const result = await createIssueAndEnqueueTaktTask({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+    }, { saveTaskFile });
+
+    expect(result.isError).toBe(true);
+    expect(requestProvider.createIssue).toHaveBeenCalledTimes(1);
+    expect(requestProvider.closeIssue).toHaveBeenCalledWith(
+      938,
+      expect.stringContaining('TAKT created this issue'),
+      '/repo',
+    );
+    expect(laterProvider.closeIssue).not.toHaveBeenCalled();
+  });
+
+  it('Given concurrent issue enqueue requests, When task saving fails, Then each request provider closes its own issue', async () => {
+    const firstProvider = {
+      createIssue: vi.fn().mockReturnValue({ success: true, issueNumber: 101 }),
+      closeIssue: vi.fn().mockReturnValue({ success: true }),
+    };
+    const secondProvider = {
+      createIssue: vi.fn().mockReturnValue({ success: true, issueNumber: 202 }),
+      closeIssue: vi.fn().mockReturnValue({ success: true }),
+    };
+    const fallbackProvider = {
+      createIssue: vi.fn().mockReturnValue({ success: true, issueNumber: 303 }),
+      closeIssue: vi.fn().mockReturnValue({ success: true }),
+    };
+    mockGetGitProvider
+      .mockReturnValueOnce(firstProvider)
+      .mockReturnValueOnce(secondProvider)
+      .mockReturnValue(fallbackProvider);
+    const saveTaskFile = vi.fn().mockRejectedValue(new Error('disk full'));
+
+    const [firstResult, secondResult] = await Promise.all([
+      createIssueAndEnqueueTaktTask({
+        cwd: '/repo-a',
+        task: 'Implement first MCP task',
+      }, { saveTaskFile }),
+      createIssueAndEnqueueTaktTask({
+        cwd: '/repo-b',
+        task: 'Implement second MCP task',
+      }, { saveTaskFile }),
+    ]);
+
+    expect(firstResult.isError).toBe(true);
+    expect(secondResult.isError).toBe(true);
+    expect(firstProvider.createIssue).toHaveBeenCalledTimes(1);
+    expect(secondProvider.createIssue).toHaveBeenCalledTimes(1);
+    expect(firstProvider.closeIssue).toHaveBeenCalledWith(
+      101,
+      expect.stringContaining('TAKT created this issue'),
+      '/repo-a',
+    );
+    expect(secondProvider.closeIssue).toHaveBeenCalledWith(
+      202,
+      expect.stringContaining('TAKT created this issue'),
+      '/repo-b',
+    );
+    expect(fallbackProvider.createIssue).not.toHaveBeenCalled();
+    expect(fallbackProvider.closeIssue).not.toHaveBeenCalled();
+  });
+
+  it('Given a URL appears in an MCP error, When it is sanitized, Then the URL is not treated as a local path', async () => {
+    const saveTaskFile = vi.fn().mockRejectedValue(
+      new Error('Request failed for https://example.com/path'),
+    );
+
+    const result = await enqueueTaktTask({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+    }, { saveTaskFile });
+
+    expect(result.isError).toBe(true);
+    expect(getToolText(result)).toContain('https://example.com/path');
+  });
+
+  it('Given secrets and a file URL appear in an MCP error, When it is sanitized, Then secrets and local paths are redacted', async () => {
+    const saveTaskFile = vi.fn().mockRejectedValue(
+      new Error(
+        'Request failed\n' +
+        'Authorization: Bearer ghp_123456789\n' +
+        'api_key=plain-secret\n' +
+        'https://user:pass@example.com/repo\n' +
+        'file:///Users/nrs/secret/token.txt',
+      ),
+    );
+
+    const result = await enqueueTaktTask({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+    }, { saveTaskFile });
+
+    const text = getToolText(result);
+    expect(result.isError).toBe(true);
+    expect(text).toContain('Authorization: Bearer [REDACTED]');
+    expect(text).toContain('api_key=[REDACTED]');
+    expect(text).toContain('https://[REDACTED]@example.com/repo');
+    expect(text).toContain('[path]');
+    expect(text).not.toContain('ghp_123456789');
+    expect(text).not.toContain('plain-secret');
+    expect(text).not.toContain('user:pass');
+    expect(text).not.toContain('/Users/nrs/secret');
+    expect(text).not.toContain('file:///Users/nrs/secret');
+  });
+
+  it('Given a file URL appears in an MCP error, When it is sanitized, Then the local path is not exposed', async () => {
+    const saveTaskFile = vi.fn().mockRejectedValue(
+      new Error('Cannot read file:///Users/nrs/secret/order.md'),
+    );
+
+    const result = await enqueueTaktTask({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+    }, { saveTaskFile });
+
+    expect(result.isError).toBe(true);
+    expect(getToolText(result)).toBe('Task saving failed: Cannot read [path]');
+    expect(getToolText(result)).not.toContain('file:///Users/nrs/secret');
+    expect(getToolText(result)).not.toContain('/Users/nrs/secret');
   });
 
   it('Given issue close compensation fails, When task saving fails after issue creation, Then both failures are returned', async () => {
@@ -417,6 +604,7 @@ describe('MCP task operations', () => {
     const saveTaskFile = vi.fn().mockRejectedValue(new Error('EACCES: permission denied'));
     const compensateCreatedIssue = vi.fn().mockReturnValue({
       success: false,
+      commentCreated: true,
       error: 'GitHub CLI is not authenticated',
     });
 
@@ -428,7 +616,9 @@ describe('MCP task operations', () => {
     expect(result.isError).toBe(true);
     expect(getToolText(result)).toContain('Issue #938 was created, but task saving failed');
     expect(getToolText(result)).toContain('task saving failed: permission denied');
-    expect(getToolText(result)).toContain('Issue close failed: GitHub CLI is not authenticated');
+    expect(getToolText(result)).toContain(
+      'Issue compensation comment was created, but issue close failed: GitHub CLI is not authenticated',
+    );
   });
 
   it('Given task saving fails with a local path, When enqueue runs, Then the MCP error does not expose the path', async () => {
@@ -482,6 +672,7 @@ describe('MCP task operations', () => {
         outputMode: 'silent',
       }),
       {
+        gitProvider: mockGitProvider,
         taskContext: {
           branch: 'takt/938/add-mcp',
           baseBranch: 'main',
@@ -494,6 +685,53 @@ describe('MCP task operations', () => {
       ran: true,
       taskName: '20260702-add-mcp',
       success: true,
+    });
+  });
+
+  it('Given concurrent run-next requests, When tasks execute, Then each execution receives its request provider', async () => {
+    const firstProvider = { name: 'first-provider' };
+    const secondProvider = { name: 'second-provider' };
+    mockGetGitProvider
+      .mockReturnValueOnce(firstProvider)
+      .mockReturnValueOnce(secondProvider);
+    const firstTask = createTask('20260702-first-mcp-task');
+    const secondTask = createTask('20260702-second-mcp-task');
+    const taskRunnersByCwd = new Map([
+      ['/repo-a', {
+        failInterruptedRunningTasks: vi.fn(() => 0),
+        claimNextTasks: vi.fn(() => [firstTask]),
+      }],
+      ['/repo-b', {
+        failInterruptedRunningTasks: vi.fn(() => 0),
+        claimNextTasks: vi.fn(() => [secondTask]),
+      }],
+    ]);
+    const createTaskRunner = vi.fn((cwd: string) => {
+      const taskRunner = taskRunnersByCwd.get(cwd);
+      if (!taskRunner) {
+        throw new Error(`Unexpected cwd: ${cwd}`);
+      }
+      return taskRunner;
+    });
+    const executeRunTaskAndCompleteWithDetails = vi.fn().mockResolvedValue({ success: true });
+
+    const [firstResult, secondResult] = await Promise.all([
+      runNextTaktTask({
+        cwd: '/repo-a',
+      }, { createTaskRunner, executeRunTaskAndCompleteWithDetails }),
+      runNextTaktTask({
+        cwd: '/repo-b',
+      }, { createTaskRunner, executeRunTaskAndCompleteWithDetails }),
+    ]);
+
+    expect(firstResult.isError).toBeUndefined();
+    expect(secondResult.isError).toBeUndefined();
+    expect(executeRunTaskAndCompleteWithDetails).toHaveBeenCalledTimes(2);
+    expect(executeRunTaskAndCompleteWithDetails.mock.calls[0]?.[5]).toEqual({
+      gitProvider: firstProvider,
+    });
+    expect(executeRunTaskAndCompleteWithDetails.mock.calls[1]?.[5]).toEqual({
+      gitProvider: secondProvider,
     });
   });
 

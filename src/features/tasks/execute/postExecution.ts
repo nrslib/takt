@@ -16,7 +16,7 @@ import {
   getGitProvider,
   stripTaktManagedPrMarker,
 } from '../../../infra/git/index.js';
-import type { Issue, CreatePrResult } from '../../../infra/git/index.js';
+import type { Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
 import type { ExecuteTaskOptions } from './types.js';
 
 const log = createLogger('postExecution');
@@ -43,6 +43,7 @@ export interface PostExecutionOptions {
   orderContent?: string;
   repo?: string;
   outputMode?: ExecuteTaskOptions['outputMode'];
+  gitProvider?: GitProvider;
 }
 
 export interface PostExecutionResult {
@@ -72,6 +73,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     orderContent,
     repo,
     outputMode,
+    gitProvider,
   } = options;
   const emitStatusLog = outputMode !== 'silent';
 
@@ -119,12 +121,12 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   }
 
   if (commitResult.commitHash && branch && shouldCreatePr) {
-    const gitProvider = getGitProvider();
+    const resolvedGitProvider = gitProvider ?? getGitProvider();
     const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
-    const existingPr = gitProvider.findExistingPr(branch, projectCwd);
+    const existingPr = resolvedGitProvider.findExistingPr(branch, projectCwd);
     const prBody = stripTaktManagedPrMarker(buildPrBody(issues, report, orderContent));
     if (existingPr) {
-      const commentResult = gitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
+      const commentResult = resolvedGitProvider.commentOnPr(existingPr.number, prBody, projectCwd);
       if (commentResult.success) {
         if (emitStatusLog) {
           success(`PR updated with comment: ${existingPr.url}`);
@@ -148,7 +150,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const issuePrefix = firstIssue ? `[#${firstIssue.number}] ` : '';
       const truncatedTask = task.length > 100 - issuePrefix.length ? `${task.slice(0, 100 - issuePrefix.length - 3)}...` : task;
       const prTitle = issuePrefix + truncatedTask;
-      const prResult: CreatePrResult = createPullRequestSafely(gitProvider, {
+      const prResult: CreatePrResult = createPullRequestSafely(resolvedGitProvider, {
         branch,
         title: prTitle,
         ...(managedPr === true ? buildTaktManagedPrOptions(prBody) : { body: prBody }),

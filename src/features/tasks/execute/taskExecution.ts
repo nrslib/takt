@@ -3,6 +3,7 @@
  */
 
 import type { TaskRunner, TaskInfo, TaskResult } from '../../../infra/task/index.js';
+import type { GitProvider } from '../../../infra/git/index.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import type {
   TaskExecutionOptions,
@@ -102,6 +103,7 @@ export async function executeTaskAndCompleteWithDetails(
   taskExecutionOptions?: TaskExecutionOptions,
   parallelOptions?: TaskExecutionParallelOptions,
   taskContext?: TaskExecutionContextOverride,
+  gitProvider?: GitProvider,
 ): Promise<TaskCompletionResult> {
   const startedAt = new Date().toISOString();
   let taskForPersistence = task;
@@ -205,7 +207,9 @@ export async function executeTaskAndCompleteWithDetails(
     let prFailedError: string | undefined;
     let postExecutionTaskError: string | undefined;
     if (taskSuccess && isWorktree) {
-      const issues = resolveTaskIssue(issueNumber, projectRootCwd);
+      const issues = gitProvider === undefined
+        ? resolveTaskIssue(issueNumber, projectRootCwd)
+        : resolveTaskIssue(issueNumber, projectRootCwd, gitProvider);
       const postResult = await postExecutionFlow({
         execCwd,
         projectCwd: projectRootCwd,
@@ -220,6 +224,7 @@ export async function executeTaskAndCompleteWithDetails(
         issues,
         orderContent,
         outputMode: parallelOptions?.outputMode,
+        ...(gitProvider === undefined ? {} : { gitProvider }),
       });
       prUrl = postResult.prUrl;
       if (postResult.prFailed) {
