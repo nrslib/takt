@@ -27,6 +27,11 @@
    - false positive / overreach を暗黙のまま流さない
 5. 差分で追加・変更された共通ヘルパー、正規化関数、builder、adapter がある場合、その契約を同じ責務の既存分岐へ照合する
    - 要件表に明記されていなくても、差分で導入した契約不整合は未確認範囲または REJECT 理由として扱う
+6. 前段レビュー本文で懸念に触れているが finding 化されていない箇所を確認する
+   - 非 finding として `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` の分類と根拠が明示されていれば、その分類を再評価する
+   - 分類や根拠がない懸念は、未分類の懸念として記録する。実コードまたは実行証跡で独立に成立確認でき、変更の正しさ・契約・配線に影響する場合のみ REJECT 理由にする
+7. 要件表に出ない差分導入契約を抽出する
+   - metadata、source、trace、adapter、公開 tool 契約、保存・表示・再利用される識別子は、元要件に明記されていなくても独立項目として確認する
 
 ## レポートの優先順位（supervise 固有）
 
@@ -39,5 +44,5 @@
 
 ## 出力
 
-- `supervisor-validation` 出力契約に従って、要件充足、前段 finding の再評価、検証証跡、未確認範囲を記録する
+- `supervisor-validation` 出力契約に従って、要件充足、前段 finding の再評価、未分類の懸念チェック、検証証跡、未確認範囲を記録する
 - APPROVE の場合のみ `summary` 出力契約に従って完了サマリーを作成する

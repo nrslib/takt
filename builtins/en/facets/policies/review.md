@@ -13,10 +13,12 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | State consistency | For side effects and state changes, verify that success, failure, and interruption paths have no missing, duplicated, or inconsistent effects |
 | Contract coverage | Verify new contracts across normal entries, derived conditions, validation, evaluation, output, and re-injection paths |
 | Contract consistency | Verify that contracts carried by consolidation or abstraction are applied to existing equivalent branches by the same standard |
+| Semantic contract | For meaningful fields such as IDs, source, trace, and issue/PR numbers, verify not only the storage shape but also the meaning interpreted downstream |
 | External contract verification | Verify semantic contracts of external services, SDKs, and generated artifacts from primary evidence or actual types |
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
 | Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
+| Concern handling | Any concern recognized in the prose must either become a finding or be explicitly classified with evidence as non-finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |
 
@@ -27,6 +29,7 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Problem introduced by this change | Blocking | REJECT |
 | Code made unused by this change (arguments, imports, variables, functions) | Blocking | REJECT (change-induced problem) |
 | Existing problem in changed or directly related code | Blocking | REJECT (Boy Scout rule) |
+| Existing ambiguous or incorrect contract exposed through a new public entry, adapter, or tool | Blocking | REJECT (existing behavior is not an exemption) |
 | Structural problem directly affecting correctness of the change | Blocking | REJECT if within scope |
 | Problem in an unchanged file | Non-blocking | Record only (informational) |
 | Existing problem that merely shares a changed file but does not directly affect correctness of the change | Non-blocking | Record only (informational) |
@@ -55,12 +58,15 @@ REJECT without exception if any of the following apply.
 - Replaced code/exports surviving after refactoring
 - Missing cross-validation of related fields (invariants of semantically coupled config values left unverified)
 - Missing caller, producer, consumer, validator, test data, or derived-entry updates after a contract change
+- Meaningful fields such as IDs, source, trace, or issue/PR numbers are added, forwarded, or persisted while only the storage shape is checked, without verifying downstream interpretation or confusion with existing fields
 - User-facing contract changes for configuration, CLI, or file formats where documentation or examples omit priority, first-match/merge behavior, inline overrides, scoped/special references, or failure conditions
 - Existing branches with the same contract remain on the old implementation after adding or changing a shared helper, normalizer, builder, or adapter
+- A new public entry, adapter, or tool republishes an existing ambiguous or incorrect contract as an external contract
 - Fields, attributes, outputs, settings, or identifiers requested by the task are treated as optional, unset, out of scope, or missing for some entry point or execution mode without explicit evidence
 - Operation-specific error types, statuses, return values, or idempotency of an external service, SDK, or generated artifact are not verified, and another operation's contract or mock success is used instead
 - Missing, duplicated, or incorrectly ordered effects in side-effect or state-change paths
 - Sensitive data exposed in logs, error responses, or test output
+- Review prose recognizes a contract mismatch, side effect, boundary value, or unverified risk but does not turn it into a finding and does not classify it as a non-finding with evidence
 
 A DRY finding is not complete unless the proposed consolidation target is also sound. A consolidation proposal is invalid unless all of the following hold.
 
@@ -257,6 +263,8 @@ Do not tolerate problems just because existing code does the same. If existing c
 - Issues detected in changed code or in areas directly affecting correctness, contracts, or wiring of the change are blocking (REJECT targets), even if the code existed before the change
 - Only issues not directly related to the change may be classified as "existing problems" or "non-blocking"
 - "The code itself existed before" is not a valid reason for non-blocking when the issue is in changed or directly related code
+- "Same as existing behavior" is not an approval reason when a new public entry, adapter, or tool exposes that contract
+- When a concern mentioned in prose is not made a finding, classify it as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` and provide evidence
 - If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited
 
 ## Basic Review Procedure

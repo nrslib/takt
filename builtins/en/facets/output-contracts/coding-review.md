@@ -13,6 +13,11 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 |--------------|----------------------|--------------------------|---------------|----------|---------------------------------|
 | {normal entry / derived condition / validation / evaluation / output / re-injection, etc.} | {Requirement} | `src/file.ts:42` | `src/file.test.ts:10` | ✅/❌/⚠️ | {none / evidence} |
 
+## Non-Finding Concerns
+| Item | Location | Classification | Evidence for Not Making a Finding |
+|------|----------|----------------|-----------------------------------|
+| {Concern, or "none"} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {Evidence} |
+
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|--------|----------------|
@@ -44,5 +49,5 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary plus Contract Entry Check when needed (10 lines or fewer total)
+- APPROVE: Summary plus Contract Entry Check and Non-Finding Concerns when needed (12 lines or fewer total)
 - REJECT: Include only relevant finding rows (30 lines or fewer)

@@ -30,6 +30,11 @@ Extract requirements from the task spec and verify each one individually against
 - If marking `false_positive` or `overreach`, state whether it conflicts with the task objective, the plan, or both
 - If overturning a pure-review conclusion, explain why with concrete evidence
 
+## Unclassified Concern Check
+| Review | Concern | Finding State | Supervisor Judgment | Evidence |
+|--------|---------|---------------|---------------------|----------|
+| {Review name} | {Concern, or "none"} | made finding / classified non-finding / unclassified | valid / REJECT reason / out of scope | `src/file.ts:42` |
+
 ## Maintenance Scope Check (maintenance workflows only)
 
 | Check | Result | Evidence |

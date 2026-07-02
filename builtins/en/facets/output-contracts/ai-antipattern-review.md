@@ -14,6 +14,11 @@
 | Context fit | ✅ | - |
 | Scope | ✅ | - |
 
+## Non-Finding Concerns
+| Item | Location | Classification | Evidence for Not Making a Finding |
+|------|----------|----------------|-----------------------------------|
+| {Concern, or "none"} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {Evidence} |
+
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|----------------|
@@ -40,5 +45,5 @@
 ```
 
 **Cognitive load reduction rules:**
-- No issues → Summary sentence + checklist + empty finding sections (10 lines or fewer)
+- No issues → Summary sentence + checklist + Non-Finding Concerns when needed (12 lines or fewer)
 - Issues found → include table rows only for impacted sections (30 lines or fewer)

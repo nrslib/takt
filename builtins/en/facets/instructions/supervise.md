@@ -27,6 +27,11 @@ Procedure:
    - Do not leave `false_positive` / `overreach` reasoning implicit
 5. If the diff adds or changes a shared helper, normalizer, builder, or adapter, reconcile its contract against existing branches with the same responsibility
    - Even when absent from the requirements table, contract inconsistencies introduced by the diff must be treated as unverified scope or a REJECT reason
+6. Check whether prior review prose mentions concerns that were not turned into findings
+   - If they are explicitly classified as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` with evidence, re-evaluate that classification
+   - If a concern has no classification or evidence, record it as an unclassified concern. Make it a REJECT reason only when it is independently confirmed from actual code or execution evidence and affects correctness, contracts, or wiring of the change
+7. Extract diff-introduced contracts that are not visible in the requirements table
+   - Metadata, source, trace, adapters, public tool contracts, and identifiers that are persisted, displayed, or reused must be checked as independent items even when absent from the original requirement
 
 ## Report Priority (supervise-specific)
 
@@ -39,5 +44,5 @@ Procedure:
 
 ## Output
 
-- Follow the `supervisor-validation` output contract to record requirements fulfillment, prior finding re-evaluation, verification evidence, and unverified scope
+- Follow the `supervisor-validation` output contract to record requirements fulfillment, prior finding re-evaluation, unclassified concern checks, verification evidence, and unverified scope
 - Only when APPROVE, follow the `summary` output contract to produce the completion summary
