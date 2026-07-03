@@ -4,8 +4,8 @@
  * (promptfoo exits non-zero when a test fails, which would break `&&` chains).
  *
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
- * Suites: coding, arch, antipattern, frontend, cqrs, frontend-coder,
- *         cqrs-coder (default: all)
+ * Suites: coding, arch, antipattern, frontend, cqrs, rescan, frontend-coder,
+ *         cqrs-coder (default: all except rescan, which needs opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
@@ -18,6 +18,7 @@ const SUITES = {
   antipattern: 'promptfooconfig.antipattern.yaml',
   frontend: 'promptfooconfig.frontend.yaml',
   cqrs: 'promptfooconfig.cqrs.yaml',
+  rescan: 'promptfooconfig.rescan.yaml',
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
 };
@@ -35,7 +36,10 @@ for (const name of names) {
     throw new Error(`Unknown suite "${name}". Available: ${Object.keys(SUITES).join(', ')}`);
   }
 }
-const selected = names.length > 0 ? names : Object.keys(SUITES);
+// rescan はローカルモデル（要 opencode 認証）を含む測定用スイートで、
+// 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
+const DEFAULT_EXCLUDED = new Set(['rescan']);
+const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 
 const summary = [];
 for (const name of selected) {

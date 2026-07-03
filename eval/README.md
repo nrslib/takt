@@ -9,6 +9,14 @@ All suites run on the **codex** provider (local Codex CLI login / ChatGPT
 plan), so runs consume subscription quota, not API billing. The `llm-rubric`
 grader is also pinned to codex for the same reason.
 
+The `rescan` suite additionally runs local/open models through the opencode
+CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
+carry weak reviewers; those rows need an authenticated opencode login.
+Because weak-model rows fluctuate and partially fail by design, `rescan` is
+excluded from the default suite run — invoke it explicitly
+(`npm run eval:prompts -- rescan --repeat 3`) and read per-metric rates,
+not the pass/fail summary.
+
 ## Suites
 
 | Suite | Workflow / step | Fixture | Measures |
@@ -18,6 +26,7 @@ grader is also pinned to codex for the same reason.
 | `antipattern` | peer-review / ai-antipattern-review-2nd | sample-project | recall on 3 planted AI antipatterns |
 | `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
+| `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 
