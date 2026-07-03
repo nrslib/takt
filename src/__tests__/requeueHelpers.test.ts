@@ -57,6 +57,7 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
 import {
   buildAutoRequeueNote,
   hasDeprecatedProviderConfig,
+  resolveSelectedWorkflowOverride,
   selectWorkflowWithOptionalReuse,
 } from '../features/tasks/list/requeueHelpers.js';
 import type { TaskFailure } from '../infra/task/index.js';
@@ -214,6 +215,20 @@ describe('hasDeprecatedProviderConfig', () => {
     ].join('\n');
 
     expect(hasDeprecatedProviderConfig(orderContent)).toBe(false);
+  });
+});
+
+describe('resolveSelectedWorkflowOverride', () => {
+  it('should return selected workflow when previous workflow differs', () => {
+    expect(resolveSelectedWorkflowOverride('default', 'selected-workflow')).toBe('selected-workflow');
+  });
+
+  it('should return undefined when previous workflow matches selected workflow', () => {
+    expect(resolveSelectedWorkflowOverride('default', 'default')).toBeUndefined();
+  });
+
+  it('should return selected workflow when previous workflow is undefined', () => {
+    expect(resolveSelectedWorkflowOverride(undefined, 'default')).toBe('default');
   });
 });
 
