@@ -239,8 +239,7 @@ steps:
          - `03-qa-review.md` (QA review)
          - `04-testing-review.md` (Testing review)
          - `05-coding-review.md` (Coding review)
-         - `06-merge-readiness-review.md` (Merge Readiness Review)
-      2. Synthesize the 6 review results
+      2. Synthesize the 5 review results
       3. Produce a consolidated review summary with overall verdict
 
       **Review Summary output contract:**
@@ -260,7 +259,6 @@ steps:
       | QA | APPROVE/REJECT | {Brief finding} |
       | Testing | APPROVE/REJECT | {Brief finding} |
       | Coding | APPROVE/REJECT | {Brief finding} |
-      | Merge Readiness | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
       | # | Severity | Source | Location | Issue |
@@ -290,7 +288,6 @@ steps:
             | QA | APPROVE/REJECT | {Overview} |
             | Testing | APPROVE/REJECT | {Overview} |
             | Coding | APPROVE/REJECT | {Overview} |
-            | Merge Readiness | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)
             | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |

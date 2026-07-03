@@ -17,10 +17,14 @@ import { WorkflowConfigRawSchema } from '../core/models/index.js';
 
 const RESOURCES_DIR = join(import.meta.dirname, '../../builtins');
 
-function loadReviewYaml(lang: 'en' | 'ja') {
-  const filePath = join(RESOURCES_DIR, lang, 'workflows', 'review-default.yaml');
+function loadWorkflowYaml(lang: 'en' | 'ja', name: string) {
+  const filePath = join(RESOURCES_DIR, lang, 'workflows', name);
   const content = readFileSync(filePath, 'utf-8');
   return parseYaml(content);
+}
+
+function loadReviewYaml(lang: 'en' | 'ja') {
+  return loadWorkflowYaml(lang, 'review-default.yaml');
 }
 
 describe('review-default workflow (EN)', () => {
@@ -35,6 +39,7 @@ describe('review-default workflow (EN)', () => {
       parallel?: Array<{ name: string; edit?: boolean; provider_options?: { claude?: { allowed_tools?: string[] } } }>;
       rules?: Array<{ condition: string; next?: string }>;
       output_contracts?: { report: Array<{ name: string }> };
+      instruction?: string;
     }>;
   };
 
@@ -112,6 +117,11 @@ describe('review-default workflow (EN)', () => {
     expect(supervise.rules[0].next).toBe('COMPLETE');
   });
 
+  it('should not require merge-readiness report in supervise synthesis', () => {
+    const supervise = raw.steps.find((s) => s.name === 'supervise');
+    expect(supervise.instruction).not.toContain('merge-readiness-review.md');
+  });
+
   it('should have gather step using planner persona', () => {
     const gather = raw.steps.find((s) => s.name === 'gather');
     expect(gather.persona).toBe('planner');
@@ -156,6 +166,7 @@ describe('review-default workflow (JA)', () => {
       edit?: boolean;
       parallel?: Array<{ name: string; edit?: boolean; provider_options?: { claude?: { allowed_tools?: string[] } } }>;
       rules?: Array<{ condition: string; next?: string }>;
+      instruction?: string;
     }>;
   };
 
@@ -211,5 +222,21 @@ describe('review-default workflow (JA)', () => {
     expect(reviewers.rules[0].condition).toBe('all("approved")');
     expect(reviewers.rules[0].next).toBe('merge-readiness-review');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
+  });
+
+  it('should not require merge-readiness report in supervise synthesis', () => {
+    const supervise = raw.steps.find((s) => s.name === 'supervise');
+    expect(supervise.instruction).not.toContain('merge-readiness-review.md');
+  });
+});
+
+describe('review-takt-default workflow supervise synthesis', () => {
+  it.each(['en', 'ja'] as const)('should not require merge-readiness report in %s supervise synthesis', (lang) => {
+    const raw = loadWorkflowYaml(lang, 'review-takt-default.yaml') as {
+      steps: Array<{ name: string; instruction?: string }>;
+    };
+    const supervise = raw.steps.find((s) => s.name === 'supervise');
+
+    expect(supervise?.instruction).not.toContain('merge-readiness-review.md');
   });
 });

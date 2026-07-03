@@ -28,7 +28,6 @@ Extract requirements from the task spec and verify each one individually against
 - If final judgment differs from prior review conclusions, explain why with evidence
 - Treat `resolved` as valid only when it satisfies the original expected result and original requirement
 - If marking `false_positive` or `overreach`, state whether it conflicts with the task objective, the plan, or both
-- If overturning a merge-readiness-review conclusion, explain why with concrete evidence
 
 ## Unclassified Concern Check
 | Review | Concern | Finding State | Supervisor Judgment | Evidence |

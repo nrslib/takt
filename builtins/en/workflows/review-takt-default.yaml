@@ -268,8 +268,7 @@ steps:
          - `04-testing-review.md` (Testing review)
          - `05-ai-antipattern-review.md` (AI antipattern review)
          - `06-coding-review.md` (Coding review)
-         - `07-merge-readiness-review.md` (Merge Readiness Review)
-      2. Synthesize the 7 review results
+      2. Synthesize the 6 review results
       3. Produce a consolidated review summary with overall verdict
 
       **Review Summary output contract:**
@@ -290,7 +289,6 @@ steps:
       | Testing | APPROVE/REJECT | {Brief finding} |
       | AI Antipattern | APPROVE/REJECT | {Brief finding} |
       | Coding | APPROVE/REJECT | {Brief finding} |
-      | Merge Readiness | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
       | # | Severity | Source | Location | Issue |
@@ -321,7 +319,6 @@ steps:
             | Testing | APPROVE/REJECT | {Overview} |
             | AI Antipattern | APPROVE/REJECT | {Overview} |
             | Coding | APPROVE/REJECT | {Overview} |
-            | Merge Readiness | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)
             | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |
