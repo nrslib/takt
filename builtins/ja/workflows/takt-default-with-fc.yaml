@@ -1,5 +1,5 @@
 name: takt-default-with-fc
-description: Finding Contract 有効版の TAKT 開発ワークフロー（計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（並列レビュー+修正） → 監督 → 完了）
+description: Finding Contract 有効版の TAKT 開発ワークフロー（計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（専門レビュー + merge-readiness + 修正） → 監督 → 完了）
 workflow_config:
   provider_options:
     codex:

@@ -176,30 +176,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: coding-review
         tags:
           - review
@@ -228,8 +204,34 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: merge-readiness-review
       - condition: any("needs_fix")
+        next: supervise
+
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
         next: supervise
 
   - name: supervise
@@ -265,7 +267,7 @@ steps:
          - `03-qa-review.md` (QA review)
          - `04-testing-review.md` (Testing review)
          - `05-ai-antipattern-review.md` (AI antipattern review)
-         - `06-pure-review.md` (Requirements review)
+         - `06-merge-readiness-review.md` (Merge Readiness Review)
          - `07-coding-review.md` (Coding review)
       2. Synthesize the 7 review results
       3. Produce a consolidated review summary with overall verdict
@@ -287,7 +289,7 @@ steps:
       | QA | APPROVE/REJECT | {Brief finding} |
       | Testing | APPROVE/REJECT | {Brief finding} |
       | AI Antipattern | APPROVE/REJECT | {Brief finding} |
-      | Requirements | APPROVE/REJECT | {Brief finding} |
+      | Merge Readiness | APPROVE/REJECT | {Brief finding} |
       | Coding | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
@@ -318,7 +320,7 @@ steps:
             | QA | APPROVE/REJECT | {Overview} |
             | Testing | APPROVE/REJECT | {Overview} |
             | AI Antipattern | APPROVE/REJECT | {Overview} |
-            | Requirements | APPROVE/REJECT | {Overview} |
+            | Merge Readiness | APPROVE/REJECT | {Overview} |
             | Coding | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)

@@ -3,9 +3,9 @@
  *
  * Covers:
  * - Workflow YAML files (EN/JA) load and pass schema validation
- * - Step structure: gather -> reviewers (parallel 5) -> supervise -> COMPLETE
+ * - Step structure: gather -> reviewers (parallel 5) -> merge-readiness-review -> supervise -> COMPLETE
  * - All steps have edit: false
- * - All 5 reviewers have Bash in provider_options.claude.allowed_tools
+ * - All 5 parallel reviewers have Bash in provider_options.claude.allowed_tools
  * - Routing rules for gather and reviewers
  */
 
@@ -52,9 +52,9 @@ describe('review-default workflow (EN)', () => {
     expect(raw.max_steps).toBe(10);
   });
 
-  it('should have 3 steps: gather, reviewers, supervise', () => {
+  it('should have 4 steps: gather, reviewers, merge-readiness-review, supervise', () => {
     const stepNames = raw.steps.map((s) => s.name);
-    expect(stepNames).toEqual(['gather', 'reviewers', 'supervise']);
+    expect(stepNames).toEqual(['gather', 'reviewers', 'merge-readiness-review', 'supervise']);
   });
 
   it('should have all steps with edit: false', () => {
@@ -72,10 +72,10 @@ describe('review-default workflow (EN)', () => {
     }
   });
 
-  it('should have reviewers step with 6 parallel sub-steps', () => {
+  it('should have reviewers step with 5 parallel sub-steps', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers).toBeDefined();
-    expect(reviewers.parallel).toHaveLength(6);
+    expect(reviewers.parallel).toHaveLength(5);
 
     const subNames = reviewers.parallel.map((s: { name: string }) => s.name);
     expect(subNames).toEqual([
@@ -83,7 +83,6 @@ describe('review-default workflow (EN)', () => {
       'security-review',
       'qa-review',
       'testing-review',
-      'pure-review',
       'coding-review',
     ]);
   });
@@ -92,9 +91,18 @@ describe('review-default workflow (EN)', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers.rules).toHaveLength(2);
     expect(reviewers.rules[0].condition).toBe('all("approved")');
-    expect(reviewers.rules[0].next).toBe('supervise');
+    expect(reviewers.rules[0].next).toBe('merge-readiness-review');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
     expect(reviewers.rules[1].next).toBe('supervise');
+  });
+
+  it('should route merge-readiness-review to supervise', () => {
+    const mergeReadiness = raw.steps.find((s) => s.name === 'merge-readiness-review');
+    expect(mergeReadiness).toBeDefined();
+    expect(mergeReadiness.rules).toEqual([
+      { condition: 'approved', next: 'supervise' },
+      { condition: 'needs_fix', next: 'supervise' },
+    ]);
   });
 
   it('should have supervise step with single rule to COMPLETE', () => {
@@ -125,7 +133,7 @@ describe('review-default workflow (EN)', () => {
     }
   });
 
-  it('should have Bash in provider_options.claude.allowed_tools for all 6 reviewers', () => {
+  it('should have Bash in provider_options.claude.allowed_tools for all 5 parallel reviewers', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     for (const sub of reviewers.parallel) {
       expect(sub.provider_options?.claude?.allowed_tools).toContain('Bash');
@@ -163,12 +171,12 @@ describe('review-default workflow (JA)', () => {
 
   it('should have same step structure as EN version', () => {
     const stepNames = raw.steps.map((s) => s.name);
-    expect(stepNames).toEqual(['gather', 'reviewers', 'supervise']);
+    expect(stepNames).toEqual(['gather', 'reviewers', 'merge-readiness-review', 'supervise']);
   });
 
-  it('should have reviewers step with 6 parallel sub-steps', () => {
+  it('should have reviewers step with 5 parallel sub-steps', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
-    expect(reviewers.parallel).toHaveLength(6);
+    expect(reviewers.parallel).toHaveLength(5);
 
     const subNames = reviewers.parallel.map((s: { name: string }) => s.name);
     expect(subNames).toEqual([
@@ -176,7 +184,6 @@ describe('review-default workflow (JA)', () => {
       'security-review',
       'qa-review',
       'testing-review',
-      'pure-review',
       'coding-review',
     ]);
   });
@@ -192,7 +199,7 @@ describe('review-default workflow (JA)', () => {
     }
   });
 
-  it('should have Bash in provider_options.claude.allowed_tools for all 6 reviewers', () => {
+  it('should have Bash in provider_options.claude.allowed_tools for all 5 parallel reviewers', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     for (const sub of reviewers.parallel) {
       expect(sub.provider_options?.claude?.allowed_tools).toContain('Bash');
@@ -202,6 +209,7 @@ describe('review-default workflow (JA)', () => {
   it('should have same aggregate rules on reviewers', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers.rules[0].condition).toBe('all("approved")');
+    expect(reviewers.rules[0].next).toBe('merge-readiness-review');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
   });
 });

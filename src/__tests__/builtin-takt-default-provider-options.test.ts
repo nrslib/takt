@@ -54,14 +54,17 @@ const EDIT_PROVIDER_OPTIONS = {
 const REVIEW_READONLY_EXTENDS = { extends: 'review-readonly' };
 const REVIEW_FILES_EXTENDS = { extends: 'review-files' };
 const EDIT_EXTENDS = { extends: 'edit' };
-const PEER_REVIEW_OUTPUT_CONTRACTS = [
+const PEER_REVIEW_PARALLEL_OUTPUT_CONTRACTS = [
   'architecture-review',
   'security-review',
   'qa-review',
   'testing-review',
-  'pure-review',
   'coding-review',
   'ai-antipattern-review',
+] as const;
+const PEER_REVIEW_OUTPUT_CONTRACTS = [
+  ...PEER_REVIEW_PARALLEL_OUTPUT_CONTRACTS,
+  'merge-readiness-review',
 ] as const;
 
 function workflowDir(locale: 'en' | 'ja'): string {
@@ -76,6 +79,14 @@ function loadBuiltinWorkflow(locale: 'en' | 'ja', name: string): BuiltinWorkflow
 function loadProviderOptionsPreset(locale: 'en' | 'ja', name: string): ProviderOptionsPresetRaw {
   const filePath = join(process.cwd(), 'builtins', locale, 'provider-options', name);
   return parseYaml(readFileSync(filePath, 'utf-8')) as ProviderOptionsPresetRaw;
+}
+
+function outputFormats(steps: WorkflowStepRaw[]): string[] {
+  return steps.flatMap((step) =>
+    (step.output_contracts?.report ?? [])
+      .map((entry) => entry.format)
+      .filter((format): format is string => format !== undefined),
+  );
 }
 
 function outputContractPath(locale: 'en' | 'ja', name: string): string {
@@ -217,6 +228,10 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalizedReviewerSteps.get('ai-antipattern-review-2nd')?.providerOptions).toMatchObject(
         REVIEW_READONLY_PROVIDER_OPTIONS,
       );
+      expect(steps.get('merge-readiness-review')?.provider_options).toEqual(REVIEW_READONLY_EXTENDS);
+      expect(normalizedSteps.get('merge-readiness-review')?.providerOptions).toMatchObject(
+        REVIEW_READONLY_PROVIDER_OPTIONS,
+      );
       expect(steps.get('fix')?.provider_options).toEqual(EDIT_EXTENDS);
       expect(normalizedSteps.get('fix')?.providerOptions).toMatchObject(EDIT_PROVIDER_OPTIONS);
     });
@@ -286,24 +301,24 @@ describe('builtin takt-default provider_options refs', () => {
     it(`${locale} peer-review should use standard output contracts`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
       const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
-      const formats = reviewers.flatMap((step) =>
-        (step.output_contracts?.report ?? [])
-          .map((entry) => entry.format)
-          .filter((format): format is string => format !== undefined),
-      );
+      const mergeReadiness = workflow.steps?.find((step) => step.name === 'merge-readiness-review');
+      const reviewerFormats = outputFormats(reviewers);
+      const formats = outputFormats([...reviewers, ...(mergeReadiness ? [mergeReadiness] : [])]);
 
+      expect(reviewerFormats).toEqual([...PEER_REVIEW_PARALLEL_OUTPUT_CONTRACTS]);
       expect(formats).toEqual([...PEER_REVIEW_OUTPUT_CONTRACTS]);
     });
 
     it(`${locale} peer-review-with-fc should use Finding Contract-specific output contracts`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'peer-review-with-fc.yaml');
       const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
-      const formats = reviewers.flatMap((step) =>
-        (step.output_contracts?.report ?? [])
-          .map((entry) => entry.format)
-          .filter((format): format is string => format !== undefined),
-      );
+      const mergeReadiness = workflow.steps?.find((step) => step.name === 'merge-readiness-review');
+      const reviewerFormats = outputFormats(reviewers);
+      const formats = outputFormats([...reviewers, ...(mergeReadiness ? [mergeReadiness] : [])]);
 
+      expect(reviewerFormats).toEqual(
+        PEER_REVIEW_PARALLEL_OUTPUT_CONTRACTS.map((contract) => `${contract}-finding-contract`),
+      );
       expect(formats).toEqual(PEER_REVIEW_OUTPUT_CONTRACTS.map((contract) => `${contract}-finding-contract`));
 
       for (const contract of PEER_REVIEW_OUTPUT_CONTRACTS) {

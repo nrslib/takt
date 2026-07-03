@@ -3,8 +3,8 @@
  *
  * Validates that:
  * - dual and dual-cqrs workflows load successfully via loadWorkflow
- * - dual has 2-stage review: reviewers_1 (arch, frontend, testing, ai-antipattern) → reviewers_2 (security, qa, pure, coding)
- * - dual-cqrs has single-stage reviewers (cqrs-es, frontend, security, qa)
+ * - dual has 2-stage review: reviewers_1 (arch, frontend, testing, ai-antipattern) → reviewers_2 (security, qa, coding) → merge-readiness-review
+ * - dual-cqrs has single-stage specialist reviewers followed by merge-readiness-review
  * - ai_review routes to reviewers_1 (dual) / reviewers (dual-cqrs)
  * - fix step routes back to reviewers_1 (dual) / reviewers (dual-cqrs)
  * - Aggregate rules (all/any) are configured on reviewer steps
@@ -51,20 +51,20 @@ describe('dual workflow parallel structure', () => {
     expect(subNames).toContain('ai-antipattern-review-2nd');
   });
 
-  it('should have reviewers_2 parallel step with 4 sub-steps', () => {
+  it('should have reviewers_2 parallel step with 3 sub-steps', () => {
     const reviewers2 = workflow!.steps.find((s) => s.name === 'reviewers_2');
     expect(reviewers2).toBeDefined();
     expect(reviewers2!.parallel).toBeDefined();
-    expect(reviewers2!.parallel!.length).toBe(4);
+    expect(reviewers2!.parallel!.length).toBe(3);
   });
 
-  it('should have security-review, qa-review, pure-review, coding-review in reviewers_2', () => {
+  it('should have security-review, qa-review and coding-review in reviewers_2', () => {
     const reviewers2 = workflow!.steps.find((s) => s.name === 'reviewers_2');
     const subNames = reviewers2!.parallel!.map((s) => s.name);
     expect(subNames).toContain('security-review');
     expect(subNames).toContain('qa-review');
-    expect(subNames).toContain('pure-review');
     expect(subNames).toContain('coding-review');
+    expect(subNames).not.toContain('merge-readiness-review');
   });
 
   it('should have aggregate rules on both reviewer steps', () => {
@@ -95,10 +95,19 @@ describe('dual workflow parallel structure', () => {
     expect(approvedRule!.next).toBe('reviewers_2');
   });
 
-  it('should route reviewers_2 all("approved") to supervise', () => {
+  it('should route reviewers_2 all("approved") to merge-readiness-review', () => {
     const reviewers2 = workflow!.steps.find((s) => s.name === 'reviewers_2');
     const approvedRule = reviewers2!.rules!.find((r) => r.condition === 'all("approved")');
-    expect(approvedRule!.next).toBe('supervise');
+    expect(approvedRule!.next).toBe('merge-readiness-review');
+  });
+
+  it('should route merge-readiness-review to supervise or fix', () => {
+    const mergeReadiness = workflow!.steps.find((s) => s.name === 'merge-readiness-review');
+    expect(mergeReadiness).toBeDefined();
+    expect(mergeReadiness!.rules).toEqual([
+      expect.objectContaining({ condition: 'approved', next: 'supervise' }),
+      expect.objectContaining({ condition: 'needs_fix', next: 'fix' }),
+    ]);
   });
 
   it('should route both reviewer stages any("needs_fix") to fix', () => {
@@ -167,7 +176,7 @@ describe('dual-cqrs workflow parallel structure', () => {
     const reviewers = workflow!.steps.find((s) => s.name === 'reviewers');
     expect(reviewers).toBeDefined();
     expect(reviewers!.parallel).toBeDefined();
-    expect(reviewers!.parallel!.length).toBe(7);
+    expect(reviewers!.parallel!.length).toBe(6);
   });
 
   it('should have cqrs-es-review instead of arch-review', () => {
@@ -179,7 +188,8 @@ describe('dual-cqrs workflow parallel structure', () => {
     expect(subNames).toContain('security-review');
     expect(subNames).toContain('qa-review');
     expect(subNames).toContain('ai-antipattern-review-2nd');
-    expect(subNames).toContain('pure-review');
+    expect(subNames).toContain('coding-review');
+    expect(subNames).not.toContain('merge-readiness-review');
   });
 
   it('should have aggregate rules on reviewers step', () => {
@@ -188,6 +198,17 @@ describe('dual-cqrs workflow parallel structure', () => {
     const conditions = reviewers!.rules!.map((r) => r.condition);
     expect(conditions).toContain('all("approved")');
     expect(conditions).toContain('any("needs_fix")');
+    const approvedRule = reviewers!.rules!.find((r) => r.condition === 'all("approved")');
+    expect(approvedRule!.next).toBe('merge-readiness-review');
+  });
+
+  it('should route merge-readiness-review to supervise or fix', () => {
+    const mergeReadiness = workflow!.steps.find((s) => s.name === 'merge-readiness-review');
+    expect(mergeReadiness).toBeDefined();
+    expect(mergeReadiness!.rules).toEqual([
+      expect.objectContaining({ condition: 'approved', next: 'supervise' }),
+      expect.objectContaining({ condition: 'needs_fix', next: 'fix' }),
+    ]);
   });
 
   it('should have simple approved/needs_fix rules on each sub-step', () => {

@@ -127,29 +127,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -178,10 +155,35 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: merge-readiness-review
       - condition: any("needs_fix")
         next: fix
 
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: fix
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
   - name: fix
     tags:
       - coding

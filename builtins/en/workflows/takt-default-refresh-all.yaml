@@ -355,30 +355,6 @@ steps:
           report:
             - name: testing-review.md
               format: testing-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        session: refresh
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: ai-antipattern-review-2nd
         tags:
           - review
@@ -405,9 +381,35 @@ steps:
               format: ai-antipattern-review
     rules:
       - condition: all("approved")
-        next: supervise
+        next: merge-readiness-review
       - condition: any("needs_fix")
         next: fix
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    session: refresh
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: fix
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
   - name: fix
     tags:
       - coding

@@ -176,30 +176,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: coding-review
         tags:
           - review
@@ -228,8 +204,34 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: merge-readiness-review
       - condition: any("needs_fix")
+        next: supervise
+
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
         next: supervise
 
   - name: supervise
@@ -265,7 +267,7 @@ steps:
          - `03-qa-review.md`（QAレビュー）
          - `04-testing-review.md`（テストレビュー）
          - `05-ai-antipattern-review.md`（AIアンチパターンレビュー）
-         - `06-pure-review.md`（Pure Review）
+         - `06-merge-readiness-review.md`（Merge Readiness Review）
          - `07-coding-review.md`（コーディングレビュー）
       2. 7つのレビュー結果を統合
       3. 統合レビューサマリーと総合判定を作成
@@ -289,7 +291,7 @@ steps:
             | QA | APPROVE/REJECT | {概要} |
             | テスト | APPROVE/REJECT | {概要} |
             | AIアンチパターン | APPROVE/REJECT | {概要} |
-            | Pure Review | APPROVE/REJECT | {概要} |
+            | Merge Readiness Review | APPROVE/REJECT | {概要} |
             | コーディング | APPROVE/REJECT | {概要} |
 
             ## 今回の指摘（new）

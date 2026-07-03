@@ -1,19 +1,24 @@
 ```markdown
-# Pure Review
+# Merge Readiness Review
 
 ## Result: APPROVE / REJECT
 
 ## Summary
 {Summarize in 1-2 sentences whether this change is mergeable quality. If REJECT, mention the largest blocker first}
 
-## Pure Review Check
+## Merge Readiness Review Check
 | # | Area | Status | Evidence (file:line / test / execution evidence) | Comment |
 |---|------|--------|--------------------------------------------------|---------|
 | 1 | Requirement fulfillment | Satisfied / Unmet / Unverified | `src/file.ts:42` | {Notes} |
 | 2 | Existing contract and existing-flow impact | No issue / Issue found / Unverified | `src/file.ts:42` | {Notes} |
-| 3 | Tests and verification | Sufficient / Insufficient / Unverified | `npm test` | {Notes} |
+| 3 | Tests and verification | Sufficient / Insufficient / Unverified | `test evidence` | {Notes} |
 | 4 | Out-of-scope changes and scope creep | No issue / Issue found / Unverified | `src/file.ts:42` | {Notes} |
 | 5 | Obvious security, data-protection, or operational risk | No issue / Issue found / Unverified | `src/file.ts:42` | {Notes} |
+
+## Cross-Audit Evidence
+| # | Change Category | Extracted Item | Search Terms / Files Checked | Judgment | Comment |
+|---|-----------------|----------------|------------------------------|----------|---------|
+| 1 | ID / config / output contract / type / helper / adapter / entrypoint | {item} | `{search term}` / `file:line` | No issue / Issue found / Unverified | {Notes} |
 
 ## Requirements Cross-Reference
 | # | Requirement (from task) | Status | Evidence (file:line) | Comment |
@@ -41,5 +46,5 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary + Pure Review Check only (10 lines or fewer)
+- APPROVE: Summary + Merge Readiness Review Check + Cross-Audit Evidence only (15 lines or fewer)
 - REJECT: Prioritize blocker findings (40 lines or fewer)

@@ -150,18 +150,19 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers');
     expect(reviewersStep).toBeDefined();
     expect(reviewersStep!.parallel).toBeDefined();
-    expect(reviewersStep!.parallel).toHaveLength(5);
+    expect(reviewersStep!.parallel).toHaveLength(3);
   });
 
-  it('should have arch-review, pure-review, coding-review and supervise as parallel sub-steps', () => {
+  it('should have arch-review, ai-antipattern-review-2nd and coding-review as parallel sub-steps', () => {
     const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
     const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
     const subStepNames = reviewersStep.parallel!.map((s) => s.name);
 
     expect(subStepNames).toContain('arch-review');
-    expect(subStepNames).toContain('pure-review');
+    expect(subStepNames).toContain('ai-antipattern-review-2nd');
     expect(subStepNames).toContain('coding-review');
-    expect(subStepNames).toContain('supervise');
+    expect(subStepNames).not.toContain('merge-readiness-review');
+    expect(subStepNames).not.toContain('supervise');
   });
 
   it('should have multi-condition aggregate rules on the reviewers parent step', () => {
@@ -176,13 +177,19 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     // Multi-condition aggregate: first condition is always 'approved' (both en/ja)
     expect(Array.isArray(allRule!.aggregateConditionText)).toBe(true);
     expect((allRule!.aggregateConditionText as string[])[0]).toBe('approved');
-    expect(allRule!.next).toBe('COMPLETE');
+    expect((allRule!.aggregateConditionText as string[])).toEqual(['approved', 'No AI-specific issues', 'approved']);
+    expect(allRule!.next).toBe('merge-readiness-review');
 
     const anyRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'any');
     expect(anyRule).toBeDefined();
     // Multi-condition aggregate: first condition is always 'needs_fix' (both en/ja)
     expect(Array.isArray(anyRule!.aggregateConditionText)).toBe(true);
     expect((anyRule!.aggregateConditionText as string[])[0]).toBe('needs_fix');
+    expect((anyRule!.aggregateConditionText as string[])).toEqual([
+      'needs_fix',
+      'AI-specific issues found',
+      'needs_fix',
+    ]);
     expect(anyRule!.next).toBe('fix');
   });
 
@@ -197,11 +204,10 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     expect(conditions).toContain('needs_fix');
   });
 
-  it('should have supervise sub-step with 2 conditions', () => {
+  it('should have supervise step with 2 conditions', () => {
     const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
-    const reviewersStep = workflow!.steps.find((s) => s.name === 'reviewers')!;
 
-    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = workflow!.steps.find((s) => s.name === 'supervise')!;
     expect(supervise.rules).toBeDefined();
     expect(supervise.rules).toHaveLength(2);
   });
@@ -266,13 +272,13 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.persona).toContain('architecture-reviewer');
 
-    const pureReview = reviewersStep.parallel!.find((s) => s.name === 'pure-review')!;
-    expect(pureReview.persona).toContain('pure-reviewer');
+    const mergeReadinessReview = workflow!.steps.find((s) => s.name === 'merge-readiness-review')!;
+    expect(mergeReadinessReview.persona).toContain('merge-readiness-reviewer');
 
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.persona).toContain('coding-reviewer');
 
-    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = workflow!.steps.find((s) => s.name === 'supervise')!;
     expect(supervise.persona).toContain('supervisor');
   });
 
@@ -283,13 +289,13 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.outputContracts).toBeDefined();
 
-    const pureReview = reviewersStep.parallel!.find((s) => s.name === 'pure-review')!;
-    expect(pureReview.outputContracts).toBeDefined();
+    const mergeReadinessReview = workflow!.steps.find((s) => s.name === 'merge-readiness-review')!;
+    expect(mergeReadinessReview.outputContracts).toBeDefined();
 
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.outputContracts).toBeDefined();
 
-    const supervise = reviewersStep.parallel!.find((s) => s.name === 'supervise')!;
+    const supervise = workflow!.steps.find((s) => s.name === 'supervise')!;
     expect(supervise.outputContracts).toBeDefined();
   });
 });

@@ -129,29 +129,6 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -179,9 +156,34 @@ steps:
           - condition: needs_fix
     rules:
       - condition: all("Complies with Terraform conventions", "No AI-specific issues", "approved")
-        next: supervise
+        next: merge-readiness-review
       - condition: any("Convention violations found", "AI-specific issues found", "needs_fix")
         next: supervise
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: supervise
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
   - name: supervise
     tags:
       - review

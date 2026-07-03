@@ -1,5 +1,5 @@
 name: review-default
-description: Multi-perspective Code Review - reviews changes in parallel from 6 perspectives (including coding review) and outputs consolidated results
+description: Multi-perspective Code Review - reviews changes with specialist parallel reviewers, runs merge-readiness review, and outputs consolidated results
 workflow_config:
   provider_options:
     codex:
@@ -148,30 +148,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: coding-review
         tags:
           - review
@@ -200,8 +176,34 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: merge-readiness-review
       - condition: any("needs_fix")
+        next: supervise
+
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
         next: supervise
 
   - name: supervise
@@ -236,7 +238,7 @@ steps:
          - `02-security-review.md` (Security review)
          - `03-qa-review.md` (QA review)
          - `04-testing-review.md` (Testing review)
-         - `05-pure-review.md` (Requirements review)
+         - `05-merge-readiness-review.md` (Merge Readiness Review)
          - `06-coding-review.md` (Coding review)
       2. Synthesize the 6 review results
       3. Produce a consolidated review summary with overall verdict
@@ -257,7 +259,7 @@ steps:
       | Security | APPROVE/REJECT | {Brief finding} |
       | QA | APPROVE/REJECT | {Brief finding} |
       | Testing | APPROVE/REJECT | {Brief finding} |
-      | Requirements | APPROVE/REJECT | {Brief finding} |
+      | Merge Readiness | APPROVE/REJECT | {Brief finding} |
       | Coding | APPROVE/REJECT | {Brief finding} |
 
       ## Issues Requiring Attention
@@ -287,7 +289,7 @@ steps:
             | Security | APPROVE/REJECT | {Overview} |
             | QA | APPROVE/REJECT | {Overview} |
             | Testing | APPROVE/REJECT | {Overview} |
-            | Requirements | APPROVE/REJECT | {Overview} |
+            | Merge Readiness | APPROVE/REJECT | {Overview} |
             | Coding | APPROVE/REJECT | {Overview} |
 
             ## Current Iteration Findings (new)

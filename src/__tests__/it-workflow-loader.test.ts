@@ -1150,12 +1150,14 @@ describe('Workflow Loader IT: parallel step loading', () => {
 
     const reviewers2 = config!.steps.find((s) => s.name === 'reviewers_2');
     expect(reviewers2).toBeDefined();
-    expect(reviewers2!.parallel!.length).toBe(4);
+    expect(reviewers2!.parallel!.length).toBe(3);
     const stage2Names = reviewers2!.parallel!.map((s) => s.name);
     expect(stage2Names).toContain('security-review');
     expect(stage2Names).toContain('qa-review');
-    expect(stage2Names).toContain('pure-review');
     expect(stage2Names).toContain('coding-review');
+
+    const mergeReadiness = config!.steps.find((s) => s.name === 'merge-readiness-review');
+    expect(mergeReadiness).toBeDefined();
   });
 });
 

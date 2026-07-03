@@ -140,7 +140,7 @@ describe('RuleEvaluator findings conditions', () => {
             status: 'active',
             findingIds: ['F-0001'],
             rawFindingIds: ['raw-security-review-1'],
-            description: 'Security and pure review disagree about resolution.',
+            description: 'Security and merge-readiness review disagree about resolution.',
           },
         ],
       },

@@ -1,5 +1,5 @@
 name: default-peer-review
-description: default series Phase 2. Parallel reviewers (arch + ai-antipattern-2nd + pure-review + coding-review + supervise) ⇄ fix loop.
+description: default series Phase 2. Specialist parallel reviewers (arch + ai-antipattern-2nd + coding-review) ⇄ fix loop, followed by merge-readiness-review and supervise in sequence.
 subworkflow:
   callable: true
   visibility: internal
@@ -78,29 +78,6 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -127,37 +104,64 @@ steps:
           report:
             - name: coding-review.md
               format: coding-review
-      - name: supervise
-        tags:
-          - review
-        edit: false
-        persona: supervisor
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: supervise
-        rules:
-          - condition: All checks passed
-          - condition: Requirements unmet, tests failing, build errors
-        output_contracts:
-          report:
-            - name: supervisor-validation.md
-              format: supervisor-validation
-            - name: summary.md
-              format: summary
-              use_judge: false
     rules:
-      - condition: all("approved", "No AI-specific issues", "approved", "approved", "All checks passed")
-        next: COMPLETE
-      - condition: any("needs_fix", "AI-specific issues found", "needs_fix", "needs_fix", "Requirements unmet, tests failing, build errors")
+      - condition: all("approved", "No AI-specific issues", "approved")
+        next: merge-readiness-review
+      - condition: any("needs_fix", "AI-specific issues found", "needs_fix")
         next: fix
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: fix
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review
+  - name: supervise
+    tags:
+      - review
+    edit: false
+    persona: supervisor
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: supervise
+    rules:
+      - condition: All checks passed
+        next: COMPLETE
+      - condition: Requirements unmet, tests failing, build errors
+        next: fix
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
   - name: fix
     tags:
       - coding
