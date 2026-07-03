@@ -538,6 +538,30 @@ export async function executeWorkflow(config, cwd, task, options?) {
 2. 全呼び出し元がその条件を既に保証しているなら、防御は不要 → REJECT
 3. 一部の呼び出し元が保証していない場合は、防御を残す
 
+## 公開状態の不変性
+
+モジュールが公開する共有状態（初期状態定数、シングルトン、設定オブジェクト）は、利用側から変更できない形で公開されているかを確認する。可変のまま公開された共有状態は、1箇所の書き換えが全利用箇所へ静かに伝播する。
+
+| 基準 | 判定 |
+|------|------|
+| 公開された初期状態定数（例: initialState）が freeze されず、利用側から変更可能 | REJECT |
+| 公開定数の内部にネストした可変オブジェクト（配列・Record・Map）が生で露出している | REJECT |
+| ストアや読み取りモデルが内部状態への参照をそのまま返している | REJECT |
+| Object.freeze / Readonly 型 / ファクトリ関数 / 防御的コピーで保護されている | OK |
+
+```typescript
+// REJECT - 可変の公開初期状態。利用側が書き換えると全 replay の起点が汚染される
+export const initialState: State = { count: 0, entries: {} };
+
+// OK - freeze で保護（ネストも含めて）
+export const initialState: State = Object.freeze({ count: 0, entries: Object.freeze({}) });
+
+// OK - ファクトリで毎回新しいインスタンスを返す
+export function createInitialState(): State {
+  return { count: 0, entries: {} };
+}
+```
+
 ## 品質特性
 
 | 特性 | 確認観点 |

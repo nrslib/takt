@@ -538,6 +538,30 @@ Verification steps:
 2. If all callers already guarantee the condition, guard is unnecessary → REJECT
 3. If some callers don't guarantee it, keep the guard
 
+## Immutability of Published State
+
+Verify that shared state a module publishes (initial-state constants, singletons, configuration objects) cannot be mutated by consumers. Mutable shared state silently propagates a single write to every usage site.
+
+| Criterion | Verdict |
+|-----------|---------|
+| A published initial-state constant (e.g. initialState) is not frozen and consumers can mutate it | REJECT |
+| Mutable objects nested inside a published constant (arrays, Records, Maps) are exposed raw | REJECT |
+| A store or read model returns references to its internal state as-is | REJECT |
+| Protected via Object.freeze / Readonly types / factory functions / defensive copies | OK |
+
+```typescript
+// REJECT - mutable published initial state; one consumer write poisons every replay
+export const initialState: State = { count: 0, entries: {} };
+
+// OK - frozen, including nested objects
+export const initialState: State = Object.freeze({ count: 0, entries: Object.freeze({}) });
+
+// OK - factory returning a fresh instance every time
+export function createInitialState(): State {
+  return { count: 0, entries: {} };
+}
+```
+
 ## Quality Attributes
 
 | Attribute | Review Point |

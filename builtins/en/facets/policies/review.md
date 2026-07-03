@@ -127,6 +127,8 @@ If tool output is unreadable, re-read using a reliable method before making any 
 
 Every issue raised must include the following.
 
+Aggregate same-`family_tag` findings into one representative entry and list the other locations inline as `also: L232, L243` (one finding per family). Do not spend rows enumerating the same kind of issue; use the remaining attention to hunt different kinds of problems.
+
 - **Which file and line number**
 - **What the problem is**
 - **How to fix it**
