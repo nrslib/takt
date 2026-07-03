@@ -54,5 +54,5 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary plus Contract Entry Check, Re-scan Evidence (from the second iteration onward), and Non-Finding Concerns when needed
+- APPROVE: Summary plus Verification Evidence, Contract Entry Check, Re-scan Evidence (from the second iteration onward), and Non-Finding Concerns when needed
 - REJECT: Include only relevant finding rows (30 lines or fewer)

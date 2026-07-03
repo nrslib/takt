@@ -52,5 +52,5 @@ Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE → Summary + Re-scan Evidence (from the second iteration onward). Omit everything else (10 lines or fewer)
+- APPROVE → Summary + Verification Evidence + Re-scan Evidence (from the second iteration onward). Omit everything else
 - REJECT → Include only relevant finding rows (30 lines or fewer)
