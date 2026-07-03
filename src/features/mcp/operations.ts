@@ -13,6 +13,7 @@ import {
   createIssueAndEnqueueTask,
   enqueueTask,
   formatIssueEnqueueFailure,
+  joinIssueEnqueueFailureText,
   type IssueEnqueueCompensationInput,
   type IssueEnqueueFailure,
 } from '../../infra/task/enqueueService.js';
@@ -119,17 +120,10 @@ function buildTaskPostExecutionFailureText(taskName: string, result: TaskComplet
   return `Task post-execution failed: ${taskName}\n${safeMcpErrorCause(result.postExecutionFailureReason)}`;
 }
 
-function joinIssueEnqueueFailureText(
-  formatted: ReturnType<typeof formatIssueEnqueueFailure>,
-): string {
-  return formatted.compensationFailure === undefined
-    ? formatted.primary
-    : [formatted.primary, '', formatted.compensationFailure].join('\n');
-}
-
 function buildIssueEnqueueFailureResult(failure: IssueEnqueueFailure): CallToolResult {
   return textResult(joinIssueEnqueueFailureText(
     formatIssueEnqueueFailure(failure, safeMcpErrorCause),
+    '\n\n',
   ), true);
 }
 

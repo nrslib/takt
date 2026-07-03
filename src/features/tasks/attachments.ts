@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   cleanupTaskSpecDirectory,
-  reserveTaskSpecDirectory,
+  prepareTaskSpecDirectory as prepareEnqueuedTaskSpecDirectory,
   type PreparedTaskSpecDirectory,
 } from '../../infra/task/enqueueService.js';
 
@@ -145,26 +145,16 @@ export function prepareTaskSpecDirectory(
   attachments?: readonly TaskAttachment[],
   options?: PrepareTaskSpecOptions,
 ): PreparedTaskSpec {
-  const preparedSpec = reserveTaskSpecDirectory(cwd, taskContent);
-  const { taskDir, taskDirRelative } = preparedSpec;
   const orderContent = buildTaskOrderContent(taskContent, attachments);
-  const orderPath = path.join(taskDir, 'order.md');
-
-  try {
-    if (options?.sourceTaskDir) {
-      copyExistingTaskAttachments(options.sourceTaskDir, taskDir);
-    }
-    promoteTaskAttachments(taskDir, attachments);
-    fs.writeFileSync(orderPath, orderContent, {
-      encoding: 'utf-8',
-      flag: 'wx',
-    });
-  } catch (error) {
-    cleanupPreparedTaskSpec(taskDir);
-    throw error;
-  }
-
-  return { taskDir, taskDirRelative };
+  return prepareEnqueuedTaskSpecDirectory(cwd, taskContent, {
+    orderContent,
+    beforeWrite: (taskDir) => {
+      if (options?.sourceTaskDir) {
+        copyExistingTaskAttachments(options.sourceTaskDir, taskDir);
+      }
+      promoteTaskAttachments(taskDir, attachments);
+    },
+  });
 }
 
 export function copyTaskAttachmentsToRunContext(sourceTaskDir: string, runContextTaskDir: string): void {

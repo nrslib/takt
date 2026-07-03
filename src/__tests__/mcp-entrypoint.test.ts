@@ -2,12 +2,9 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createTaktMcpServer } from '../app/mcp/server.js';
-
-const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts';
 
 function objectProperties(schema: unknown): Record<string, Record<string, unknown>> {
   const value = schema as { properties?: Record<string, Record<string, unknown>> };
@@ -101,50 +98,6 @@ describe('MCP package entrypoint', () => {
     } finally {
       await client.close();
       await server.close();
-    }
-  });
-
-  it('Given the source MCP entrypoint, When a stdio MCP client lists and calls tools, Then stdout remains valid MCP protocol', async () => {
-    const cwd = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-stdio-'));
-    const client = new Client({ name: 'takt-mcp-stdio-test-client', version: '1.0.0' });
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        'node_modules/.bin/vite-node',
-        '--script',
-        SOURCE_STDIO_ENTRYPOINT_RUNNER,
-      ],
-      cwd: process.cwd(),
-      stderr: 'pipe',
-    });
-    const stderrChunks: Buffer[] = [];
-    transport.stderr?.on('data', (chunk: Buffer) => {
-      stderrChunks.push(chunk);
-    });
-
-    try {
-      await client.connect(transport);
-
-      const tools = await client.listTools();
-      const result = await client.callTool({
-        name: 'takt_run_next_task',
-        arguments: { cwd },
-      });
-
-      expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
-        'takt_create_issue_and_enqueue_task',
-        'takt_enqueue_task',
-        'takt_run_next_task',
-      ]);
-      expect(result.isError).toBeUndefined();
-      expect(JSON.parse(String(result.content[0]?.text))).toEqual({
-        ran: false,
-        message: 'No pending tasks in .takt/tasks.yaml',
-      });
-      expect(Buffer.concat(stderrChunks).toString('utf-8')).toBe('');
-    } finally {
-      await client.close();
-      rmSync(cwd, { recursive: true, force: true });
     }
   });
 

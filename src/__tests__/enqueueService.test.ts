@@ -98,6 +98,38 @@ describe('createIssueAndEnqueueTask', () => {
     );
   });
 
+  it('returns an issue_creation failure result without saving or compensation when issue creation fails', async () => {
+    const closeIssue = vi.fn(() => ({ success: true as const }));
+    const gitProvider = createTestGitProvider({ closeIssue });
+    const createIssueFromTaskResult = vi.fn(() => ({
+      success: false as const,
+      error: 'gh issue create failed',
+    }));
+    const saveTaskFile = vi.fn();
+
+    const result = await createIssueAndEnqueueTask({
+      cwd: '/repo',
+      task: 'Implement enqueue service',
+      workflow: 'review',
+      worktree: true,
+      autoPr: false,
+      gitProvider,
+    }, {
+      createIssueFromTaskResult,
+      saveTaskFile,
+    });
+
+    expect(result).toEqual({
+      success: false,
+      failure: {
+        stage: 'issue_creation',
+        error: 'gh issue create failed',
+      },
+    });
+    expect(saveTaskFile).not.toHaveBeenCalled();
+    expect(closeIssue).not.toHaveBeenCalled();
+  });
+
   it('uses a cancellation compensation comment when enqueue is cancelled after issue creation', async () => {
     const closeIssue = vi.fn(() => ({ success: true as const }));
     const gitProvider = createTestGitProvider({ closeIssue });

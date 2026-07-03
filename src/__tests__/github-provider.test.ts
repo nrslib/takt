@@ -53,15 +53,12 @@ vi.mock('../infra/github/pr.js', () => ({
 
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { getGitProvider } from '../infra/git/index.js';
-import type { CommentResult, CreateIssueResult, PrReviewData } from '../infra/git/index.js';
+import type { CommentResult, PrReviewData } from '../infra/git/index.js';
+import { createIssueSuccess } from './helpers/createIssueResult.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
-
-function createIssueSuccess(issueNumber: number, url: string): CreateIssueResult {
-  return { success: true, issueNumber, url };
-}
 
 describe('GitHubProvider', () => {
   describe('checkCliStatus', () => {

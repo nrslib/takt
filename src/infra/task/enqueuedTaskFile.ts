@@ -1,5 +1,4 @@
 import * as path from 'node:path';
-import * as fs from 'node:fs';
 import { createLogger } from '../../shared/utils/index.js';
 import { TaskRunner } from './runner.js';
 import { TaskExecutionConfigSchema, type TaskFileData, resolveTaskWorkflowValue } from './schema.js';
@@ -7,27 +6,12 @@ import { summarizeTaskName } from './summarize.js';
 import { firstLine } from './naming.js';
 import {
   cleanupTaskSpecDirectory,
-  reserveTaskSpecDirectory,
-  type PreparedEnqueuedTaskSpec,
+  prepareTaskSpecDirectory,
   type PrepareEnqueuedTaskSpec,
   type SaveEnqueuedTaskFileOptions,
 } from './enqueueService.js';
 
 const log = createLogger('task-enqueue');
-
-function prepareTaskSpecDirectory(cwd: string, taskContent: string): PreparedEnqueuedTaskSpec {
-  const preparedSpec = reserveTaskSpecDirectory(cwd, taskContent);
-  try {
-    fs.writeFileSync(path.join(preparedSpec.taskDir, 'order.md'), taskContent, {
-      encoding: 'utf-8',
-      flag: 'wx',
-    });
-  } catch (error) {
-    cleanupTaskSpecDirectory(preparedSpec.taskDir);
-    throw error;
-  }
-  return preparedSpec;
-}
 
 function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<TaskFileData, 'task'> {
   const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;

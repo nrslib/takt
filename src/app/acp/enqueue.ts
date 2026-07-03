@@ -9,6 +9,7 @@ import {
   createIssueAndEnqueueTask,
   enqueueTask,
   formatIssueEnqueueFailure,
+  joinIssueEnqueueFailureText,
 } from '../../infra/task/enqueueService.js';
 import type { AcpTaskContext } from './types.js';
 
@@ -51,14 +52,6 @@ export async function enqueueAcpTask(input: {
   }, input.saveTaskFile);
 }
 
-function joinIssueEnqueueFailureText(
-  formatted: ReturnType<typeof formatIssueEnqueueFailure>,
-): string {
-  return formatted.compensationFailure === undefined
-    ? formatted.primary
-    : [formatted.primary, formatted.compensationFailure].join('\n');
-}
-
 export async function createIssueAndEnqueueAcpTask(input: {
   cwd: string;
   instruction: WorkflowTaskInstruction;
@@ -88,6 +81,7 @@ export async function createIssueAndEnqueueAcpTask(input: {
   if (!result.success) {
     throw new Error(joinIssueEnqueueFailureText(
       formatIssueEnqueueFailure(result.failure, safeExternalErrorMessage),
+      '\n',
     ));
   }
   return result.created;

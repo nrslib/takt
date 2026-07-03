@@ -37,6 +37,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { success, info, error } from '../shared/ui/index.js';
 import { createIssueFromTask } from '../features/tasks/index.js';
 import { createIssueFromTaskResult, extractTitle } from '../features/tasks/add/index.js';
+import { createIssueSuccess } from './helpers/createIssueResult.js';
 
 const mockSuccess = vi.mocked(success);
 const mockInfo = vi.mocked(info);
@@ -45,10 +46,6 @@ const mockError = vi.mocked(error);
 beforeEach(() => {
   vi.clearAllMocks();
 });
-
-function createIssueSuccess(issueNumber: number, url = `https://github.com/owner/repo/issues/${issueNumber}`) {
-  return { success: true, issueNumber, url } as const;
-}
 
 describe('createIssueFromTask', () => {
   describe('title truncation boundary', () => {

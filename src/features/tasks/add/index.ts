@@ -20,6 +20,7 @@ import {
   createIssueAndEnqueueTask,
   formatIssueEnqueueFailure,
   IssueEnqueueCancelledError,
+  joinIssueEnqueueFailureText,
   type SaveEnqueuedTaskFile,
   type SaveEnqueuedTaskFileOptions,
 } from '../../../infra/task/enqueueService.js';
@@ -107,15 +108,6 @@ export async function saveTaskFromInteractive(
   });
   displayTaskCreationResult(created, settings, workflow);
   return created;
-}
-
-function joinIssueEnqueueFailureText(
-  formatted: ReturnType<typeof formatIssueEnqueueFailure>,
-  separator: string,
-): string {
-  return formatted.compensationFailure === undefined
-    ? formatted.primary
-    : `${formatted.primary}${separator}${formatted.compensationFailure}`;
 }
 
 export async function createIssueAndSaveTask(

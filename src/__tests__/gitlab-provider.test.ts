@@ -58,15 +58,12 @@ vi.mock('../infra/gitlab/pr.js', () => ({
 }));
 
 import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
-import type { CommentResult, CreateIssueResult, PrReviewData } from '../infra/git/types.js';
+import type { CommentResult, PrReviewData } from '../infra/git/types.js';
+import { createIssueSuccess } from './helpers/createIssueResult.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
-
-function createIssueSuccess(issueNumber: number, url: string): CreateIssueResult {
-  return { success: true, issueNumber, url };
-}
 
 describe('GitLabProvider', () => {
   describe('checkCliStatus', () => {

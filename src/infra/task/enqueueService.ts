@@ -117,6 +117,11 @@ export interface FormattedIssueEnqueueFailure {
   compensationFailure?: string;
 }
 
+export interface PrepareTaskSpecDirectoryOptions {
+  orderContent?: string;
+  beforeWrite?: (taskDir: string) => void;
+}
+
 export function reserveTaskSpecDirectory(cwd: string, taskContent: string): PreparedTaskSpecDirectory {
   const tasksDir = path.join(cwd, '.takt', 'tasks');
   fs.mkdirSync(tasksDir, { recursive: true });
@@ -145,9 +150,32 @@ export function reserveTaskSpecDirectory(cwd: string, taskContent: string): Prep
 export function cleanupTaskSpecDirectory(taskDir: string): void {
   fs.rmSync(taskDir, { recursive: true, force: true });
   const tasksDir = path.dirname(taskDir);
-  if (fs.existsSync(tasksDir) && fs.readdirSync(tasksDir).length === 0) {
-    fs.rmdirSync(tasksDir);
+  try {
+    if (fs.existsSync(tasksDir) && fs.readdirSync(tasksDir).length === 0) {
+      fs.rmdirSync(tasksDir);
+    }
+  } catch {
+    // Parent cleanup is best-effort; concurrent enqueue can recreate tasksDir.
   }
+}
+
+export function prepareTaskSpecDirectory(
+  cwd: string,
+  taskContent: string,
+  options: PrepareTaskSpecDirectoryOptions = {},
+): PreparedTaskSpecDirectory {
+  const preparedSpec = reserveTaskSpecDirectory(cwd, taskContent);
+  try {
+    options.beforeWrite?.(preparedSpec.taskDir);
+    fs.writeFileSync(path.join(preparedSpec.taskDir, 'order.md'), options.orderContent ?? taskContent, {
+      encoding: 'utf-8',
+      flag: 'wx',
+    });
+  } catch (error) {
+    cleanupTaskSpecDirectory(preparedSpec.taskDir);
+    throw error;
+  }
+  return preparedSpec;
 }
 
 export function formatIssueEnqueueFailure(
@@ -177,6 +205,15 @@ export function formatIssueEnqueueFailure(
     primary: `Issue #${failure.issueNumber} was created, but task saving failed: ${formatError(failure.error)}`,
     compensationFailure: formatIssueCloseFailure(failure.compensation, formatError),
   };
+}
+
+export function joinIssueEnqueueFailureText(
+  formatted: FormattedIssueEnqueueFailure,
+  separator: string,
+): string {
+  return formatted.compensationFailure === undefined
+    ? formatted.primary
+    : `${formatted.primary}${separator}${formatted.compensationFailure}`;
 }
 
 function isFileExistsError(error: unknown): boolean {
