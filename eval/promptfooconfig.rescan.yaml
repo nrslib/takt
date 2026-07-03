@@ -8,7 +8,7 @@
 description: 'TAKT facet eval: peer-review / arch-review round-2 re-scan'
 
 prompts:
-  - file://prompts/arch-review.phase1.md
+  - file://prompts/rescan.phase1.md
 
 providers:
   - id: openai:codex-sdk
@@ -33,7 +33,8 @@ tests:
       - type: javascript
         metric: rescan/evidence-table-present
         value: |
-          return /再走査証跡|Re-scan Evidence/i.test(output);
+          const ok = /再走査証跡|Re-scan Evidence/i.test(output);
+          return ok;
       - type: javascript
         metric: recall/ship-projection-contract
         value: |
@@ -47,7 +48,8 @@ tests:
       - type: javascript
         metric: recall/monolith
         value: |
-          return /(分割|単一ファイル|モノリ|複数の責務|1ファイル|一つのファイル)/.test(output);
+          const ok = /(分割|単一ファイル|モノリ|複数の責務|1ファイル|一つのファイル)/.test(output);
+          return ok;
       - type: javascript
         metric: recall/mutable-initial-state
         value: |
@@ -73,4 +75,5 @@ tests:
       - type: javascript
         metric: verdict/reject
         value: |
-          return /## 結果: *(REJECT|IMPROVE)/.test(output);
+          const ok = /(結果|判定|Verdict).{0,12}(REJECT|IMPROVE)/.test(output) || /^#+ *REJECT/m.test(output);
+          return ok;

@@ -41,6 +41,9 @@ const TARGETS = [
   { id: 'antipattern-review', workflow: 'peer-review', step: 'ai-antipattern-review-2nd', fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-review', workflow: 'review-frontend', step: 'frontend-review', fixture: 'eval/fixtures/frontend-app' },
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
+  // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
+  // スナップショット（Source Path）を inventory-es 側に生成する専用エントリが必要
+  { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
 ];
