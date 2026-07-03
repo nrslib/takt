@@ -1,0 +1,49 @@
+# 2周目レビュー断面: builtin ファセット vs 再走査証跡オーバーレイ
+# 実行前に: node ../build-prompts.ts --overlay overlays/rescan-evidence
+description: 2周目レビューが前回指摘の答え合わせに留まらず新規欠陥を検出できるか
+prompts:
+  - id: file://../prompts/round2-base.txt
+    label: builtin
+  - id: file://../prompts/round2-overlay.txt
+    label: rescan-evidence
+providers:
+  - id: 'exec: bash ../providers/gemma.sh'
+    label: gemma4-31b
+  - id: 'exec: bash ../providers/qwen-coder-next.sh'
+    label: qwen3-coder-next
+  - id: 'exec: bash ../providers/qwen-instruct.sh'
+    label: qwen3.5-397b
+defaultTest:
+  vars:
+    code: file://../fixtures/flawed-index.ts.txt
+    previous_report: file://../fixtures/previous-report.md
+tests:
+  - description: 再走査の実質性・罠検出・幻覚
+    assert:
+      - type: javascript
+        value: "/再走査証跡/.test(output)"
+        metric: rescan-table-present
+      - type: javascript
+        value: "/(出荷|Ship)/i.test(output) && /(全予約|予約合計|すべての予約|全ての予約|reservations = \\{\\}|reserved = 0|合計を減算|全量)/.test(output)"
+        metric: T1-ship-bug
+      - type: javascript
+        value: "/version/.test(output) && /(二重|重複|別々|導出|events\\.length|配列長|配列の長さ)/.test(output)"
+        metric: T3-version-dual
+      - type: javascript
+        value: "/(分割|単一ファイル|モノリ|複数の責務|1ファイル|一つのファイル)/.test(output)"
+        metric: T5-monolith
+      - type: javascript
+        value: "/initialState/.test(output) && /(freeze|可変|mutable|変更可能|不変|readonly|凍結)/i.test(output)"
+        metric: T6-mutable-initstate
+      - type: javascript
+        value: |
+          return (() => {
+            const cited = [...output.matchAll(/src\/[\w./-]+\.ts/g)].map(m => m[0]);
+            const allowed = new Set(['src/index.ts', 'src/types.ts']);
+            const bad = cited.filter(c => !allowed.has(c));
+            return bad.length === 0 || `捏造引用: ${bad.join(', ')}`;
+          })()
+        metric: no-hallucinated-files
+      - type: javascript
+        value: "/## 結果: *(REJECT|IMPROVE)/.test(output)"
+        metric: verdict-reject
