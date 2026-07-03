@@ -23,6 +23,8 @@ providers:
     label: gemma4-31b
   - id: 'exec: bash providers/opencode-review.sh ollama-cloud/qwen3.5:397b fixtures/inventory-es'
     label: qwen3.5-397b
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/qwen3-coder-next fixtures/inventory-es'
+    label: qwen3-coder-next
 
 tests:
   - description: 'round-2: resolved previous findings must not suppress a full re-scan'
