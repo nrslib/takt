@@ -1,5 +1,5 @@
 name: terraform
-description: Terraform IaC development workflow (plan → implement → parallel review → supervisor validation → fix → complete)
+description: Terraform IaC development workflow (plan → implement → parallel review → final gate → fix → complete)
 workflow_config:
   provider_options:
     codex:
@@ -156,34 +156,79 @@ steps:
           - condition: needs_fix
     rules:
       - condition: all("Complies with Terraform conventions", "No AI-specific issues", "approved")
-        next: merge-readiness-review
+        next: final-gate
       - condition: any("Convention violations found", "AI-specific issues found", "needs_fix")
         next: supervise
-  - name: merge-readiness-review
+  - name: final-gate
     tags:
       - review
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+    parallel:
+      - name: merge-readiness-review
+        tags:
+          - review
+        edit: false
+        persona: merge-readiness-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-merge-readiness
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review
+      - name: final-supervise
+        tags:
+          - review
+        edit: false
+        persona: supervisor
+        policy: review
+        knowledge: terraform-aws
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: supervise
+        rules:
+          - condition: All reviewers approved and mergeable quality
+          - condition: Only AI-specific issues need fixing
+          - condition: Only convention violations or mergeability issues need fixing
+          - condition: Multiple types of issues found
+          - condition: Irreconcilable requirement conflict, user decision needed
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: summary
+              use_judge: false
     rules:
-      - condition: approved
-        next: supervise
-      - condition: needs_fix
-        next: supervise
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
+      - condition: all("approved", "All reviewers approved and mergeable quality")
+        next: COMPLETE
+      - condition: all("needs_fix", "Only AI-specific issues need fixing")
+        next: fix_both
+      - condition: any("Multiple types of issues found")
+        next: fix_both
+      - condition: any("Irreconcilable requirement conflict, user decision needed")
+        next: ABORT
+      - condition: any("Only AI-specific issues need fixing")
+        next: ai-antipattern-fix
+      - condition: any("needs_fix", "Only convention violations or mergeability issues need fixing")
+        next: supervise_fix
   - name: supervise
     tags:
       - review
