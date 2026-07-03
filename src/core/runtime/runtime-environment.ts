@@ -44,9 +44,28 @@ function resolveGlabConfigDir(): string {
   return join(xdgBase, 'glab-cli');
 }
 
+/**
+ * Resolve the Cursor CLI config directory to preserve across runtime.prepare.
+ * Cursor honors CURSOR_CONFIG_DIR (highest precedence, points directly at the
+ * config dir) and otherwise XDG_CONFIG_HOME/cursor; its default is ~/.cursor
+ * (NOT ~/.config/cursor). Must be evaluated against the ORIGINAL process.env,
+ * i.e. before createBaseEnvironment's XDG_CONFIG_HOME override is applied to
+ * process.env (which happens later in prepareRuntimeEnvironment).
+ */
+function resolveCursorConfigDir(): string {
+  if (process.env['CURSOR_CONFIG_DIR']) {
+    return process.env['CURSOR_CONFIG_DIR'];
+  }
+  if (process.env['XDG_CONFIG_HOME']) {
+    return join(process.env['XDG_CONFIG_HOME'], 'cursor');
+  }
+  return join(process.env['HOME']!, '.cursor');
+}
+
 function createBaseEnvironment(runtimeRoot: string): Record<string, string> {
   const ghConfigDir = preserveToolConfigDir('GH_CONFIG_DIR', 'gh');
   const glabConfigDir = resolveGlabConfigDir();
+  const cursorConfigDir = resolveCursorConfigDir();
   return {
     TMPDIR: join(runtimeRoot, 'tmp'),
     XDG_CACHE_HOME: join(runtimeRoot, 'cache'),
@@ -55,6 +74,7 @@ function createBaseEnvironment(runtimeRoot: string): Record<string, string> {
     CI: 'true',
     GH_CONFIG_DIR: ghConfigDir,
     GLAB_CONFIG_DIR: glabConfigDir,
+    CURSOR_CONFIG_DIR: cursorConfigDir,
   };
 }
 
