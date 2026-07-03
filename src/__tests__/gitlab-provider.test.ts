@@ -58,11 +58,15 @@ vi.mock('../infra/gitlab/pr.js', () => ({
 }));
 
 import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
-import type { CommentResult, PrReviewData } from '../infra/git/types.js';
+import type { CommentResult, CreateIssueResult, PrReviewData } from '../infra/git/types.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+function createIssueSuccess(issueNumber: number, url: string): CreateIssueResult {
+  return { success: true, issueNumber, url };
+}
 
 describe('GitLabProvider', () => {
   describe('checkCliStatus', () => {
@@ -213,7 +217,7 @@ describe('GitLabProvider', () => {
     it('createIssue(opts) に委譲し結果を返す', () => {
       // Given
       const opts = { title: 'New issue', body: 'Description' };
-      const issueResult = { success: true, url: 'https://gitlab.com/org/repo/-/issues/1' };
+      const issueResult = createIssueSuccess(1, 'https://gitlab.com/org/repo/-/issues/1');
       mockCreateIssue.mockReturnValue(issueResult);
       const provider = new GitLabProvider();
 
@@ -228,7 +232,7 @@ describe('GitLabProvider', () => {
     it('ラベルを含む場合、opts をそのまま委譲する', () => {
       // Given
       const opts = { title: 'Bug', body: 'Details', labels: ['bug', 'urgent'] };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/issues/2' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(2, 'https://gitlab.com/org/repo/-/issues/2'));
       const provider = new GitLabProvider();
 
       // When
@@ -241,7 +245,7 @@ describe('GitLabProvider', () => {
     it('cwd を指定した場合は createIssue にそのまま転送する', () => {
       // Given
       const opts = { title: 'Issue', body: 'Body' };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/issues/3' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(3, 'https://gitlab.com/org/repo/-/issues/3'));
       const provider = new GitLabProvider();
 
       // When
@@ -254,7 +258,7 @@ describe('GitLabProvider', () => {
     it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
       // Given
       const opts = { title: 'Issue', body: 'Body' };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/issues/4' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(4, 'https://gitlab.com/org/repo/-/issues/4'));
       const provider = new GitLabProvider();
 
       // When

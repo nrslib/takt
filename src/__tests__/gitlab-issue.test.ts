@@ -418,8 +418,11 @@ describe('createIssue', () => {
     const result = createIssue({ title: 'New issue', body: 'Description' }, '/my/project');
 
     // Then
-    expect(result.success).toBe(true);
-    expect(result.url).toBe('https://gitlab.com/org/repo/-/issues/1');
+    expect(result).toEqual({
+      success: true,
+      issueNumber: 1,
+      url: 'https://gitlab.com/org/repo/-/issues/1',
+    });
   });
 
   it('--description オプションで body を渡す（--body ではない）', () => {
@@ -481,6 +484,38 @@ describe('createIssue', () => {
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
+  });
+
+  it('glab issue create が数値で終わらない URL を返した場合は success: false を返す', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://gitlab.com/org/repo/-/issues/not-a-number\n');
+
+    const result = createIssue({ title: 'Title', body: 'Body' }, '/my/project');
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringContaining(
+        'Issue URL must end with a positive issue number: https://gitlab.com/org/repo/-/issues/not-a-number',
+      ),
+    });
+  });
+
+  it('glab issue create が trailing slash 付き URL を返した場合は success: false を返す', () => {
+    mockExecFileSync
+      .mockReturnValueOnce('https://gitlab.com/org/repo.git\n')
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://gitlab.com/org/repo/-/issues/42/\n');
+
+    const result = createIssue({ title: 'Title', body: 'Body' }, '/my/project');
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringContaining(
+        'Issue URL must end with a positive issue number: https://gitlab.com/org/repo/-/issues/42/',
+      ),
+    });
   });
 
   it('cwd を checkGlabCli に転送する', () => {

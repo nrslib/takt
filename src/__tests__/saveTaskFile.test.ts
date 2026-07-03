@@ -108,7 +108,11 @@ beforeEach(() => {
   testDir = fs.mkdtempSync(path.join(tmpdir(), 'takt-test-save-'));
   mockGetCurrentBranch.mockReturnValue('main');
   mockBranchExists.mockReturnValue(true);
-  mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
+  mockCreateIssue.mockReturnValue({
+    success: true,
+    issueNumber: 42,
+    url: 'https://github.com/owner/repo/issues/42',
+  });
   mockCloseIssue.mockReturnValue({ success: true });
 });
 
@@ -269,6 +273,21 @@ describe('saveTaskFile', () => {
     expect(fs.readFileSync(path.join(testDir, String(tasks[1]?.task_dir), 'order.md'), 'utf-8')).toContain('Same title');
   });
 
+  it('should reserve the next task directory without overwriting an existing order.md on slug collision', async () => {
+    const existingDir = path.join(testDir, '.takt', 'tasks', '20260210-044000-same-title-new-task-body');
+    fs.mkdirSync(existingDir, { recursive: true });
+    fs.writeFileSync(path.join(existingDir, 'order.md'), 'Existing task body', 'utf-8');
+
+    await saveTaskFile(testDir, 'Same title\nNew task body');
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.task_dir).toBe('.takt/tasks/20260210-044000-same-title-new-task-body-2');
+    expect(fs.readFileSync(path.join(existingDir, 'order.md'), 'utf-8')).toBe('Existing task body');
+    expect(fs.readFileSync(path.join(testDir, String(task.task_dir), 'order.md'), 'utf-8')).toBe(
+      'Same title\nNew task body',
+    );
+  });
+
   it('should promote image attachments and append relative paths to order.md', async () => {
     const attachment = createTempAttachment(testDir, 'image-1.png', 'png-data');
 
@@ -284,6 +303,44 @@ describe('saveTaskFile', () => {
     expect(orderContent).toContain('## 添付画像');
     expect(orderContent).toContain('- [Image #1]: `attachments/image-1.png`');
     expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+  });
+
+  it('should reserve the next attachment task directory without overwriting an existing order.md', async () => {
+    const existingDir = path.join(testDir, '.takt', 'tasks', '20260210-044000-use-image-1');
+    fs.mkdirSync(existingDir, { recursive: true });
+    fs.writeFileSync(path.join(existingDir, 'order.md'), 'Existing attachment task body', 'utf-8');
+    const attachment = createTempAttachment(testDir, 'image-1.png', 'png-data');
+
+    await saveTaskFile(testDir, 'Use [Image #1].', {
+      attachments: [attachment],
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    const taskDir = path.join(testDir, String(task.task_dir));
+    expect(task.task_dir).toBe('.takt/tasks/20260210-044000-use-image-1-2');
+    expect(fs.readFileSync(path.join(existingDir, 'order.md'), 'utf-8')).toBe('Existing attachment task body');
+    expect(fs.readFileSync(path.join(taskDir, 'order.md'), 'utf-8')).toContain('Use [Image #1].');
+    expect(fs.readFileSync(path.join(taskDir, 'attachments', 'image-1.png'), 'utf-8')).toBe('png-data');
+  });
+
+  it('should share task directory reservation between plain and attachment tasks', async () => {
+    const first = await saveTaskFile(testDir, 'Shared task directory');
+    const attachment = createTempAttachment(testDir, 'image-1.png', 'png-data');
+
+    const second = await saveTaskFile(testDir, 'Shared task directory', {
+      attachments: [attachment],
+    });
+
+    const tasks = loadTasks(testDir).tasks;
+    expect(first.taskName).not.toBe(second.taskName);
+    expect(tasks[0]?.task_dir).toBe('.takt/tasks/20260210-044000-shared-task-directory');
+    expect(tasks[1]?.task_dir).toBe('.takt/tasks/20260210-044000-shared-task-directory-2');
+    expect(fs.readFileSync(path.join(testDir, String(tasks[0]?.task_dir), 'order.md'), 'utf-8')).toBe(
+      'Shared task directory',
+    );
+    expect(fs.readFileSync(path.join(testDir, String(tasks[1]?.task_dir), 'order.md'), 'utf-8')).toContain(
+      '## 添付画像',
+    );
   });
 
   it('should replace pasted image temp paths in generated task content with task attachment paths', async () => {

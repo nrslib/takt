@@ -52,12 +52,9 @@ export interface SystemStepCreateIssueOptions {
   labels?: string[];
 }
 
-export interface SystemStepCreateIssueResult {
-  success: boolean;
-  issueNumber?: number;
-  url?: string;
-  error?: string;
-}
+export type SystemStepCreateIssueResult =
+  | { success: true; issueNumber: number; url?: string }
+  | { success: false; error: string };
 
 export type SystemStepCloseIssueResult =
   | { success: true; commentCreated?: boolean }

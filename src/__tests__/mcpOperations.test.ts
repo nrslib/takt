@@ -231,6 +231,7 @@ describe('MCP task operations', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-issue-enqueue-'));
     mockCreateIssue.mockReturnValue({
       success: true,
+      issueNumber: 938,
       url: 'https://github.com/nrslib/takt/issues/938',
     });
 
@@ -277,6 +278,7 @@ describe('MCP task operations', () => {
     const taskBody = '\n# Implement MCP support\n\nKeep trailing whitespace.  \n';
     mockCreateIssue.mockReturnValue({
       success: true,
+      issueNumber: 938,
       url: 'https://github.com/nrslib/takt/issues/938',
     });
 
@@ -319,6 +321,33 @@ describe('MCP task operations', () => {
     expect(result.isError).toBe(true);
     expect(getToolText(result)).toContain('GitHub CLI is not authenticated');
     expect(saveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('Given issue enqueue cwd outside the MCP root, When the operation runs, Then issue creation and saving are skipped', async () => {
+    const allowedRoot = mkdtempSync(join(tmpdir(), 'takt-mcp-allowed-'));
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'takt-mcp-outside-'));
+    const createIssueFromTaskResult = vi.fn();
+    const saveTaskFile = vi.fn();
+
+    try {
+      const result = await createIssueAndEnqueueTaktTask({
+        cwd: outsideRoot,
+        task: 'Implement MCP support',
+      }, {
+        allowedProjectRoot: allowedRoot,
+        createIssueFromTaskResult,
+        saveTaskFile,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain('outside the allowed project root');
+      expect(mockInitGitProvider).not.toHaveBeenCalled();
+      expect(createIssueFromTaskResult).not.toHaveBeenCalled();
+      expect(saveTaskFile).not.toHaveBeenCalled();
+    } finally {
+      rmSync(allowedRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it('Given issue creation fails with a local error, When issue enqueue runs, Then the MCP error does not expose the raw error', async () => {
@@ -796,6 +825,32 @@ describe('MCP task operations', () => {
       ran: false,
       message: 'No pending tasks in .takt/tasks.yaml',
     });
+  });
+
+  it('Given run-next cwd outside the MCP root, When the operation runs, Then task claim and execution are skipped', async () => {
+    const allowedRoot = mkdtempSync(join(tmpdir(), 'takt-mcp-allowed-'));
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'takt-mcp-outside-'));
+    const createTaskRunner = vi.fn();
+    const executeRunTaskAndCompleteWithDetails = vi.fn();
+
+    try {
+      const result = await runNextTaktTask({
+        cwd: outsideRoot,
+      }, {
+        allowedProjectRoot: allowedRoot,
+        createTaskRunner,
+        executeRunTaskAndCompleteWithDetails,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(getToolText(result)).toContain('outside the allowed project root');
+      expect(mockInitGitProvider).not.toHaveBeenCalled();
+      expect(createTaskRunner).not.toHaveBeenCalled();
+      expect(executeRunTaskAndCompleteWithDetails).not.toHaveBeenCalled();
+    } finally {
+      rmSync(allowedRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it('Given a claimed task, When execution fails, Then an MCP error result includes the failure reason', async () => {

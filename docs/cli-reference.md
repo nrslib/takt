@@ -153,6 +153,8 @@ The server exposes these tools:
 | `takt_create_issue_and_enqueue_task` | Create an issue through the configured issue provider, then save a pending task with the created issue number. |
 | `takt_run_next_task` | Claim and execute the next pending task through TAKT's existing task execution path. |
 
+Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
+
 ### `takt_enqueue_task`
 
 Required input:
@@ -173,6 +175,8 @@ Optional input:
 | `taskContext.baseBranch` | string | Base branch name to save with the task. |
 | `taskContext.prNumber` | positive safe integer | Pull request number to save with the task. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
 
+Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, each issue label to 100 characters, and at most 20 labels.
+
 ### `takt_create_issue_and_enqueue_task`
 
 This tool accepts the same fields as `takt_enqueue_task`, plus:
@@ -181,7 +185,7 @@ This tool accepts the same fields as `takt_enqueue_task`, plus:
 |-------|------|-------------|
 | `labels` | string array | Labels to request when creating the issue. |
 
-Issue creation uses the configured TAKT issue provider and runs in silent output mode. If issue creation fails, the tool returns an MCP error result and does not save the task. If task saving fails after the issue is created, TAKT adds a fixed compensation comment to the created issue and closes it so the repository does not retain an issue without a pending task. When that close succeeds, the MCP error result reports that the issue was created and closed along with the local task saving error. When that close fails, the MCP error result includes both the task saving error and the issue close error.
+Issue creation uses the configured TAKT issue provider and runs in silent output mode. If issue creation fails, the tool returns an MCP error result and does not save the task. If task saving fails after the issue is created, TAKT adds a fixed compensation comment to the created issue and closes it so the repository does not retain an issue without a pending task. When that close succeeds, the MCP error result reports that the issue was created and closed along with the local task-saving error. When that close fails, the MCP error result includes both the task-saving error and the issue close error.
 
 ### `takt_run_next_task`
 
@@ -200,6 +204,8 @@ Optional input:
 | `taskContext.branch` | string | Local branch context. |
 | `taskContext.baseBranch` | string | Base branch context. |
 | `taskContext.prNumber` | positive safe integer | Pull request context. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
+
+Input limits: `provider` must be one of TAKT's known provider identifiers and `model` is limited to 128 characters.
 
 The tool executes at most one pending task and suppresses normal workflow output so stdout remains reserved for MCP messages. When no pending task exists, it returns `{ "ran": false }`.
 

@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
@@ -10,6 +12,7 @@ import {
 import {
   createIssueAndEnqueueTask,
   enqueueTask,
+  formatIssueEnqueueFailure,
   type IssueEnqueueCompensationInput,
   type IssueEnqueueFailure,
 } from '../../infra/task/enqueueService.js';
@@ -37,6 +40,7 @@ export interface McpOperationDependencies {
   compensateCreatedIssue?: CompensateCreatedIssue;
   createTaskRunner?: CreateTaskRunner;
   executeRunTaskAndCompleteWithDetails?: ExecuteRunTaskAndCompleteWithDetails;
+  allowedProjectRoot?: string;
 }
 
 function textResult(text: string, isError?: boolean): CallToolResult {
@@ -56,6 +60,21 @@ function safeMcpErrorCause(error: unknown): string {
 
 function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeMcpErrorCause(error)}`, true);
+}
+
+function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | undefined): void {
+  if (allowedProjectRoot === undefined) {
+    return;
+  }
+
+  const root = fs.realpathSync(allowedProjectRoot);
+  const target = fs.realpathSync(cwd);
+  const relative = path.relative(root, target);
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    return;
+  }
+
+  throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
 }
 
 function resolveWorkflow(workflow: string | undefined): string {
@@ -100,67 +119,18 @@ function buildTaskPostExecutionFailureText(taskName: string, result: TaskComplet
   return `Task post-execution failed: ${taskName}\n${safeMcpErrorCause(result.postExecutionFailureReason)}`;
 }
 
-function buildIssueSaveFailureText(issueNumber: number, error: unknown): string {
-  return `Issue #${issueNumber} was created, but task saving failed: ${safeMcpErrorCause(error)}`;
-}
-
-function buildCompensatedIssueSaveFailureText(issueNumber: number, saveError: unknown): string {
-  return `Issue #${issueNumber} was created and closed because task saving failed: ${safeMcpErrorCause(saveError)}`;
-}
-
-function buildUncompensatedIssueSaveFailureText(
-  issueNumber: number,
-  saveError: unknown,
-  compensation: Extract<CloseIssueResult, { success: false }>,
+function joinIssueEnqueueFailureText(
+  formatted: ReturnType<typeof formatIssueEnqueueFailure>,
 ): string {
-  const compensationFailure = compensation.commentCreated === true
-    ? `Issue compensation comment was created, but issue close failed: ${safeMcpErrorCause(compensation.error)}`
-    : `Issue close failed: ${safeMcpErrorCause(compensation.error)}`;
-  return [
-    buildIssueSaveFailureText(issueNumber, saveError),
-    '',
-    compensationFailure,
-  ].join('\n');
-}
-
-function buildCancelledIssueEnqueueFailureText(
-  issueNumber: number,
-  compensation: CloseIssueResult,
-): string {
-  if (compensation.success) {
-    return `Issue #${issueNumber} was created and closed because task enqueue was cancelled`;
-  }
-  const compensationFailure = compensation.commentCreated === true
-    ? `Issue compensation comment was created, but issue close failed: ${safeMcpErrorCause(compensation.error)}`
-    : `Issue close failed: ${safeMcpErrorCause(compensation.error)}`;
-  return [
-    `Issue #${issueNumber} was created, but task enqueue was cancelled`,
-    '',
-    compensationFailure,
-  ].join('\n');
+  return formatted.compensationFailure === undefined
+    ? formatted.primary
+    : [formatted.primary, '', formatted.compensationFailure].join('\n');
 }
 
 function buildIssueEnqueueFailureResult(failure: IssueEnqueueFailure): CallToolResult {
-  if (failure.stage === 'issue_creation') {
-    return textResult(safeMcpErrorCause(failure.error), true);
-  }
-  if (failure.stage === 'cancelled_after_issue_creation') {
-    return textResult(
-      buildCancelledIssueEnqueueFailureText(failure.issueNumber, failure.compensation),
-      true,
-    );
-  }
-  if (!failure.compensation.success) {
-    return textResult(
-      buildUncompensatedIssueSaveFailureText(
-        failure.issueNumber,
-        failure.error,
-        failure.compensation,
-      ),
-      true,
-    );
-  }
-  return textResult(buildCompensatedIssueSaveFailureText(failure.issueNumber, failure.error), true);
+  return textResult(joinIssueEnqueueFailureText(
+    formatIssueEnqueueFailure(failure, safeMcpErrorCause),
+  ), true);
 }
 
 export async function enqueueTaktTask(
@@ -168,6 +138,7 @@ export async function enqueueTaktTask(
   deps: McpOperationDependencies = {},
 ): Promise<CallToolResult> {
   try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
     const workflow = resolveWorkflow(input.workflow);
     const created = await enqueueTask({
@@ -189,6 +160,7 @@ export async function createIssueAndEnqueueTaktTask(
   deps: McpOperationDependencies = {},
 ): Promise<CallToolResult> {
   try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     initGitProvider(input.cwd);
     const gitProvider = getGitProvider();
     const workflow = resolveWorkflow(input.workflow);
@@ -220,6 +192,7 @@ export async function runNextTaktTask(
   deps: McpOperationDependencies = {},
 ): Promise<CallToolResult> {
   try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     initGitProvider(input.cwd);
     const gitProvider = getGitProvider();
     const createTaskRunner = deps.createTaskRunner ?? ((cwd: string) => new TaskRunner(cwd));

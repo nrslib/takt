@@ -13,6 +13,7 @@ import type {
   Issue,
   IssueListItem,
 } from '../git/types.js';
+import { parseIssueNumberFromUrl } from '../git/format.js';
 import { checkGlabCli, fetchAllPages, parseJson, ITEMS_PER_PAGE } from './utils.js';
 
 const log = createLogger('gitlab');
@@ -116,9 +117,10 @@ export function createIssue(options: CreateIssueOptions, cwd: string): CreateIss
     });
 
     const url = output.trim();
-    log.info('Issue created', { url });
+    const issueNumber = parseIssueNumberFromUrl(url);
+    log.info('Issue created', { url, issueNumber });
 
-    return { success: true, url };
+    return { success: true, issueNumber, url };
   } catch (err) {
     const errorMessage = getErrorMessage(err);
     log.error('Issue creation failed', { error: errorMessage });

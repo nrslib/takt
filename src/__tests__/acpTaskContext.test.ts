@@ -60,7 +60,7 @@ describe('ACP task context', () => {
     `prNumber: ${Number.MAX_SAFE_INTEGER + 1} をタスクに積んで`,
   ])('should reject invalid explicit PR numbers from prompt text: %s', (text) => {
     expect(() => extractAcpTaskContextFromText(text)).toThrow(
-      /ACP prNumber must be a positive (safe )?integer\./,
+      'ACP prNumber must be a positive safe integer.',
     );
   });
 

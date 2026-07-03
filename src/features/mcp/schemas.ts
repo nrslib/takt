@@ -6,19 +6,25 @@ import {
   isValidTaskContextPrNumber,
 } from '../tasks/taskContextValidation.js';
 
+const MCP_TASK_MAX_LENGTH = 128 * 1024;
+const MCP_WORKFLOW_MAX_LENGTH = 128;
+const MCP_MODEL_MAX_LENGTH = 128;
+const MCP_LABEL_MAX_LENGTH = 100;
+const MCP_LABEL_MAX_COUNT = 20;
+
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, {
   message: 'cwd must be an absolute path',
 }).describe('Absolute path to the TAKT project where .takt/tasks.yaml is read or written.');
 
-const taskContentSchema = z.string().refine((value) => value.trim().length > 0, {
+const taskContentSchema = z.string().max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0, {
   message: 'task is required',
 }).describe('Task body to save as a pending TAKT task. Boundary whitespace is preserved.');
-const workflowSchema = z.string().trim().min(1)
-  .describe('Workflow identifier to store on the queued task. Defaults to the TAKT default workflow.')
-  .optional();
+const workflowSchema = z.string().trim().min(1).max(MCP_WORKFLOW_MAX_LENGTH)
+  .optional()
+  .describe('Workflow identifier to store on the queued task. Defaults to the TAKT default workflow.');
 const worktreeSchema = z.boolean()
-  .describe('Whether the queued task should run in a TAKT-managed worktree.')
-  .optional();
+  .optional()
+  .describe('Whether the queued task should run in a TAKT-managed worktree.');
 const branchSchema = z.string().refine(isValidTaskContextBranchName, {
   message: 'branch must be a valid local branch name',
 }).describe('Plain local Git branch name for task execution context.');
@@ -27,12 +33,12 @@ const prNumberSchema = z.number().refine(isValidTaskContextPrNumber, {
 }).describe('PR number used as task execution context, not as PR-review provenance.');
 
 const taskContextSchema = z.object({
-  branch: branchSchema.optional(),
-  baseBranch: branchSchema.optional(),
-  prNumber: prNumberSchema.optional(),
+  branch: branchSchema.optional().describe('Plain local Git branch name for task execution context.'),
+  baseBranch: branchSchema.optional().describe('Plain local Git base branch name used when creating or resolving a task worktree.'),
+  prNumber: prNumberSchema.optional().describe('PR number used as task execution context, not as PR-review provenance.'),
 }).strict()
-  .describe('Optional Git context to pass to the queued or executed task without changing task provenance.')
-  .optional();
+  .optional()
+  .describe('Optional Git context to pass to the queued or executed task without changing task provenance.');
 
 const taskSaveOptionsSchema = z.object({
   cwd: absolutePathSchema,
@@ -40,27 +46,27 @@ const taskSaveOptionsSchema = z.object({
   workflow: workflowSchema,
   worktree: worktreeSchema,
   autoPr: z.boolean()
-    .describe('Whether successful worktree execution should automatically open a pull request.')
-    .optional(),
+    .optional()
+    .describe('Whether successful worktree execution should automatically open a pull request.'),
   taskContext: taskContextSchema,
 }).strict();
 
 export const enqueueTaskInputSchema = taskSaveOptionsSchema;
 
 export const createIssueAndEnqueueTaskInputSchema = taskSaveOptionsSchema.extend({
-  labels: z.array(z.string().trim().min(1))
-    .describe('Issue labels to request from the configured issue provider.')
-    .optional(),
+  labels: z.array(z.string().trim().min(1).max(MCP_LABEL_MAX_LENGTH)).max(MCP_LABEL_MAX_COUNT)
+    .optional()
+    .describe('Issue labels to request from the configured issue provider.'),
 }).strict();
 
 export const runNextTaskInputSchema = z.object({
   cwd: absolutePathSchema,
   provider: z.enum(PROVIDER_TYPES)
-    .describe('Agent provider override for this task execution.')
-    .optional(),
-  model: z.string().trim().min(1)
-    .describe('Model override for this task execution.')
-    .optional(),
+    .optional()
+    .describe('Agent provider override for this task execution.'),
+  model: z.string().trim().min(1).max(MCP_MODEL_MAX_LENGTH)
+    .optional()
+    .describe('Model override for this task execution.'),
   taskContext: taskContextSchema,
 }).strict();
 

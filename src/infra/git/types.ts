@@ -66,12 +66,9 @@ export interface CreateIssueOptions {
   labels?: string[];
 }
 
-export interface CreateIssueResult {
-  success: boolean;
-  issueNumber?: number;
-  url?: string;
-  error?: string;
-}
+export type CreateIssueResult =
+  | { success: true; issueNumber: number; url?: string }
+  | { success: false; error: string };
 
 export type CloseIssueResult =
   | { success: true; commentCreated?: boolean }

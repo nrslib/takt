@@ -1,51 +1,32 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { createLogger, generateReportDir } from '../../shared/utils/index.js';
+import { createLogger } from '../../shared/utils/index.js';
 import { TaskRunner } from './runner.js';
 import { TaskExecutionConfigSchema, type TaskFileData, resolveTaskWorkflowValue } from './schema.js';
 import { summarizeTaskName } from './summarize.js';
 import { firstLine } from './naming.js';
-import type {
-  PreparedEnqueuedTaskSpec,
-  PrepareEnqueuedTaskSpec,
-  SaveEnqueuedTaskFileOptions,
+import {
+  cleanupTaskSpecDirectory,
+  reserveTaskSpecDirectory,
+  type PreparedEnqueuedTaskSpec,
+  type PrepareEnqueuedTaskSpec,
+  type SaveEnqueuedTaskFileOptions,
 } from './enqueueService.js';
 
 const log = createLogger('task-enqueue');
 
-function resolveUniqueTaskSpecSlug(cwd: string, taskContent: string): string {
-  const baseSlug = generateReportDir(taskContent);
-  let sequence = 1;
-  let slug = baseSlug;
-  let taskDir = path.join(cwd, '.takt', 'tasks', slug);
-  while (fs.existsSync(taskDir)) {
-    sequence += 1;
-    slug = `${baseSlug}-${sequence}`;
-    taskDir = path.join(cwd, '.takt', 'tasks', slug);
-  }
-  return slug;
-}
-
 function prepareTaskSpecDirectory(cwd: string, taskContent: string): PreparedEnqueuedTaskSpec {
-  const taskDirSlug = resolveUniqueTaskSpecSlug(cwd, taskContent);
-  const taskDir = path.join(cwd, '.takt', 'tasks', taskDirSlug);
-  const taskDirRelative = `.takt/tasks/${taskDirSlug}`;
-  fs.mkdirSync(taskDir, { recursive: true });
+  const preparedSpec = reserveTaskSpecDirectory(cwd, taskContent);
   try {
-    fs.writeFileSync(path.join(taskDir, 'order.md'), taskContent, 'utf-8');
+    fs.writeFileSync(path.join(preparedSpec.taskDir, 'order.md'), taskContent, {
+      encoding: 'utf-8',
+      flag: 'wx',
+    });
   } catch (error) {
-    cleanupPreparedTaskSpec(taskDir);
+    cleanupTaskSpecDirectory(preparedSpec.taskDir);
     throw error;
   }
-  return { taskDir, taskDirRelative };
-}
-
-function cleanupPreparedTaskSpec(taskDir: string): void {
-  fs.rmSync(taskDir, { recursive: true, force: true });
-  const tasksDir = path.dirname(taskDir);
-  if (fs.existsSync(tasksDir) && fs.readdirSync(tasksDir).length === 0) {
-    fs.rmdirSync(tasksDir);
-  }
+  return preparedSpec;
 }
 
 function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<TaskFileData, 'task'> {
@@ -92,7 +73,7 @@ export async function saveEnqueuedTaskFile(
       summary,
     });
   } catch (error) {
-    cleanupPreparedTaskSpec(preparedSpec.taskDir);
+    cleanupTaskSpecDirectory(preparedSpec.taskDir);
     throw error;
   }
   const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');

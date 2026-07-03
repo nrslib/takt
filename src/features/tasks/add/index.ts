@@ -13,13 +13,13 @@ import { saveEnqueuedTaskFile } from '../../../infra/task/enqueuedTaskFile.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
-import type { CloseIssueResult, PrReviewData } from '../../../infra/git/index.js';
+import type { PrReviewData } from '../../../infra/git/index.js';
 import { extractTitle, createIssueFromTask, createIssueFromTaskResult } from '../../../infra/task/issueTask.js';
 import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
 import {
   createIssueAndEnqueueTask,
+  formatIssueEnqueueFailure,
   IssueEnqueueCancelledError,
-  type IssueEnqueueFailure,
   type SaveEnqueuedTaskFile,
   type SaveEnqueuedTaskFileOptions,
 } from '../../../infra/task/enqueueService.js';
@@ -109,26 +109,13 @@ export async function saveTaskFromInteractive(
   return created;
 }
 
-function formatCliIssueEnqueueFailure(failure: IssueEnqueueFailure): string {
-  if (failure.stage === 'issue_creation') {
-    return failure.error;
-  }
-  if (failure.stage === 'cancelled_after_issue_creation') {
-    if (failure.compensation.success) {
-      return `Issue #${failure.issueNumber} was created and closed because task enqueue was cancelled`;
-    }
-    return `Issue #${failure.issueNumber} was created, but task enqueue was cancelled: ${getIssueCloseFailureMessage(failure.compensation)}`;
-  }
-  if (failure.compensation.success) {
-    return `Issue #${failure.issueNumber} was created and closed because task saving failed: ${getErrorMessage(failure.error)}`;
-  }
-  return `Issue #${failure.issueNumber} was created, but task saving failed: ${getErrorMessage(failure.error)}; ${getIssueCloseFailureMessage(failure.compensation)}`;
-}
-
-function getIssueCloseFailureMessage(compensation: Extract<CloseIssueResult, { success: false }>): string {
-  return compensation.commentCreated === true
-    ? `Issue compensation comment was created, but issue close failed: ${compensation.error}`
-    : `Issue close failed: ${compensation.error}`;
+function joinIssueEnqueueFailureText(
+  formatted: ReturnType<typeof formatIssueEnqueueFailure>,
+  separator: string,
+): string {
+  return formatted.compensationFailure === undefined
+    ? formatted.primary
+    : `${formatted.primary}${separator}${formatted.compensationFailure}`;
 }
 
 export async function createIssueAndSaveTask(
@@ -164,7 +151,10 @@ export async function createIssueAndSaveTask(
   });
   if (!result.success) {
     if (result.failure.stage !== 'issue_creation') {
-      error(formatCliIssueEnqueueFailure(result.failure));
+      error(joinIssueEnqueueFailureText(
+        formatIssueEnqueueFailure(result.failure, getErrorMessage),
+        '; ',
+      ));
     }
     return;
   }

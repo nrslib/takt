@@ -152,6 +152,8 @@ codex mcp add takt -- takt-mcp
 | `takt_create_issue_and_enqueue_task` | 設定済み issue provider で Issue を作成し、作成された Issue 番号付きで pending タスクを保存する。 |
 | `takt_run_next_task` | 次の pending タスクを取得し、TAKT の既存タスク実行経路で実行する。 |
 
+各 tool の `cwd` は `realpath` で解決され、MCP server の許可 project root 内にある必要があります。既定の許可 root は `takt-mcp` を起動したディレクトリです。
+
 ### `takt_enqueue_task`
 
 必須入力:
@@ -171,6 +173,8 @@ codex mcp add takt -- takt-mcp
 | `taskContext.branch` | string | タスクに保存するローカルブランチ名。 |
 | `taskContext.baseBranch` | string | タスクに保存するベースブランチ名。 |
 | `taskContext.prNumber` | 正の safe integer | タスクに保存する Pull Request 番号。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |
+
+入力上限: `task` は 128 KiB、`workflow` は 128 文字、Issue label は 1 件 100 文字、最大 20 件までです。
 
 ### `takt_create_issue_and_enqueue_task`
 
@@ -199,6 +203,8 @@ Issue 作成は設定済み TAKT issue provider を使用し、silent output mod
 | `taskContext.branch` | string | ローカルブランチ context。 |
 | `taskContext.baseBranch` | string | ベースブランチ context。 |
 | `taskContext.prNumber` | 正の safe integer | Pull Request context。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |
+
+入力上限: `provider` は TAKT の既知 provider identifier のみ、`model` は 128 文字までです。
 
 この tool は最大 1 件の pending タスクだけを実行し、stdio を MCP message 専用に保つため通常の workflow 出力を抑制します。pending タスクがない場合は `{ "ran": false }` を返します。
 

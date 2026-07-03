@@ -1,4 +1,7 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { CloseIssueResult, GitProvider } from '../git/index.js';
+import { generateReportDir } from '../../shared/utils/index.js';
 
 export type IssueEnqueueGitProvider = Pick<GitProvider, 'createIssue' | 'closeIssue'>;
 
@@ -16,10 +19,12 @@ export interface SaveEnqueuedTaskFileOptions extends Record<string, unknown> {
   contextPrNumber?: number;
 }
 
-export interface PreparedEnqueuedTaskSpec {
+export interface PreparedTaskSpecDirectory {
   taskDir: string;
   taskDirRelative: string;
 }
+
+export type PreparedEnqueuedTaskSpec = PreparedTaskSpecDirectory;
 
 export type PrepareEnqueuedTaskSpec = (
   cwd: string,
@@ -106,6 +111,86 @@ export type IssueEnqueueCompensationStage = 'task_saving' | 'cancelled_after_iss
 export type IssueEnqueueResult =
   | { success: true; created: EnqueueTaskResult }
   | { success: false; failure: IssueEnqueueFailure };
+
+export interface FormattedIssueEnqueueFailure {
+  primary: string;
+  compensationFailure?: string;
+}
+
+export function reserveTaskSpecDirectory(cwd: string, taskContent: string): PreparedTaskSpecDirectory {
+  const tasksDir = path.join(cwd, '.takt', 'tasks');
+  fs.mkdirSync(tasksDir, { recursive: true });
+  const baseSlug = generateReportDir(taskContent);
+  let sequence = 1;
+
+  while (true) {
+    const taskDirSlug = sequence === 1 ? baseSlug : `${baseSlug}-${sequence}`;
+    const taskDir = path.join(tasksDir, taskDirSlug);
+    try {
+      fs.mkdirSync(taskDir);
+      return {
+        taskDir,
+        taskDirRelative: `.takt/tasks/${taskDirSlug}`,
+      };
+    } catch (error) {
+      if (isFileExistsError(error)) {
+        sequence += 1;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+export function cleanupTaskSpecDirectory(taskDir: string): void {
+  fs.rmSync(taskDir, { recursive: true, force: true });
+  const tasksDir = path.dirname(taskDir);
+  if (fs.existsSync(tasksDir) && fs.readdirSync(tasksDir).length === 0) {
+    fs.rmdirSync(tasksDir);
+  }
+}
+
+export function formatIssueEnqueueFailure(
+  failure: IssueEnqueueFailure,
+  formatError: (error: unknown) => string,
+): FormattedIssueEnqueueFailure {
+  if (failure.stage === 'issue_creation') {
+    return { primary: formatError(failure.error) };
+  }
+  if (failure.stage === 'cancelled_after_issue_creation') {
+    if (failure.compensation.success) {
+      return {
+        primary: `Issue #${failure.issueNumber} was created and closed because task enqueue was cancelled`,
+      };
+    }
+    return {
+      primary: `Issue #${failure.issueNumber} was created, but task enqueue was cancelled`,
+      compensationFailure: formatIssueCloseFailure(failure.compensation, formatError),
+    };
+  }
+  if (failure.compensation.success) {
+    return {
+      primary: `Issue #${failure.issueNumber} was created and closed because task saving failed: ${formatError(failure.error)}`,
+    };
+  }
+  return {
+    primary: `Issue #${failure.issueNumber} was created, but task saving failed: ${formatError(failure.error)}`,
+    compensationFailure: formatIssueCloseFailure(failure.compensation, formatError),
+  };
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'EEXIST';
+}
+
+function formatIssueCloseFailure(
+  compensation: Extract<CloseIssueResult, { success: false }>,
+  formatError: (error: unknown) => string,
+): string {
+  return compensation.commentCreated === true
+    ? `Issue compensation comment was created, but issue close failed: ${formatError(compensation.error)}`
+    : `Issue close failed: ${formatError(compensation.error)}`;
+}
 
 function buildEnqueuedTaskSaveOptions(
   input: SaveEnqueuedTaskOptions,

@@ -53,11 +53,15 @@ vi.mock('../infra/github/pr.js', () => ({
 
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { getGitProvider } from '../infra/git/index.js';
-import type { CommentResult, PrReviewData } from '../infra/git/index.js';
+import type { CommentResult, CreateIssueResult, PrReviewData } from '../infra/git/index.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+function createIssueSuccess(issueNumber: number, url: string): CreateIssueResult {
+  return { success: true, issueNumber, url };
+}
 
 describe('GitHubProvider', () => {
   describe('checkCliStatus', () => {
@@ -191,7 +195,7 @@ describe('GitHubProvider', () => {
     it('createIssue(opts) に委譲し結果を返す', () => {
       // Given
       const opts = { title: 'New issue', body: 'Description' };
-      const issueResult = { success: true, url: 'https://github.com/org/repo/issues/1' };
+      const issueResult = createIssueSuccess(1, 'https://github.com/org/repo/issues/1');
       mockCreateIssue.mockReturnValue(issueResult);
       const provider = new GitHubProvider();
 
@@ -206,7 +210,7 @@ describe('GitHubProvider', () => {
     it('ラベルを含む場合、opts をそのまま委譲する', () => {
       // Given
       const opts = { title: 'Bug', body: 'Details', labels: ['bug', 'urgent'] };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/org/repo/issues/2' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(2, 'https://github.com/org/repo/issues/2'));
       const provider = new GitHubProvider();
 
       // When
@@ -219,7 +223,7 @@ describe('GitHubProvider', () => {
     it('cwd を指定した場合は createIssue にそのまま転送する', () => {
       // Given
       const opts = { title: 'Issue', body: 'Body' };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/org/repo/issues/3' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(3, 'https://github.com/org/repo/issues/3'));
       const provider = new GitHubProvider();
 
       // When
@@ -232,7 +236,7 @@ describe('GitHubProvider', () => {
     it('cwd 省略時は process.cwd() をフォールバックとして渡す', () => {
       // Given
       const opts = { title: 'Issue', body: 'Body' };
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/org/repo/issues/4' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(4, 'https://github.com/org/repo/issues/4'));
       const provider = new GitHubProvider();
 
       // When

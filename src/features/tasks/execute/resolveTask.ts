@@ -40,7 +40,11 @@ function assertReusedWorktreeContext(
   reusedWorktree: { branch?: string; worktreePath: string },
   contextOverride: TaskExecutionContextOverride | undefined,
 ): void {
-  if (contextOverride?.branch !== undefined && contextOverride.branch !== reusedWorktree.branch) {
+  if (
+    contextOverride?.branch !== undefined
+    && reusedWorktree.branch !== undefined
+    && contextOverride.branch !== reusedWorktree.branch
+  ) {
     throw new Error(
       `Task "${task.name}" has existing worktree ${reusedWorktree.worktreePath} for branch "${reusedWorktree.branch ?? '<none>'}", ` +
       `but runtime taskContext.branch is "${contextOverride.branch}".`,

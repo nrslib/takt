@@ -46,12 +46,16 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+function createIssueSuccess(issueNumber: number, url = `https://github.com/owner/repo/issues/${issueNumber}`) {
+  return { success: true, issueNumber, url } as const;
+}
+
 describe('createIssueFromTask', () => {
   describe('title truncation boundary', () => {
     it('should use title as-is when exactly 99 characters', () => {
       // Given: 99-character first line
       const title99 = 'a'.repeat(99);
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask(title99);
@@ -66,7 +70,7 @@ describe('createIssueFromTask', () => {
     it('should use title as-is when exactly 100 characters', () => {
       // Given: 100-character first line
       const title100 = 'a'.repeat(100);
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask(title100);
@@ -81,7 +85,7 @@ describe('createIssueFromTask', () => {
     it('should truncate title to 97 chars + ellipsis when 101 characters', () => {
       // Given: 101-character first line
       const title101 = 'a'.repeat(101);
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask(title101);
@@ -99,7 +103,7 @@ describe('createIssueFromTask', () => {
   it('should display success message with URL when issue creation succeeds', () => {
     // Given
     const url = 'https://github.com/owner/repo/issues/42';
-    mockCreateIssue.mockReturnValue({ success: true, url });
+    mockCreateIssue.mockReturnValue(createIssueSuccess(42, url));
 
     // When
     createIssueFromTask('Test task');
@@ -125,7 +129,7 @@ describe('createIssueFromTask', () => {
   describe('return value', () => {
     it('should return issue number when creation succeeds', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(42));
 
       // When
       const result = createIssueFromTask('Test task');
@@ -136,7 +140,7 @@ describe('createIssueFromTask', () => {
 
     it('should create the issue without UI output in silent mode', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(42));
 
       // When
       const result = createIssueFromTask('Test task', { cwd: '/repo', outputMode: 'silent' });
@@ -163,19 +167,7 @@ describe('createIssueFromTask', () => {
       expect(result).toBeUndefined();
     });
 
-    it('should return undefined and display error when URL has non-numeric suffix', () => {
-      // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/abc' });
-
-      // When
-      const result = createIssueFromTask('Test task');
-
-      // Then
-      expect(result).toBeUndefined();
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Failed to extract issue number from URL'));
-    });
-
-    it('should return issue number from provider result before parsing URL', () => {
+    it('should return issue number from provider result without parsing URL', () => {
       mockCreateIssue.mockReturnValue({
         success: true,
         issueNumber: 42,
@@ -186,35 +178,12 @@ describe('createIssueFromTask', () => {
 
       expect(result).toBe(42);
     });
-
-    it('should reject issue URL with trailing slash instead of treating it as issue 0', () => {
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/42/' });
-
-      const result = createIssueFromTaskResult('Test task', { outputMode: 'silent' });
-
-      expect(result).toEqual({
-        success: false,
-        error: expect.stringContaining('Issue URL must end with a positive issue number'),
-      });
-      expect(mockError).not.toHaveBeenCalled();
-    });
-
-    it('should reject invalid issue URLs with a clear error', () => {
-      mockCreateIssue.mockReturnValue({ success: true, url: 'not a url' });
-
-      const result = createIssueFromTaskResult('Test task', { outputMode: 'silent' });
-
-      expect(result).toEqual({
-        success: false,
-        error: expect.stringContaining('Issue URL is invalid'),
-      });
-    });
   });
 
   it('should use first line as title and full text as body for multi-line task', () => {
     // Given: multi-line task
     const task = 'First line title\nSecond line details\nThird line more info';
-    mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+    mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
     // When
     createIssueFromTask(task);
@@ -229,7 +198,7 @@ describe('createIssueFromTask', () => {
   describe('cwd propagation', () => {
     it('cwd を指定した場合は createIssue に cwd を渡す', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask('Test task', { cwd: '/worktree/clone' });
@@ -243,7 +212,7 @@ describe('createIssueFromTask', () => {
 
     it('cwd 省略時は createIssue に undefined を渡す', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask('Test task');
@@ -259,7 +228,7 @@ describe('createIssueFromTask', () => {
   describe('labels option', () => {
     it('should pass labels to createIssue when provided', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask('Test task', { labels: ['bug'] });
@@ -273,7 +242,7 @@ describe('createIssueFromTask', () => {
 
     it('should not include labels key when options is undefined', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask('Test task');
@@ -287,7 +256,7 @@ describe('createIssueFromTask', () => {
 
     it('should not include labels key when labels is empty array', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask('Test task', { labels: [] });
@@ -301,7 +270,7 @@ describe('createIssueFromTask', () => {
 
     it('should filter out empty string labels', () => {
       // Given
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/1' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(1));
 
       // When
       createIssueFromTask('Test task', { labels: ['bug', '', 'enhancement'] });
@@ -318,7 +287,7 @@ describe('createIssueFromTask', () => {
     it('uses a valid structured output title as the issue title', () => {
       // Given
       const task = '## Generic task heading\nImplement AI issue title generation';
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/7' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(7));
 
       // When
       createIssueFromTask(task, {
@@ -344,7 +313,7 @@ describe('createIssueFromTask', () => {
 
     it('does not log a fallback reason when the structured output title is valid', () => {
       const task = '## Generic task heading\nImplement AI issue title generation';
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/15' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(15));
 
       createIssueFromTask(task, { title: 'Generate concise issue titles with AI' });
 
@@ -356,7 +325,7 @@ describe('createIssueFromTask', () => {
     it('truncates a valid structured output title at the existing 100 character boundary', () => {
       // Given
       const longTitle = 'a'.repeat(101);
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/8' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(8));
 
       // When
       createIssueFromTask('## Task body\nDetails', { title: longTitle });
@@ -373,7 +342,7 @@ describe('createIssueFromTask', () => {
     it('falls back to the task-derived title and logs missing when structured title is absent', () => {
       // Given
       const task = '## Implement fallback issue title\nDetails';
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/9' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(9));
 
       // When
       createIssueFromTask(task);
@@ -392,7 +361,7 @@ describe('createIssueFromTask', () => {
     it('falls back and logs prohibited_title when structured title is generic task order text', () => {
       // Given
       const task = '## Generate issue title from structured output\nDetails';
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/10' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(10));
 
       // When
       createIssueFromTask(task, { title: '# タスク指示書' });
@@ -411,7 +380,7 @@ describe('createIssueFromTask', () => {
     it('falls back when structured title is a Markdown Summary heading', () => {
       // Given
       const task = '## Generate issue title from structured output\nDetails';
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/13' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(13));
 
       // When
       createIssueFromTask(task, { title: '## Summary' });
@@ -430,7 +399,7 @@ describe('createIssueFromTask', () => {
     it('falls back when structured title is a Japanese Markdown summary heading', () => {
       // Given
       const task = '## AIでIssueタイトルを要約する\nDetails';
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/14' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(14));
 
       // When
       createIssueFromTask(task, { title: '## 概要' });
@@ -459,7 +428,7 @@ describe('createIssueFromTask', () => {
         '- [ ] The title is not a template heading',
         '- [ ] The summary line is used',
       ].join('\n');
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/12' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(12));
 
       // When
       createIssueFromTask(task, { title: '# Task Order' });
@@ -478,7 +447,7 @@ describe('createIssueFromTask', () => {
     it('falls back and logs too_short when structured title is shorter than the minimum', () => {
       // Given
       const task = '## Generate issue title from task body\nDetails';
-      mockCreateIssue.mockReturnValue({ success: true, url: 'https://github.com/owner/repo/issues/11' });
+      mockCreateIssue.mockReturnValue(createIssueSuccess(11));
 
       // When
       createIssueFromTask(task, { title: 'abc' });

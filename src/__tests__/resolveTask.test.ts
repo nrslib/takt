@@ -985,6 +985,42 @@ describe('resolveTaskExecution', () => {
     mockResolveBaseBranch.mockRestore();
   });
 
+  it('should allow runtime branch override when reused worktree metadata has no saved branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with reused worktree and runtime branch',
+        worktree: true,
+        base_branch: 'release/main',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'takt/938/add-mcp',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'takt/938/add-mcp',
+      },
+    });
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.isWorktree).toBe(true);
+    expect(result.branch).toBeUndefined();
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
+  });
+
   it('should reject runtime branch override that conflicts with a reused worktree branch', async () => {
     const root = createTempProjectDir();
     const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');

@@ -41,8 +41,11 @@ describe('createIssue', () => {
     const result = createIssue({ title: 'Test issue', body: 'Test body' }, '/project');
 
     // Then
-    expect(result.success).toBe(true);
-    expect(result.url).toBe('https://github.com/owner/repo/issues/42');
+    expect(result).toEqual({
+      success: true,
+      issueNumber: 42,
+      url: 'https://github.com/owner/repo/issues/42',
+    });
   });
 
   it('should pass title and body as arguments', () => {
@@ -183,6 +186,36 @@ describe('createIssue', () => {
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toContain('repo not found');
+  });
+
+  it('should return error when gh issue create returns a URL without a numeric issue number', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce('https://github.com/owner/repo/issues/not-a-number\n' as unknown as Buffer);
+
+    const result = createIssue({ title: 'Test', body: 'Body' }, '/project');
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringContaining(
+        'Issue URL must end with a positive issue number: https://github.com/owner/repo/issues/not-a-number',
+      ),
+    });
+  });
+
+  it('should return error when gh issue create returns a URL with a trailing slash', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(''))
+      .mockReturnValueOnce('https://github.com/owner/repo/issues/42/\n' as unknown as Buffer);
+
+    const result = createIssue({ title: 'Test', body: 'Body' }, '/project');
+
+    expect(result).toEqual({
+      success: false,
+      error: expect.stringContaining(
+        'Issue URL must end with a positive issue number: https://github.com/owner/repo/issues/42/',
+      ),
+    });
   });
 });
 

@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { packageVersion } from '../../shared/package-info.js';
 import {
@@ -12,7 +14,25 @@ import {
   type McpOperationDependencies,
 } from './operations.js';
 
-export function createTaktMcpServer(deps: McpOperationDependencies = {}): McpServer {
+export interface TaktMcpServerOptions {
+  allowedProjectRoot?: string;
+}
+
+function buildMcpOperationDependencies(
+  deps: McpOperationDependencies,
+  options: TaktMcpServerOptions,
+): McpOperationDependencies {
+  return {
+    ...deps,
+    allowedProjectRoot: fs.realpathSync(options.allowedProjectRoot ?? process.cwd()),
+  };
+}
+
+export function createTaktMcpServer(
+  deps: McpOperationDependencies = {},
+  options: TaktMcpServerOptions = {},
+): McpServer {
+  const operationDeps = buildMcpOperationDependencies(deps, options);
   const server = new McpServer({
     name: 'takt',
     version: packageVersion,
@@ -25,7 +45,7 @@ export function createTaktMcpServer(deps: McpOperationDependencies = {}): McpSer
       description: 'Save a pending TAKT task into .takt/tasks.yaml.',
       inputSchema: enqueueTaskInputSchema,
     },
-    (input) => enqueueTaktTask(input, deps),
+    (input) => enqueueTaktTask(input, operationDeps),
   );
 
   server.registerTool(
@@ -35,7 +55,7 @@ export function createTaktMcpServer(deps: McpOperationDependencies = {}): McpSer
       description: 'Create an issue with the configured issue provider, then save a pending TAKT task with the issue number.',
       inputSchema: createIssueAndEnqueueTaskInputSchema,
     },
-    (input) => createIssueAndEnqueueTaktTask(input, deps),
+    (input) => createIssueAndEnqueueTaktTask(input, operationDeps),
   );
 
   server.registerTool(
@@ -45,7 +65,7 @@ export function createTaktMcpServer(deps: McpOperationDependencies = {}): McpSer
       description: 'Claim and execute the next pending TAKT task.',
       inputSchema: runNextTaskInputSchema,
     },
-    (input) => runNextTaktTask(input, deps),
+    (input) => runNextTaktTask(input, operationDeps),
   );
 
   return server;

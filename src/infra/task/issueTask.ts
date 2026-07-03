@@ -127,48 +127,16 @@ function requireIssueFailureMessage(message: string | undefined): string {
   return message;
 }
 
-function parseIssueNumberFromUrl(url: string): number {
-  if (url.endsWith('/')) {
-    throw new Error(`Issue URL must end with a positive issue number: ${url}`);
+function resolveCreatedIssueNumber(issueResult: Extract<CreateIssueResult, { success: true }>): number {
+  if (Number.isSafeInteger(issueResult.issueNumber) && issueResult.issueNumber > 0) {
+    return issueResult.issueNumber;
   }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Issue URL is invalid: ${url}`);
-  }
-
-  const lastSegment = parsed.pathname.split('/').pop();
-  if (lastSegment === undefined || !/^[1-9]\d*$/u.test(lastSegment)) {
-    throw new Error(`Issue URL must end with a positive issue number: ${url}`);
-  }
-
-  const issueNumber = Number(lastSegment);
-  if (!Number.isSafeInteger(issueNumber)) {
-    throw new Error(`Issue number must be a positive safe integer: ${lastSegment}`);
-  }
-  return issueNumber;
+  throw new Error(`Issue number must be a positive safe integer: ${issueResult.issueNumber}`);
 }
 
-function resolveCreatedIssueNumber(issueResult: CreateIssueResult): number {
-  if (issueResult.issueNumber !== undefined) {
-    if (Number.isSafeInteger(issueResult.issueNumber) && issueResult.issueNumber > 0) {
-      return issueResult.issueNumber;
-    }
-    throw new Error(`Issue number must be a positive safe integer: ${issueResult.issueNumber}`);
-  }
-  if (!issueResult.url) {
-    throw new Error('Issue creation result did not include an issue URL or issue number');
-  }
-  return parseIssueNumberFromUrl(issueResult.url);
-}
-
-function formatIssueNumberExtractionError(issueResult: CreateIssueResult, extractionError: unknown): string {
+function formatIssueNumberExtractionError(extractionError: unknown): string {
   const cause = extractionError instanceof Error ? extractionError.message : String(extractionError);
-  return issueResult.url
-    ? `Failed to extract issue number from URL: ${cause}`
-    : `Failed to extract issue number: ${cause}`;
+  return `Failed to extract issue number: ${cause}`;
 }
 
 export function createIssueFromTaskResult(
@@ -204,7 +172,7 @@ export function createIssueFromTaskResult(
     try {
       issueNumber = resolveCreatedIssueNumber(issueResult);
     } catch (extractionError) {
-      const message = formatIssueNumberExtractionError(issueResult, extractionError);
+      const message = formatIssueNumberExtractionError(extractionError);
       if (shouldWriteIssueOutput(options)) {
         error(message);
       }

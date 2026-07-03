@@ -809,7 +809,7 @@ describe('TAKT ACP agent adapter', () => {
     await expect(agent.handleSessionPrompt({
       sessionId,
       prompt: [{ type: 'text', text }],
-    })).rejects.toThrow(/ACP prNumber must be a positive (safe )?integer\./);
+    })).rejects.toThrow('ACP prNumber must be a positive safe integer.');
 
     expect(createTaskInstruction).not.toHaveBeenCalled();
     expect(saveTaskFile).not.toHaveBeenCalled();

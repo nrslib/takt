@@ -9,6 +9,11 @@ import { createTaktMcpServer } from '../app/mcp/server.js';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts';
 
+function objectProperties(schema: unknown): Record<string, Record<string, unknown>> {
+  const value = schema as { properties?: Record<string, Record<string, unknown>> };
+  return value.properties ?? {};
+}
+
 describe('MCP package entrypoint', () => {
   it('Given package metadata, When bin entries are read, Then takt-mcp points at the stdio MCP entrypoint', () => {
     const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as {
@@ -76,6 +81,23 @@ describe('MCP package entrypoint', () => {
         }),
       );
       expect(toolsByName.get('takt_run_next_task')?.inputSchema.required).toEqual(['cwd']);
+
+      const enqueueProperties = objectProperties(toolsByName.get('takt_enqueue_task')?.inputSchema);
+      const issueProperties = objectProperties(toolsByName.get('takt_create_issue_and_enqueue_task')?.inputSchema);
+      const runNextProperties = objectProperties(toolsByName.get('takt_run_next_task')?.inputSchema);
+      const enqueueTaskContext = objectProperties(enqueueProperties.taskContext);
+      const runNextTaskContext = objectProperties(runNextProperties.taskContext);
+
+      expect(enqueueProperties.workflow?.description).toBe('Workflow identifier to store on the queued task. Defaults to the TAKT default workflow.');
+      expect(enqueueProperties.worktree?.description).toBe('Whether the queued task should run in a TAKT-managed worktree.');
+      expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should automatically open a pull request.');
+      expect(issueProperties.labels?.description).toBe('Issue labels to request from the configured issue provider.');
+      expect(runNextProperties.provider?.description).toBe('Agent provider override for this task execution.');
+      expect(runNextProperties.model?.description).toBe('Model override for this task execution.');
+      expect(enqueueTaskContext.branch?.description).toBe('Plain local Git branch name for task execution context.');
+      expect(enqueueTaskContext.baseBranch?.description).toBe('Plain local Git base branch name used when creating or resolving a task worktree.');
+      expect(enqueueTaskContext.baseBranch?.description).not.toBe(enqueueTaskContext.branch?.description);
+      expect(runNextTaskContext.prNumber?.description).toBe('PR number used as task execution context, not as PR-review provenance.');
     } finally {
       await client.close();
       await server.close();
@@ -83,7 +105,7 @@ describe('MCP package entrypoint', () => {
   });
 
   it('Given the source MCP entrypoint, When a stdio MCP client lists and calls tools, Then stdout remains valid MCP protocol', async () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-stdio-'));
+    const cwd = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-stdio-'));
     const client = new Client({ name: 'takt-mcp-stdio-test-client', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -127,9 +149,10 @@ describe('MCP package entrypoint', () => {
   });
 
   it('Given an MCP client connection, When tools are called with root arguments, Then arguments reach TAKT operations', async () => {
+    const cwd = mkdtempSync(join(process.cwd(), '.tmp-takt-mcp-root-'));
     const saveTaskFile = vi.fn().mockResolvedValue({
       taskName: '20260702-add-mcp',
-      tasksFile: '/repo/.takt/tasks.yaml',
+      tasksFile: join(cwd, '.takt', 'tasks.yaml'),
     });
     const createIssueFromTaskResult = vi.fn().mockReturnValue({
       success: true,
@@ -138,7 +161,7 @@ describe('MCP package entrypoint', () => {
     const task = {
       name: '20260702-add-mcp',
       content: 'Task: 20260702-add-mcp',
-      filePath: '/repo/.takt/tasks/20260702-add-mcp.yaml',
+      filePath: join(cwd, '.takt', 'tasks', '20260702-add-mcp.yaml'),
       createdAt: '2026-07-02T00:00:00.000Z',
       status: 'running',
       data: {
@@ -168,7 +191,7 @@ describe('MCP package entrypoint', () => {
       await client.callTool({
         name: 'takt_enqueue_task',
         arguments: {
-          cwd: '/repo',
+          cwd,
           task: 'Implement MCP support',
           workflow: 'review',
         },
@@ -176,7 +199,7 @@ describe('MCP package entrypoint', () => {
       await client.callTool({
         name: 'takt_create_issue_and_enqueue_task',
         arguments: {
-          cwd: '/repo',
+          cwd,
           task: 'Implement MCP support',
           labels: ['enhancement'],
         },
@@ -184,33 +207,33 @@ describe('MCP package entrypoint', () => {
       await client.callTool({
         name: 'takt_run_next_task',
         arguments: {
-          cwd: '/repo',
+          cwd,
           provider: 'mock',
           model: 'mock-model',
         },
       });
 
-      expect(saveTaskFile).toHaveBeenNthCalledWith(1, '/repo', 'Implement MCP support', {
+      expect(saveTaskFile).toHaveBeenNthCalledWith(1, cwd, 'Implement MCP support', {
         workflow: 'review',
         worktree: true,
         autoPr: false,
       });
       expect(createIssueFromTaskResult).toHaveBeenCalledWith('Implement MCP support', expect.objectContaining({
-        cwd: '/repo',
+        cwd,
         labels: ['enhancement'],
         outputMode: 'silent',
       }));
-      expect(saveTaskFile).toHaveBeenNthCalledWith(2, '/repo', 'Implement MCP support', {
+      expect(saveTaskFile).toHaveBeenNthCalledWith(2, cwd, 'Implement MCP support', {
         workflow: 'default',
         worktree: true,
         autoPr: false,
         issue: 938,
       });
-      expect(createTaskRunner).toHaveBeenCalledWith('/repo');
+      expect(createTaskRunner).toHaveBeenCalledWith(cwd);
       expect(executeRunTaskAndCompleteWithDetails).toHaveBeenCalledWith(
         task,
         taskRunner,
-        '/repo',
+        cwd,
         {
           provider: 'mock',
           model: 'mock-model',
@@ -225,6 +248,38 @@ describe('MCP package entrypoint', () => {
     } finally {
       await client.close();
       await server.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('Given a cwd outside the MCP server root, When a tool is called, Then the operation is rejected before saving', async () => {
+    const allowedRoot = mkdtempSync(join(tmpdir(), 'takt-mcp-allowed-'));
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'takt-mcp-outside-'));
+    const saveTaskFile = vi.fn();
+    const server = createTaktMcpServer({ saveTaskFile }, { allowedProjectRoot: allowedRoot });
+    const client = new Client({ name: 'takt-mcp-test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: 'takt_enqueue_task',
+        arguments: {
+          cwd: outsideRoot,
+          task: 'Implement MCP support',
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(String(result.content[0]?.text)).toContain('outside the allowed project root');
+      expect(saveTaskFile).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+      rmSync(allowedRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
     }
   });
 
