@@ -23,6 +23,7 @@ loop_monitors:
           next: reviewers_1
   - cycle:
       - reviewers_1
+      - reviewers_2
       - final-gate
       - fix
     threshold: 3
@@ -395,6 +396,17 @@ steps:
   - name: final-gate
     kind: workflow_call
     call: merge-readiness-dual-final-gate
+    args:
+      merge_readiness_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+      supervise_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE

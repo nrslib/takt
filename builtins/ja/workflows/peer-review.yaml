@@ -160,7 +160,7 @@ steps:
     call: merge-readiness-final-gate
     args:
       supervise_knowledge:
-        - architecture
+        $param: arch_knowledge
     rules:
       - condition: COMPLETE
         next: COMPLETE

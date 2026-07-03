@@ -7,6 +7,16 @@ subworkflow:
     - needs_fix
     - need_replan
   params:
+    merge_readiness_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - review
+    merge_readiness_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
     supervise_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
@@ -30,7 +40,10 @@ steps:
           - review
         edit: false
         persona: merge-readiness-reviewer
-        policy: review
+        policy:
+          $param: merge_readiness_policy
+        knowledge:
+          $param: merge_readiness_knowledge
         provider_options:
           extends: review-readonly
         pass_previous_response: false

@@ -17,6 +17,11 @@ export function assertNoParamReferences(steps: RawWorkflowConfig['steps']): void
     if (isWorkflowParamReference(step.instruction)) {
       throw new Error(`Step "${step.name}" cannot use $param in instruction outside a callable subworkflow`);
     }
+    for (const [argName, value] of Object.entries(step.args ?? {})) {
+      if (isWorkflowParamReference(value)) {
+        throw new Error(`Step "${step.name}" cannot use $param in args.${argName} outside a callable subworkflow`);
+      }
+    }
     for (const report of step.output_contracts?.report ?? []) {
       if (isWorkflowParamReference(report.format)) {
         throw new Error(`Step "${step.name}" cannot use $param in output_contracts.report.${report.name}.format outside a callable subworkflow`);

@@ -463,7 +463,20 @@ steps:
     kind: workflow_call
     call: merge-readiness-dual-final-gate
     args:
+      merge_readiness_policy:
+        - review
+        - existing-system-respect
+      merge_readiness_knowledge:
+        - frontend
+        - react
+        - security
+        - architecture
+        - existing-system
       supervise_knowledge:
+        - frontend
+        - react
+        - security
+        - architecture
         - existing-system
     rules:
       - condition: COMPLETE

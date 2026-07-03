@@ -104,6 +104,9 @@ describe('review-default workflow (EN)', () => {
   it('should run merge-readiness-review and synthesis in the final-gate', () => {
     const finalGate = raw.steps.find((s) => s.name === 'final-gate');
     expect(finalGate).toBeDefined();
+    if (!finalGate) {
+      throw new Error('final-gate step should exist');
+    }
     expect(finalGate.parallel?.map((s: { name: string }) => s.name)).toEqual([
       'merge-readiness-review',
       'review-synthesis',

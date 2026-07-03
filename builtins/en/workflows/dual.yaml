@@ -463,9 +463,18 @@ steps:
     kind: workflow_call
     call: merge-readiness-dual-final-gate
     args:
-      supervise_knowledge:
-        - architecture
+      merge_readiness_knowledge:
+        - frontend
         - react
+        - backend
+        - security
+        - architecture
+      supervise_knowledge:
+        - frontend
+        - react
+        - backend
+        - security
+        - architecture
     rules:
       - condition: COMPLETE
         next: COMPLETE

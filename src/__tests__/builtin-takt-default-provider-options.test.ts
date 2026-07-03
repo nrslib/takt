@@ -355,12 +355,12 @@ describe('builtin takt-default provider_options refs', () => {
       expect(formats).toEqual([...PEER_REVIEW_OUTPUT_CONTRACTS]);
     });
 
-    it(`${locale} peer-review should keep final-gate supervise knowledge scoped to architecture`, () => {
+    it(`${locale} peer-review should forward arch_knowledge into final-gate supervise knowledge`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
       const finalGate = workflow.steps?.find((step) => step.name === 'final-gate');
 
       expect(finalGate?.args).toEqual({
-        supervise_knowledge: ['architecture'],
+        supervise_knowledge: { $param: 'arch_knowledge' },
       });
     });
 

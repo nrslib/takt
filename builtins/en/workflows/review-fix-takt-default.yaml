@@ -8,6 +8,21 @@ workflow_config:
       network_access: true
 max_steps: 50
 initial_step: gather
+loop_monitors:
+  - cycle:
+      - plan
+      - write_tests
+      - draft
+      - peer-review
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-replan
+      rules:
+        - condition: Healthy (plan refined, implementation converging)
+          next: plan
+        - condition: Unproductive (same replan reason repeating)
+          next: ABORT
 steps:
   - name: gather
     tags:
