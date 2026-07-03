@@ -1663,17 +1663,23 @@ describe('OpenCodeClient stream cleanup', () => {
       server: { close: vi.fn() },
     });
 
+    const onStream = vi.fn();
     const client = new OpenCodeClient();
     const result = await client.call('coder', 'hello', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       sessionId: 'session-existing-tools',
       allowedTools: [],
+      onStream,
     });
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('session-existing-tools');
     expect(sessionCreate).not.toHaveBeenCalled();
+    // 再開パスではセッション権限を適用しないため permission_summary は流れない
+    expect(onStream).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'permission_summary' }),
+    );
     expect(promptAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionID: 'session-existing-tools',

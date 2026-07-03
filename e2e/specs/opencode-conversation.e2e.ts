@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { getOpenCodeSessionSnapshot, resetSharedServer } from '../../src/infra/opencode/client.js';
+import { getOpenCodeSessionMessages, getOpenCodeSessionSnapshot, resetSharedServer } from '../../src/infra/opencode/client.js';
 import { OpenCodeProvider } from '../../src/infra/providers/opencode.js';
 
 const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'opencode/big-pickle';
@@ -130,8 +130,18 @@ describe('OpenCode real E2E conversation', () => {
     // 再開ターンでは permission_summary は再発行されない（セッション権限は不変）
     const secondTurnEvents = streamEvents.slice(secondTurnStartIndex);
     expect(secondTurnEvents.some((event) => event.type === 'permission_summary')).toBe(false);
-    // tools マップにより read が不可視になっている
+    // tools マップにより read が不可視になっている。文字列不在ではなく、
+    // 記録されたメッセージ（観測単位）でターン2にツールパートが一切ないことを検証する
     expect(result2.content).toContain('NO-READ-TOOL');
+    const messages = await getOpenCodeSessionMessages(MODEL, sessionId, process.cwd());
+    const lastUserIndex = messages.reduce(
+      (last, message, index) => (message.info.role === 'user' ? index : last),
+      -1,
+    );
+    expect(lastUserIndex).toBeGreaterThan(0);
+    const secondTurnParts = messages.slice(lastUserIndex + 1).flatMap((message) => message.parts);
+    expect(secondTurnParts.length).toBeGreaterThan(0);
+    expect(secondTurnParts.filter((part) => part.type === 'tool')).toEqual([]);
     // セッション権限は 1 ターン目の緩和済みルールセットのまま
     const session = await getOpenCodeSessionSnapshot(MODEL, sessionId, process.cwd());
     if (!session.permission) {

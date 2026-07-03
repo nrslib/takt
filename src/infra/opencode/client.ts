@@ -257,6 +257,26 @@ export async function getOpenCodeSessionSnapshot(
   }
 }
 
+export type OpenCodeSessionMessages = NonNullable<Awaited<ReturnType<OpencodeClient['session']['messages']>>['data']>;
+
+export async function getOpenCodeSessionMessages(
+  model: string,
+  sessionID: string,
+  directory: string,
+  apiKey?: string,
+): Promise<OpenCodeSessionMessages> {
+  const { client, release } = await acquireClient(model, apiKey, undefined);
+  try {
+    const result = await client.session.messages({ sessionID, directory });
+    if (!result.data) {
+      throw new Error(`OpenCode session messages not found: ${sessionID}`);
+    }
+    return result.data;
+  } finally {
+    release();
+  }
+}
+
 function releaseClient(server: SharedServer): void {
   const next = server.queue.shift();
   if (next) {
