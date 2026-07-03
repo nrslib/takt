@@ -27,6 +27,19 @@ function loadReviewYaml(lang: 'en' | 'ja') {
   return loadWorkflowYaml(lang, 'review-default.yaml');
 }
 
+type WorkflowStepYaml = {
+  name: string;
+  parallel?: WorkflowStepYaml[];
+  rules?: Array<{ condition: string; next?: string }>;
+  output_contracts?: { report: Array<{ name: string; format: string; use_judge?: boolean }> };
+};
+
+type WorkflowYaml = {
+  name: string;
+  initial_step: string;
+  steps: WorkflowStepYaml[];
+};
+
 describe('review-default workflow (EN)', () => {
   const raw = loadReviewYaml('en') as {
     name: string;
@@ -245,5 +258,57 @@ describe('review-takt-default workflow supervise synthesis', () => {
     const supervise = raw.steps.find((s) => s.name === 'supervise');
 
     expect(supervise?.instruction).not.toContain('merge-readiness-review.md');
+  });
+});
+
+describe('review-backend workflow final-gate contract (EN)', () => {
+  const raw = loadWorkflowYaml('en', 'review-backend.yaml') as WorkflowYaml;
+
+  it('routes approved reviews through final-gate and findings through supervise', () => {
+    const reviewers = raw.steps.find((step) => step.name === 'reviewers');
+    expect(reviewers).toBeDefined();
+    expect(reviewers?.parallel?.map((step) => step.name)).toEqual([
+      'arch-review',
+      'security-review',
+      'qa-review',
+      'coding-review',
+    ]);
+    expect(reviewers?.rules).toEqual([
+      { condition: 'all("approved")', next: 'final-gate' },
+      { condition: 'any("needs_fix")', next: 'supervise' },
+    ]);
+
+    const supervise = raw.steps.find((step) => step.name === 'supervise');
+    expect(supervise?.rules).toEqual([
+      { condition: 'Review integration complete', next: 'COMPLETE' },
+    ]);
+  });
+
+  it('keeps merge-readiness and synthesis output contracts in final-gate', () => {
+    const finalGate = raw.steps.find((step) => step.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    expect(finalGate?.parallel?.map((step) => step.name)).toEqual([
+      'merge-readiness-review',
+      'review-synthesis',
+    ]);
+    expect(finalGate?.rules).toEqual([
+      { condition: 'all("approved")', next: 'COMPLETE' },
+      { condition: 'any("needs_fix")', next: 'COMPLETE' },
+    ]);
+
+    const mergeReadiness = finalGate?.parallel?.find((step) => step.name === 'merge-readiness-review');
+    expect(mergeReadiness?.output_contracts).toEqual({
+      report: [
+        { name: 'merge-readiness-review.md', format: 'merge-readiness-review' },
+      ],
+    });
+
+    const synthesis = finalGate?.parallel?.find((step) => step.name === 'review-synthesis');
+    expect(synthesis?.output_contracts).toEqual({
+      report: [
+        { name: 'supervisor-validation.md', format: 'supervisor-validation' },
+        { name: 'summary.md', format: 'summary', use_judge: false },
+      ],
+    });
   });
 });

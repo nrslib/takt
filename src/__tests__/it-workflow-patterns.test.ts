@@ -611,6 +611,10 @@ describe('Workflow Patterns IT: review-fix workflow', () => {
         finalGate?.rules?.some((rule) => rule.condition === 'needs_fix' && rule.next === 'fix'),
         `${workflowName} final-gate should route findings to fix`,
       ).toBe(true);
+      expect(
+        finalGate?.rules?.some((rule) => rule.condition === 'need_replan' && rule.next === 'fix'),
+        `${workflowName} final-gate should route replanning findings to fix`,
+      ).toBe(true);
       expect(config!.steps.find((step) => step.name === 'supervise')).toBeUndefined();
       expect(config!.steps.find((step) => step.name === 'fix_supervisor')).toBeUndefined();
     }
