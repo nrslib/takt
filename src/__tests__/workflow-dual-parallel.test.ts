@@ -3,8 +3,8 @@
  *
  * Validates that:
  * - dual and dual-cqrs workflows load successfully via loadWorkflow
- * - dual has 2-stage review: reviewers_1 (arch, frontend, testing, ai-antipattern) → reviewers_2 (security, qa, coding) → merge-readiness-review
- * - dual-cqrs has single-stage specialist reviewers followed by merge-readiness-review
+ * - dual has 2-stage review: reviewers_1 (arch, frontend, testing, ai-antipattern) → reviewers_2 (security, qa, coding) → final-gate
+ * - dual-cqrs has single-stage specialist reviewers followed by final-gate
  * - ai_review routes to reviewers_1 (dual) / reviewers (dual-cqrs)
  * - fix step routes back to reviewers_1 (dual) / reviewers (dual-cqrs)
  * - Aggregate rules (all/any) are configured on reviewer steps
@@ -95,18 +95,22 @@ describe('dual workflow parallel structure', () => {
     expect(approvedRule!.next).toBe('reviewers_2');
   });
 
-  it('should route reviewers_2 all("approved") to merge-readiness-review', () => {
+  it('should route reviewers_2 all("approved") to final-gate', () => {
     const reviewers2 = workflow!.steps.find((s) => s.name === 'reviewers_2');
     const approvedRule = reviewers2!.rules!.find((r) => r.condition === 'all("approved")');
-    expect(approvedRule!.next).toBe('merge-readiness-review');
+    expect(approvedRule!.next).toBe('final-gate');
   });
 
-  it('should route merge-readiness-review to supervise or fix', () => {
-    const mergeReadiness = workflow!.steps.find((s) => s.name === 'merge-readiness-review');
-    expect(mergeReadiness).toBeDefined();
-    expect(mergeReadiness!.rules).toEqual([
-      expect.objectContaining({ condition: 'approved', next: 'supervise' }),
+  it('should route final-gate to complete, fix, or plan', () => {
+    const finalGate = workflow!.steps.find((s) => s.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    expect(finalGate!.kind).toBe('workflow_call');
+    expect(finalGate!.call).toBe('merge-readiness-dual-final-gate');
+    expect(finalGate!.rules).toEqual([
+      expect.objectContaining({ condition: 'COMPLETE', next: 'COMPLETE' }),
       expect.objectContaining({ condition: 'needs_fix', next: 'fix' }),
+      expect.objectContaining({ condition: 'need_replan', next: 'plan' }),
+      expect.objectContaining({ condition: 'ABORT', next: 'ABORT' }),
     ]);
   });
 
@@ -199,15 +203,19 @@ describe('dual-cqrs workflow parallel structure', () => {
     expect(conditions).toContain('all("approved")');
     expect(conditions).toContain('any("needs_fix")');
     const approvedRule = reviewers!.rules!.find((r) => r.condition === 'all("approved")');
-    expect(approvedRule!.next).toBe('merge-readiness-review');
+    expect(approvedRule!.next).toBe('final-gate');
   });
 
-  it('should route merge-readiness-review to supervise or fix', () => {
-    const mergeReadiness = workflow!.steps.find((s) => s.name === 'merge-readiness-review');
-    expect(mergeReadiness).toBeDefined();
-    expect(mergeReadiness!.rules).toEqual([
-      expect.objectContaining({ condition: 'approved', next: 'supervise' }),
+  it('should route final-gate to complete, fix, or plan', () => {
+    const finalGate = workflow!.steps.find((s) => s.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    expect(finalGate!.kind).toBe('workflow_call');
+    expect(finalGate!.call).toBe('merge-readiness-dual-final-gate');
+    expect(finalGate!.rules).toEqual([
+      expect.objectContaining({ condition: 'COMPLETE', next: 'COMPLETE' }),
       expect.objectContaining({ condition: 'needs_fix', next: 'fix' }),
+      expect.objectContaining({ condition: 'need_replan', next: 'plan' }),
+      expect.objectContaining({ condition: 'ABORT', next: 'ABORT' }),
     ]);
   });
 

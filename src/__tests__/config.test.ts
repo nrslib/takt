@@ -178,7 +178,7 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     expect(Array.isArray(allRule!.aggregateConditionText)).toBe(true);
     expect((allRule!.aggregateConditionText as string[])[0]).toBe('approved');
     expect((allRule!.aggregateConditionText as string[])).toEqual(['approved', 'No AI-specific issues', 'approved']);
-    expect(allRule!.next).toBe('merge-readiness-review');
+    expect(allRule!.next).toBe('final-gate');
 
     const anyRule = reviewersStep.rules!.find((r) => r.isAggregateCondition && r.aggregateType === 'any');
     expect(anyRule).toBeDefined();
@@ -204,12 +204,18 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     expect(conditions).toContain('needs_fix');
   });
 
-  it('should have supervise step with 2 conditions', () => {
+  it('should have final-gate workflow call with completion/fix/replan routes', () => {
     const workflow = getBuiltinWorkflow('default-peer-review', process.cwd());
 
-    const supervise = workflow!.steps.find((s) => s.name === 'supervise')!;
-    expect(supervise.rules).toBeDefined();
-    expect(supervise.rules).toHaveLength(2);
+    const finalGate = workflow!.steps.find((s) => s.name === 'final-gate')!;
+    expect(finalGate.kind).toBe('workflow_call');
+    expect(finalGate.call).toBe('merge-readiness-final-gate');
+    expect(finalGate.rules).toEqual([
+      expect.objectContaining({ condition: 'COMPLETE', next: 'COMPLETE' }),
+      expect.objectContaining({ condition: 'needs_fix', next: 'fix' }),
+      expect.objectContaining({ condition: 'need_replan', returnValue: 'need_replan' }),
+      expect.objectContaining({ condition: 'ABORT', next: 'ABORT' }),
+    ]);
   });
 
   it('should have coding-review sub-step with approved/needs_fix conditions', () => {
@@ -272,13 +278,15 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.persona).toContain('architecture-reviewer');
 
-    const mergeReadinessReview = workflow!.steps.find((s) => s.name === 'merge-readiness-review')!;
+    const finalGateWorkflow = getBuiltinWorkflow('merge-readiness-final-gate', process.cwd())!;
+    const finalGate = finalGateWorkflow.steps.find((s) => s.name === 'final_gate')!;
+    const mergeReadinessReview = finalGate.parallel!.find((s) => s.name === 'merge-readiness-review')!;
     expect(mergeReadinessReview.persona).toContain('merge-readiness-reviewer');
 
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.persona).toContain('coding-reviewer');
 
-    const supervise = workflow!.steps.find((s) => s.name === 'supervise')!;
+    const supervise = finalGate.parallel!.find((s) => s.name === 'supervise')!;
     expect(supervise.persona).toContain('supervisor');
   });
 
@@ -289,13 +297,15 @@ describe('default-peer-review workflow parallel reviewers step', () => {
     const archReview = reviewersStep.parallel!.find((s) => s.name === 'arch-review')!;
     expect(archReview.outputContracts).toBeDefined();
 
-    const mergeReadinessReview = workflow!.steps.find((s) => s.name === 'merge-readiness-review')!;
+    const finalGateWorkflow = getBuiltinWorkflow('merge-readiness-final-gate', process.cwd())!;
+    const finalGate = finalGateWorkflow.steps.find((s) => s.name === 'final_gate')!;
+    const mergeReadinessReview = finalGate.parallel!.find((s) => s.name === 'merge-readiness-review')!;
     expect(mergeReadinessReview.outputContracts).toBeDefined();
 
     const codingReview = reviewersStep.parallel!.find((s) => s.name === 'coding-review')!;
     expect(codingReview.outputContracts).toBeDefined();
 
-    const supervise = workflow!.steps.find((s) => s.name === 'supervise')!;
+    const supervise = finalGate.parallel!.find((s) => s.name === 'supervise')!;
     expect(supervise.outputContracts).toBeDefined();
   });
 });

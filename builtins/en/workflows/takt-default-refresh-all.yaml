@@ -1,5 +1,5 @@
 name: takt-default-refresh-all
-description: "TAKT development workflow (all-step session refresh comparison: plan → write tests → team-leader implement → AI antipattern review → parallel review → fix → supervise → complete)"
+description: "TAKT development workflow (all-step session refresh comparison: plan → write tests → team-leader implement → AI antipattern review → parallel review → fix → final gate → complete)"
 workflow_config:
   provider_options:
     codex:
@@ -23,7 +23,7 @@ loop_monitors:
           next: reviewers
   - cycle:
       - reviewers
-      - merge-readiness-review
+      - final-gate
       - fix
     threshold: 5
     judge:
@@ -33,7 +33,7 @@ loop_monitors:
         - condition: Healthy (findings decreasing, fixes applied)
           next: reviewers
         - condition: Unproductive (same findings repeating)
-          next: supervise
+          next: final-gate
 steps:
   - name: plan
     tags:
@@ -382,35 +382,24 @@ steps:
               format: ai-antipattern-review
     rules:
       - condition: all("approved")
-        next: merge-readiness-review
+        next: final-gate
       - condition: any("needs_fix")
         next: fix
-  - name: merge-readiness-review
-    tags:
-      - review
-    edit: false
-    persona: merge-readiness-reviewer
-    session: refresh
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
     rules:
-      - condition: approved
-        next: supervise
+      - condition: COMPLETE
+        next: COMPLETE
       - condition: needs_fix
         next: fix
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding
@@ -442,34 +431,3 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction: fix
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: supervisor
-    session: refresh
-    policy: review
-    knowledge: architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    pass_previous_response: false
-    rules:
-      - condition: All checks passed
-        next: COMPLETE
-      - condition: Requirements unmet, tests failing, build errors
-        next: plan
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false

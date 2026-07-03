@@ -1,5 +1,5 @@
 name: peer-review
-description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループの後、merge-readiness-review で保守前提のマージ品質を確認する。
+description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正ループの後、merge-readiness-review と supervise の並列最終ゲートを実行する。
 subworkflow:
   callable: true
   visibility: internal
@@ -23,7 +23,7 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
-      - merge-readiness-review
+      - final-gate
       - fix
     threshold: 5
     judge:
@@ -152,28 +152,24 @@ steps:
               format: ai-antipattern-review
     rules:
       - condition: all("approved")
-        next: merge-readiness-review
+        next: final-gate
       - condition: any("needs_fix")
         next: fix
-  - name: merge-readiness-review
-    tags:
-      - review
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    provider_options:
-      extends: review-readonly
-    pass_previous_response: false
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
     rules:
-      - condition: approved
+      - condition: COMPLETE
         next: COMPLETE
       - condition: needs_fix
         next: fix
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding

@@ -1,5 +1,5 @@
 name: default-peer-review
-description: default series Phase 2. Specialist parallel reviewers (arch + ai-antipattern-2nd + coding-review) ⇄ fix loop, followed by merge-readiness-review and supervise in sequence.
+description: default series Phase 2. Specialist parallel reviewers (arch + ai-antipattern-2nd + coding-review) ⇄ fix loop, followed by a parallel merge-readiness/supervise final gate.
 subworkflow:
   callable: true
   visibility: internal
@@ -16,7 +16,7 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
-      - merge-readiness-review
+      - final-gate
       - fix
     threshold: 3
     judge:
@@ -107,62 +107,21 @@ steps:
               format: coding-review
     rules:
       - condition: all("approved", "No AI-specific issues", "approved")
-        next: merge-readiness-review
+        next: final-gate
       - condition: any("needs_fix", "AI-specific issues found", "needs_fix")
         next: fix
-  - name: merge-readiness-review
-    tags:
-      - review
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
     rules:
-      - condition: approved
-        next: supervise
+      - condition: COMPLETE
+        next: COMPLETE
       - condition: needs_fix
         next: fix
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: supervisor
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: supervise
-    rules:
-      - condition: All checks passed
-        next: COMPLETE
-      - condition: Requirements unmet, tests failing, build errors
-        next: fix
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding

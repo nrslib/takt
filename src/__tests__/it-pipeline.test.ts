@@ -224,7 +224,7 @@ describe('Pipeline Integration Tests', () => {
   it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
     // Use builtin 'default' workflow
     // persona field: extractPersonaName result (from .md filename)
-    // Flow: plan → write_tests → draft → peer-review reviewers(arch + ai-antipattern + coding) → merge-readiness-review → supervise → COMPLETE
+    // Flow: plan → write_tests → draft → peer-review reviewers(arch + ai-antipattern + coding) → final-gate → COMPLETE
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
@@ -234,7 +234,7 @@ describe('Pipeline Integration Tests', () => {
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nNo AI-specific issues' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
       { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\napproved' },
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\nAll checks passed' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:1]\n\napproved' },
     ]);
 
     const exitCode = await executePipeline({

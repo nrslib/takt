@@ -1156,8 +1156,10 @@ describe('Workflow Loader IT: parallel step loading', () => {
     expect(stage2Names).toContain('qa-review');
     expect(stage2Names).toContain('coding-review');
 
-    const mergeReadiness = config!.steps.find((s) => s.name === 'merge-readiness-review');
-    expect(mergeReadiness).toBeDefined();
+    const finalGate = config!.steps.find((s) => s.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    expect(finalGate!.kind).toBe('workflow_call');
+    expect(finalGate!.call).toBe('merge-readiness-dual-final-gate');
   });
 });
 

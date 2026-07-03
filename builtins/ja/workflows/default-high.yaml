@@ -1,5 +1,5 @@
 name: default-high
-description: フルスペック開発ワークフロー（計画 → テスト作成 → draft（チームリーダー実装 + AI 自己レビュー） → peer-review（並列レビュー + AP-2nd） → supervise → COMPLETE）
+description: フルスペック開発ワークフロー（計画 → テスト作成 → draft（チームリーダー実装 + AI 自己レビュー） → peer-review（並列レビュー + AP-2nd + 並列最終ゲート） → COMPLETE）
 workflow_config:
   provider_options:
     codex:
@@ -103,38 +103,8 @@ steps:
         - architecture
     rules:
       - condition: COMPLETE
-        next: supervise
+        next: COMPLETE
       - condition: need_replan
         next: plan
       - condition: ABORT
         next: ABORT
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: supervisor
-    policy: review
-    knowledge: architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    pass_previous_response: false
-    rules:
-      - condition: すべて問題なし
-        next: COMPLETE
-      - condition: 要求未達成、テスト失敗、ビルドエラー
-        next: plan
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false

@@ -3,7 +3,7 @@
  *
  * Covers:
  * - Workflow YAML files (EN/JA) load and pass schema validation
- * - Step structure: gather -> reviewers (parallel 5) -> merge-readiness-review -> supervise -> COMPLETE
+ * - Step structure: gather -> reviewers (parallel 5) -> final-gate (merge-readiness + synthesis) / supervise -> COMPLETE
  * - All steps have edit: false
  * - All 5 parallel reviewers have Bash in provider_options.claude.allowed_tools
  * - Routing rules for gather and reviewers
@@ -57,9 +57,9 @@ describe('review-default workflow (EN)', () => {
     expect(raw.max_steps).toBe(10);
   });
 
-  it('should have 4 steps: gather, reviewers, merge-readiness-review, supervise', () => {
+  it('should have 4 steps: gather, reviewers, final-gate, supervise', () => {
     const stepNames = raw.steps.map((s) => s.name);
-    expect(stepNames).toEqual(['gather', 'reviewers', 'merge-readiness-review', 'supervise']);
+    expect(stepNames).toEqual(['gather', 'reviewers', 'final-gate', 'supervise']);
   });
 
   it('should have all steps with edit: false', () => {
@@ -96,17 +96,21 @@ describe('review-default workflow (EN)', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers.rules).toHaveLength(2);
     expect(reviewers.rules[0].condition).toBe('all("approved")');
-    expect(reviewers.rules[0].next).toBe('merge-readiness-review');
+    expect(reviewers.rules[0].next).toBe('final-gate');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
     expect(reviewers.rules[1].next).toBe('supervise');
   });
 
-  it('should route merge-readiness-review to supervise', () => {
-    const mergeReadiness = raw.steps.find((s) => s.name === 'merge-readiness-review');
-    expect(mergeReadiness).toBeDefined();
-    expect(mergeReadiness.rules).toEqual([
-      { condition: 'approved', next: 'supervise' },
-      { condition: 'needs_fix', next: 'supervise' },
+  it('should run merge-readiness-review and synthesis in the final-gate', () => {
+    const finalGate = raw.steps.find((s) => s.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    expect(finalGate.parallel?.map((s: { name: string }) => s.name)).toEqual([
+      'merge-readiness-review',
+      'review-synthesis',
+    ]);
+    expect(finalGate.rules).toEqual([
+      { condition: 'all("approved")', next: 'COMPLETE' },
+      { condition: 'any("needs_fix")', next: 'COMPLETE' },
     ]);
   });
 
@@ -182,7 +186,7 @@ describe('review-default workflow (JA)', () => {
 
   it('should have same step structure as EN version', () => {
     const stepNames = raw.steps.map((s) => s.name);
-    expect(stepNames).toEqual(['gather', 'reviewers', 'merge-readiness-review', 'supervise']);
+    expect(stepNames).toEqual(['gather', 'reviewers', 'final-gate', 'supervise']);
   });
 
   it('should have reviewers step with 5 parallel sub-steps', () => {
@@ -220,7 +224,7 @@ describe('review-default workflow (JA)', () => {
   it('should have same aggregate rules on reviewers', () => {
     const reviewers = raw.steps.find((s) => s.name === 'reviewers');
     expect(reviewers.rules[0].condition).toBe('all("approved")');
-    expect(reviewers.rules[0].next).toBe('merge-readiness-review');
+    expect(reviewers.rules[0].next).toBe('final-gate');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
   });
 
