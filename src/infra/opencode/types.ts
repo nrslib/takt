@@ -199,6 +199,106 @@ export function buildOpenCodePermissionRuleset(
 
 export type OpenCodeAllowedTools = readonly string[];
 
+/**
+ * Build the permission ruleset used at session creation.
+ *
+ * A session-scoped `deny` can never be escalated later (verified against a
+ * live OpenCode server: neither agent-level `allow` nor a new ruleset can
+ * override it), while TAKT reuses one session across step phases and the
+ * report phase needs file writes on read-only steps. Therefore `edit`/`write`
+ * denies are lifted to `allow` at session scope (`ask` rules stay: the
+ * permission auto-reply already approves them per phase) and the per-phase
+ * restriction is enforced by the explicit per-prompt tools map instead
+ * (see buildOpenCodePromptTools).
+ *
+ * `external_directory` is denied explicitly: the permission auto-reply
+ * rejects unknown permission kinds and a rejected ask aborts the whole call,
+ * so leaving it unruled turns an agent's stray out-of-workspace access into
+ * a step failure. A session-scoped deny keeps it a silent tool error the
+ * agent can recover from.
+ */
+export function buildOpenCodeSessionPermission(
+  mode?: PermissionMode,
+  networkAccess?: boolean,
+  allowedTools?: OpenCodeAllowedTools,
+): OpenCodePermissionRule[] {
+  const rules = buildOpenCodePermissionRuleset(mode, networkAccess, allowedTools)
+    .map((rule) => (
+      (rule.permission === 'edit' || rule.permission === 'write') && rule.action === 'deny'
+        ? { ...rule, action: 'allow' as const }
+        : rule
+    ));
+  for (const permission of ['edit', 'write'] as const) {
+    if (!rules.some((rule) => rule.permission === permission)) {
+      rules.push({ permission, pattern: '*', action: 'allow' });
+    }
+  }
+  rules.push({ permission: 'external_directory', pattern: '*', action: 'deny' });
+  return rules;
+}
+
+/**
+ * OpenCode tool ids grouped by the permission that governs them.
+ * `task` is intentionally absent: TAKT disables subagent spawning at the
+ * agent level and never re-enables it per prompt. `skill` loads skill files
+ * (read-shaped), so it follows the read permission.
+ */
+const OPEN_CODE_TOOL_IDS_BY_PERMISSION: Record<Exclude<OpenCodePermissionKey, 'task'>, readonly string[]> = {
+  read: ['read', 'list', 'skill'],
+  glob: ['glob'],
+  grep: ['grep'],
+  edit: ['edit', 'write', 'patch'],
+  write: ['write'],
+  bash: ['bash'],
+  todowrite: ['todowrite', 'todoread'],
+  websearch: ['websearch'],
+  webfetch: ['webfetch'],
+  question: ['question'],
+};
+
+/** 全プロンプトで明示するツール ID の完全集合（固着リーク防止の契約） */
+export const OPEN_CODE_MANAGED_TOOL_IDS = Object.freeze([
+  'task',
+  ...new Set(Object.values(OPEN_CODE_TOOL_IDS_BY_PERMISSION).flat()),
+]);
+
+/**
+ * Build the explicit per-prompt tools map that enforces the current phase's
+ * tool restriction on a shared session.
+ *
+ * The map is sent with every prompt and always covers the full managed tool
+ * set: OpenCode persists the last explicit map on the session, so omitting a
+ * key would silently leak the previous phase's restriction into the next one
+ * (verified against a live OpenCode server).
+ */
+export function buildOpenCodePromptTools(
+  mode?: PermissionMode,
+  networkAccess?: boolean,
+  allowedTools?: OpenCodeAllowedTools,
+): Record<string, boolean> {
+  const enabledPermissions = new Set<string>();
+  if (allowedTools !== undefined) {
+    for (const permission of resolveOpenCodeAllowedPermissions(mode, networkAccess, allowedTools)) {
+      enabledPermissions.add(permission);
+    }
+  } else {
+    const permissionMap = applyNetworkAccessOverride(buildPermissionMap(mode), networkAccess);
+    for (const [permission, action] of Object.entries(permissionMap)) {
+      if (action !== 'deny') {
+        enabledPermissions.add(permission);
+      }
+    }
+  }
+
+  const tools: Record<string, boolean> = { task: false };
+  for (const [permission, toolIds] of Object.entries(OPEN_CODE_TOOL_IDS_BY_PERMISSION)) {
+    for (const toolId of toolIds) {
+      tools[toolId] = (tools[toolId] ?? false) || enabledPermissions.has(permission);
+    }
+  }
+  return tools;
+}
+
 function buildOpenCodeAllowedToolsRuleset(
   mode: PermissionMode | undefined,
   networkAccess: boolean | undefined,
