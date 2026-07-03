@@ -39,11 +39,16 @@
 |---|------------|------------|--------------------------|---------------------|-------|----------------|
 | 1 | AI-REOPENED-src-file-L55 | hallucination | `Previously fixed at src/file.ts:10` | `Recurred at src/file.ts:55` | Issue description | Fix approach |
 
+## Re-scan Evidence (required from the second review onward)
+| Policy/Knowledge section checked | Evidence in the diff (`file:line` or "none") |
+|----------------------------------|----------------------------------------------|
+| {section name} | {evidence} |
+
 ## Rejection Gate
 - REJECT is valid only when at least one finding exists in `new`, `persists`, or `reopened`
 - Findings without `finding_id` are invalid
 ```
 
 **Cognitive load reduction rules:**
-- No issues → Summary sentence + checklist + Non-Finding Concerns when needed (12 lines or fewer)
+- No issues → Summary sentence + checklist + Re-scan Evidence (from the second iteration onward) + Non-Finding Concerns when needed
 - Issues found → include table rows only for impacted sections (30 lines or fewer)

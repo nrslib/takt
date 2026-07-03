@@ -12,3 +12,5 @@ Procedure:
 2. List every `##` section in each of them (do not cherry-pick)
 3. Match the criteria in each listed section against the diff and detect any issues
 4. If the prose mentions a concern, either put it in the finding table or record it as a non-finding with classification and evidence
+
+Record the sections you checked and the evidence in the report's "Re-scan Evidence" section (required even when you APPROVE).

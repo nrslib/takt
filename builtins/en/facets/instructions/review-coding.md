@@ -18,3 +18,8 @@ Procedure:
 13. For each finding, include location, impact, and fix direction
 14. If the prose mentions a concern, either put it in the finding table or record it as a non-finding with classification and evidence
 15. Do not report unsupported speculation, preference-only changes, or unrelated pre-existing issues
+
+**This is review iteration #{step_iteration}.**
+From the second iteration onward, as a separate step from confirming that previous findings were resolved,
+re-scan the entire cumulative diff from the base (task start) against every Policy / Knowledge section.
+Record the sections you checked and the evidence in the report's "Re-scan Evidence" section (required even when you APPROVE).

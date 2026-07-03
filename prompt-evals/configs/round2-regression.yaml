@@ -1,11 +1,10 @@
-# 2周目レビュー断面: builtin ファセット vs 再走査証跡オーバーレイ
-# 実行前に: node ../build-prompts.ts --overlay overlays/rescan-evidence
-description: 2周目レビューが前回指摘の答え合わせに留まらず新規欠陥を検出できるか
+# 2周目レビュー断面の回帰チェック（builtin ファセット。実行前に: node ../build-prompts.ts）
+# 再走査証跡が builtin に組み込まれているため、証跡表の出現と検出力を単体で検証する。
+# 実験的なファセット変種を比較するときは --overlay で生成した round2-overlay.txt を prompts に足す。
+description: 2周目レビューが前回指摘の答え合わせに留まらず新規欠陥を検出できるか（回帰チェック）
 prompts:
   - id: file://../prompts/round2-base.txt
     label: builtin
-  - id: file://../prompts/round2-overlay.txt
-    label: rescan-evidence
 providers:
   - id: 'exec: bash ../providers/gemma.sh'
     label: gemma4-31b
@@ -13,6 +12,8 @@ providers:
     label: qwen3-coder-next
   - id: 'exec: bash ../providers/qwen-instruct.sh'
     label: qwen3.5-397b
+  - id: 'exec: bash ../providers/codex.sh'
+    label: codex-gpt-5.5
 defaultTest:
   vars:
     code: file://../fixtures/flawed-index.ts.txt
