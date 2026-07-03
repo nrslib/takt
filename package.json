@@ -80,7 +80,7 @@
   "homepage": "https://github.com/nrslib/takt#readme",
   "type": "module",
   "engines": {
-    "node": ">=20.6.0"
+    "node": "^20.20.0 || >=22.22.0"
   },
   "files": [
     "dist/",

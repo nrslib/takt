@@ -4,7 +4,8 @@
  * (promptfoo exits non-zero when a test fails, which would break `&&` chains).
  *
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
- * Suites: coding, arch, antipattern, frontend, cqrs (default: all)
+ * Suites: coding, arch, antipattern, frontend, cqrs, frontend-coder,
+ *         cqrs-coder (default: all)
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
@@ -26,8 +27,9 @@ const evalDir = resolve(scriptDir, '..');
 const repoRoot = resolve(evalDir, '..');
 
 const args = process.argv.slice(2);
-const flags = args.filter((a) => a.startsWith('-'));
-const names = args.filter((a) => !a.startsWith('-'));
+const firstFlagIndex = args.findIndex((a) => a.startsWith('-'));
+const names = firstFlagIndex === -1 ? args : args.slice(0, firstFlagIndex);
+const flags = firstFlagIndex === -1 ? [] : args.slice(firstFlagIndex);
 for (const name of names) {
   if (!SUITES[name]) {
     throw new Error(`Unknown suite "${name}". Available: ${Object.keys(SUITES).join(', ')}`);

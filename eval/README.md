@@ -112,7 +112,7 @@ relative to the config file's directory (`eval/`), not the process cwd.
 
 ## Layout
 
-```
+```text
 eval/
   promptfooconfig.<suite>.yaml   provider + tests + assertions per suite
   scripts/prepare.mjs            facet placement + prompt rendering

@@ -28,7 +28,7 @@ export default function assertCqrsImplement() {
   const account = sources.find((f) => f.path.endsWith('Account.kt'))?.content ?? '';
 
   const withdrawnApplyBranch = account.match(/is MoneyWithdrawn\s*->\s*\{?([\s\S]*?)(?=\n\s*(is |\}\s*\n))/);
-  const applyBranchBody = withdrawnApplyBranch ? withdrawnApplyBranch[1] : '';
+  const applyBranchBody = withdrawnApplyBranch?.[1];
 
   const checks = [
     {
@@ -37,7 +37,7 @@ export default function assertCqrsImplement() {
     },
     {
       name: 'apply-restores-state-only',
-      pass: /is MoneyWithdrawn/.test(account) &&
+      pass: !!applyBranchBody &&
         !/require|throw|check\(/.test(applyBranchBody),
     },
     {

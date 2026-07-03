@@ -23,7 +23,7 @@ export default function assertFrontendImplement() {
     },
     {
       name: 'search-box-layering',
-      pass: !!searchBox && !/from '.*(features|app)\//.test(searchBox),
+      pass: !!searchBox && !/from\s+['"][^'"]*(features|app)\//.test(searchBox),
     },
     {
       name: 'route-uses-search-box',

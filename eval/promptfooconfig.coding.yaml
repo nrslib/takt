@@ -58,8 +58,8 @@ tests:
       - type: javascript
         metric: recall/any-type
         value: |
-          const flagged = /(`any`|any\s*型|any\s+type|:\s*any\b)/i.test(output);
-          return flagged;
+          return /(updateProfile|patch|:\s*any\b|`any`|any\s*型|any\s+type)/i.test(output) &&
+            /(問題|指摘|禁止|避け|型安全|unsafe|no-explicit-any|type-?safe)/i.test(output);
       - type: javascript
         metric: recall/in-place-mutation
         value: |
@@ -68,8 +68,8 @@ tests:
       - type: javascript
         metric: recall/todo-without-issue
         value: |
-          const flagged = /TODO/i.test(output);
-          return flagged;
+          return /TODO/i.test(output) &&
+            /(issue|ticket|チケット|課題|根拠|番号|未追跡|管理されていない)/i.test(output);
 
   - description: 'precision: clean diff must not produce fabricated findings'
     vars:

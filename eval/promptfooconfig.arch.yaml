@@ -40,5 +40,5 @@ tests:
       - type: javascript
         metric: recall/mixed-responsibilities
         value: |
-          return /(format)/i.test(output) &&
+          return /(shared\/format|format\.ts)/i.test(output) &&
             /(責務|凝集|responsibilit|cohesion|混在|同居)/i.test(output);
