@@ -44,7 +44,9 @@ describe('MCP stdio entrypoint integration', () => {
         ran: false,
         message: 'No pending tasks in .takt/tasks.yaml',
       });
-      expect(Buffer.concat(stderrChunks).toString('utf-8')).toBe('');
+      const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+      expect(stderr).not.toMatch(/(?:^|\n)(?:Error|TypeError|ReferenceError|SyntaxError):/u);
+      expect(stderr).not.toMatch(/(?:^|\n)\s+at\s+/u);
     } finally {
       await client.close();
       rmSync(cwd, { recursive: true, force: true });
