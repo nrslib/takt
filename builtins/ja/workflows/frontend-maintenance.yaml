@@ -23,6 +23,7 @@ loop_monitors:
           next: reviewers_1
   - cycle:
       - reviewers_1
+      - merge-readiness-review
       - fix
     threshold: 3
     judge:
@@ -433,6 +434,9 @@ steps:
         policy:
           - review
           - coding
+          - existing-system-respect
+        knowledge:
+          - existing-system
         provider_options:
           claude:
             allowed_tools:
@@ -460,7 +464,11 @@ steps:
       - review
     edit: false
     persona: merge-readiness-reviewer
-    policy: review
+    policy:
+      - review
+      - existing-system-respect
+    knowledge:
+      - existing-system
     provider_options:
       claude:
         allowed_tools:

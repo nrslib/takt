@@ -296,6 +296,32 @@ describe('builtin takt-default provider_options refs', () => {
         aggregateConditionText: 'needs_fix',
         aggregateGuardCondition: 'findings.conflicts.count == 0',
       });
+
+      const mergeReadiness = normalized.steps.find((step) => step.name === 'merge-readiness-review');
+      expect(mergeReadiness?.rules).toEqual([
+        expect.objectContaining({
+          condition: 'approved && findings.open.count == 0 && findings.conflicts.count == 0',
+          next: 'COMPLETE',
+        }),
+        expect.objectContaining({
+          condition: 'needs_fix && findings.conflicts.count == 0',
+          next: 'fix',
+        }),
+        expect.objectContaining({
+          condition: 'findings.conflicts.count == 0 && findings.open.count > 0',
+          next: 'fix',
+        }),
+        expect.objectContaining({
+          condition: expect.stringContaining('findings.conflicts'),
+          next: 'fix',
+          isAiCondition: true,
+        }),
+        expect.objectContaining({
+          condition: 'findings.conflicts.count > 0',
+          next: '',
+          returnValue: 'need_replan',
+        }),
+      ]);
     });
 
     it(`${locale} peer-review should use standard output contracts`, () => {

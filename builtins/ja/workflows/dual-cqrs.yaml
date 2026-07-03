@@ -23,6 +23,7 @@ loop_monitors:
           next: ai-antipattern-no-fix
   - cycle:
       - reviewers
+      - merge-readiness-review
       - fix
     threshold: 3
     judge:

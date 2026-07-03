@@ -238,8 +238,8 @@ steps:
          - `02-security-review.md`（セキュリティレビュー）
          - `03-qa-review.md`（QAレビュー）
          - `04-testing-review.md`（テストレビュー）
-         - `05-merge-readiness-review.md`（Merge Readiness Review）
-         - `06-coding-review.md`（コーディングレビュー）
+         - `05-coding-review.md`（コーディングレビュー）
+         - `06-merge-readiness-review.md`（Merge Readiness Review）
       2. 6つのレビュー結果を統合
       3. 統合レビューサマリーと総合判定を作成
     output_contracts:
@@ -261,8 +261,8 @@ steps:
             | セキュリティ | APPROVE/REJECT | {概要} |
             | QA | APPROVE/REJECT | {概要} |
             | テスト | APPROVE/REJECT | {概要} |
-            | Merge Readiness Review | APPROVE/REJECT | {概要} |
             | コーディング | APPROVE/REJECT | {概要} |
+            | Merge Readiness Review | APPROVE/REJECT | {概要} |
 
             ## 今回の指摘（new）
             | # | finding_id | 重大度 | ソース | 場所 | 問題 | 修正案 |

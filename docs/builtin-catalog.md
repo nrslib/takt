@@ -8,9 +8,9 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 
 | Workflow | Recommended Use |
 |----------|-----------------|
-| `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review → complete. |
+| `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
-| `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review → supervise → complete. |
+| `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | `dual` | Frontend + backend development workflow with team-leader implementation, architecture, frontend, security, QA reviews with fix loops. |
@@ -21,9 +21,9 @@ Organized by category.
 
 | Category | Workflow | Description |
 |----------|----------|-------------|
-| 🚀 Quick Start | `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review → complete. |
+| 🚀 Quick Start | `default` | Standard development workflow. Test-first with draft implementation, AI antipattern self-review, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
-| | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review → supervise → complete. |
+| | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
 | | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |

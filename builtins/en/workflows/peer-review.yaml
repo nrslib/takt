@@ -23,6 +23,7 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
+      - merge-readiness-review
       - fix
     threshold: 5
     judge:
