@@ -17,7 +17,7 @@ Procedure:
    - Do not mark a composite requirement as ✅ based on only one side of the cases
    - Do not reinterpret required task items as optional, out of scope, or different requirements without explicit evidence
    - For requirements involving IDs, names, metadata, config, environment variables, or output contracts, verify entry points, execution modes, and missing-value behavior separately
-   - Do not rely on the plan report or merge-readiness-review judgment; independently verify mergeability
+   - Do not rely on the plan report or merge-readiness-review judgment; independently verify maintainability-aware merge quality
    - For requirements involving side effects or state changes, separate verification of happy paths, failure paths, and cleanup
    - If any requirement is unfulfilled, REJECT
 4. Re-evaluate prior review findings

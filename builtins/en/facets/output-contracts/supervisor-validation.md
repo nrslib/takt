@@ -18,7 +18,7 @@ Extract requirements from the task spec and verify each one individually against
 - ✅ without evidence is invalid (must verify against actual code)
 - Do not mark a row as ✅ when the evidence covers only part of the cases
 - Treat optionalization, exclusion, or exception not present in the task spec as unmet
-- Do not rely on plan report's judgment; independently verify mergeability
+- Do not rely on plan report's judgment; independently verify maintainability-aware merge quality
 
 ## Re-evaluation of Prior Findings
 | finding_id | Prior Status | Original Expected Result | Re-evaluation | Evidence |

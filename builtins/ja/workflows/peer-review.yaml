@@ -1,5 +1,5 @@
 name: peer-review
-description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループの後、merge-readiness-review で最終マージ可否を確認する。
+description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループの後、merge-readiness-review で保守前提のマージ品質を確認する。
 subworkflow:
   callable: true
   visibility: internal

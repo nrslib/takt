@@ -13,7 +13,7 @@ Procedure:
 2. For each requirement, identify the implemented code (file:line)
 3. Actually verify that the code satisfies the requirement by reading files and checking build/test evidence
    - Do not mark a compound requirement ✅ after checking only one side
-   - Do not trust plan or merge-readiness-review judgments without independent mergeability verification
+   - Do not trust plan or merge-readiness-review judgments without independently verifying maintainability-aware merge quality
    - REJECT if any single requirement is unsatisfied
 4. Validate the maintenance scope
    - Check whether required, related, and unnecessary change classifications are valid

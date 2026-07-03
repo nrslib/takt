@@ -95,7 +95,7 @@ Run `takt` to choose a workflow interactively.
 | **research-supervisor** | Research quality validation and completeness assessment |
 | **test-planner** | Test strategy analysis and comprehensive test planning |
 | **testing-reviewer** | Testing-focused code review with integration test requirements analysis |
-| **merge-readiness-reviewer** | Plain mergeability review for the current change |
+| **merge-readiness-reviewer** | Cross-cutting quality review for whether the change is ready to merge into a codebase that must be maintained |
 | **terraform-coder** | Terraform IaC implementation |
 | **terraform-reviewer** | Terraform IaC review |
 | **melchior** | MAGI deliberation system: MELCHIOR-1 (scientist perspective) |
