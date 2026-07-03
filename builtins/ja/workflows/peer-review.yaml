@@ -12,6 +12,12 @@ subworkflow:
       default:
         - architecture
         - takt
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
 workflow_config:
   provider_options:
     codex:
@@ -179,8 +185,7 @@ steps:
       - coding
       - testing
     knowledge:
-      - takt
-      - architecture
+      $param: fix_knowledge
     provider_options:
       extends: edit
     required_permission_mode: edit
