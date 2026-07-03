@@ -19,6 +19,8 @@ import {
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 import {
   buildOpenCodePermissionRuleset,
+  buildOpenCodePromptTools,
+  buildOpenCodeSessionPermission,
   resolveOpenCodePermissionReply,
   type OpenCodeCallOptions,
 } from './types.js';
@@ -248,6 +250,26 @@ export async function getOpenCodeSessionSnapshot(
     const result = await client.session.get({ sessionID, directory });
     if (!result.data) {
       throw new Error(`OpenCode session not found: ${sessionID}`);
+    }
+    return result.data;
+  } finally {
+    release();
+  }
+}
+
+export type OpenCodeSessionMessages = NonNullable<Awaited<ReturnType<OpencodeClient['session']['messages']>>['data']>;
+
+export async function getOpenCodeSessionMessages(
+  model: string,
+  sessionID: string,
+  directory: string,
+  apiKey?: string,
+): Promise<OpenCodeSessionMessages> {
+  const { client, release } = await acquireClient(model, apiKey, undefined);
+  try {
+    const result = await client.session.messages({ sessionID, directory });
+    if (!result.data) {
+      throw new Error(`OpenCode session messages not found: ${sessionID}`);
     }
     return result.data;
   } finally {
@@ -635,23 +657,21 @@ export class OpenCodeClient {
           options.networkAccess,
           options.allowedTools,
         );
-        const shouldCreateSession = sessionId === undefined || options.allowedTools !== undefined;
-        const appliedPermissionRuleset = shouldCreateSession;
+        // The session is created once per step and reused across phases: a
+        // session-scoped deny can never be escalated later, and recreating the
+        // session drops the conversation history the report/judgment phases
+        // depend on. Per-phase tool restriction rides on the explicit prompt
+        // tools map below instead.
+        const appliedPermissionRuleset = sessionId === undefined;
+        const sessionPermission = buildOpenCodeSessionPermission(
+          options.permissionMode,
+          options.networkAccess,
+          options.allowedTools,
+        );
         if (sessionId === undefined) {
           const sessionResult = await opencodeApiClient.session.create({
             directory: options.cwd,
-            permission: permissionRuleset,
-          });
-
-          sessionId = sessionResult.data?.id;
-          if (!sessionId) {
-            throw new Error('Failed to create OpenCode session');
-          }
-        } else if (options.allowedTools !== undefined) {
-          const sessionResult = await opencodeApiClient.session.create({
-            directory: options.cwd,
-            parentID: sessionId,
-            permission: permissionRuleset,
+            permission: sessionPermission,
           });
 
           sessionId = sessionResult.data?.id;
@@ -677,19 +697,29 @@ export class OpenCodeClient {
             ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
             ...(options.allowedTools !== undefined ? { allowedTools: options.allowedTools } : {}),
             ...(options.networkAccess !== undefined ? { networkAccess: options.networkAccess } : {}),
-            resolvedPermissions: permissionRuleset,
+            resolvedPermissions: sessionPermission,
           });
         }
 
         const agentName = selectTaktAgent(options.allowedTools);
+        // OpenCode persists the last explicit tools map on the session, so
+        // every prompt sends the full map for its own phase (see
+        // buildOpenCodePromptTools).
+        const promptTools = buildOpenCodePromptTools(
+          options.permissionMode,
+          options.networkAccess,
+          options.allowedTools,
+        );
         log.debug('Selecting OpenCode agent', {
           agentName,
           allowedTools: options.allowedTools,
+          promptTools,
         });
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
           model: parsedModel,
+          tools: promptTools,
           ...(agentName !== undefined ? { agent: agentName } : {}),
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),

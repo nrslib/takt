@@ -1,5 +1,5 @@
 name: default-high
-description: Full-spec development workflow (plan -> write tests -> draft (team-leader implement + AI self-review) -> peer-review (parallel review + AP-2nd) -> supervise -> COMPLETE).
+description: Full-spec development workflow (plan -> write tests -> draft (team-leader implement + AI self-review) -> peer-review (parallel review + AP-2nd + parallel final gate) -> COMPLETE).
 workflow_config:
   provider_options:
     codex:
@@ -103,38 +103,8 @@ steps:
         - architecture
     rules:
       - condition: COMPLETE
-        next: supervise
+        next: COMPLETE
       - condition: need_replan
         next: plan
       - condition: ABORT
         next: ABORT
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: supervisor
-    policy: review
-    knowledge: architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    pass_previous_response: false
-    rules:
-      - condition: All checks passed
-        next: COMPLETE
-      - condition: Requirements unmet, tests failing, build errors
-        next: plan
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false

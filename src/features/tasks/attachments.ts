@@ -1,6 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { generateReportDir } from '../../shared/utils/index.js';
+import {
+  cleanupTaskSpecDirectory,
+  prepareTaskSpecDirectory as prepareEnqueuedTaskSpecDirectory,
+  type PreparedTaskSpecDirectory,
+} from '../../infra/task/enqueueService.js';
 
 export interface TaskAttachment {
   placeholder: string;
@@ -8,10 +12,7 @@ export interface TaskAttachment {
   fileName: string;
 }
 
-export interface PreparedTaskSpec {
-  taskDir: string;
-  taskDirRelative: string;
-}
+export type PreparedTaskSpec = PreparedTaskSpecDirectory;
 
 export interface PrepareTaskSpecOptions {
   sourceTaskDir?: string;
@@ -101,25 +102,8 @@ export function promoteTaskAttachments(
   }
 }
 
-export function resolveUniqueTaskSpecSlug(cwd: string, taskContent: string): string {
-  const baseSlug = generateReportDir(taskContent);
-  let sequence = 1;
-  let slug = baseSlug;
-  let taskDir = path.join(cwd, '.takt', 'tasks', slug);
-  while (fs.existsSync(taskDir)) {
-    sequence += 1;
-    slug = `${baseSlug}-${sequence}`;
-    taskDir = path.join(cwd, '.takt', 'tasks', slug);
-  }
-  return slug;
-}
-
 export function cleanupPreparedTaskSpec(taskDir: string): void {
-  fs.rmSync(taskDir, { recursive: true, force: true });
-  const tasksDir = path.dirname(taskDir);
-  if (fs.existsSync(tasksDir) && fs.readdirSync(tasksDir).length === 0) {
-    fs.rmdirSync(tasksDir);
-  }
+  cleanupTaskSpecDirectory(taskDir);
 }
 
 function copyAttachmentEntry(sourcePath: string, destinationPath: string): void {
@@ -161,25 +145,16 @@ export function prepareTaskSpecDirectory(
   attachments?: readonly TaskAttachment[],
   options?: PrepareTaskSpecOptions,
 ): PreparedTaskSpec {
-  const taskDirSlug = resolveUniqueTaskSpecSlug(cwd, taskContent);
-  const taskDir = path.join(cwd, '.takt', 'tasks', taskDirSlug);
-  const taskDirRelative = `.takt/tasks/${taskDirSlug}`;
   const orderContent = buildTaskOrderContent(taskContent, attachments);
-  const orderPath = path.join(taskDir, 'order.md');
-
-  fs.mkdirSync(taskDir, { recursive: true });
-  try {
-    if (options?.sourceTaskDir) {
-      copyExistingTaskAttachments(options.sourceTaskDir, taskDir);
-    }
-    promoteTaskAttachments(taskDir, attachments);
-    fs.writeFileSync(orderPath, orderContent, 'utf-8');
-  } catch (error) {
-    cleanupPreparedTaskSpec(taskDir);
-    throw error;
-  }
-
-  return { taskDir, taskDirRelative };
+  return prepareEnqueuedTaskSpecDirectory(cwd, taskContent, {
+    orderContent,
+    beforeWrite: (taskDir) => {
+      if (options?.sourceTaskDir) {
+        copyExistingTaskAttachments(options.sourceTaskDir, taskDir);
+      }
+      promoteTaskAttachments(taskDir, attachments);
+    },
+  });
 }
 
 export function copyTaskAttachmentsToRunContext(sourceTaskDir: string, runContextTaskDir: string): void {

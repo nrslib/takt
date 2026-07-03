@@ -57,9 +57,10 @@ describe('ACP task context', () => {
     'prNumber: -1 をタスクに積んで',
     'pr_number=1.5 をタスクに積んで',
     'prNumber: abc をタスクに積んで',
+    `prNumber: ${Number.MAX_SAFE_INTEGER + 1} をタスクに積んで`,
   ])('should reject invalid explicit PR numbers from prompt text: %s', (text) => {
     expect(() => extractAcpTaskContextFromText(text)).toThrow(
-      'ACP prNumber must be a positive integer.',
+      'ACP prNumber must be a positive safe integer.',
     );
   });
 
@@ -113,9 +114,9 @@ describe('ACP task context', () => {
     });
   });
 
-  it.each([0, -1, 1.5, Number.NaN])('should reject invalid session taskContext PR numbers: %s', (prNumber) => {
+  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])('should reject invalid session taskContext PR numbers: %s', (prNumber) => {
     expect(() => assertValidAcpTaskContext({ prNumber })).toThrow(
-      'ACP prNumber must be a positive integer.',
+      'ACP prNumber must be a positive safe integer.',
     );
   });
 });

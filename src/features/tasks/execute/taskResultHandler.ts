@@ -84,9 +84,12 @@ export function persistPrFailedTaskResult(
   taskRunner: TaskRunner,
   taskResult: TaskResult,
   prError: string,
+  options?: PersistTaskResultOptions,
 ): void {
   taskRunner.prFailTask(taskResult, prError);
-  info(`Task "${taskResult.task.name}" completed (PR creation failed)`);
+  if (options?.emitStatusLog !== false) {
+    info(`Task "${taskResult.task.name}" completed (PR creation failed)`);
+  }
 }
 
 export function persistTaskResult(
@@ -114,6 +117,7 @@ export function persistExceededTaskResult(
   task: TaskInfo,
   exceeded: ExceededInfo,
   context?: { worktreePath?: string; branch?: string },
+  options?: PersistTaskResultOptions,
 ): void {
   taskRunner.exceedTask(task.name, {
     currentStep: exceeded.currentStep,
@@ -123,7 +127,9 @@ export function persistExceededTaskResult(
     ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
     ...(context?.branch ? { branch: context.branch } : {}),
   });
-  info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentStep}"`);
+  if (options?.emitStatusLog !== false) {
+    info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentStep}"`);
+  }
 }
 
 export function persistTaskError(

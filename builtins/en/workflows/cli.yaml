@@ -1,0 +1,120 @@
+name: cli
+description: CLI development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (parallel reviewers + fix) -> supervise -> COMPLETE).
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 50
+initial_step: plan
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    knowledge: architecture
+    provider_options:
+      extends: review-readonly
+    rules:
+      - condition: Requirements are clear and implementable
+        next: write_tests
+      - condition: User is asking a question (not an implementation task)
+        next: COMPLETE
+      - condition: Requirements unclear, insufficient info
+        next: ABORT
+        appendix: |
+          Items to confirm:
+          - {question 1}
+          - {question 2}
+    instruction: plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+  - name: write_tests
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: Tests written
+        next: draft
+      - condition: Skip test writing because target is not yet implemented
+        next: draft
+      - condition: Cannot proceed with writing tests
+        next: plan
+      - condition: User input required for confirmation
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+  - name: draft
+    kind: workflow_call
+    call: draft
+    args:
+      impl_knowledge:
+        - architecture
+        - task-decomposition
+      fix_knowledge:
+        - architecture
+    rules:
+      - condition: COMPLETE
+        next: peer-review
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
+  - name: peer-review
+    kind: workflow_call
+    call: peer-review
+    args:
+      arch_knowledge:
+        - architecture
+      fix_knowledge:
+        - architecture
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
+  - name: supervise
+    tags:
+      - review
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge: architecture
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    rules:
+      - condition: All clear
+        next: COMPLETE
+      - condition: Requirements unmet, tests failing, build errors
+        next: plan
+    instruction: supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false

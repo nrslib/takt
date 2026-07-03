@@ -254,6 +254,100 @@ steps:
     });
   });
 
+  it('expands callable $param values inside nested workflow_call args', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: delegate_parent
+max_steps: 3
+steps:
+  - name: delegate_parent
+    kind: workflow_call
+    call: parent
+    args:
+      parent_knowledge: [domain]
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeProjectWorkflow('parent.yaml', `name: parent
+subworkflow:
+  callable: true
+  params:
+    parent_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture]
+initial_step: delegate_child
+max_steps: 3
+knowledge:
+  architecture: |
+    Architecture reference content.
+  domain: |
+    Domain reference content.
+steps:
+  - name: delegate_child
+    kind: workflow_call
+    call: child
+    args:
+      child_knowledge:
+        $param: parent_knowledge
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    child_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+initial_step: review
+max_steps: 3
+knowledge:
+  domain: |
+    Domain reference content.
+steps:
+  - name: review
+    persona: reviewer
+    knowledge:
+      $param: child_knowledge
+    instruction: Review child workflow
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const rootWorkflow = loadProjectWorkflow('root.yaml');
+    expect(rootWorkflow).not.toBeNull();
+
+    const parentWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      rootWorkflow!,
+      'parent',
+      'delegate_parent',
+      projectDir,
+      projectDir,
+    );
+    expect(parentWorkflow).not.toBeNull();
+
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      'child',
+      'delegate_child',
+      projectDir,
+      projectDir,
+    );
+    expect(childWorkflow).not.toBeNull();
+
+    const reviewStep = childWorkflow!.steps.find((step) => step.name === 'review') as Record<string, unknown> | undefined;
+    expect(reviewStep).toMatchObject({
+      knowledgeContents: [expect.stringContaining('Domain reference content')],
+    });
+  });
+
   it('expands scalar facet_ref args into child policy and knowledge fields', () => {
     writeProjectWorkflow('parent.yaml', `name: parent
 initial_step: delegate

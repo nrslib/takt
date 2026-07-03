@@ -1,5 +1,5 @@
 name: peer-review-with-fc
-description: 実験的 Finding Contract ピアレビュー。6 並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループ。
+description: 実験的 Finding Contract ピアレビュー。専門並列ピアレビュー（+ ai-antipattern-review-2nd）⇄ 修正 ループの後、merge-readiness-review で保守前提のマージ品質を確認する。
 finding_contract:
   ledger_path: .takt/findings/peer-review-with-fc.json
   raw_findings_path: .takt/findings/peer-review-with-fc/raw
@@ -30,6 +30,7 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
+      - merge-readiness-review
       - fix
     threshold: 5
     judge:
@@ -119,22 +120,6 @@ steps:
           report:
             - name: testing-review.md
               format: testing-review-finding-contract
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          extends: review-readonly
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review-finding-contract
       - name: coding-review
         tags:
           - review
@@ -174,7 +159,7 @@ steps:
               format: ai-antipattern-review-finding-contract
     rules:
       - condition: all("approved") && findings.open.count == 0 && findings.conflicts.count == 0
-        next: COMPLETE
+        next: merge-readiness-review
       - condition: any("needs_fix") && findings.conflicts.count == 0
         next: fix
       - condition: findings.conflicts.count == 0 && findings.open.count > 0
@@ -183,6 +168,31 @@ steps:
         next: fix
       - condition: findings.conflicts.count > 0
         return: need_replan
+  - name: merge-readiness-review
+    tags:
+      - review
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    rules:
+      - condition: approved && findings.open.count == 0 && findings.conflicts.count == 0
+        next: COMPLETE
+      - condition: needs_fix && findings.conflicts.count == 0
+        next: fix
+      - condition: findings.conflicts.count == 0 && findings.open.count > 0
+        next: fix
+      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
+        next: fix
+      - condition: findings.conflicts.count > 0
+        return: need_replan
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review-finding-contract
   - name: fix
     tags:
       - coding

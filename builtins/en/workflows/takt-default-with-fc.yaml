@@ -1,5 +1,5 @@
 name: takt-default-with-fc
-description: Finding Contract-enabled TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (parallel reviewers + fix) -> supervise -> COMPLETE).
+description: Finding Contract-enabled TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (specialist reviewers + merge-readiness + fix) -> supervise -> COMPLETE).
 workflow_config:
   provider_options:
     codex:

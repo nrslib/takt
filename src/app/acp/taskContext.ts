@@ -1,4 +1,9 @@
 import type { AcpTaskContext } from './types.js';
+import {
+  assertValidTaskContextBranchName,
+  assertValidTaskContextPrNumber,
+  isValidTaskContextBranchName,
+} from '../../features/tasks/taskContextValidation.js';
 
 type PresentAcpTaskContext = AcpTaskContext & (
   | { branch: string }
@@ -17,78 +22,21 @@ const PR_NUMBER_KEY_PATTERN = new RegExp(
   'iu',
 );
 const PR_NUMBER_LABEL_PATTERN = new RegExp(String.raw`\bPR\s*#\s*${CONTEXT_VALUE_PATTERN}`, 'iu');
-const REMOTE_TRACKING_REF_PREFIXES = ['origin/', 'refs/remotes/'];
-const DISALLOWED_BRANCH_PREFIXES = ['refs/'];
-const DISALLOWED_BRANCH_CHARACTERS = new Set(['~', '^', ':', '?', '*', '[', ']', '\\']);
+const ACP_BRANCH_VALIDATION_LABELS = {
+  branchLabel: 'ACP branch',
+  invalidBranchLabel: 'Invalid ACP branch',
+};
 
 export function assertValidAcpBranchName(branch: string): void {
-  const trimmed = branch.trim();
-  if (trimmed.length === 0 || trimmed !== branch) {
-    throw new Error('ACP branch must be a non-empty branch name without surrounding whitespace.');
-  }
-  if (branch.includes(':')) {
-    throw new Error(`ACP branch must be a branch name, not a refspec: ${branch}`);
-  }
-  if (branch.includes('@{')) {
-    throw new Error(`ACP branch must be a plain branch name, not a reflog selector: ${branch}`);
-  }
-  if (branch.startsWith('-')) {
-    throw new Error(`ACP branch must be a plain local branch name, not a Git option: ${branch}`);
-  }
-  if (DISALLOWED_BRANCH_PREFIXES.some((prefix) => branch.startsWith(prefix))) {
-    throw new Error(`ACP branch must be a plain local branch name, not a full ref: ${branch}`);
-  }
-  if (REMOTE_TRACKING_REF_PREFIXES.some((prefix) => branch.startsWith(prefix))) {
-    throw new Error(`ACP branch must be a branch name, not a remote-tracking ref: ${branch}`);
-  }
-
-  if (!isValidGitBranchRefName(branch)) {
-    throw new Error(`Invalid ACP branch: ${branch}`);
-  }
-}
-
-function isValidGitBranchRefName(branch: string): boolean {
-  if (
-    branch === '@'
-    || branch.startsWith('/')
-    || branch.endsWith('/')
-    || branch.endsWith('.')
-    || branch.includes('//')
-    || branch.includes('..')
-    || hasInvalidGitBranchCharacter(branch)
-  ) {
-    return false;
-  }
-
-  return branch.split('/').every((part) =>
-    part.length > 0
-    && !part.startsWith('.')
-    && !part.endsWith('.lock'));
-}
-
-function hasInvalidGitBranchCharacter(branch: string): boolean {
-  for (const char of branch) {
-    const code = char.charCodeAt(0);
-    if (code <= 32 || code === 127 || DISALLOWED_BRANCH_CHARACTERS.has(char)) {
-      return true;
-    }
-  }
-  return false;
+  assertValidTaskContextBranchName(branch, ACP_BRANCH_VALIDATION_LABELS);
 }
 
 export function isValidAcpBranchName(branch: string): boolean {
-  try {
-    assertValidAcpBranchName(branch);
-    return true;
-  } catch {
-    return false;
-  }
+  return isValidTaskContextBranchName(branch);
 }
 
 function assertValidAcpPrNumber(prNumber: number): void {
-  if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    throw new Error('ACP prNumber must be a positive integer.');
-  }
+  assertValidTaskContextPrNumber(prNumber, 'ACP prNumber');
 }
 
 export function assertValidAcpTaskContext(context: AcpTaskContext): void {
@@ -116,7 +64,7 @@ function extractPrNumber(text: string): number | undefined {
   }
 
   if (!/^-?\d+$/u.test(value)) {
-    throw new Error('ACP prNumber must be a positive integer.');
+    throw new Error('ACP prNumber must be a positive safe integer.');
   }
 
   const parsed = Number.parseInt(value, 10);

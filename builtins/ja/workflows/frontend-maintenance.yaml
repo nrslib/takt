@@ -23,6 +23,7 @@ loop_monitors:
           next: reviewers_1
   - cycle:
       - reviewers_1
+      - final-gate
       - fix
     threshold: 3
     judge:
@@ -32,7 +33,7 @@ loop_monitors:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers_1
         - condition: 非生産的（同じ指摘が繰り返される）
-          next: supervise
+          next: final-gate
 steps:
   - name: plan
     tags:
@@ -425,29 +426,6 @@ steps:
               format: qa-review
         knowledge:
           - existing-system
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -456,6 +434,9 @@ steps:
         policy:
           - review
           - coding
+          - existing-system-respect
+        knowledge:
+          - existing-system
         provider_options:
           claude:
             allowed_tools:
@@ -475,9 +456,37 @@ steps:
           - condition: needs_fix
     rules:
       - condition: all("approved")
-        next: supervise
+        next: final-gate
       - condition: any("needs_fix")
         next: fix
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-dual-final-gate
+    args:
+      merge_readiness_policy:
+        - review
+        - existing-system-respect
+      merge_readiness_knowledge:
+        - frontend
+        - react
+        - security
+        - architecture
+        - existing-system
+      supervise_knowledge:
+        - frontend
+        - react
+        - security
+        - architecture
+        - existing-system
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding
@@ -513,69 +522,3 @@ steps:
       - condition: 修正を進行できない
         next: plan
     instruction: fix-maintenance
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: dual-supervisor
-    policy:
-      - review
-      - existing-system-respect
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    instruction: supervise-maintenance
-    pass_previous_response: false
-    rules:
-      - condition: すべての検証が完了し、マージ可能な状態である
-        next: COMPLETE
-      - condition: 問題が検出された
-        next: fix_supervisor
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false
-    knowledge:
-      - existing-system
-  - name: fix_supervisor
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - existing-system-respect
-    knowledge:
-      - frontend
-      - react
-      - security
-      - architecture
-      - existing-system
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: fix-maintenance
-    pass_previous_response: false
-    rules:
-      - condition: 監督者の指摘に対する修正が完了した
-        next: supervise
-      - condition: 修正を進行できない
-        next: plan

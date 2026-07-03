@@ -2,14 +2,18 @@
  * Task execution logic
  */
 
-import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
+import type { TaskRunner, TaskInfo, TaskResult } from '../../../infra/task/index.js';
+import type { GitProvider } from '../../../infra/git/index.js';
+import { getErrorMessage } from '../../../shared/utils/index.js';
 import type {
   TaskExecutionOptions,
   ExecuteTaskOptions,
   WorkflowExecutionResult,
   TaskExecutionParallelOptions,
+  TaskExecutionContextOverride,
+  ExceededInfo,
 } from './types.js';
-import { resolveTaskExecution, resolveTaskIssue } from './resolveTask.js';
+import { resolveTaskExecution, resolveTaskIssue, type ResolveTaskExecutionOptions } from './resolveTask.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { postExecutionFlow } from './postExecution.js';
 import {
@@ -23,6 +27,14 @@ import {
 import { runWorkflowExecution } from './workflowExecutionApi.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
+
+export interface TaskCompletionResult {
+  success: boolean;
+  failureReason?: string;
+  prFailed?: boolean;
+  postExecutionFailureReason?: string;
+  taskResult?: TaskResult;
+}
 
 export async function executeTaskWithResult(options: ExecuteTaskOptions): Promise<WorkflowExecutionResult> {
   return runWorkflowExecution(options);
@@ -51,7 +63,7 @@ export async function executeAndCompleteTask(
   taskExecutionOptions?: TaskExecutionOptions,
   parallelOptions?: TaskExecutionParallelOptions,
 ): Promise<boolean> {
-  return executeTaskAndCompleteWithResult(
+  const result = await executeTaskAndCompleteWithDetails(
     task,
     taskRunner,
     cwd,
@@ -59,6 +71,7 @@ export async function executeAndCompleteTask(
     taskExecutionOptions,
     parallelOptions,
   );
+  return result.success;
 }
 
 export async function executeTaskAndCompleteWithResult(
@@ -68,7 +81,30 @@ export async function executeTaskAndCompleteWithResult(
   taskExecutor: (options: ExecuteTaskOptions) => Promise<WorkflowExecutionResult>,
   taskExecutionOptions?: TaskExecutionOptions,
   parallelOptions?: TaskExecutionParallelOptions,
+  taskContext?: TaskExecutionContextOverride,
 ): Promise<boolean> {
+  const result = await executeTaskAndCompleteWithDetails(
+    task,
+    taskRunner,
+    cwd,
+    taskExecutor,
+    taskExecutionOptions,
+    parallelOptions,
+    taskContext,
+  );
+  return result.success;
+}
+
+export async function executeTaskAndCompleteWithDetails(
+  task: TaskInfo,
+  taskRunner: TaskRunner,
+  cwd: string,
+  taskExecutor: (options: ExecuteTaskOptions) => Promise<WorkflowExecutionResult>,
+  taskExecutionOptions?: TaskExecutionOptions,
+  parallelOptions?: TaskExecutionParallelOptions,
+  taskContext?: TaskExecutionContextOverride,
+  gitProvider?: GitProvider,
+): Promise<TaskCompletionResult> {
   const startedAt = new Date().toISOString();
   let taskForPersistence = task;
   const taskAbortController = new AbortController();
@@ -88,6 +124,7 @@ export async function executeTaskAndCompleteWithResult(
   }
 
   try {
+    const emitStatusLog = parallelOptions?.outputMode !== 'silent';
     const {
       execCwd,
       workflowIdentifier,
@@ -108,7 +145,10 @@ export async function executeTaskAndCompleteWithResult(
       orderContent,
       maxStepsOverride,
       initialIterationOverride,
-    } = await resolveTaskExecution(task, cwd, taskAbortSignal);
+      prNumber,
+    } = await resolveTaskExecution(task, cwd, taskAbortSignal, {
+      ...buildResolveTaskExecutionOptions(parallelOptions, taskContext),
+    });
 
     const executionTask = taskRunner.updateRunningTaskExecution(task.name, {
       runSlug: reportDirName,
@@ -132,6 +172,7 @@ export async function executeTaskAndCompleteWithResult(
       taskPrefix: parallelOptions?.taskPrefix,
       taskColorIndex: parallelOptions?.taskColorIndex,
       taskDisplayLabel: parallelOptions?.taskDisplayLabel,
+      outputMode: parallelOptions?.outputMode,
       maxStepsOverride,
       initialIterationOverride,
       currentTaskIssueNumber: issueNumber,
@@ -142,6 +183,7 @@ export async function executeTaskAndCompleteWithResult(
         baseBranch,
         worktreePath,
         issueNumber,
+        prNumber,
       }),
     });
 
@@ -149,8 +191,13 @@ export async function executeTaskAndCompleteWithResult(
       persistExceededTaskResult(taskRunner, executionTask, taskRunResult.exceededInfo, {
         worktreePath,
         branch,
+      }, {
+        emitStatusLog,
       });
-      return false;
+      return {
+        success: false,
+        failureReason: buildExceededFailureReason(taskRunResult.exceededInfo),
+      };
     }
 
     const taskSuccess = taskRunResult.success;
@@ -160,7 +207,9 @@ export async function executeTaskAndCompleteWithResult(
     let prFailedError: string | undefined;
     let postExecutionTaskError: string | undefined;
     if (taskSuccess && isWorktree) {
-      const issues = resolveTaskIssue(issueNumber, projectRootCwd);
+      const issues = gitProvider === undefined
+        ? resolveTaskIssue(issueNumber, projectRootCwd)
+        : resolveTaskIssue(issueNumber, projectRootCwd, gitProvider);
       const postResult = await postExecutionFlow({
         execCwd,
         projectCwd: projectRootCwd,
@@ -174,6 +223,8 @@ export async function executeTaskAndCompleteWithResult(
         workflowIdentifier,
         issues,
         orderContent,
+        outputMode: parallelOptions?.outputMode,
+        ...(gitProvider === undefined ? {} : { gitProvider }),
       });
       prUrl = postResult.prUrl;
       if (postResult.prFailed) {
@@ -195,8 +246,12 @@ export async function executeTaskAndCompleteWithResult(
         worktreePath,
         branch,
       });
-      persistTaskResult(taskRunner, taskResult);
-      return false;
+      persistTaskResult(taskRunner, taskResult, { emitStatusLog });
+      return {
+        success: false,
+        failureReason: taskResult.response,
+        taskResult,
+      };
     }
 
     const taskResult = buildTaskResult({
@@ -210,19 +265,48 @@ export async function executeTaskAndCompleteWithResult(
     });
 
     if (prFailedError !== undefined) {
-      persistPrFailedTaskResult(taskRunner, taskResult, prFailedError);
-      return true;
+      persistPrFailedTaskResult(taskRunner, taskResult, prFailedError, { emitStatusLog });
+      return {
+        success: true,
+        prFailed: true,
+        postExecutionFailureReason: prFailedError,
+        taskResult,
+      };
     }
 
-    persistTaskResult(taskRunner, taskResult);
-    return taskRunResult.success;
+    persistTaskResult(taskRunner, taskResult, { emitStatusLog });
+    return {
+      success: taskRunResult.success,
+      ...(taskRunResult.success ? {} : { failureReason: taskResult.response }),
+      taskResult,
+    };
   } catch (err) {
     const completedAt = new Date().toISOString();
-    persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, err);
-    return false;
+    const failureReason = getErrorMessage(err);
+    persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, err, {
+      emitStatusLog: parallelOptions?.outputMode !== 'silent',
+    });
+    return {
+      success: false,
+      failureReason,
+    };
   } finally {
     if (externalAbortSignal) {
       externalAbortSignal.removeEventListener('abort', onExternalAbort);
     }
   }
+}
+
+function buildExceededFailureReason(exceeded: ExceededInfo): string {
+  return `Task exceeded iteration limit at step "${exceeded.currentStep}"`;
+}
+
+function buildResolveTaskExecutionOptions(
+  parallelOptions: TaskExecutionParallelOptions | undefined,
+  taskContext: TaskExecutionContextOverride | undefined,
+): ResolveTaskExecutionOptions {
+  return {
+    ...(parallelOptions?.outputMode !== undefined ? { outputMode: parallelOptions.outputMode } : {}),
+    ...(taskContext !== undefined ? { taskContext } : {}),
+  };
 }

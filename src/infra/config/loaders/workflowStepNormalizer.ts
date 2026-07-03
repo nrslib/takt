@@ -10,6 +10,7 @@ import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js'
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
 import type {
   StepProviderOptions,
+  WorkflowCallArgValue,
   WorkflowStepKind,
 } from '../../../core/models/workflow-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
@@ -32,11 +33,30 @@ import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
 import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
 import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
+import { isWorkflowParamReference } from './workflowCallableParamRef.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
 type RawPromotionEntry = NonNullable<RawStep['promotion']>[number];
 type NormalizedProviderReference = ReturnType<typeof normalizeProviderReference>;
+
+function normalizeWorkflowCallArgs(
+  stepName: string,
+  args: RawStep['args'],
+): Record<string, WorkflowCallArgValue> | undefined {
+  if (!args) {
+    return undefined;
+  }
+
+  const normalized: Record<string, WorkflowCallArgValue> = {};
+  for (const [argName, value] of Object.entries(args)) {
+    if (isWorkflowParamReference(value)) {
+      throw new Error(`Step "${stepName}" has unresolved $param in args.${argName}`);
+    }
+    normalized[argName] = value;
+  }
+  return normalized;
+}
 
 export function normalizeProviderReference(
   provider: RawProviderReference,
@@ -238,7 +258,7 @@ export function normalizeStepFromRaw(
             providerOptions: normalizedOverrides.providerOptions,
           }
         : undefined,
-      args: step.args,
+      args: normalizeWorkflowCallArgs(step.name, step.args),
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       rules,

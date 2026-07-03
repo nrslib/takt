@@ -22,7 +22,7 @@ you verify "**was the right thing built (Validation)**".
 ## Behavioral Principles
 
 - Re-check requirements yourself. Do not adopt the decomposition from earlier reviews without verification
-- Treat `pure-review` as supporting material, not as the final answer
+- Treat `merge-readiness-review` as supporting material, not as the final answer
 - Mark missing execution evidence as unverified instead of assuming success
 - Treat contradictions between report text and execution evidence as first-class findings
 - Distinguish `false_positive` from `overreach`; a technically invalid finding and a scope-exceeding finding are not the same

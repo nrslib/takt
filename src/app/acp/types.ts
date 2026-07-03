@@ -3,7 +3,7 @@ import type {
   CreateElicitationResponse,
 } from '@agentclientprotocol/sdk';
 import type { ConversationSession, ConversationSessionOptions } from '../../features/interactive/conversationSession.js';
-import type { createIssueFromTask, saveTaskFile } from '../../features/tasks/add/index.js';
+import type { createIssueFromTaskResult, saveTaskFile } from '../../features/tasks/add/index.js';
 import type {
   WorkflowExecutionEvent,
   WorkflowExecutionResult,
@@ -45,7 +45,7 @@ export interface TaktAcpAgentDependencies {
   createConversationSession?: (options: AcpConversationSessionOptions) => ConversationSession;
   runWorkflowExecution?: (request: WorkflowExecutionRequest) => Promise<WorkflowExecutionResult>;
   saveTaskFile?: typeof saveTaskFile;
-  createIssueFromTask?: typeof createIssueFromTask;
+  createIssueFromTaskResult?: typeof createIssueFromTaskResult;
   sendSessionUpdate?: SendSessionUpdate;
   createElicitation?: CreateAcpElicitation;
   workflowIdentifier?: string;

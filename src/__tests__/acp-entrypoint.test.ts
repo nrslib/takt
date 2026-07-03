@@ -534,7 +534,7 @@ describe('ACP package entrypoint', () => {
       autoPr: false,
       branch: 'takt/789/entrypoint-context',
       baseBranch: 'main',
-      prNumber: 789,
+      contextPrNumber: 789,
     });
     expect(runWorkflowExecution).not.toHaveBeenCalled();
   });
@@ -563,6 +563,36 @@ describe('ACP package entrypoint', () => {
           mcpServers: [],
           taskContext: {
             branch: 'HEAD:refs/heads/takt/injected',
+          },
+        });
+      })).rejects.toThrow('Invalid params');
+    expect(saveTaskFile).not.toHaveBeenCalled();
+  });
+
+  it('should reject unsafe session/new taskContext PR number over the SDK stream transport', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const saveTaskFile = vi.fn();
+    const app = createTaktAcpAgentApp({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn(),
+        createTaskInstruction: vi.fn(),
+      })),
+      saveTaskFile,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    await expect(client({ name: 'takt-acp-unsafe-pr-number-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        return agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          mcpServers: [],
+          taskContext: {
+            prNumber: Number.MAX_SAFE_INTEGER + 1,
           },
         });
       })).rejects.toThrow('Invalid params');

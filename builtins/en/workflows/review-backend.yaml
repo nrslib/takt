@@ -114,29 +114,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -165,9 +142,67 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: final-gate
       - condition: any("needs_fix")
         next: supervise
+
+  - name: final-gate
+    tags:
+      - review
+    parallel:
+      - name: merge-readiness-review
+        tags:
+          - review
+        edit: false
+        persona: merge-readiness-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-merge-readiness
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      - name: review-synthesis
+        tags:
+          - review
+        edit: false
+        persona: supervisor
+        policy: review
+        provider_options: &review_synthesis_provider_options
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
+        pass_previous_response: false
+        instruction: &review_synthesis_instruction supervise
+        output_contracts: &review_synthesis_output_contracts
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: summary
+              use_judge: false
+        rules:
+          - condition: approved
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+      - condition: any("needs_fix")
+        next: COMPLETE
 
   - name: supervise
     tags:
@@ -175,23 +210,10 @@ steps:
     edit: false
     persona: supervisor
     policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
+    provider_options: *review_synthesis_provider_options
     pass_previous_response: false
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false
+    instruction: *review_synthesis_instruction
+    output_contracts: *review_synthesis_output_contracts
     rules:
       - condition: Review integration complete
         next: COMPLETE

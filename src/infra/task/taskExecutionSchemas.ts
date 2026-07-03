@@ -15,12 +15,17 @@ const ResumePointSchema = z.object({
   elapsed_ms: z.number().int().min(0),
 }).strict();
 
+const positiveSafeIntegerSchema = z.number().refine(
+  (value) => Number.isSafeInteger(value) && value > 0,
+  { message: 'Expected a positive safe integer' },
+);
+
 export const TaskExecutionConfigObjectSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
   branch: z.string().optional(),
   base_branch: z.string().optional(),
   workflow: z.string().optional(),
-  issue: z.number().int().positive().optional(),
+  issue: positiveSafeIntegerSchema.optional(),
   start_step: z.string().optional(),
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),
@@ -30,7 +35,8 @@ export const TaskExecutionConfigObjectSchema = z.object({
   exceeded_max_steps: z.number().int().positive().optional(),
   exceeded_current_iteration: z.number().int().min(0).optional(),
   source: z.enum(['pr_review', 'issue', 'manual']).optional(),
-  pr_number: z.number().int().positive().optional(),
+  pr_number: positiveSafeIntegerSchema.optional(),
+  context_pr_number: positiveSafeIntegerSchema.optional(),
   resume_point: ResumePointSchema.optional(),
 }).superRefine((data, ctx) => {
   if (data.source === 'pr_review' && data.pr_number === undefined) {

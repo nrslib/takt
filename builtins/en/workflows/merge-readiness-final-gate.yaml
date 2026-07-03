@@ -1,0 +1,74 @@
+name: merge-readiness-final-gate
+description: Parallel final gate that checks merge readiness and supervision independently, then returns the required next action.
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+    - need_replan
+  params:
+    supervise_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 5
+initial_step: final_gate
+steps:
+  - name: final_gate
+    tags:
+      - review
+    parallel:
+      - name: merge-readiness-review
+        tags:
+          - review
+        edit: false
+        persona: merge-readiness-reviewer
+        policy: review
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: review-merge-readiness
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      - name: supervise
+        tags:
+          - review
+        edit: false
+        persona: supervisor
+        policy: review
+        knowledge:
+          $param: supervise_knowledge
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: supervise
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: summary
+              use_judge: false
+        rules:
+          - condition: approved
+          - condition: needs_fix
+          - condition: need_replan
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+      - condition: any("need_replan")
+        return: need_replan
+      - condition: any("needs_fix")
+        return: needs_fix

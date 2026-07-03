@@ -124,6 +124,91 @@ If an ACP prompt creates or directly executes a task, TAKT uses the `default` wo
 
 TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/update` notifications. `additionalDirectories` is not advertised and non-empty `additionalDirectories` requests are rejected.
 
+## MCP Server
+
+`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want the client to enqueue TAKT tasks, create an issue through the configured issue provider and enqueue the task, or run the next pending task without shelling out to `takt add` or `takt run`.
+
+```bash
+takt-mcp
+```
+
+For Codex, add a stdio MCP server to `~/.codex/config.toml`, or to project-scoped `.codex/config.toml` for trusted projects:
+
+```toml
+[mcp_servers.takt]
+command = "takt-mcp"
+```
+
+You can also add it with the Codex MCP CLI:
+
+```bash
+codex mcp add takt -- takt-mcp
+```
+
+The server exposes these tools:
+
+| Tool | Description |
+|------|-------------|
+| `takt_enqueue_task` | Save a pending task to `.takt/tasks.yaml`. |
+| `takt_create_issue_and_enqueue_task` | Create an issue through the configured issue provider, then save a pending task with the created issue number. |
+| `takt_run_next_task` | Claim and execute the next pending task through TAKT's existing task execution path. |
+
+Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
+
+### `takt_enqueue_task`
+
+Required input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cwd` | absolute path string | Project root where `.takt/tasks.yaml` is written. |
+| `task` | string | Task instruction body. |
+
+Optional input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `workflow` | string | Workflow name or path. Defaults to `default`. |
+| `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
+| `autoPr` | boolean | Save the task with auto-PR enabled. Defaults to `false`. |
+| `taskContext.branch` | string | Local branch name to save with the task. |
+| `taskContext.baseBranch` | string | Base branch name to save with the task. |
+| `taskContext.prNumber` | positive safe integer | Pull request number to save with the task. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
+
+Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, each issue label to 100 characters, and at most 20 labels.
+
+### `takt_create_issue_and_enqueue_task`
+
+This tool accepts the same fields as `takt_enqueue_task`, plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `labels` | string array | Labels to request when creating the issue. |
+
+Issue creation uses the configured TAKT issue provider and runs in silent output mode. If issue creation fails, the tool returns an MCP error result and does not save the task. If task saving fails after the issue is created, TAKT adds a fixed compensation comment to the created issue and closes it so the repository does not retain an issue without a pending task. When that close succeeds, the MCP error result reports that the issue was created and closed along with the local task-saving error. When that close fails, the MCP error result includes both the task-saving error and the issue close error.
+
+### `takt_run_next_task`
+
+Required input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cwd` | absolute path string | Project root containing `.takt/tasks.yaml`. |
+
+Optional input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | string | Provider override for the task execution. |
+| `model` | string | Model override for the task execution. |
+| `taskContext.branch` | string | Local branch context. |
+| `taskContext.baseBranch` | string | Base branch context. |
+| `taskContext.prNumber` | positive safe integer | Pull request context. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
+
+Input limits: `provider` must be one of TAKT's known provider identifiers and `model` is limited to 128 characters.
+
+The tool executes at most one pending task and suppresses normal workflow output so stdout remains reserved for MCP messages. When no pending task exists, it returns `{ "ran": false }`.
+
 ## Instant Exec Mode
 
 `takt exec` starts TAKT's interactive task-entry mode without writing workflow YAML by hand. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.

@@ -176,30 +176,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: coding-review
         tags:
           - review
@@ -228,9 +204,149 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: final-gate
       - condition: any("needs_fix")
         next: supervise
+
+  - name: final-gate
+    tags:
+      - review
+    parallel:
+      - name: merge-readiness-review
+        tags:
+          - review
+        edit: false
+        persona: merge-readiness-reviewer
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - Bash
+              - WebSearch
+              - WebFetch
+        instruction: review-merge-readiness
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      - name: review-synthesis
+        tags:
+          - review
+        edit: false
+        persona: supervisor
+        policy: review
+        provider_options:
+          claude:
+            allowed_tools:
+              - Read
+              - Glob
+              - Grep
+              - WebSearch
+              - WebFetch
+        pass_previous_response: false
+        rules:
+          - condition: approved
+        instruction: &review_synthesis_instruction |
+          ## Review Results
+          {previous_response}
+
+          **This is a review-only workflow.** Do NOT run tests or builds.
+          Your role is to synthesize the review results and produce a final summary.
+
+          **Tasks:**
+          1. Read all review reports in the Report Directory
+             - `00-review-target.md` (Review target information)
+             - `01-architecture-review.md` (Architecture review)
+             - `02-security-review.md` (Security review)
+             - `03-qa-review.md` (QA review)
+             - `04-testing-review.md` (Testing review)
+             - `05-ai-antipattern-review.md` (AI antipattern review)
+             - `06-coding-review.md` (Coding review)
+          2. Synthesize the 6 review results
+          3. Produce a consolidated review summary with overall verdict
+
+          **Review Summary output contract:**
+          ```markdown
+          # Review Summary
+
+          ## Overall Verdict: APPROVE / REJECT
+
+          ## Summary
+          {2-3 sentences consolidating all review results}
+
+          ## Review Results
+          | Review | Result | Key Findings |
+          |--------|--------|--------------|
+          | Architecture | APPROVE/REJECT | {Brief finding} |
+          | Security | APPROVE/REJECT | {Brief finding} |
+          | QA | APPROVE/REJECT | {Brief finding} |
+          | Testing | APPROVE/REJECT | {Brief finding} |
+          | AI Antipattern | APPROVE/REJECT | {Brief finding} |
+          | Coding | APPROVE/REJECT | {Brief finding} |
+
+          ## Issues Requiring Attention
+          | # | Severity | Source | Location | Issue |
+          |---|----------|--------|----------|-------|
+          | 1 | High | Security | `file:line` | Description |
+
+          ## Improvement Suggestions
+          - {Consolidated suggestions from all reviews}
+          ```
+        output_contracts: &review_synthesis_output_contracts
+          report:
+            - name: review-summary.md
+              format: |
+                ```markdown
+                # Review Summary
+
+                ## Overall Verdict: APPROVE / REJECT
+
+                ## Summary
+                {2-3 sentences consolidating all review results}
+
+                ## Review Results
+                | Review | Result | Key Findings |
+                |--------|--------|--------------|
+                | Architecture | APPROVE/REJECT | {Overview} |
+                | Security | APPROVE/REJECT | {Overview} |
+                | QA | APPROVE/REJECT | {Overview} |
+                | Testing | APPROVE/REJECT | {Overview} |
+                | AI Antipattern | APPROVE/REJECT | {Overview} |
+                | Coding | APPROVE/REJECT | {Overview} |
+
+                ## Current Iteration Findings (new)
+                | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |
+                |---|------------|----------|--------|----------|-------|----------------|
+                | 1 | SUM-NEW-src-file-L42 | High | Security | `file:line` | Description | Suggestion |
+
+                ## Carry-over Findings (persists)
+                | # | finding_id | Source | Previous Evidence | Current Evidence | Issue |
+                |---|------------|--------|-------------------|------------------|-------|
+                | 1 | SUM-PERSIST-src-file-L77 | Architecture | `file:line` | `file:line` | Description |
+
+                ## Resolved Findings (resolved)
+                | finding_id | Source | Resolution Evidence |
+                |------------|--------|---------------------|
+                | SUM-RESOLVED-src-file-L10 | QA | `file:line` |
+
+                ## Improvement Suggestions
+                - {Consolidated suggestions from all reviews}
+
+                ## Rejection Gate
+                - REJECT is valid only when at least one finding exists in `new` or `persists`
+                - Findings without `finding_id` are invalid
+                ```
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+      - condition: any("needs_fix")
+        next: COMPLETE
 
   - name: supervise
     tags:
@@ -250,96 +366,5 @@ steps:
     rules:
       - condition: Review synthesis complete
         next: COMPLETE
-    instruction: |
-      ## Review Results
-      {previous_response}
-
-      **This is a review-only workflow.** Do NOT run tests or builds.
-      Your role is to synthesize the review results and produce a final summary.
-
-      **Tasks:**
-      1. Read all review reports in the Report Directory
-         - `00-review-target.md` (Review target information)
-         - `01-architecture-review.md` (Architecture review)
-         - `02-security-review.md` (Security review)
-         - `03-qa-review.md` (QA review)
-         - `04-testing-review.md` (Testing review)
-         - `05-ai-antipattern-review.md` (AI antipattern review)
-         - `06-pure-review.md` (Requirements review)
-         - `07-coding-review.md` (Coding review)
-      2. Synthesize the 7 review results
-      3. Produce a consolidated review summary with overall verdict
-
-      **Review Summary output contract:**
-      ```markdown
-      # Review Summary
-
-      ## Overall Verdict: APPROVE / REJECT
-
-      ## Summary
-      {2-3 sentences consolidating all review results}
-
-      ## Review Results
-      | Review | Result | Key Findings |
-      |--------|--------|--------------|
-      | Architecture | APPROVE/REJECT | {Brief finding} |
-      | Security | APPROVE/REJECT | {Brief finding} |
-      | QA | APPROVE/REJECT | {Brief finding} |
-      | Testing | APPROVE/REJECT | {Brief finding} |
-      | AI Antipattern | APPROVE/REJECT | {Brief finding} |
-      | Requirements | APPROVE/REJECT | {Brief finding} |
-      | Coding | APPROVE/REJECT | {Brief finding} |
-
-      ## Issues Requiring Attention
-      | # | Severity | Source | Location | Issue |
-      |---|----------|--------|----------|-------|
-      | 1 | High | Security | `file:line` | Description |
-
-      ## Improvement Suggestions
-      - {Consolidated suggestions from all reviews}
-      ```
-    output_contracts:
-      report:
-        - name: review-summary.md
-          format: |
-            ```markdown
-            # Review Summary
-
-            ## Overall Verdict: APPROVE / REJECT
-
-            ## Summary
-            {2-3 sentences consolidating all review results}
-
-            ## Review Results
-            | Review | Result | Key Findings |
-            |--------|--------|--------------|
-            | Architecture | APPROVE/REJECT | {Overview} |
-            | Security | APPROVE/REJECT | {Overview} |
-            | QA | APPROVE/REJECT | {Overview} |
-            | Testing | APPROVE/REJECT | {Overview} |
-            | AI Antipattern | APPROVE/REJECT | {Overview} |
-            | Requirements | APPROVE/REJECT | {Overview} |
-            | Coding | APPROVE/REJECT | {Overview} |
-
-            ## Current Iteration Findings (new)
-            | # | finding_id | Severity | Source | Location | Issue | Fix Suggestion |
-            |---|------------|----------|--------|----------|-------|----------------|
-            | 1 | SUM-NEW-src-file-L42 | High | Security | `file:line` | Description | Suggestion |
-
-            ## Carry-over Findings (persists)
-            | # | finding_id | Source | Previous Evidence | Current Evidence | Issue |
-            |---|------------|--------|-------------------|------------------|-------|
-            | 1 | SUM-PERSIST-src-file-L77 | Architecture | `file:line` | `file:line` | Description |
-
-            ## Resolved Findings (resolved)
-            | finding_id | Source | Resolution Evidence |
-            |------------|--------|---------------------|
-            | SUM-RESOLVED-src-file-L10 | QA | `file:line` |
-
-            ## Improvement Suggestions
-            - {Consolidated suggestions from all reviews}
-
-            ## Rejection Gate
-            - REJECT is valid only when at least one finding exists in `new` or `persists`
-            - Findings without `finding_id` are invalid
-            ```
+    instruction: *review_synthesis_instruction
+    output_contracts: *review_synthesis_output_contracts

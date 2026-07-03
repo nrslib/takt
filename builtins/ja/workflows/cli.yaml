@@ -1,0 +1,120 @@
+name: cli
+description: CLI開発ワークフロー（計画 → テスト作成 → draft（実装+AI自己レビュー） → peer-review（並列レビュー+修正） → 監督 → 完了）
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 50
+initial_step: plan
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    knowledge: architecture
+    provider_options:
+      extends: review-readonly
+    rules:
+      - condition: 要件が明確で実装可能
+        next: write_tests
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+    instruction: plan
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+  - name: write_tests
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - architecture
+      - unit-testing
+      - e2e-testing
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: テスト作成が完了した
+        next: draft
+      - condition: テスト対象が未実装のためテスト作成をスキップする
+        next: draft
+      - condition: テスト作成を進行できない
+        next: plan
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+  - name: draft
+    kind: workflow_call
+    call: draft
+    args:
+      impl_knowledge:
+        - architecture
+        - task-decomposition
+      fix_knowledge:
+        - architecture
+    rules:
+      - condition: COMPLETE
+        next: peer-review
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
+  - name: peer-review
+    kind: workflow_call
+    call: peer-review
+    args:
+      arch_knowledge:
+        - architecture
+      fix_knowledge:
+        - architecture
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
+  - name: supervise
+    tags:
+      - review
+    edit: false
+    persona: supervisor
+    policy: review
+    knowledge: architecture
+    provider_options:
+      extends: review-readonly
+    pass_previous_response: false
+    rules:
+      - condition: すべて問題なし
+        next: COMPLETE
+      - condition: 要求未達成、テスト失敗、ビルドエラー
+        next: plan
+    instruction: supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false

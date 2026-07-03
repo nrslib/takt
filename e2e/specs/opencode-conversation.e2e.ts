@@ -1,51 +1,8 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { getOpenCodeSessionSnapshot, resetSharedServer } from '../../src/infra/opencode/client.js';
+import { getOpenCodeSessionMessages, getOpenCodeSessionSnapshot, resetSharedServer } from '../../src/infra/opencode/client.js';
 import { OpenCodeProvider } from '../../src/infra/providers/opencode.js';
 
 const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'opencode/big-pickle';
-const DENY_OR_FAILURE_PATTERN = /denied|deny|permission|not allowed|forbidden|reject|failed/i;
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (value && typeof value === 'object') {
-    return value as Record<string, unknown>;
-  }
-  return undefined;
-}
-
-function hasRuntimeDenyOrFailureEvent(
-  events: Array<{ type: string; data?: unknown }>,
-  sessionId: string,
-): boolean {
-  return events.some((event) => {
-    const data = asRecord(event.data);
-    if (!data) {
-      return false;
-    }
-
-    if (event.type === 'permission_asked') {
-      return (
-        data.sessionId === sessionId
-        && (data.reply === 'reject' || data.reply === 'deny')
-      );
-    }
-
-    if (event.type === 'tool_result') {
-      const content = String(data.content ?? '');
-      return data.isError === true && DENY_OR_FAILURE_PATTERN.test(content);
-    }
-
-    return false;
-  });
-}
-
-function expectDenyOnlyRuleset(ruleset: unknown): void {
-  expect(Array.isArray(ruleset)).toBe(true);
-  const permissions = ruleset as Array<{ permission?: unknown; action?: unknown }>;
-  expect(permissions.length).toBeGreaterThan(0);
-  expect(permissions.every((rule) => rule.action === 'deny')).toBe(true);
-  expect(permissions.some((rule) => rule.permission === 'read')).toBe(true);
-}
-
 describe('OpenCode real E2E conversation', () => {
   afterAll(() => {
     resetSharedServer();
@@ -118,7 +75,7 @@ describe('OpenCode real E2E conversation', () => {
     expect(results[2].content).toMatch(/84/);
   }, 180_000);
 
-  it('should use a deny-only permission session when allowedTools is empty', async () => {
+  it('should reuse the session and hide tools per prompt when allowedTools is empty', async () => {
     const provider = new OpenCodeProvider();
     const agent = provider.setup({
       name: 'coder',
@@ -139,6 +96,8 @@ describe('OpenCode real E2E conversation', () => {
     if (!sessionId) {
       throw new Error('OpenCode session ID is required for permission verification');
     }
+    // セッション permission は edit/write を許可し external_directory を deny する
+    // 緩和済みルールセット（フェーズ制限は per-prompt tools マップが担う）
     expect(streamEvents).toContainEqual({
       type: 'permission_summary',
       data: expect.objectContaining({
@@ -146,42 +105,54 @@ describe('OpenCode real E2E conversation', () => {
         resolvedPermissions: [
           { permission: '*', pattern: '*', action: 'deny' },
           { permission: 'read', pattern: '*', action: 'allow' },
+          { permission: 'edit', pattern: '*', action: 'allow' },
+          { permission: 'write', pattern: '*', action: 'allow' },
+          { permission: 'external_directory', pattern: '*', action: 'deny' },
         ],
       }),
     });
 
     const secondTurnStartIndex = streamEvents.length;
-    const result2 = await agent.call('Use the OpenCode read tool to inspect package.json before answering with only the package name.', {
-      cwd: process.cwd(),
-      model: MODEL,
-      sessionId,
-      allowedTools: [],
-      onStream: (event) => streamEvents.push(event),
-    });
+    const result2 = await agent.call(
+      'Use the OpenCode read tool to inspect package.json. If you have no read tool available, reply exactly NO-READ-TOOL.',
+      {
+        cwd: process.cwd(),
+        model: MODEL,
+        sessionId,
+        allowedTools: [],
+        onStream: (event) => streamEvents.push(event),
+      },
+    );
 
-    expect(result2.sessionId).toBeDefined();
-    const permissionSessionId = result2.sessionId;
-    if (!permissionSessionId) {
-      throw new Error('OpenCode permission session ID is required for deny-all verification');
-    }
+    expect(result2.status).toBe('done');
+    // セッションは再作成されず、同一 ID のまま継続する
+    expect(result2.sessionId).toBe(sessionId);
+    // 再開ターンでは permission_summary は再発行されない（セッション権限は不変）
     const secondTurnEvents = streamEvents.slice(secondTurnStartIndex);
-    const hasRuntimeDenyEvent = hasRuntimeDenyOrFailureEvent(secondTurnEvents, permissionSessionId);
-    expect(hasRuntimeDenyEvent).toBe(true);
-    const permissionSummary = secondTurnEvents.find((event) => (
-      event.type === 'permission_summary'
-      && asRecord(event.data)?.sessionId === permissionSessionId
-    ));
-    expect(permissionSummary).toBeDefined();
-    const permissionSummaryData = asRecord(permissionSummary?.data);
-    expect(permissionSummaryData).toEqual(expect.objectContaining({
-      sessionId: permissionSessionId,
-      allowedTools: [],
-    }));
-    expectDenyOnlyRuleset(permissionSummaryData?.resolvedPermissions);
-    const session = await getOpenCodeSessionSnapshot(MODEL, permissionSessionId, process.cwd());
+    expect(secondTurnEvents.some((event) => event.type === 'permission_summary')).toBe(false);
+    // tools マップにより read が不可視になっている。文字列不在ではなく、
+    // 記録されたメッセージ（観測単位）でターン2にツールパートが一切ないことを検証する
+    expect(result2.content).toContain('NO-READ-TOOL');
+    const messages = await getOpenCodeSessionMessages(MODEL, sessionId, process.cwd());
+    const lastUserIndex = messages.reduce(
+      (last, message, index) => (message.info.role === 'user' ? index : last),
+      -1,
+    );
+    expect(lastUserIndex).toBeGreaterThan(0);
+    const secondTurnParts = messages.slice(lastUserIndex + 1).flatMap((message) => message.parts);
+    expect(secondTurnParts.length).toBeGreaterThan(0);
+    expect(secondTurnParts.filter((part) => part.type === 'tool')).toEqual([]);
+    // セッション権限は 1 ターン目の緩和済みルールセットのまま
+    const session = await getOpenCodeSessionSnapshot(MODEL, sessionId, process.cwd());
     if (!session.permission) {
-      throw new Error('OpenCode session permission is required for deny-all verification');
+      throw new Error('OpenCode session permission is required for verification');
     }
-    expectDenyOnlyRuleset(session.permission);
+    const permissions = session.permission as Array<{ permission?: unknown; action?: unknown }>;
+    expect(permissions).toContainEqual(
+      expect.objectContaining({ permission: 'external_directory', action: 'deny' }),
+    );
+    expect(permissions).toContainEqual(
+      expect.objectContaining({ permission: 'edit', action: 'allow' }),
+    );
   }, 180_000);
 });

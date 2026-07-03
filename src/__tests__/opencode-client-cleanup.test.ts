@@ -163,8 +163,13 @@ const { createOpencodeMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
 }));
 
-const DENY_ONLY_OPEN_CODE_PERMISSION_RULESET = [
+// セッションの deny は後から昇格できないため、edit/write はセッションスコープで
+// 常に許可される（フェーズごとの制限は per-prompt tools マップが担う）
+const EMPTY_TOOLS_SESSION_PERMISSION_RULESET = [
   { permission: '*', pattern: '*', action: 'deny' },
+  { permission: 'edit', pattern: '*', action: 'allow' },
+  { permission: 'write', pattern: '*', action: 'allow' },
+  { permission: 'external_directory', pattern: '*', action: 'deny' },
 ];
 
 function deferred<T = void>(): {
@@ -803,10 +808,27 @@ describe('OpenCodeClient stream cleanup', () => {
         { permission: 'bash', pattern: '*', action: 'allow' },
         { permission: 'websearch', pattern: '*', action: 'allow' },
         { permission: 'webfetch', pattern: '*', action: 'allow' },
+        { permission: 'write', pattern: '*', action: 'allow' },
+        { permission: 'external_directory', pattern: '*', action: 'deny' },
       ],
     });
     expect(promptAsync).toHaveBeenCalledWith(
-      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          read: true,
+          edit: true,
+          write: true,
+          patch: true,
+          bash: true,
+          todowrite: true,
+          websearch: true,
+          webfetch: true,
+          glob: false,
+          grep: false,
+          question: false,
+          task: false,
+        }),
+      }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -855,10 +877,22 @@ describe('OpenCodeClient stream cleanup', () => {
         { permission: '*', pattern: '*', action: 'deny' },
         { permission: 'read', pattern: '*', action: 'allow' },
         { permission: 'bash', pattern: '*', action: 'allow' },
+        { permission: 'edit', pattern: '*', action: 'allow' },
+        { permission: 'write', pattern: '*', action: 'allow' },
+        { permission: 'external_directory', pattern: '*', action: 'deny' },
       ],
     });
     expect(promptAsync).toHaveBeenCalledWith(
-      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          read: true,
+          bash: true,
+          edit: false,
+          write: false,
+          patch: false,
+          task: false,
+        }),
+      }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -1475,6 +1509,9 @@ describe('OpenCodeClient stream cleanup', () => {
       directory: '/tmp',
       permission: [
         { permission: '*', pattern: '*', action: 'allow' },
+        { permission: 'edit', pattern: '*', action: 'allow' },
+        { permission: 'write', pattern: '*', action: 'allow' },
+        { permission: 'external_directory', pattern: '*', action: 'deny' },
       ],
     });
   });
@@ -1519,10 +1556,25 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('done');
     expect(sessionCreate).toHaveBeenCalledWith({
       directory: '/tmp',
-      permission: DENY_ONLY_OPEN_CODE_PERMISSION_RULESET,
+      permission: EMPTY_TOOLS_SESSION_PERMISSION_RULESET,
     });
     expect(promptAsync).toHaveBeenCalledWith(
-      expect.not.objectContaining({ tools: expect.anything() }),
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          read: false,
+          glob: false,
+          grep: false,
+          edit: false,
+          write: false,
+          patch: false,
+          bash: false,
+          todowrite: false,
+          websearch: false,
+          webfetch: false,
+          question: false,
+          task: false,
+        }),
+      }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -1581,14 +1633,14 @@ describe('OpenCodeClient stream cleanup', () => {
     });
   });
 
-  it('should create a permission-scoped child session when resuming with allowed tools', async () => {
+  it('should reuse the session and restrict tools per prompt when resuming with allowed tools', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       {
         type: 'message.updated',
         properties: {
           info: {
-            sessionID: 'session-existing-tools-deny',
+            sessionID: 'session-existing-tools',
             role: 'assistant',
             time: { created: Date.now(), completed: Date.now() + 1 },
           },
@@ -1597,39 +1649,42 @@ describe('OpenCodeClient stream cleanup', () => {
     ]);
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-existing-tools-deny' } });
-    const sessionUpdate = vi.fn().mockResolvedValue({ data: { id: 'unused-session' } });
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'unused-session' } });
     const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
     const subscribe = vi.fn().mockResolvedValue({ stream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, update: sessionUpdate, promptAsync },
+        session: { create: sessionCreate, promptAsync },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
       server: { close: vi.fn() },
     });
 
+    const onStream = vi.fn();
     const client = new OpenCodeClient();
     const result = await client.call('coder', 'hello', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       sessionId: 'session-existing-tools',
       allowedTools: [],
+      onStream,
     });
 
     expect(result.status).toBe('done');
-    expect(result.sessionId).toBe('session-existing-tools-deny');
-    expect(sessionUpdate).not.toHaveBeenCalled();
-    expect(sessionCreate).toHaveBeenCalledWith({
-      directory: '/tmp',
-      parentID: 'session-existing-tools',
-      permission: DENY_ONLY_OPEN_CODE_PERMISSION_RULESET,
-    });
+    expect(result.sessionId).toBe('session-existing-tools');
+    expect(sessionCreate).not.toHaveBeenCalled();
+    // 再開パスではセッション権限を適用しないため permission_summary は流れない
+    expect(onStream).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'permission_summary' }),
+    );
     expect(promptAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionID: 'session-existing-tools-deny' }),
+      expect.objectContaining({
+        sessionID: 'session-existing-tools',
+        tools: expect.objectContaining({ edit: false, write: false, bash: false, read: false }),
+      }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -1700,47 +1755,6 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(sessionCreate).toHaveBeenCalledTimes(3);
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(subscribe).toHaveBeenCalledTimes(2);
-  });
-
-  it('should stop before prompting when permission-scoped child session creation fails', async () => {
-    const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockRejectedValue(new Error('permission session create failed'));
-    const sessionUpdate = vi.fn().mockResolvedValue({ data: { id: 'unused-session' } });
-    const subscribe = vi.fn().mockResolvedValue({
-      stream: new MockEventStream([
-        { type: 'session.idle', properties: { sessionID: 'session-update-failure' } },
-      ]),
-    });
-
-    createOpencodeMock.mockResolvedValue({
-      client: {
-        instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, update: sessionUpdate, promptAsync },
-        event: { subscribe },
-        permission: { reply: vi.fn() },
-      },
-      server: { close: vi.fn() },
-    });
-
-    const client = new OpenCodeClient();
-    const result = await client.call('coder', 'hello', {
-      cwd: '/tmp',
-      model: 'opencode/big-pickle',
-      sessionId: 'session-update-failure',
-      allowedTools: [],
-    });
-
-    expect(result.status).toBe('error');
-    expect(result.content).toContain('permission session create failed');
-    expect(sessionCreate).toHaveBeenCalledWith({
-      directory: '/tmp',
-      parentID: 'session-update-failure',
-      permission: DENY_ONLY_OPEN_CODE_PERMISSION_RULESET,
-    });
-    expect(sessionUpdate).not.toHaveBeenCalled();
-    expect(subscribe).not.toHaveBeenCalled();
-    expect(promptAsync).not.toHaveBeenCalled();
   });
 
   it('should not update permission ruleset when resuming without allowed tools', async () => {
@@ -1840,9 +1854,13 @@ describe('OpenCodeClient stream cleanup', () => {
         permissionMode: 'readonly',
         allowedTools: ['Read', 'WebSearch'],
         networkAccess: false,
+        // summary は session.create に実際に渡した緩和済みルールセットを反映する
         resolvedPermissions: [
           { permission: '*', pattern: '*', action: 'deny' },
           { permission: 'read', pattern: '*', action: 'allow' },
+          { permission: 'edit', pattern: '*', action: 'allow' },
+          { permission: 'write', pattern: '*', action: 'allow' },
+          { permission: 'external_directory', pattern: '*', action: 'deny' },
         ],
       },
     });

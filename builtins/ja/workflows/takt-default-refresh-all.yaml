@@ -1,5 +1,5 @@
 name: takt-default-refresh-all
-description: "TAKT開発ワークフロー（全ステップ session refresh 比較版: 計画 → テスト作成 → チームリーダー実装 → AIアンチパターンレビュー → 並列レビュー → 修正 → 監督 → 完了）"
+description: "TAKT開発ワークフロー（全ステップ session refresh 比較版: 計画 → テスト作成 → チームリーダー実装 → AIアンチパターンレビュー → 並列レビュー → 修正 → 最終ゲート → 完了）"
 workflow_config:
   provider_options:
     codex:
@@ -23,6 +23,7 @@ loop_monitors:
           next: reviewers
   - cycle:
       - reviewers
+      - final-gate
       - fix
     threshold: 5
     judge:
@@ -32,7 +33,7 @@ loop_monitors:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
         - condition: 非生産的（同じ指摘が繰り返される）
-          next: supervise
+          next: final-gate
 steps:
   - name: plan
     tags:
@@ -355,30 +356,6 @@ steps:
           report:
             - name: testing-review.md
               format: testing-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        session: refresh
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: ai-antipattern-review-2nd
         tags:
           - review
@@ -405,9 +382,24 @@ steps:
               format: ai-antipattern-review
     rules:
       - condition: all("approved")
-        next: supervise
+        next: final-gate
       - condition: any("needs_fix")
         next: fix
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    args:
+      supervise_knowledge:
+        - architecture
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+      - condition: need_replan
+        next: plan
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding
@@ -439,34 +431,3 @@ steps:
       - condition: 判断できない、情報不足
         next: plan
     instruction: fix
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: supervisor
-    session: refresh
-    policy: review
-    knowledge: architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    pass_previous_response: false
-    rules:
-      - condition: すべて問題なし
-        next: COMPLETE
-      - condition: 要求未達成、テスト失敗、ビルドエラー
-        next: plan
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false

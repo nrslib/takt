@@ -21,6 +21,7 @@ import {
   type TaktAcpAgentDependencies,
 } from './agent.js';
 import { isValidAcpBranchName } from './taskContext.js';
+import { isValidTaskContextPrNumber } from '../../features/tasks/taskContextValidation.js';
 import { createLogger } from '../../shared/utils/debug.js';
 
 const log = createLogger('acp');
@@ -80,7 +81,9 @@ const acpBranchSchema = z.string().min(1).refine(isValidAcpBranchName, {
 const acpTaskContextSchema = z.object({
   branch: acpBranchSchema.optional(),
   baseBranch: acpBranchSchema.optional(),
-  prNumber: z.number().int().positive().optional(),
+  prNumber: z.number().refine(isValidTaskContextPrNumber, {
+    message: 'prNumber must be a positive safe integer',
+  }).optional(),
 }).strict().optional();
 
 const streamSessionNewRequestParser = {

@@ -17,7 +17,7 @@ Procedure:
    - Do not mark a composite requirement as ✅ based on only one side of the cases
    - Do not reinterpret required task items as optional, out of scope, or different requirements without explicit evidence
    - For requirements involving IDs, names, metadata, config, environment variables, or output contracts, verify entry points, execution modes, and missing-value behavior separately
-   - Do not rely on the plan report or pure-review judgment; independently verify mergeability
+   - Do not rely on the plan report or prior review judgments; independently verify maintainability-aware merge quality
    - For requirements involving side effects or state changes, separate verification of happy paths, failure paths, and cleanup
    - If any requirement is unfulfilled, REJECT
 4. Re-evaluate prior review findings
@@ -37,7 +37,7 @@ Procedure:
 
 - Do not treat summary reports as primary evidence. Use execution-result reports, reviewer reports with concrete verification details, and actual code in that order
 - You may treat `Build Results` / `Test Results` sections in execution-result reports as primary evidence
-- For `architecture-review`, `qa-review`, `testing-review`, `security-review`, and `pure-review`, prioritize each report's `Verification Evidence` section
+- For `architecture-review`, `qa-review`, `testing-review`, and `security-review`, prioritize each report's `Verification Evidence` section
 - Treat each `Verification Evidence` item as supporting evidence only when it states the verified target, what was checked, and observed result. If any part is missing, mark that item as `unverified`
 - Evidence based on mocks, static inspection, or limited unit tests must not be treated as verification beyond that scope
 - If items of evidence conflict, prioritize them in this order: `execution-result report > reviewer report with concrete verification details > summary report`

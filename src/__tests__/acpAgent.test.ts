@@ -681,7 +681,7 @@ describe('TAKT ACP agent adapter', () => {
       autoPr: false,
       branch: 'takt/123/fix-acp',
       baseBranch: 'main',
-      prNumber: 123,
+      contextPrNumber: 123,
     });
     expect(runWorkflowExecution).not.toHaveBeenCalled();
     expect(result).toEqual({ stopReason: 'end_turn' });
@@ -690,7 +690,7 @@ describe('TAKT ACP agent adapter', () => {
   it('should create an issue and enqueue the generated task instruction', async () => {
     const sendSessionUpdate = vi.fn();
     const runWorkflowExecution = vi.fn();
-    const createIssueFromTask = vi.fn().mockReturnValue(913);
+    const createIssueFromTaskResult = vi.fn().mockReturnValue({ success: true, issueNumber: 913 });
     const saveTaskFile = vi.fn().mockResolvedValue({
       taskName: '20260701-implement-acp-support',
       tasksFile: '/repo/.takt/tasks.yaml',
@@ -708,7 +708,7 @@ describe('TAKT ACP agent adapter', () => {
       })),
       runWorkflowExecution,
       saveTaskFile,
-      createIssueFromTask,
+      createIssueFromTaskResult,
       sendSessionUpdate,
     });
     const { sessionId } = await agent.handleSessionNew(newSessionParams());
@@ -722,17 +722,17 @@ describe('TAKT ACP agent adapter', () => {
       userNote: 'Issueを作ってタスクに積んで',
       abortSignal: expect.any(AbortSignal),
     }));
-    expect(createIssueFromTask).toHaveBeenCalledWith('Implement ACP support', {
+    expect(createIssueFromTaskResult).toHaveBeenCalledWith('Implement ACP support', expect.objectContaining({
       cwd: '/repo',
       outputMode: 'silent',
-    });
+    }));
     expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement ACP support', {
       workflow: 'review',
       worktree: true,
       autoPr: false,
       issue: 913,
     });
-    expect(createIssueFromTask.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(createIssueFromTaskResult.mock.invocationCallOrder[0]).toBeLessThan(
       saveTaskFile.mock.invocationCallOrder[0],
     );
     expect(runWorkflowExecution).not.toHaveBeenCalled();
@@ -746,7 +746,10 @@ describe('TAKT ACP agent adapter', () => {
   it('should not enqueue when ACP issue creation fails', async () => {
     const sendSessionUpdate = vi.fn();
     const runWorkflowExecution = vi.fn();
-    const createIssueFromTask = vi.fn().mockReturnValue(undefined);
+    const createIssueFromTaskResult = vi.fn().mockReturnValue({
+      success: false,
+      error: 'Issue creation failed',
+    });
     const saveTaskFile = vi.fn();
     const createTaskInstruction = vi.fn().mockResolvedValue(createTaskInstructionResult());
     const agent = createTaktAcpAgent({
@@ -759,7 +762,7 @@ describe('TAKT ACP agent adapter', () => {
       })),
       runWorkflowExecution,
       saveTaskFile,
-      createIssueFromTask,
+      createIssueFromTaskResult,
       sendSessionUpdate,
     });
     const { sessionId } = await agent.handleSessionNew(newSessionParams());
@@ -769,10 +772,10 @@ describe('TAKT ACP agent adapter', () => {
       prompt: [{ type: 'text', text: 'create an issue and enqueue' }],
     });
 
-    expect(createIssueFromTask).toHaveBeenCalledWith('Implement ACP support', {
+    expect(createIssueFromTaskResult).toHaveBeenCalledWith('Implement ACP support', expect.objectContaining({
       cwd: '/repo',
       outputMode: 'silent',
-    });
+    }));
     expect(saveTaskFile).not.toHaveBeenCalled();
     expect(runWorkflowExecution).not.toHaveBeenCalled();
     expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
@@ -806,7 +809,7 @@ describe('TAKT ACP agent adapter', () => {
     await expect(agent.handleSessionPrompt({
       sessionId,
       prompt: [{ type: 'text', text }],
-    })).rejects.toThrow('ACP prNumber must be a positive integer.');
+    })).rejects.toThrow('ACP prNumber must be a positive safe integer.');
 
     expect(createTaskInstruction).not.toHaveBeenCalled();
     expect(saveTaskFile).not.toHaveBeenCalled();
@@ -1054,7 +1057,7 @@ describe('TAKT ACP agent adapter', () => {
       taskContext: {
         prNumber: 0,
       },
-    }))).rejects.toThrow('ACP prNumber must be a positive integer.');
+    }))).rejects.toThrow('ACP prNumber must be a positive safe integer.');
 
     expect(createTaskInstruction).not.toHaveBeenCalled();
     expect(saveTaskFile).not.toHaveBeenCalled();
@@ -1098,7 +1101,7 @@ describe('TAKT ACP agent adapter', () => {
       autoPr: false,
       branch: 'takt/321/session-context',
       baseBranch: 'develop',
-      prNumber: 321,
+      contextPrNumber: 321,
     });
     expect(runWorkflowExecution).not.toHaveBeenCalled();
     expect(result).toEqual({ stopReason: 'end_turn' });
@@ -1229,7 +1232,7 @@ describe('TAKT ACP agent adapter', () => {
       autoPr: false,
       branch: 'takt/654/direct-context',
       baseBranch: 'main',
-      prNumber: 654,
+      contextPrNumber: 654,
     });
     expect(directResult).toEqual({ stopReason: 'end_turn' });
     expect(enqueueResult).toEqual({ stopReason: 'end_turn' });
@@ -1442,9 +1445,10 @@ describe('TAKT ACP agent adapter', () => {
         auto_pr: false,
         branch: 'takt/456/acp-review',
         base_branch: 'main',
-        source: 'pr_review',
-        pr_number: 456,
+        context_pr_number: 456,
       }));
+      expect(parsed.tasks[0]).not.toHaveProperty('source');
+      expect(parsed.tasks[0]).not.toHaveProperty('pr_number');
       expect(runWorkflowExecution).not.toHaveBeenCalled();
       expect(result).toEqual({ stopReason: 'end_turn' });
     } finally {

@@ -5,7 +5,7 @@ import { packageVersion } from '../../shared/package-info.js';
 import type { ConversationSessionResult } from '../../features/interactive/conversationSession.js';
 import {
   createIssueAndEnqueueAcpTask,
-  defaultCreateIssueFromTask,
+  defaultCreateIssueFromTaskResult,
   defaultSaveTaskFile,
   enqueueAcpTask,
 } from './enqueue.js';
@@ -126,7 +126,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
   const createSession = deps.createConversationSession ?? createDefaultConversationSession;
   const executeWorkflowRequest = deps.runWorkflowExecution ?? runWorkflowExecution;
   const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
-  const createIssueFromTask = deps.createIssueFromTask ?? defaultCreateIssueFromTask;
+  const createIssueFromTaskResult = deps.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult;
   const sendSessionUpdate = deps.sendSessionUpdate;
   const createElicitation = deps.createElicitation;
   const defaultWorkflowIdentifier = deps.workflowIdentifier ?? DEFAULT_WORKFLOW_NAME;
@@ -235,7 +235,7 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
           instruction: result,
           workflow,
           saveTaskFile,
-          createIssueFromTask,
+          createIssueFromTaskResult,
           taskContext: session.taskContext,
           abortSignal,
         })

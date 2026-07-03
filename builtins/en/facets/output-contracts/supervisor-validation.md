@@ -18,7 +18,7 @@ Extract requirements from the task spec and verify each one individually against
 - ✅ without evidence is invalid (must verify against actual code)
 - Do not mark a row as ✅ when the evidence covers only part of the cases
 - Treat optionalization, exclusion, or exception not present in the task spec as unmet
-- Do not rely on plan report's judgment; independently verify mergeability
+- Do not rely on plan report's judgment; independently verify maintainability-aware merge quality
 
 ## Re-evaluation of Prior Findings
 | finding_id | Prior Status | Original Expected Result | Re-evaluation | Evidence |
@@ -28,7 +28,6 @@ Extract requirements from the task spec and verify each one individually against
 - If final judgment differs from prior review conclusions, explain why with evidence
 - Treat `resolved` as valid only when it satisfies the original expected result and original requirement
 - If marking `false_positive` or `overreach`, state whether it conflicts with the task objective, the plan, or both
-- If overturning a pure-review conclusion, explain why with concrete evidence
 
 ## Unclassified Concern Check
 | Review | Concern | Finding State | Supervisor Judgment | Evidence |

@@ -1,8 +1,16 @@
 import type { ConversationSessionResult } from '../../features/interactive/conversationSession.js';
+import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import {
-  createIssueFromTask as defaultCreateIssueFromTask,
+  createIssueFromTaskResult as defaultCreateIssueFromTaskResult,
   saveTaskFile as defaultSaveTaskFile,
 } from '../../features/tasks/add/index.js';
+import {
+  createIssueAndEnqueueTask,
+  enqueueTask,
+  formatIssueEnqueueFailure,
+  joinIssueEnqueueFailureText,
+} from '../../infra/task/enqueueService.js';
 import type { AcpTaskContext } from './types.js';
 
 type WorkflowTaskInstruction = ConversationSessionResult & {
@@ -10,7 +18,7 @@ type WorkflowTaskInstruction = ConversationSessionResult & {
 };
 
 export type SaveAcpTaskFile = typeof defaultSaveTaskFile;
-export type CreateAcpIssueFromTask = typeof defaultCreateIssueFromTask;
+export type CreateAcpIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface AcpEnqueueResult {
   taskName: string;
@@ -25,22 +33,6 @@ function throwIfAbortRequested(abortSignal: AbortSignal | undefined): void {
   }
 }
 
-function buildTaskSaveOptions(input: {
-  workflow: string;
-  taskContext?: AcpTaskContext;
-  issueNumber?: number;
-}): Parameters<SaveAcpTaskFile>[2] {
-  return {
-    workflow: input.workflow,
-    worktree: true,
-    autoPr: false,
-    ...(input.issueNumber !== undefined && { issue: input.issueNumber }),
-    ...(input.taskContext?.branch !== undefined && { branch: input.taskContext.branch }),
-    ...(input.taskContext?.baseBranch !== undefined && { baseBranch: input.taskContext.baseBranch }),
-    ...(input.taskContext?.prNumber !== undefined && { prNumber: input.taskContext.prNumber }),
-  };
-}
-
 export async function enqueueAcpTask(input: {
   cwd: string;
   instruction: WorkflowTaskInstruction;
@@ -50,18 +42,14 @@ export async function enqueueAcpTask(input: {
   abortSignal?: AbortSignal;
 }): Promise<AcpEnqueueResult> {
   throwIfAbortRequested(input.abortSignal);
-  const created = await input.saveTaskFile(
-    input.cwd,
-    input.instruction.task,
-    buildTaskSaveOptions({
-      workflow: input.workflow,
-      taskContext: input.taskContext,
-    }),
-  );
-  return {
-    ...created,
+  return enqueueTask({
+    cwd: input.cwd,
+    task: input.instruction.task,
     workflow: input.workflow,
-  };
+    worktree: true,
+    autoPr: false,
+    taskContext: input.taskContext,
+  }, input.saveTaskFile);
 }
 
 export async function createIssueAndEnqueueAcpTask(input: {
@@ -69,33 +57,34 @@ export async function createIssueAndEnqueueAcpTask(input: {
   instruction: WorkflowTaskInstruction;
   workflow: string;
   saveTaskFile: SaveAcpTaskFile;
-  createIssueFromTask: CreateAcpIssueFromTask;
+  createIssueFromTaskResult?: CreateAcpIssueFromTaskResult;
   taskContext?: AcpTaskContext;
   abortSignal?: AbortSignal;
 }): Promise<AcpEnqueueResult> {
   throwIfAbortRequested(input.abortSignal);
-  const issueNumber = input.createIssueFromTask(input.instruction.task, {
-    cwd: input.cwd,
-    outputMode: 'silent',
-  });
-  if (issueNumber === undefined) {
-    throw new Error('Issue creation failed');
-  }
+  initGitProvider(input.cwd);
+  const gitProvider = getGitProvider();
   throwIfAbortRequested(input.abortSignal);
-  const created = await input.saveTaskFile(
-    input.cwd,
-    input.instruction.task,
-    buildTaskSaveOptions({
-      workflow: input.workflow,
-      taskContext: input.taskContext,
-      issueNumber,
-    }),
-  );
-  return {
-    ...created,
+  const result = await createIssueAndEnqueueTask({
+    cwd: input.cwd,
+    task: input.instruction.task,
     workflow: input.workflow,
-    issueNumber,
-  };
+    worktree: true,
+    autoPr: false,
+    taskContext: input.taskContext,
+    gitProvider,
+    abortSignal: input.abortSignal,
+  }, {
+    saveTaskFile: input.saveTaskFile,
+    createIssueFromTaskResult: input.createIssueFromTaskResult ?? defaultCreateIssueFromTaskResult,
+  });
+  if (!result.success) {
+    throw new Error(joinIssueEnqueueFailureText(
+      formatIssueEnqueueFailure(result.failure, safeExternalErrorMessage),
+      '\n',
+    ));
+  }
+  return result.created;
 }
 
-export { defaultCreateIssueFromTask, defaultSaveTaskFile };
+export { defaultCreateIssueFromTaskResult, defaultSaveTaskFile };

@@ -4,6 +4,7 @@ workflow_categories:
       - default
       - default-mini
       - default-high
+      - cli
       - frontend
       - backend
       - dual
