@@ -1,0 +1,53 @@
+#!/usr/bin/env node
+/**
+ * Run promptfoo eval suites sequentially without stopping on failures
+ * (promptfoo exits non-zero when a test fails, which would break `&&` chains).
+ *
+ * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
+ * Suites: coding, arch, antipattern, frontend, cqrs (default: all)
+ * Example: npm run eval:prompts -- arch --repeat 3
+ */
+import { spawnSync } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SUITES = {
+  coding: 'promptfooconfig.coding.yaml',
+  arch: 'promptfooconfig.arch.yaml',
+  antipattern: 'promptfooconfig.antipattern.yaml',
+  frontend: 'promptfooconfig.frontend.yaml',
+  cqrs: 'promptfooconfig.cqrs.yaml',
+  'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
+  'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
+};
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const evalDir = resolve(scriptDir, '..');
+const repoRoot = resolve(evalDir, '..');
+
+const args = process.argv.slice(2);
+const flags = args.filter((a) => a.startsWith('-'));
+const names = args.filter((a) => !a.startsWith('-'));
+for (const name of names) {
+  if (!SUITES[name]) {
+    throw new Error(`Unknown suite "${name}". Available: ${Object.keys(SUITES).join(', ')}`);
+  }
+}
+const selected = names.length > 0 ? names : Object.keys(SUITES);
+
+const summary = [];
+for (const name of selected) {
+  const config = join(evalDir, SUITES[name]);
+  console.log(`\n=== suite: ${name} (${SUITES[name]}) ===`);
+  const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...flags], {
+    stdio: 'inherit',
+    cwd: repoRoot,
+  });
+  summary.push({ name, code: result.status ?? 1 });
+}
+
+console.log('\n=== eval summary ===');
+for (const { name, code } of summary) {
+  console.log(`${code === 0 ? 'PASS' : 'FAIL'}  ${name}`);
+}
+process.exit(summary.some((s) => s.code !== 0) ? 1 : 0);
