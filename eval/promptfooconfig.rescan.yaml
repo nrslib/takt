@@ -77,5 +77,9 @@ tests:
       - type: javascript
         metric: verdict/reject
         value: |
-          const ok = /(結果|判定|Verdict).{0,12}REJECT/.test(output) || /^#+ *REJECT/m.test(output);
-          return ok;
+          // src/features/analytics/report-parser.ts の extractDecisionFromReport と
+          // 同様に、verdict 値を語（\w+）として抽出し REJECT と厳密比較する。
+          // 部分一致（REJECTED 等）を verdict と誤認しないため。
+          const labeled = [...output.matchAll(/(?:結果|判定|Verdict)[^\w\n]{0,12}(\w+)/g)].map((m) => m[1]);
+          const headings = [...output.matchAll(/^#+ *(\w+)/gm)].map((m) => m[1]);
+          return [...labeled, ...headings].some((v) => v.toUpperCase() === 'REJECT');
