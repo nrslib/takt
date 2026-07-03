@@ -77,5 +77,5 @@ tests:
       - type: javascript
         metric: verdict/reject
         value: |
-          const ok = /(結果|判定|Verdict).{0,12}(REJECT|IMPROVE)/.test(output) || /^#+ *REJECT/m.test(output);
+          const ok = /(結果|判定|Verdict).{0,12}REJECT/.test(output) || /^#+ *REJECT/m.test(output);
           return ok;
