@@ -317,12 +317,15 @@ describe('builtin takt-default provider_options refs', () => {
 
       const mergeReadiness = normalized.steps.find((step) => step.name === 'merge-readiness-review');
       expect(mergeReadiness?.rules).toEqual([
+        // タグ && findings の複合は condition（タグ文）+ guardCondition に分解される
         expect.objectContaining({
-          condition: 'approved && findings.open.count == 0 && findings.conflicts.count == 0',
+          condition: 'approved',
+          guardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
           next: 'COMPLETE',
         }),
         expect.objectContaining({
-          condition: 'needs_fix && findings.conflicts.count == 0',
+          condition: 'needs_fix',
+          guardCondition: 'findings.conflicts.count == 0',
           next: 'fix',
         }),
         expect.objectContaining({

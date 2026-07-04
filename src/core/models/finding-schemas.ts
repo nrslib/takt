@@ -231,7 +231,7 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion', 'kind', 'targetFindingId'],
+        required: ['rawFindingId', 'kind', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
           kind: {

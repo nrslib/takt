@@ -96,6 +96,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -594,6 +596,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -625,6 +629,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -833,6 +839,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -945,6 +953,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1164,6 +1174,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1507,6 +1519,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Injected raw finding',
@@ -1716,6 +1730,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-current',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'prompt-injection',
                 severity: 'high',
                 title: 'Current issue',
@@ -1890,6 +1906,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-normal-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Normal step raw finding should not be collected',
@@ -1960,6 +1978,8 @@ describe('WorkflowEngine structured caller defaults', () => {
               rawFindings: [
                 {
                   rawFindingId: 'raw-architecture-1',
+                  kind: 'issue',
+                  targetFindingId: '',
                   familyTag: 'bug',
                   severity: 'high',
                   title: 'Rule evaluation ignores finding state',

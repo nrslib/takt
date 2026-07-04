@@ -299,6 +299,31 @@ describe('validateFindingManagerOutput', () => {
     });
   });
 
+  it('should reject a resolution confirmation cited as issue evidence', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+          title: 'Confirmed fixed',
+          description: 'Verified at src/index.ts:42.',
+        }),
+      ],
+      managerOutput: makeManagerOutput({
+        newFindings: [{ rawFindingIds: ['raw-confirm'], title: 'Fake issue', severity: 'high' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Resolution confirmation "raw-confirm" cannot be cited as issue evidence in newFindings[0]',
+      ],
+    });
+  });
+
   it('should reject a silence-based resolution citing only previous ledger raw findings', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),

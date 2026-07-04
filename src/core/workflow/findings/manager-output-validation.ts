@@ -99,7 +99,31 @@ function validateRawFindingDecisionRefs(
     ...reopenedErrors,
     ...conflictErrors,
     ...validateDuplicateRawFindingDecisionRefs(decisionRefs),
+    ...validateConfirmationRefsOnlyInResolutions(managerOutput, context),
   ];
+}
+
+/**
+ * resolution_confirmation raw findings are resolution evidence only: citing
+ * them as issue evidence in matches / newFindings / reopenedFindings would let
+ * a confirmation masquerade as a problem observation. Conflicts may cite them
+ * (a confirmation contradicting a re-report is a legitimate conflict).
+ */
+function validateConfirmationRefsOnlyInResolutions(
+  managerOutput: FindingManagerOutput,
+  context: ValidationContext,
+): string[] {
+  const issueDecisionRefs = [
+    ...managerOutput.matches.flatMap((match, index) => rawFindingDecisionRefs(`matches[${index}]`, match.rawFindingIds)),
+    ...managerOutput.newFindings.flatMap((finding, index) => rawFindingDecisionRefs(`newFindings[${index}]`, finding.rawFindingIds)),
+    ...managerOutput.reopenedFindings.flatMap((reopened, index) => rawFindingDecisionRefs(`reopenedFindings[${index}]`, reopened.rawFindingIds)),
+  ];
+  return issueDecisionRefs.flatMap((ref) => {
+    const rawFinding = context.currentRawFindingsById.get(ref.rawFindingId);
+    return rawFinding !== undefined && rawFinding.kind === 'resolution_confirmation'
+      ? [`Resolution confirmation "${ref.rawFindingId}" cannot be cited as issue evidence in ${ref.decision}`]
+      : [];
+  });
 }
 
 function collectRawFindingDecisionRefs(managerOutput: FindingManagerOutput): RawFindingDecisionRef[] {
