@@ -211,11 +211,12 @@ export type OpenCodeAllowedTools = readonly string[];
  * restriction is enforced by the explicit per-prompt tools map instead
  * (see buildOpenCodePromptTools).
  *
- * `external_directory` is denied explicitly: the permission auto-reply
- * rejects unknown permission kinds and a rejected ask aborts the whole call,
- * so leaving it unruled turns an agent's stray out-of-workspace access into
- * a step failure. A session-scoped deny keeps it a silent tool error the
- * agent can recover from.
+ * `external_directory` is denied explicitly. Note that this session-scoped
+ * rule only holds until the first prompt: a prompt-level tools map is
+ * materialized into `session.permission` by OpenCode and replaces this
+ * ruleset. The authoritative deny lives in the server config passed to
+ * `createOpencode` (see client.ts), which the rewrite does not touch; the
+ * rule here covers the window before the first prompt.
  */
 export function buildOpenCodeSessionPermission(
   mode?: PermissionMode,
