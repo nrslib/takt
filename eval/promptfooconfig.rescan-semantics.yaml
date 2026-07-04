@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Prompt quality eval for TAKT facets: 2周目レビューの再走査（rescan evidence）の
+# coding-review 断面。前回指摘が解消済みの文脈で、残存する既知欠陥を
+# coding-review 視点の再走査で検出できるかを測る。
+# ローカルモデルは opencode CLI 経由（実プロバイダ認証が必要）。
+# 実行: npm run eval:prompts -- rescan-coding
+
+description: 'TAKT facet eval: deep-peer-review / implementation-semantics-review round-2 re-scan'
+
+prompts:
+  - file://prompts/rescan-semantics.phase1.md
+
+providers:
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/gemma4:31b fixtures/inventory-es'
+    label: gemma4-31b
+
+tests:
+  - description: 'round-2: resolved previous findings must not suppress a full re-scan'
+    vars:
+      task: file://cases/inventory-review-task.md
+      previous_response: file://cases/prev-review-inventory-round2.md
+    assert:
+      - type: javascript
+        metric: rescan/evidence-table-present
+        value: |
+          const ok = /再走査証跡|Re-scan Evidence/i.test(output);
+          return ok;
+      - type: javascript
+        metric: recall/prototype-pollution-dict
+        value: |
+          const ok = /toString|hasOwn|プロトタイプ|in 演算子|継承プロパティ/.test(output);
+          return ok;
+      - type: javascript
+        metric: recall/derived-value-dual-bookkeeping
+        value: |
+          return /(導出|重複管理|二重|別々に管理|単一情報源)/.test(output) &&
+            /(reserved|version|合計)/i.test(output);
+      - type: javascript
+        metric: recall/silent-ignore
+        value: |
+          const ok = /(サイレント|黙って|無視|握りつぶ|検知できず|fail-?fast)/i.test(output);
+          return ok;
+      - type: javascript
+        metric: recall/naming-meaning-mismatch
+        value: |
+          return /(命名|名前)/.test(output) &&
+            /(乖離|不一致|ずれ|一致しない)/.test(output);
+      - type: javascript
+        metric: precision/no-fabricated-citations
+        value: |
+          // 行番号付き引用（事実主張）のみ検査する。
+          const cited = [...output.matchAll(/((?:src|tests)\/[\w./-]+\.ts):\d+/g)].map((m) => m[1]);
+          const allowed = new Set([
+            'src/index.ts', 'src/types.ts',
+            'tests/domain.test.ts', 'tests/event-store.test.ts',
+            'tests/command-handler.test.ts', 'tests/projection.test.ts',
+          ]);
+          const bad = [...new Set(cited.filter((c) => !allowed.has(c)))];
+          return {
+            pass: bad.length === 0,
+            score: bad.length === 0 ? 1 : 0,
+            reason: bad.length === 0 ? 'all line-cited files exist' : `fabricated citations: ${bad.join(', ')}`,
+          };
+      - type: javascript
+        metric: verdict/reject
+        value: |
+          // verdict 値を語として抽出し REJECT と厳密比較する（REJECTED 等の誤マッチ防止）
+          const labeled = [...output.matchAll(/(?:結果|判定|Verdict)[^\w\n]{0,12}(\w+)/g)].map((m) => m[1]);
+          const headings = [...output.matchAll(/^#+ *(\w+)/gm)].map((m) => m[1]);
+          const inline = /\(REJECT\)|\*\*REJECT\*\*/.test(output);
+          return inline || [...labeled, ...headings].some((v) => v.toUpperCase() === 'REJECT');

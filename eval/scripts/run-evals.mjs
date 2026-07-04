@@ -21,6 +21,7 @@ const SUITES = {
   cqrs: 'promptfooconfig.cqrs.yaml',
   rescan: 'promptfooconfig.rescan.yaml',
   'rescan-coding': 'promptfooconfig.rescan-coding.yaml',
+  'rescan-semantics': 'promptfooconfig.rescan-semantics.yaml',
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
 };
@@ -40,7 +41,7 @@ for (const name of names) {
 }
 // rescan / rescan-coding はローカルモデル（要 opencode 認証）を含む測定用スイートで、
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
-const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding']);
+const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding', 'rescan-semantics']);
 const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 
 const summary = [];
