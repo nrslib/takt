@@ -791,6 +791,97 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.stepOutputs.get('solo-review')?.content).toBe('Review report body.');
   });
 
+  it('是正コールが rate_limited を返したら error に潰さずそのまま伝播する', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'structured-retry-ratelimit-test',
+      nextId: 1,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    };
+
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"rawFindings"')) {
+        reviewerCalls += 1;
+        if (reviewerCalls === 1) {
+          return {
+            persona: 'reviewer',
+            status: 'done',
+            content: 'Review report body.',
+            structuredOutput: { rawFindings: [{ rawFindingId: 'raw-1', efamilyTag: 'bug' }] },
+            timestamp: new Date('2026-06-13T00:00:01.000Z'),
+          };
+        }
+        return {
+          persona: 'reviewer',
+          status: 'rate_limited',
+          content: '',
+          error: 'Rate limited by provider',
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'ok',
+        timestamp: new Date('2026-06-13T00:00:04.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'structured-retry-ratelimit-test',
+      maxSteps: 2,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'solo-review',
+              persona: 'solo-reviewer',
+              instruction: 'Review.',
+              rules: [makeRule('true', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('findings.open.count == 0', 'COMPLETE'),
+            makeRule('invalid manager output', 'ABORT', { returnValue: 'needs_fix' }),
+          ],
+        }),
+      ],
+    };
+
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    }).run();
+
+    // rate_limited が error に化けず、サブステップの応答として保持される
+    expect(result.stepOutputs.get('solo-review')?.status).toBe('rate_limited');
+  });
+
   it('parallel sub-step の phase 3 判定でも findings ガードが不成立なら採用せずフォールバックする', async () => {
     const initialLedger = {
       version: 1,

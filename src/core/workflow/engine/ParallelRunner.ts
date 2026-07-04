@@ -305,6 +305,7 @@ export class ParallelRunner {
               permissionMode: 'readonly',
               allowedTools: [],
               onPromptResolved: undefined,
+              onStream: undefined,
               ...(subResponse.sessionId !== undefined ? { sessionId: subResponse.sessionId } : {}),
             });
             // 非ネイティブ構造化出力プロバイダでは是正 JSON が content に入る
@@ -314,7 +315,11 @@ export class ParallelRunner {
               correctiveResponse,
               runtime,
             );
-            if (renormalized.invalidDetail !== undefined || renormalized.response.status !== 'done') {
+            if (correctiveResponse.status === 'rate_limited' || correctiveResponse.status === 'blocked') {
+              // レート制限・ブロックは専用フロー（メタデータ伝播・バックオフ）
+              // が上位にあるため、error に潰さずそのまま伝える。
+              subResponse = correctiveResponse;
+            } else if (renormalized.invalidDetail !== undefined || renormalized.response.status !== 'done') {
               subResponse = {
                 ...subResponse,
                 status: 'error',
