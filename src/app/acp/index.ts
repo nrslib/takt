@@ -2,7 +2,6 @@
 
 import { Readable, Writable } from 'node:stream';
 import type { ReadableStream, WritableStream } from 'node:stream/web';
-import { pathToFileURL } from 'node:url';
 import {
   agent,
   methods,
@@ -23,6 +22,7 @@ import {
 import { isValidAcpBranchName } from './taskContext.js';
 import { isValidTaskContextPrNumber } from '../../features/tasks/taskContextValidation.js';
 import { createLogger } from '../../shared/utils/debug.js';
+import { isDirectEntrypoint } from '../../shared/utils/entrypoint.js';
 
 const log = createLogger('acp');
 
@@ -160,6 +160,6 @@ export function connectTaktAcpAgentToStdio(): void {
   ));
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (isDirectEntrypoint(import.meta.url)) {
   connectTaktAcpAgentToStdio();
 }
