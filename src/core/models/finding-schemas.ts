@@ -5,6 +5,7 @@ import type {
   RawFinding,
 } from './finding-types.js';
 import {
+  RAW_FINDING_KINDS,
   FINDING_CONFLICT_STATUSES,
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
@@ -63,6 +64,8 @@ export const RawFindingSchema = z.object({
   location: nonEmptyString.optional(),
   description: nonEmptyString,
   suggestion: nonEmptyString.optional(),
+  kind: z.enum(RAW_FINDING_KINDS).optional(),
+  targetFindingId: nonEmptyString.optional(),
 }).strict();
 
 export const ReviewerRawFindingSchema = z.object({
@@ -73,6 +76,10 @@ export const ReviewerRawFindingSchema = z.object({
   location: nonEmptyString.optional(),
   description: nonEmptyString,
   suggestion: nonEmptyString.optional(),
+  kind: z.enum(RAW_FINDING_KINDS).optional(),
+  // 構造化出力の strict 様式では全プロパティが required になるため、
+  // issue 行は空文字で埋める。空文字は未指定として扱う。
+  targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
 }).strict();
 
 export const FindingLedgerConflictSchema = z.object({
@@ -224,9 +231,17 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
+        required: ['rawFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion', 'kind', 'targetFindingId'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
+          kind: {
+            enum: RAW_FINDING_KINDS,
+            description: 'issue = observed problem. resolution_confirmation = verified that an open ledger finding is fixed.',
+          },
+          targetFindingId: {
+            type: 'string',
+            description: 'Ledger finding id being confirmed as resolved. Empty string for issue entries.',
+          },
           familyTag: {
             type: 'string',
             minLength: 1,

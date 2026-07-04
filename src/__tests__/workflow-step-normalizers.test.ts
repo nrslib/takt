@@ -154,3 +154,45 @@ describe('workflow step normalizer helpers', () => {
     });
   });
 });
+
+describe('normalizeRule tag-and-findings compound conditions', () => {
+  it('should split a tag condition with a findings guard', () => {
+    const normalized = normalizeRule({ condition: 'approved && findings.open.count == 0', next: 'COMPLETE' });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('findings.open.count == 0');
+    expect(normalized.isAggregateCondition).toBeUndefined();
+  });
+
+  it('should join multiple findings clauses into one guard', () => {
+    const normalized = normalizeRule({
+      condition: 'approved && findings.open.count == 0 && findings.conflicts.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('findings.open.count == 0 && findings.conflicts.count == 0');
+  });
+
+  it('should not split pure findings conditions', () => {
+    const normalized = normalizeRule({ condition: 'findings.open.count > 0', next: 'fix' });
+
+    expect(normalized.condition).toBe('findings.open.count > 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should not split plain tag conditions or non-findings compounds', () => {
+    expect(normalizeRule({ condition: 'approved', next: 'COMPLETE' }).guardCondition).toBeUndefined();
+    expect(normalizeRule({ condition: 'approved && rejected', next: 'COMPLETE' }).guardCondition).toBeUndefined();
+  });
+
+  it('should keep aggregate guard splitting on the aggregate path', () => {
+    const normalized = normalizeRule({
+      condition: 'all("approved") && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+});

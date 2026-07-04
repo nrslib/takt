@@ -72,6 +72,12 @@ export interface WorkflowRule {
   aggregateType?: 'all' | 'any';
   aggregateConditionText?: string | string[];
   aggregateGuardCondition?: string;
+  /**
+   * Deterministic guard split from a plain-rule compound condition
+   * ("<tag text> && findings...."). The tag part stays in `condition`;
+   * this guard must also hold for the rule to match.
+   */
+  guardCondition?: string;
 }
 
 export type WorkflowMaxSteps = number | 'infinite';
