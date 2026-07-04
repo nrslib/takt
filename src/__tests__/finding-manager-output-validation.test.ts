@@ -414,6 +414,25 @@ describe('finding-schemas backward compatibility', () => {
     expect(parsed[0]?.targetFindingId).toBeUndefined();
   });
 
+  it('should treat empty location and suggestion from structured output as unset', () => {
+    const parsed = parseReviewerRawFindings([
+      {
+        rawFindingId: 'raw-confirm',
+        familyTag: 'bug',
+        severity: 'low',
+        title: 'Confirmed fixed',
+        description: 'Verified at src/index.ts:42.',
+        kind: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        location: '',
+        suggestion: '',
+      },
+    ]);
+
+    expect(parsed[0]?.location).toBeUndefined();
+    expect(parsed[0]?.suggestion).toBeUndefined();
+  });
+
   it('should treat an empty targetFindingId from structured output as unset', () => {
     const parsed = parseReviewerRawFindings([
       {

@@ -61,9 +61,11 @@ export const RawFindingSchema = z.object({
   familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
-  location: nonEmptyString.optional(),
+  // 構造化出力の strict 様式では全プロパティが required になるため、
+  // 該当なしの欄は空文字で埋められる。空文字は未指定として扱う。
+  location: z.string().optional().transform((value) => (value ? value : undefined)),
   description: nonEmptyString,
-  suggestion: nonEmptyString.optional(),
+  suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
   kind: z.enum(RAW_FINDING_KINDS).optional(),
   targetFindingId: nonEmptyString.optional(),
 }).strict();
@@ -73,9 +75,11 @@ export const ReviewerRawFindingSchema = z.object({
   familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
-  location: nonEmptyString.optional(),
+  // 構造化出力の strict 様式では全プロパティが required になるため、
+  // 該当なしの欄は空文字で埋められる。空文字は未指定として扱う。
+  location: z.string().optional().transform((value) => (value ? value : undefined)),
   description: nonEmptyString,
-  suggestion: nonEmptyString.optional(),
+  suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
   kind: z.enum(RAW_FINDING_KINDS).optional(),
   // 構造化出力の strict 様式では全プロパティが required になるため、
   // issue 行は空文字で埋める。空文字は未指定として扱う。
@@ -249,9 +253,15 @@ export const RawFindingsOutputJsonSchema = {
           },
           severity: { enum: FINDING_SEVERITIES },
           title: { type: 'string', minLength: 1 },
-          location: { type: 'string', minLength: 1 },
+          location: {
+            type: 'string',
+            description: 'file:line evidence. Empty string when not applicable.',
+          },
           description: { type: 'string', minLength: 1 },
-          suggestion: { type: 'string', minLength: 1 },
+          suggestion: {
+            type: 'string',
+            description: 'Fix direction. Empty string when not applicable (e.g. resolution confirmations).',
+          },
         },
       },
     },
