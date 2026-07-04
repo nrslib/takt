@@ -186,6 +186,26 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
     expect(normalizeRule({ condition: 'approved && rejected', next: 'COMPLETE' }).guardCondition).toBeUndefined();
   });
 
+  it('should not split compounds whose left side is itself a deterministic condition', () => {
+    const normalized = normalizeRule({
+      condition: 'structured.status == "approved" && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('structured.status == "approved" && findings.open.count == 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should not split prose tags containing && when any clause is not a findings condition', () => {
+    const normalized = normalizeRule({
+      condition: 'レビュー && 承認 && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('レビュー && 承認 && findings.open.count == 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
   it('should keep aggregate guard splitting on the aggregate path', () => {
     const normalized = normalizeRule({
       condition: 'all("approved") && findings.open.count == 0',

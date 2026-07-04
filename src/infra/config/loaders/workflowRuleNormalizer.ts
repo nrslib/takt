@@ -4,7 +4,7 @@ import {
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../../../core/models/workflow-condition-expression.js';
-import { isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { isDeterministicCondition, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 
 /**
  * Split a plain compound condition "<tag text> && <findings guard>" into its
@@ -18,14 +18,21 @@ function splitTagFindingsCondition(condition: string): { tagText: string; guard:
     return undefined;
   }
   const [tagText, ...guardClauses] = clauses;
-  if (tagText === undefined || isFindingsCondition(tagText)) {
+  if (tagText === undefined) {
     return undefined;
   }
-  const guard = guardClauses.join(' && ');
-  if (!isFindingsCondition(guard)) {
+  // 左辺が決定的条件（findings./structured./context. 等）なら分解しない:
+  // 複合全体を when-evaluator がそのまま評価できる。
+  if (isDeterministicCondition(tagText)) {
     return undefined;
   }
-  return { tagText, guard };
+  // ガード側は「全節が findings 条件」のときだけ分解する。1節でも散文が
+  // 混ざる場合（例: 日本語タグ文が && を含む）は分解せず、従来どおり
+  // 条件全体をタグ文として扱う。
+  if (!guardClauses.every((clause) => isFindingsCondition(clause))) {
+    return undefined;
+  }
+  return { tagText, guard: guardClauses.join(' && ') };
 }
 
 export function normalizeRule(rule: {
