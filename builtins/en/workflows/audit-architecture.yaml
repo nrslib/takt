@@ -62,6 +62,7 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     persona: supervisor
     policy: review
     knowledge: architecture

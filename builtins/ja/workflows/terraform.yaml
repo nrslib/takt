@@ -162,10 +162,13 @@ steps:
   - name: final-gate
     tags:
       - review
+      - final-gate
     parallel:
       - name: merge-readiness-review
         tags:
           - review
+          - final-gate
+          - merge-readiness
         edit: false
         persona: merge-readiness-reviewer
         policy: review
@@ -232,6 +235,7 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     edit: *terraform_supervise_edit
     persona: *terraform_supervise_persona
     policy: *terraform_supervise_policy

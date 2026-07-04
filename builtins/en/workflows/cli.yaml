@@ -98,6 +98,7 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     edit: false
     persona: supervisor
     policy: review

@@ -43,6 +43,7 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     persona: research-supervisor
     policy: research
     knowledge: research

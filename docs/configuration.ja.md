@@ -54,6 +54,12 @@ interactive_preview_steps: 3  # インタラクティブモードでの step プ
 #     review:
 #       provider: opencode
 #       model: opencode/qwen3-coder-next
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
 #     edit:
 #       provider_options:
 #         codex:
@@ -462,6 +468,12 @@ provider_routing:
     review:
       provider: opencode
       model: opencode/qwen3-coder-next
+    final-gate:
+      provider: codex
+      model: gpt-5
+      provider_options:
+        codex:
+          reasoning_effort: high
     edit:
       provider_options:
         codex:
@@ -481,7 +493,7 @@ steps:
     tags: [implementation, edit]
 ```
 
-`provider_routing.personas` は workflow step の raw `persona` キーを使います。`persona_name` は表示専用で、routing には影響しません。`provider_routing.tags` は step の `tags` に一致する entry を適用します。複数 tag が一致した場合は step に書かれた順に適用され、後ろの tag が同じ provider / model / provider_options leaf を上書きします。`provider_routing.steps` は workflow step の `name` を使います。
+`provider_routing.personas` は workflow step の raw `persona` キーを使います。`persona_name` は表示専用で、routing には影響しません。`provider_routing.tags` は step の `tags` に一致する entry を適用します。複数 tag が一致した場合は step に書かれた順に適用され、後ろの tag が同じ provider / model / provider_options leaf を上書きします。たとえば builtin の最終ゲートは `review` の後に `final-gate` を持つため、通常レビューを OpenCode にしつつ merge-readiness / supervisor だけ Codex の高推論モデルへ上書きできます。より細かく分ける場合は `merge-readiness` と `supervise` タグを個別に指定できます。`provider_routing.steps` は workflow step の `name` を使います。
 
 各 routing entry では `provider`、`model`、`provider_options` を指定できます。これらは個別に省略できますが、各 entry には少なくとも 1 つ必要です。空の `provider_options` オブジェクトは受理されません。
 

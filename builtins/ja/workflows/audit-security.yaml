@@ -58,6 +58,7 @@ steps:
   - name: supervise
     tags:
       - review
+      - supervise
     persona: supervisor
     knowledge: security
     instruction: audit-security-supervise

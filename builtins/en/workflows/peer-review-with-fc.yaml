@@ -171,6 +171,8 @@ steps:
   - name: merge-readiness-review
     tags:
       - review
+      - final-gate
+      - merge-readiness
     edit: false
     persona: merge-readiness-reviewer
     policy: review

@@ -24,10 +24,13 @@ steps:
   - name: final_gate
     tags:
       - review
+      - final-gate
     parallel:
       - name: merge-readiness-review
         tags:
           - review
+          - final-gate
+          - merge-readiness
         edit: false
         persona: merge-readiness-reviewer
         policy: review
@@ -45,6 +48,8 @@ steps:
       - name: supervise
         tags:
           - review
+          - final-gate
+          - supervise
         edit: false
         persona: supervisor
         policy: review
