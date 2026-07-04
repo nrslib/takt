@@ -44,6 +44,7 @@ const TARGETS = [
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
   // スナップショット（Source Path）を inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
+  { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
 ];

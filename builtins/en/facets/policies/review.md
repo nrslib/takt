@@ -127,7 +127,10 @@ If tool output is unreadable, re-read using a reliable method before making any 
 
 Every issue raised must include the following.
 
-Aggregate same-`family_tag` findings into one representative entry and list the other locations inline as `also: L232, L243` (one finding per family). Do not spend rows enumerating the same kind of issue; use the remaining attention to hunt different kinds of problems.
+When the same kind of problem appears in multiple locations, report one representative finding and list the other locations inline as `also: L232, L243`. Do not spend rows enumerating the same kind of issue; use the remaining attention to hunt different kinds of problems. Do not merge, however, in these cases:
+
+- Findings already tracked under separate `finding_id`s (do not break the tracking unit)
+- When a Finding Contract is in use (report every observed problem as an individual raw finding; deduplication is the responsibility of the findings-manager and the ledger)
 
 - **Which file and line number**
 - **What the problem is**
