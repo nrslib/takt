@@ -5,7 +5,35 @@ import {
   parseAiConditionExpression,
 } from '../../../core/models/workflow-condition-expression.js';
 import { isDeterministicCondition, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
-import { splitTopLevel } from '../../../core/workflow/evaluation/when-evaluator.js';
+
+function splitTopLevelPreservingEmpties(expression: string, separator: '&&'): string[] {
+  const parts: string[] = [];
+  let inString = false;
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < expression.length - 1; index++) {
+    const current = expression[index];
+    if (current === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString && current === '(') {
+      depth++;
+      continue;
+    }
+    if (!inString && current === ')') {
+      depth--;
+      continue;
+    }
+    if (!inString && depth === 0 && expression.slice(index, index + 2) === separator) {
+      parts.push(expression.slice(start, index).trim());
+      start = index + 2;
+      index++;
+    }
+  }
+  parts.push(expression.slice(start).trim());
+  return parts;
+}
 
 /**
  * Split a plain compound condition "<tag text> && <findings guard>" into its
@@ -14,8 +42,10 @@ import { splitTopLevel } from '../../../core/workflow/evaluation/when-evaluator.
  * Returns undefined when the condition is not in that shape.
  */
 export function splitTagFindingsCondition(condition: string): { tagText: string; guard: string } | undefined {
-  // 文字列リテラル・括弧内の && では分割しない（exists(...) 等を壊さない）
-  const clauses = splitTopLevel(condition, '&&');
+  // 文字列リテラル・括弧内の && では分割しない（exists(...) 等を壊さない）。
+  // splitTopLevel は空 clause を除去するため、壊れた設定（"a && && b" 等）の
+  // fail-fast 用に空 clause を保持する分割をここで行う。
+  const clauses = splitTopLevelPreservingEmpties(condition, '&&');
   if (clauses.length < 2 || clauses.some((clause) => clause.length === 0)) {
     return undefined;
   }
