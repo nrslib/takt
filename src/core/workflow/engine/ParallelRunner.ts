@@ -298,13 +298,20 @@ export class ParallelRunner {
               'Re-emit ONLY the corrected structured output matching the schema.',
               'Do not repeat the report text. Do not add commentary.',
             ].join('\n');
+            // 是正は JSON 再出力のみ: ツール・編集権限は不要なので絞り、
+            // Phase 1 のイベントコールバックも引き継がない。
             const correctiveResponse = await executeAgent(executableSubStep.persona, correctionInstruction, {
               ...agentOptions,
+              permissionMode: 'readonly',
+              allowedTools: [],
+              onPromptResolved: undefined,
               ...(subResponse.sessionId !== undefined ? { sessionId: subResponse.sessionId } : {}),
             });
+            // 非ネイティブ構造化出力プロバイダでは是正 JSON が content に入る
+            // ため、是正応答をそのまま正規化する（本文の差し替えはマージ時）。
             const renormalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
               executableSubStep,
-              { ...correctiveResponse, content: subResponse.content },
+              correctiveResponse,
               runtime,
             );
             if (renormalized.invalidDetail !== undefined || renormalized.response.status !== 'done') {

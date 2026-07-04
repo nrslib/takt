@@ -718,8 +718,12 @@ describe('WorkflowEngine structured caller defaults', () => {
             timestamp: new Date('2026-06-13T00:00:01.000Z'),
           };
         }
-        // 2回目（是正コール）: 正しい出力
+        // 2回目（是正コール）: 正しい出力。是正では tools を絞り、
+        // Phase 1 のイベントコールバックを引き継がないことも検証する
         expect(instruction).toContain('failed schema validation');
+        expect(options?.permissionMode).toBe('readonly');
+        expect(options?.allowedTools).toEqual([]);
+        expect(options?.onPromptResolved).toBeUndefined();
         return {
           persona: 'reviewer',
           status: 'done',
