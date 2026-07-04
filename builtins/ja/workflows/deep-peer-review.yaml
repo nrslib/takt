@@ -1,0 +1,217 @@
+name: deep-peer-review
+description: peer-review に実装意味論レビュアーを加えた深いレビュー編成。専門並列レビュー ⇄ 修正ループの後、merge-readiness-review と supervise の並列最終ゲートを実行する。
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - need_replan
+  params:
+    arch_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - architecture
+        - takt
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
+        - implementation-semantics
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 30
+initial_step: reviewers
+loop_monitors:
+  - cycle:
+      - reviewers
+      - final-gate
+      - fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（指摘数が減少、修正が反映されている）
+          next: reviewers
+        - condition: 非生産的（同じ指摘が繰り返される）
+          next: COMPLETE
+steps:
+  - name: reviewers
+    tags:
+      - review
+    parallel:
+      - name: arch-review
+        tags:
+          - review
+        edit: false
+        persona: architecture-reviewer
+        policy: review
+        knowledge:
+          $param: arch_knowledge
+        provider_options:
+          extends: review-readonly
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-arch
+        output_contracts:
+          report:
+            - name: architect-review.md
+              format: architecture-review
+      - name: security-review
+        tags:
+          - review
+        edit: false
+        persona: security-reviewer
+        policy: review
+        knowledge: security
+        provider_options:
+          extends: review-readonly
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-security
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: security-review
+      - name: qa-review
+        tags:
+          - review
+        edit: false
+        persona: qa-reviewer
+        policy:
+          - review
+          - qa
+        provider_options:
+          extends: review-readonly
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-qa
+        output_contracts:
+          report:
+            - name: qa-review.md
+              format: qa-review
+      - name: testing-review
+        tags:
+          - review
+        edit: false
+        persona: testing-reviewer
+        policy:
+          - review
+          - testing
+        knowledge:
+          - unit-testing
+          - e2e-testing
+        provider_options:
+          extends: review-readonly
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        instruction: review-test
+        output_contracts:
+          report:
+            - name: testing-review.md
+              format: testing-review
+      - name: coding-review
+        tags:
+          - review
+        edit: false
+        persona: coding-reviewer
+        policy:
+          - review
+          - coding
+        pass_previous_response: false
+        provider_options:
+          extends: review-readonly
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review
+      - name: implementation-semantics-review
+        tags:
+          - review
+        edit: false
+        persona: implementation-semantics-reviewer
+        policy: review
+        knowledge: implementation-semantics
+        pass_previous_response: false
+        provider_options:
+          extends: review-readonly
+        instruction: review-implementation-semantics
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: implementation-semantics-review.md
+              format: implementation-semantics-review
+      - name: ai-antipattern-review-2nd
+        tags:
+          - review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - review
+          - ai-antipattern
+        provider_options:
+          extends: review-readonly
+        instruction: ai-antipattern-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review
+    rules:
+      - condition: all("approved")
+        next: final-gate
+      - condition: any("needs_fix")
+        next: fix
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    args:
+      supervise_knowledge:
+        $param: arch_knowledge
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT
+  - name: fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      $param: fix_knowledge
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    pass_previous_response: false
+    rules:
+      - condition: 修正完了
+        next: reviewers
+      - condition: 判断できない、情報不足
+        return: need_replan
+    instruction: fix
