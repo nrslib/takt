@@ -226,3 +226,40 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
     expect(normalized.guardCondition).toBeUndefined();
   });
 });
+
+describe('guarded compound rejection on unsupported paths', () => {
+  it('should reject tag-and-findings compounds on loop monitor judge rules', async () => {
+    const { normalizeLoopMonitors } = await import('../infra/config/loaders/workflowLoopMonitorNormalizer.js');
+
+    expect(() => normalizeLoopMonitors(
+      [
+        {
+          cycle: ['review', 'fix'],
+          threshold: 3,
+          judge: {
+            rules: [
+              { condition: '健全 && findings.open.count == 0', next: 'review' },
+            ],
+          },
+        },
+      ] as Parameters<typeof normalizeLoopMonitors>[0],
+      ...([undefined, undefined, undefined] as unknown as never[]),
+    )).toThrow('loop_monitor judge rule');
+  });
+
+  it('should reject findings guards on workflow_call rules', async () => {
+    const { validateWorkflowCallRulesAgainstChildReturns } = await import('../infra/config/loaders/workflowCallContracts.js');
+
+    expect(() => validateWorkflowCallRulesAgainstChildReturns(
+      {
+        kind: 'workflow_call',
+        name: 'final-gate',
+        call: 'merge-readiness-final-gate',
+        rules: [
+          { condition: 'COMPLETE', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
+        ],
+      } as Parameters<typeof validateWorkflowCallRulesAgainstChildReturns>[0],
+      { name: 'child', maxSteps: 1, initialStep: 'x', steps: [] } as Parameters<typeof validateWorkflowCallRulesAgainstChildReturns>[1],
+    )).toThrow('does not support findings guards');
+  });
+});

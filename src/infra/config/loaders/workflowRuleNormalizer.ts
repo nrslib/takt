@@ -13,7 +13,7 @@ import { splitTopLevel } from '../../../core/workflow/evaluation/when-evaluator.
  * bare status text as an operand, so compounds must be decomposed here.
  * Returns undefined when the condition is not in that shape.
  */
-function splitTagFindingsCondition(condition: string): { tagText: string; guard: string } | undefined {
+export function splitTagFindingsCondition(condition: string): { tagText: string; guard: string } | undefined {
   // 文字列リテラル・括弧内の && では分割しない（exists(...) 等を壊さない）
   const clauses = splitTopLevel(condition, '&&');
   if (clauses.length < 2 || clauses.some((clause) => clause.length === 0)) {
