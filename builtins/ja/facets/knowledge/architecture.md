@@ -547,7 +547,7 @@ export async function executeWorkflow(config, cwd, task, options?) {
 | 公開された初期状態定数（例: initialState）が freeze されず、利用側から変更可能 | REJECT |
 | 公開定数の内部にネストした可変オブジェクト（配列・Record・Map）が生で露出している | REJECT |
 | ストアや読み取りモデルが内部状態への参照をそのまま返している | REJECT |
-| Object.freeze（ネストした可変オブジェクトも含めて凍結）・ファクトリ関数・防御的コピーで保護されている | OK |
+| 再帰的な deep freeze（`Object.freeze` 単体は浅く、ネストした可変オブジェクトや `Map`/`Set` は保護されない）・ファクトリ関数・防御的コピーで保護されている | OK |
 | `Readonly` 型注釈のみ、または浅い freeze のみ（ネストが生のまま） | REJECT（静的・浅い制約は runtime の変更を防げない） |
 
 ```typescript

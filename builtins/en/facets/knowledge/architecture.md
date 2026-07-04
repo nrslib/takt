@@ -547,7 +547,7 @@ Verify that shared state a module publishes (initial-state constants, singletons
 | A published initial-state constant (e.g. initialState) is not frozen and consumers can mutate it | REJECT |
 | Mutable objects nested inside a published constant (arrays, Records, Maps) are exposed raw | REJECT |
 | A store or read model returns references to its internal state as-is | REJECT |
-| Protected via Object.freeze (including nested mutable objects), factory functions, or defensive copies | OK |
+| Protected via recursive deep freeze (`Object.freeze` alone is shallow and does not protect nested mutable objects or `Map`/`Set`), factory functions, or defensive copies | OK |
 | Only `Readonly` type annotations, or a shallow freeze that leaves nested objects raw | REJECT (static or shallow guards do not prevent runtime mutation) |
 
 ```typescript
