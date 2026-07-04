@@ -1038,6 +1038,16 @@ export class OpenCodeClient {
           }
         }
 
+        // The idle watchdog and external aborts cancel the stream. If the
+        // iterator ends without throwing, the loop falls through with
+        // success still true - do not let a timed-out or aborted stream
+        // pass as a completed call (a stalled stream after a rejected
+        // permission would otherwise be reported as done).
+        if (success && streamAbortController.signal.aborted && (abortCause === 'timeout' || abortCause === 'external')) {
+          success = false;
+          failureMessage = abortCause === 'timeout' ? timeoutMessage : OPENCODE_STREAM_ABORTED_MESSAGE;
+        }
+
         content = [...textContentParts.values()].join('\n');
         if (!success && !streamAbortController.signal.aborted) {
           streamAbortController.abort();

@@ -2080,6 +2080,81 @@ describe('OpenCodeClient stream cleanup', () => {
     }, expect.any(Object));
   });
 
+  it('should fail instead of reporting success when the stream is aborted without throwing', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const abortController = new AbortController();
+    // Ends only when the stream abort signal fires (mirrors SSE behaviour):
+    // the loop then falls through without an exception and the post-loop
+    // guard must turn the aborted stream into an error, not a success.
+    const buildAbortEndingStream = (signal: AbortSignal) => {
+      let emitted = false;
+      return {
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+        next(): Promise<{ done: boolean; value?: unknown }> {
+          if (!emitted) {
+            emitted = true;
+            return Promise.resolve({
+              done: false,
+              value: {
+                type: 'permission.asked',
+                properties: {
+                  id: 'perm-stall',
+                  sessionID: 'session-stall',
+                  permission: 'read',
+                  patterns: ['**'],
+                  always: [],
+                },
+              },
+            });
+          }
+          return new Promise((resolve) => {
+            if (signal.aborted) {
+              resolve({ done: true });
+              return;
+            }
+            signal.addEventListener('abort', () => resolve({ done: true }), { once: true });
+          });
+        },
+        return: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+      };
+    };
+    const permissionReply = vi.fn().mockImplementation(() => {
+      // 最初の（そして唯一の）イベント処理後に外部 abort を発生させる
+      queueMicrotask(() => abortController.abort());
+      return Promise.resolve({ data: {} });
+    });
+    const subscribe = vi.fn().mockImplementation(
+      (_args: unknown, opts: { signal: AbortSignal }) =>
+        Promise.resolve({ stream: buildAbortEndingStream(opts.signal) }),
+    );
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-stall' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe },
+        permission: { reply: permissionReply },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      permissionMode: 'edit',
+      allowedTools: [],
+      abortSignal: abortController.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('abort');
+  });
+
   it('should pass the external_directory deny in the server config', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
