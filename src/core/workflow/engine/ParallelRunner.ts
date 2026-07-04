@@ -281,7 +281,46 @@ export class ParallelRunner {
           providerUsage: result.providerUsage,
         }));
         if (findingLedgerCopyPath) {
-          subResponse = this.deps.stepExecutor.normalizeStructuredOutput(executableSubStep, subResponse, runtime);
+          const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(executableSubStep, subResponse, runtime);
+          subResponse = normalized.response;
+          if (normalized.invalidDetail !== undefined) {
+            // 弱いモデルは大きな構造化出力で JSON を壊しやすい。1回だけ
+            // 同一セッションで是正を求め、直れば元の応答（レポート本文）に
+            // 構造化出力だけをマージして続行する。
+            log.info('Structured output invalid for parallel sub-step, requesting one correction', {
+              step: subStep.name,
+              detail: normalized.invalidDetail,
+            });
+            const correctionInstruction = [
+              'Your structured output failed schema validation:',
+              normalized.invalidDetail,
+              '',
+              'Re-emit ONLY the corrected structured output matching the schema.',
+              'Do not repeat the report text. Do not add commentary.',
+            ].join('\n');
+            const correctiveResponse = await executeAgent(executableSubStep.persona, correctionInstruction, {
+              ...agentOptions,
+              ...(subResponse.sessionId !== undefined ? { sessionId: subResponse.sessionId } : {}),
+            });
+            const renormalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+              executableSubStep,
+              { ...correctiveResponse, content: subResponse.content },
+              runtime,
+            );
+            if (renormalized.invalidDetail !== undefined || renormalized.response.status !== 'done') {
+              subResponse = {
+                ...subResponse,
+                status: 'error',
+                error: `Step "${subStep.name}" structured output remained invalid after one correction: ${renormalized.invalidDetail ?? renormalized.response.error ?? 'correction failed'}`,
+              };
+            } else {
+              subResponse = {
+                ...subResponse,
+                structuredOutput: renormalized.response.structuredOutput,
+                ...(correctiveResponse.sessionId !== undefined ? { sessionId: correctiveResponse.sessionId } : {}),
+              };
+            }
+          }
         }
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);

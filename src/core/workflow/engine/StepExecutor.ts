@@ -226,8 +226,29 @@ export class StepExecutor {
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
   ): AgentResponse {
+    const result = this.normalizeStructuredOutputWithDiagnostics(step, response, runtime);
+    if (result.invalidDetail !== undefined) {
+      const provider = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime).provider;
+      throw new Error(
+        `Step "${step.name}" requires structured_output for provider "${provider}": ${result.invalidDetail}`,
+      );
+    }
+    return result.response;
+  }
+
+  /**
+   * Like normalizeStructuredOutput, but returns the validation failure as a
+   * diagnostic instead of throwing, so callers can attempt a corrective
+   * retry with the agent (weak models frequently emit malformed JSON on
+   * large structured outputs).
+   */
+  normalizeStructuredOutputWithDiagnostics(
+    step: WorkflowStep,
+    response: AgentResponse,
+    runtime?: RuntimeStepResolution,
+  ): { response: AgentResponse; invalidDetail?: string } {
     if (!step.structuredOutput) {
-      return response;
+      return { response };
     }
 
     const provider = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime).provider;
@@ -247,10 +268,10 @@ export class StepExecutor {
         detail,
       );
       if (fallback) {
-        return fallback;
+        return { response: fallback };
       }
       this.logStructuredOutputFailure(step, failureReason, detail);
-      return response;
+      return { response };
     }
 
     try {
@@ -274,12 +295,14 @@ export class StepExecutor {
         language: this.deps.getLanguage(),
       });
       if (structuredOutput === response.structuredOutput) {
-        return response;
+        return { response };
       }
 
       return {
-        ...response,
-        structuredOutput,
+        response: {
+          ...response,
+          structuredOutput,
+        },
       };
     } catch (error) {
       const detail = getErrorMessage(error);
@@ -290,16 +313,14 @@ export class StepExecutor {
         detail,
       );
       if (fallback) {
-        return fallback;
+        return { response: fallback };
       }
       this.logStructuredOutputFailure(
         step,
         supportsStructuredOutput !== false && response.structuredOutput === undefined ? 'missing' : 'schema_error',
         detail,
       );
-      throw new Error(
-        `Step "${step.name}" requires structured_output for provider "${provider}": ${detail}`,
-      );
+      return { response, invalidDetail: detail };
     }
   }
 
