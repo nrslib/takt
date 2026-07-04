@@ -872,7 +872,7 @@ export class OpenCodeClient {
                   // error and generation continues (verified against a live
                   // server). Aborting here used to turn a single stray
                   // out-of-workspace access into a whole-step failure.
-                  log.debug(buildPermissionRejectedMessage(permProps.permission), {
+                  log.info(buildPermissionRejectedMessage(permProps.permission), {
                     permission: permProps.permission,
                     patterns: permProps.patterns,
                   });
