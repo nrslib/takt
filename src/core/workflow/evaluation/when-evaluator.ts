@@ -1,7 +1,7 @@
 import type { WorkflowState } from '../../models/types.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
 
-function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
+export function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
   const parts: string[] = [];
   let inString = false;
   let depth = 0;

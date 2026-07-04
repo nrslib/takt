@@ -21,6 +21,7 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
@@ -492,17 +493,32 @@ export class StepExecutor {
     }
 
     if (phase3Result) {
-      log.debug('Rule matched (Phase 3)', {
-        step: step.name,
-        ruleIndex: phase3Result.ruleIndex,
-        method: phase3Result.method,
-      });
-      nextResponse = {
-        ...nextResponse,
-        matchedRuleIndex: phase3Result.ruleIndex,
-        matchedRuleMethod: phase3Result.method,
-      };
-      return nextResponse;
+      // Phase 3 の判定はタグ/構造化出力からルール番号を直接採用するため、
+      // ここでガード（findings 条件）を評価する。不成立なら採用せず、
+      // ガード対応済みの通常ルール評価へフォールバックする。
+      const phase3Rule = step.rules?.[phase3Result.ruleIndex];
+      if (
+        phase3Rule?.guardCondition !== undefined
+        && !evaluateWhenExpression(phase3Rule.guardCondition, state)
+      ) {
+        log.debug('Phase 3 rule guard failed; falling back to rule evaluation', {
+          step: step.name,
+          ruleIndex: phase3Result.ruleIndex,
+          guardCondition: phase3Rule.guardCondition,
+        });
+      } else {
+        log.debug('Rule matched (Phase 3)', {
+          step: step.name,
+          ruleIndex: phase3Result.ruleIndex,
+          method: phase3Result.method,
+        });
+        nextResponse = {
+          ...nextResponse,
+          matchedRuleIndex: phase3Result.ruleIndex,
+          matchedRuleMethod: phase3Result.method,
+        };
+        return nextResponse;
+      }
     }
 
     // No Phase 3 — use rule evaluator with Phase 1 content

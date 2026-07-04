@@ -206,6 +206,16 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
     expect(normalized.guardCondition).toBeUndefined();
   });
 
+  it('should split guards containing top-level-protected && inside exists()', () => {
+    const normalized = normalizeRule({
+      condition: 'approved && exists(findings.open.items, item.severity == "high" && item.id == "F-0001")',
+      next: 'fix',
+    });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('exists(findings.open.items, item.severity == "high" && item.id == "F-0001")');
+  });
+
   it('should keep aggregate guard splitting on the aggregate path', () => {
     const normalized = normalizeRule({
       condition: 'all("approved") && findings.open.count == 0',
