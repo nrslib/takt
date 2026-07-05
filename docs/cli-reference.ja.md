@@ -162,14 +162,14 @@ codex mcp add takt -- takt-mcp
 |-----------|----|------|
 | `cwd` | 絶対パス文字列 | `.takt/tasks.yaml` を書き込む project root。 |
 | `task` | string | タスク指示書本文。 |
+| `workflow` | string | Workflow 名またはパス。MCP caller はタスク投入前に使用する workflow を確認する必要があります。 |
+| `autoPr` | boolean | 自動 PR を有効にしたタスクとして保存するかどうか。MCP caller はタスク投入前に確認する必要があります。 |
 
 任意入力:
 
 | フィールド | 型 | 説明 |
 |-----------|----|------|
-| `workflow` | string | Workflow 名またはパス。省略時は `default`。 |
 | `worktree` | boolean | `true` は自動の隔離 worktree を作成する。省略時は `true`。MCP 入力では任意の worktree パスを受け取りません。 |
-| `autoPr` | boolean | 自動 PR を有効にしたタスクとして保存する。省略時は `false`。 |
 | `taskContext.branch` | string | タスクに保存するローカルブランチ名。 |
 | `taskContext.baseBranch` | string | タスクに保存するベースブランチ名。 |
 | `taskContext.prNumber` | 正の safe integer | タスクに保存する Pull Request 番号。`Number.MAX_SAFE_INTEGER` を超える値は拒否されます。 |

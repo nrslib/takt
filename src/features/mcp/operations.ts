@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
 import { TaskRunner, type TaskInfo } from '../../infra/task/index.js';
 import { getGitProvider, initGitProvider, type CloseIssueResult, type GitProvider } from '../../infra/git/index.js';
@@ -78,10 +77,6 @@ function assertCwdAllowedByMcpRoot(cwd: string, allowedProjectRoot: string | und
   throw new Error(`MCP cwd is outside the allowed project root: ${cwd}`);
 }
 
-function resolveWorkflow(workflow: string | undefined): string {
-  return workflow ?? DEFAULT_WORKFLOW_NAME;
-}
-
 function buildTaskExecutionOptions(input: RunNextTaskInput): TaskExecutionOptions | undefined {
   if (input.provider === undefined && input.model === undefined) {
     return undefined;
@@ -134,13 +129,12 @@ export async function enqueueTaktTask(
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const saveTaskFile = deps.saveTaskFile ?? defaultSaveTaskFile;
-    const workflow = resolveWorkflow(input.workflow);
     const created = await enqueueTask({
       cwd: input.cwd,
       task: input.task,
-      workflow,
+      workflow: input.workflow,
       worktree: input.worktree ?? true,
-      autoPr: input.autoPr ?? false,
+      autoPr: input.autoPr,
       taskContext: input.taskContext,
     }, saveTaskFile);
     return jsonResult(created);
@@ -157,13 +151,12 @@ export async function createIssueAndEnqueueTaktTask(
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     initGitProvider(input.cwd);
     const gitProvider = getGitProvider();
-    const workflow = resolveWorkflow(input.workflow);
     const issueResult = await createIssueAndEnqueueTask({
       cwd: input.cwd,
       task: input.task,
-      workflow,
+      workflow: input.workflow,
       worktree: input.worktree ?? true,
-      autoPr: input.autoPr ?? false,
+      autoPr: input.autoPr,
       labels: input.labels,
       taskContext: input.taskContext,
       gitProvider,

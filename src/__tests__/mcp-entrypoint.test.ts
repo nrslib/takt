@@ -69,7 +69,7 @@ describe('MCP package entrypoint', () => {
         title: 'Enqueue TAKT task',
         inputSchema: expect.objectContaining({
           type: 'object',
-          required: expect.arrayContaining(['cwd', 'task']),
+          required: expect.arrayContaining(['cwd', 'task', 'workflow', 'autoPr']),
         }),
       }));
       expect(toolsByName.get('takt_create_issue_and_enqueue_task')?.inputSchema.properties).toEqual(
@@ -85,9 +85,9 @@ describe('MCP package entrypoint', () => {
       const enqueueTaskContext = objectProperties(enqueueProperties.taskContext);
       const runNextTaskContext = objectProperties(runNextProperties.taskContext);
 
-      expect(enqueueProperties.workflow?.description).toBe('Workflow identifier to store on the queued task. Defaults to the TAKT default workflow.');
+      expect(enqueueProperties.workflow?.description).toBe('Workflow identifier to store on the queued task. Ask the user which workflow to use before enqueueing.');
       expect(enqueueProperties.worktree?.description).toBe('Whether the queued task should run in a TAKT-managed worktree.');
-      expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should automatically open a pull request.');
+      expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should automatically open a pull request. Ask the user before enqueueing.');
       expect(issueProperties.labels?.description).toBe('Issue labels to request from the configured issue provider.');
       expect(runNextProperties.provider?.description).toBe('Agent provider override for this task execution.');
       expect(runNextProperties.model?.description).toBe('Model override for this task execution.');
@@ -147,6 +147,7 @@ describe('MCP package entrypoint', () => {
           cwd,
           task: 'Implement MCP support',
           workflow: 'review',
+          autoPr: false,
         },
       });
       await client.callTool({
@@ -154,6 +155,8 @@ describe('MCP package entrypoint', () => {
         arguments: {
           cwd,
           task: 'Implement MCP support',
+          workflow: 'default',
+          autoPr: false,
           labels: ['enhancement'],
         },
       });
@@ -222,6 +225,8 @@ describe('MCP package entrypoint', () => {
         arguments: {
           cwd: outsideRoot,
           task: 'Implement MCP support',
+          workflow: 'default',
+          autoPr: false,
         },
       });
 

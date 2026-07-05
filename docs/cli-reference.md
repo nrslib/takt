@@ -163,14 +163,14 @@ Required input:
 |-------|------|-------------|
 | `cwd` | absolute path string | Project root where `.takt/tasks.yaml` is written. |
 | `task` | string | Task instruction body. |
+| `workflow` | string | Workflow name or path. MCP callers must ask which workflow to use before enqueueing. |
+| `autoPr` | boolean | Save the task with auto-PR enabled. MCP callers must ask before enqueueing. |
 
 Optional input:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `workflow` | string | Workflow name or path. Defaults to `default`. |
 | `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
-| `autoPr` | boolean | Save the task with auto-PR enabled. Defaults to `false`. |
 | `taskContext.branch` | string | Local branch name to save with the task. |
 | `taskContext.baseBranch` | string | Base branch name to save with the task. |
 | `taskContext.prNumber` | positive safe integer | Pull request number to save with the task. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |

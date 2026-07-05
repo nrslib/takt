@@ -4,11 +4,15 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  createIssueAndEnqueueTaktTask,
-  enqueueTaktTask,
+  createIssueAndEnqueueTaktTask as createIssueAndEnqueueTaktTaskOperation,
+  enqueueTaktTask as enqueueTaktTaskOperation,
   type McpOperationDependencies,
   runNextTaktTask,
 } from '../features/mcp/operations.js';
+import type {
+  CreateIssueAndEnqueueTaskInput,
+  EnqueueTaskInput,
+} from '../features/mcp/schemas.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 
 vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
@@ -79,6 +83,28 @@ function parseToolJson(result: unknown): Record<string, unknown> {
 
 const RAW_LOCAL_ERROR = "EACCES: permission denied, open '/Users/nrs/secret/.takt/tasks.yaml'";
 
+type EnqueueInputForTest = Omit<EnqueueTaskInput, 'workflow' | 'autoPr'> & Partial<Pick<EnqueueTaskInput, 'workflow' | 'autoPr'>>;
+type IssueEnqueueInputForTest = Omit<CreateIssueAndEnqueueTaskInput, 'workflow' | 'autoPr'> & Partial<Pick<CreateIssueAndEnqueueTaskInput, 'workflow' | 'autoPr'>>;
+
+function withRequiredTaskOptions<T extends EnqueueInputForTest | IssueEnqueueInputForTest>(input: T): T & {
+  workflow: string;
+  autoPr: boolean;
+} {
+  return {
+    workflow: 'default',
+    autoPr: false,
+    ...input,
+  };
+}
+
+function enqueueTaktTask(input: EnqueueInputForTest, deps?: McpOperationDependencies) {
+  return enqueueTaktTaskOperation(withRequiredTaskOptions(input), deps);
+}
+
+function createIssueAndEnqueueTaktTask(input: IssueEnqueueInputForTest, deps?: McpOperationDependencies) {
+  return createIssueAndEnqueueTaktTaskOperation(withRequiredTaskOptions(input), deps);
+}
+
 function expectNoRawLocalError(result: unknown): void {
   const text = getToolText(result);
   expect(text).not.toContain('/Users/nrs/secret');
@@ -113,7 +139,7 @@ describe('MCP task operations', () => {
     mockGetGitProvider.mockReturnValue(mockGitProvider);
   });
 
-  it('Given minimal enqueue input, When takt_enqueue_task runs, Then saveTaskFile receives MCP defaults', async () => {
+  it('Given required enqueue input, When takt_enqueue_task runs, Then saveTaskFile receives explicit MCP decisions', async () => {
     const saveTaskFile = vi.fn().mockResolvedValue({
       taskName: '20260702-add-mcp',
       tasksFile: '/repo/.takt/tasks.yaml',
@@ -122,6 +148,8 @@ describe('MCP task operations', () => {
     const result = await enqueueTaktTask({
       cwd: '/repo',
       task: 'Implement MCP support',
+      workflow: 'default',
+      autoPr: false,
     }, { saveTaskFile });
 
     expect(saveTaskFile).toHaveBeenCalledWith('/repo', 'Implement MCP support', {
