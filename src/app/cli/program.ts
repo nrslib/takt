@@ -49,8 +49,9 @@ program
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
   .option(
     '--provider <name>',
-    'Override agent provider (claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)',
+    'Override agent provider (auto|claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)',
   )
+  .option('--auto-strategy <strategy>', 'Auto routing strategy (cost|balanced|performance)')
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to issue reference)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')

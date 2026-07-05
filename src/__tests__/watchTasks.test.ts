@@ -116,6 +116,7 @@ describe('watchTasks', () => {
       providerSource: 'cli',
       model: 'gpt-5',
       modelSource: 'cli',
+      autoStrategy: 'balanced',
       ignoreExceed: true,
     } as never);
 
@@ -128,6 +129,7 @@ describe('watchTasks', () => {
         providerSource: 'cli',
         model: 'gpt-5',
         modelSource: 'cli',
+        autoStrategy: 'balanced',
       },
       undefined,
       { ignoreIterationLimit: true },

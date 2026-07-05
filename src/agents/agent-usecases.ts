@@ -14,6 +14,11 @@ export {
   type DecomposeTaskOptions,
   type MorePartsResponse,
 } from './decompose-task-usecase.js';
+export {
+  createAutoRoutingAiRouter,
+  type AutoRoutingAiRouter,
+  type AutoRoutingAiStep,
+} from './auto-routing-usecase.js';
 
 export async function executeAgent(
   persona: string | undefined,

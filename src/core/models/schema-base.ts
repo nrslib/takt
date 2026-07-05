@@ -101,6 +101,7 @@ export const ProviderProfileNameSchema = z.enum([
   'mock',
 ]);
 export const ProviderTypeSchema = ProviderProfileNameSchema;
+export const ProviderTypeOrAutoSchema = z.union([ProviderTypeSchema, z.literal('auto')]);
 
 export const ProviderBlockSchema = z.object({
   type: ProviderTypeSchema,
@@ -171,6 +172,76 @@ export const ProviderBlockSchema = z.object({
 });
 
 export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBlockSchema]);
+export const ProviderReferenceOrAutoSchema = z.union([ProviderTypeOrAutoSchema, ProviderBlockSchema]);
+
+export const CostTierSchema = z.enum(['high', 'medium', 'low']);
+export const AutoRoutingStrategySchema = z.enum(['cost', 'balanced', 'performance']);
+const AutoRoutingFullModelIdSchema = z.string().min(1).refine((value) => (
+  /[0-9]/.test(value) || value.includes('/')
+), {
+  message: 'auto_routing model must be a full model id',
+});
+const AutoRoutingStrategyCostTier = {
+  cost: 'low',
+  balanced: 'medium',
+  performance: 'high',
+} as const;
+
+const AutoRoutingCandidateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  provider: ProviderTypeSchema,
+  model: AutoRoutingFullModelIdSchema,
+  cost_tier: CostTierSchema,
+  provider_options: StepProviderOptionsSchema,
+}).strict();
+
+export const AutoRoutingSchema = z.object({
+  strategy: AutoRoutingStrategySchema,
+  router: z.object({
+    provider: ProviderTypeSchema,
+    model: AutoRoutingFullModelIdSchema,
+  }).strict(),
+  candidates: z.array(AutoRoutingCandidateSchema).min(1),
+  rules: z.object({
+    tags: z.record(z.string(), z.string().min(1)).optional(),
+    steps: z.record(z.string(), z.string().min(1)).optional(),
+    personas: z.record(z.string(), z.string().min(1)).optional(),
+  }).strict().optional(),
+}).strict().superRefine((config, ctx) => {
+  const candidateNames = new Set<string>();
+  config.candidates.forEach((candidate, index) => {
+    if (candidateNames.has(candidate.name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['candidates', index, 'name'],
+        message: `auto_routing candidates contain duplicate candidate name "${candidate.name}"`,
+      });
+    }
+    candidateNames.add(candidate.name);
+  });
+
+  for (const [ruleKind, rules] of Object.entries(config.rules ?? {})) {
+    for (const [ruleKey, candidateName] of Object.entries(rules ?? {})) {
+      if (!candidateNames.has(candidateName)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['rules', ruleKind, ruleKey],
+          message: `auto_routing rule references unknown candidate "${candidateName}"`,
+        });
+      }
+    }
+  }
+
+  const requiredTier = AutoRoutingStrategyCostTier[config.strategy];
+  if (!config.candidates.some((candidate) => candidate.cost_tier === requiredTier)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['candidates'],
+      message: `auto_routing strategy "${config.strategy}" requires at least one ${requiredTier} cost_tier candidate`,
+    });
+  }
+});
 
 export const RateLimitFallbackSchema = z.object({
   switch_chain: z.array(z.object({
@@ -408,6 +479,11 @@ export const AnalyticsConfigSchema = z.object({
   events_path: z.string().optional(),
   retention_days: z.number().int().positive().optional(),
 });
+
+/** Local-only telemetry config schema */
+export const TelemetryConfigSchema = z.object({
+  routing_decisions: z.boolean().optional(),
+}).strict();
 
 /** Language setting schema */
 export const LanguageSchema = z.enum(['en', 'ja']);

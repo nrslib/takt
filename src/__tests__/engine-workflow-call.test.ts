@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -42,6 +42,11 @@ import {
   mockDetectMatchedRuleSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
+import type { AutoRoutingConfig } from '../core/models/index.js';
+import { initAnalyticsWriter } from '../features/analytics/index.js';
+import { resetAnalyticsWriter } from '../features/analytics/writer.js';
+import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
+import type { RoutingDecisionEvent } from '../features/analytics/index.js';
 
 function writeWorkflow(projectDir: string, relativePath: string, content: string): void {
   const filePath = join(projectDir, '.takt', 'workflows', relativePath);
@@ -84,6 +89,51 @@ function createWorkflowCallOptions(
   };
 }
 
+function createWorkflowCallAutoRoutingConfig(): AutoRoutingConfig {
+  return {
+    strategy: 'balanced',
+    router: {
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    },
+    candidates: [
+	      {
+	        name: 'delegate-runtime',
+	        description: 'Workflow call delegation',
+	        provider: 'mock',
+	        model: 'parent-model',
+	        costTier: 'medium',
+	      },
+	      {
+	        name: 'reasoning',
+	        description: 'Architecture and planning',
+	        provider: 'claude-sdk',
+	        model: 'claude-opus-4-20250514',
+	        costTier: 'high',
+	      },
+	      {
+	        name: 'coding',
+	        description: 'Implementation and tests',
+	        provider: 'codex',
+	        model: 'gpt-5',
+	        costTier: 'medium',
+	      },
+	      {
+	        name: 'lightweight',
+	        description: 'Formatting',
+	        provider: 'claude-sdk',
+	        model: 'claude-haiku-4-5-20251001',
+	        costTier: 'low',
+	      },
+	    ],
+    rules: {
+      steps: {
+        delegate: 'delegate-runtime',
+      },
+    },
+  };
+}
+
 function mockPersonaResponses(responses: Record<string, string>, fallback = 'Parent delegate placeholder'): void {
   vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
     options?.onPromptResolved?.({
@@ -123,6 +173,7 @@ describe('WorkflowEngine workflow_call integration', () => {
     }
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
+    resetAnalyticsWriter();
     if (engine) {
       cleanupWorkflowEngine(engine);
       engine = null;
@@ -1334,6 +1385,377 @@ steps:
       resolvedProvider: 'claude',
       resolvedModel: 'parent-model',
     }));
+  });
+
+  it('workflow_call child workflow の AI router は child workflow 名で判定する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-18T10:00:00.000Z'));
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+workflow_config:
+  provider: auto
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 4,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'auto-router') {
+        return makeResponse({
+          persona: 'auto-router',
+          content: '{"selected_candidate":"coding"}',
+        });
+      }
+      return makeResponse({
+        persona: 'reviewer',
+        content: 'done',
+      });
+    });
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'Route child workflow with child context', createWorkflowCallOptions(tmpDir, {
+      provider: 'auto',
+      autoRouting: createWorkflowCallAutoRoutingConfig(),
+    }));
+    const routingEventsDir = join(tmpDir, '.takt', 'events');
+    initAnalyticsWriter(false, join(tmpDir, 'analytics'), { routingEventsDir });
+    const analyticsEmitter = new AnalyticsEmitter('run-workflow-call-routing', 'mock', 'parent-model', 'parent');
+    engine.on('step:start', (_step, iteration, instruction, providerInfo, workflowName) => {
+      analyticsEmitter.updateProviderInfo(
+        iteration,
+        providerInfo.provider ?? 'mock',
+        providerInfo.model ?? '(default)',
+        workflowName,
+      );
+    });
+    engine.on('step:complete', (step, response) => {
+      analyticsEmitter.onStepComplete(step, response);
+    });
+    engine.on('routing:decision', (step, response, instruction, providerInfo, stepType, durationMs, iteration, workflowName) => {
+      analyticsEmitter.onRoutingDecision(
+        step,
+        response,
+        instruction,
+        providerInfo,
+        stepType,
+        durationMs,
+        iteration,
+        workflowName,
+      );
+    });
+
+    const state = await engine.run();
+    const routerCalls = vi.mocked(runAgent).mock.calls.filter(([persona]) => persona === 'auto-router');
+    const routerCall = routerCalls[0];
+    const childCall = vi.mocked(runAgent).mock.calls.find(([persona]) => String(persona).includes('reviewer'));
+
+    expect(state.status).toBe('completed');
+    expect(routerCalls).toHaveLength(1);
+    expect(routerCall?.[1]).toContain('Workflow: takt/coding');
+    expect(routerCall?.[1]).not.toContain('Workflow: parent');
+    expect(childCall?.[2]).toEqual(expect.objectContaining({
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
+    }));
+    const records = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as RoutingDecisionEvent);
+    const childRoutingEvent = records.find((event) => (
+      event.type === 'routing_decision' && event.stepName === 'review'
+    ));
+	  expect(childRoutingEvent).toMatchObject({
+	    type: 'routing_decision',
+	    stepName: 'review',
+	    workflowName: 'takt/coding',
+	    selectedCategory: 'coding',
+	  });
+	});
+
+	it('workflow_call は親 options の provider auto を provider 未指定の child workflow に継承する', async () => {
+	  writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+	  const config = createParentWorkflow(tmpDir, {
+	    name: 'parent',
+	    initial_step: 'delegate',
+	    max_steps: 4,
+	    steps: [
+	      {
+	        name: 'delegate',
+	        kind: 'workflow_call',
+	        call: 'takt/coding',
+	        rules: [
+	          {
+	            condition: 'COMPLETE',
+	            next: 'COMPLETE',
+	          },
+	        ],
+	      },
+	    ],
+	  });
+
+	  vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+	    options?.onPromptResolved?.({
+	      systemPrompt: typeof persona === 'string' ? persona : '',
+	      userInstruction: prompt,
+	    });
+	    if (persona === 'auto-router') {
+	      return makeResponse({
+	        persona: 'auto-router',
+	        content: '{"selected_candidate":"coding"}',
+	      });
+	    }
+	    return makeResponse({
+	      persona: 'reviewer',
+	      content: 'done',
+	    });
+	  });
+	  mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+	  engine = new WorkflowEngine(config, tmpDir, 'Route inherited auto provider child workflow', createWorkflowCallOptions(tmpDir, {
+	    provider: 'auto',
+	    model: undefined,
+	    autoRouting: createWorkflowCallAutoRoutingConfig(),
+	  }));
+
+	  const state = await engine.run();
+	  const childCall = vi.mocked(runAgent).mock.calls.find(([persona]) => String(persona).includes('reviewer'));
+
+	  expect(state.status).toBeDefined();
+	  expect(childCall?.[2]).toEqual(expect.objectContaining({
+	    resolvedProvider: 'codex',
+	    resolvedModel: 'gpt-5',
+	  }));
+	});
+
+	it('workflow_call は child workflow 自前の auto_routing に親 engine の strategy override を適用する', async () => {
+	  const parentConfig = createParentWorkflow(tmpDir, {
+	    name: 'parent',
+	    initial_step: 'delegate',
+	    max_steps: 4,
+	    steps: [
+	      {
+	        name: 'delegate',
+	        kind: 'workflow_call',
+	        call: 'takt/coding',
+	        rules: [
+	          {
+	            condition: 'COMPLETE',
+	            next: 'COMPLETE',
+	          },
+	        ],
+	      },
+	    ],
+	  });
+	  const childConfig = {
+	    name: 'takt/coding',
+	    provider: 'auto',
+	    autoRouting: createWorkflowCallAutoRoutingConfig(),
+	    subworkflow: { callable: true },
+	    initialStep: 'review',
+	    maxSteps: 5,
+	    steps: [
+	      {
+	        name: 'review',
+	        persona: 'reviewer',
+	        instruction: 'Review child workflow',
+	        rules: [{ condition: 'done', next: 'COMPLETE' }],
+	      },
+	    ],
+	  };
+	  const createEngine = vi.fn().mockReturnValue({
+	    on: vi.fn(),
+	    runWithResult: vi.fn().mockResolvedValue({
+	      state: {
+	        workflowName: childConfig.name,
+	        currentStep: 'review',
+	        iteration: 2,
+	        stepOutputs: new Map(),
+	        structuredOutputs: new Map(),
+	        systemContexts: new Map(),
+	        effectResults: new Map(),
+	        lastOutput: makeResponse({ persona: 'reviewer', content: 'done' }),
+	        userInputs: [],
+	        personaSessions: new Map(),
+	        stepIterations: new Map(),
+	        status: 'completed',
+	      },
+	    }),
+	  });
+	  const runner = new WorkflowCallRunner({
+	    getConfig: () => parentConfig,
+	    state: {
+	      workflowName: parentConfig.name,
+	      currentStep: 'delegate',
+	      iteration: 1,
+	      stepOutputs: new Map(),
+	      structuredOutputs: new Map(),
+	      systemContexts: new Map(),
+	      effectResults: new Map(),
+	      userInputs: [],
+	      personaSessions: new Map(),
+	      stepIterations: new Map(),
+	      status: 'running',
+	    },
+	    projectCwd: tmpDir,
+	    getMaxSteps: () => parentConfig.maxSteps,
+	    updateMaxSteps: vi.fn(),
+	    getCwd: () => tmpDir,
+	    task: 'Override child auto strategy',
+	    getOptions: () => ({
+	      ...createWorkflowCallOptions(tmpDir),
+	      provider: 'mock',
+	      model: undefined,
+	      autoStrategyOverride: 'performance',
+	    }),
+	    sharedRuntime: { startedAtMs: Date.now() },
+	    resumeStackPrefix: [],
+	    runPaths: { slug: 'test-report-dir' } as never,
+	    setActiveResumePoint: vi.fn(),
+	    emit: vi.fn(),
+	    resolveWorkflowCall: () => childConfig as never,
+	    createEngine,
+	  });
+
+	  await runner.run(parentConfig.steps[0] as never);
+
+	  expect(createEngine).toHaveBeenCalledWith(
+	    childConfig,
+	    tmpDir,
+	    'Override child auto strategy',
+	    expect.objectContaining({
+	      provider: 'auto',
+	      autoRouting: expect.objectContaining({ strategy: 'performance' }),
+	    }),
+	  );
+	});
+
+  it('workflow_call child workflow の strategy override 後に必要 tier が欠ける場合は child engine 作成前に拒否する', async () => {
+    const parentConfig = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 4,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+          ],
+        },
+      ],
+    });
+    const childConfig = {
+      name: 'takt/coding',
+      provider: 'auto',
+      autoRouting: {
+        ...createWorkflowCallAutoRoutingConfig(),
+        candidates: [
+          {
+            name: 'delegate-runtime',
+            description: 'Workflow call delegation',
+            provider: 'mock',
+            model: 'parent-model',
+            costTier: 'medium',
+          },
+        ],
+      },
+      subworkflow: { callable: true },
+      initialStep: 'review',
+      maxSteps: 5,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review child workflow',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+    const createEngine = vi.fn();
+    const runner = new WorkflowCallRunner({
+      getConfig: () => parentConfig,
+      state: {
+        workflowName: parentConfig.name,
+        currentStep: 'delegate',
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        status: 'running',
+      },
+      projectCwd: tmpDir,
+      getMaxSteps: () => parentConfig.maxSteps,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => tmpDir,
+      task: 'Reject child auto strategy',
+      getOptions: () => ({
+        ...createWorkflowCallOptions(tmpDir),
+        provider: 'mock',
+        model: undefined,
+        autoStrategyOverride: 'performance',
+      }),
+      sharedRuntime: { startedAtMs: Date.now() },
+      resumeStackPrefix: [],
+      runPaths: { slug: 'test-report-dir' } as never,
+      setActiveResumePoint: vi.fn(),
+      emit: vi.fn(),
+      resolveWorkflowCall: () => childConfig as never,
+      createEngine,
+    });
+
+    await expect(runner.run(parentConfig.steps[0] as never)).rejects.toThrow(/performance|high|candidate/i);
+    expect(createEngine).not.toHaveBeenCalled();
   });
 
   it('callable ではない child workflow を拒否する', async () => {

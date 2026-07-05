@@ -25,6 +25,9 @@ function normalizeLoopMonitorJudge(
     workflowDir,
     context,
   );
+  if (normalizedProvider.provider === 'auto') {
+    throw new Error('Configuration error: loop monitor judge provider does not support "auto"');
+  }
   return {
     sessionKey: raw.session_key,
     persona: personaSpec,

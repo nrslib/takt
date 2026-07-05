@@ -23,7 +23,10 @@ export async function runAllTasks(
   const agentOverrides: TaskExecutionOptions | undefined = options
     ? {
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
+        ...(options.providerSource !== undefined ? { providerSource: options.providerSource } : {}),
         ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
+        ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
       }
     : undefined;
   const runOptions = options?.ignoreExceed === true

@@ -379,7 +379,7 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('step:start', (step, iteration, instruction, providerInfo) => {
+  deps.engine.on('step:start', (step, iteration, instruction, providerInfo, workflowName) => {
     state.currentIteration = iteration;
     state.currentStepName = step.name;
     state.lastResumePoint = getResumePoint();
@@ -437,7 +437,7 @@ export function bindWorkflowExecutionEvents(
     deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
     deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
     emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
-    deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel);
+    deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel, workflowName ?? deps.workflowConfig.name);
 
     if (!deps.prefixWriter) {
       const stepIndex = deps.workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
@@ -515,6 +515,19 @@ export function bindWorkflowExecutionEvents(
     deps.sessionLogger.onStepComplete(step, response, instruction, deps.getCurrentWorkflowStack());
     deps.analyticsEmitter.onStepComplete(step, response);
     state.sessionLog = { ...state.sessionLog, iterations: state.sessionLog.iterations + 1 };
+  });
+
+  deps.engine.on('routing:decision', (step, response, instruction, providerInfo, stepType, durationMs, iteration, workflowName) => {
+    deps.analyticsEmitter.onRoutingDecision?.(
+      step,
+      response,
+      instruction,
+      providerInfo,
+      stepType,
+      durationMs,
+      iteration,
+      workflowName ?? deps.workflowConfig.name,
+    );
   });
 
   deps.engine.on('step:rate_limited', (step, response) => {

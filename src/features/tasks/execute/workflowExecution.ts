@@ -132,8 +132,12 @@ async function executeWorkflowInternal(
   runContext?: WorkflowRunContext,
 ): Promise<WorkflowExecutionResult> {
   const parentRunPid = process.pid;
-  const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, task, cwd, options);
   const workflowExecutionContext = createWorkflowExecutionContext(workflowConfig, options.projectCwd);
+  const workflowCallResolver = createWorkflowCallResolver(workflowExecutionContext);
+  const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, task, cwd, {
+    ...options,
+    workflowCallResolver,
+  });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(workflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
@@ -213,6 +217,8 @@ async function executeWorkflowInternal(
       reportFallbackProvider: options.reportFallbackProvider,
       rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
       providerOptions: options.providerOptions,
+      autoRouting: bootstrap.effectiveWorkflowConfig.autoRouting,
+      autoStrategyOverride: options.autoStrategy,
       providerOptionsSource: options.providerOptionsSource,
       providerOptionsOriginResolver: options.providerOptionsOriginResolver,
       personaProviders: options.personaProviders,
@@ -237,7 +243,7 @@ async function executeWorkflowInternal(
         ...serviceOptions,
         ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
       }),
-      workflowCallResolver: createWorkflowCallResolver(workflowExecutionContext),
+      workflowCallResolver,
     });
 
     eventBridge = bindWorkflowExecutionEvents({

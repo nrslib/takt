@@ -8,7 +8,7 @@ import type {
   WorkflowState,
 } from '../../models/types.js';
 import type { RunPaths } from '../run/run-paths.js';
-import { resolveWorkflowCallProviderModel } from '../provider-resolution.js';
+import { resolveWorkflowCallProviderModel, toConcreteProvider } from '../provider-resolution.js';
 import {
   getResumePointWorkflowReference,
   getWorkflowReference,
@@ -84,24 +84,42 @@ export class WorkflowCallRunner {
     };
   }
 
-  private resolveChildProviderModel(step: WorkflowCallStep): { provider: WorkflowEngineOptions['provider']; model: string | undefined } {
+  private resolveChildProviderModel(
+    step: WorkflowCallStep,
+    childWorkflow: WorkflowConfig,
+  ): { provider: WorkflowEngineOptions['provider']; model: string | undefined } {
     const parentProviderInfo = this.resolveParentWorkflowProviderContext();
+    const childProviderInfo = resolveWorkflowCallProviderModel({
+      workflow: childWorkflow,
+      provider: parentProviderInfo.provider,
+      model: parentProviderInfo.model,
+    });
     if (!step.overrides) {
       return {
-        provider: parentProviderInfo.provider,
-        model: parentProviderInfo.model,
+        provider: childProviderInfo.provider,
+        model: childProviderInfo.model,
       };
     }
 
     return {
-      provider: step.overrides.provider ?? parentProviderInfo.provider,
-      model: step.overrides.model ?? (step.overrides.provider !== undefined ? undefined : parentProviderInfo.model),
+      provider: step.overrides.provider ?? childProviderInfo.provider,
+      model: step.overrides.model ?? (step.overrides.provider !== undefined ? undefined : childProviderInfo.model),
     };
   }
 
   resolveRuntime(step: WorkflowCallStep): RuntimeStepResolution {
+    const parentProviderInfo = this.resolveParentWorkflowProviderContext();
+    const workflowCallProviderModel = {
+      provider: step.overrides?.provider ?? parentProviderInfo.provider,
+      model: step.overrides?.model ?? (
+        step.overrides?.provider !== undefined ? undefined : parentProviderInfo.model
+      ),
+    };
     return {
-      providerInfo: this.resolveChildProviderModel(step),
+      providerInfo: {
+        provider: toConcreteProvider(workflowCallProviderModel.provider),
+        model: workflowCallProviderModel.model,
+      },
     };
   }
 
@@ -184,10 +202,13 @@ export class WorkflowCallRunner {
       throw new Error(`workflow_call depth exceeds limit (5): ${childWorkflow.name}`);
     }
 
-    const childProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
-    if (!childProviderInfo) {
+    const runtimeProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
+    if (!runtimeProviderInfo) {
       throw new Error(`workflow_call step "${step.name}" could not resolve provider context`);
     }
+    const childProviderInfo = runtime.fallback
+      ? runtimeProviderInfo
+      : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
     const childResult = await this.executor.execute({
       step,
@@ -208,6 +229,6 @@ export class WorkflowCallRunner {
     this.deps.state.stepOutputs.set(step.name, response);
     this.deps.state.lastOutput = response;
     this.deps.state.previousResponseSourcePath = undefined;
-    return { response, instruction: '', providerInfo: childProviderInfo };
+    return { response, instruction: '', providerInfo: runtimeProviderInfo };
   }
 }

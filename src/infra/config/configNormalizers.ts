@@ -9,6 +9,7 @@ import type { PermissionMode } from '../../core/models/status.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type {
   AssistantConfig,
+  AutoRoutingConfig,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
@@ -16,13 +17,14 @@ import type {
   ProviderRoutingEntry,
   TaktProviderConfigEntry,
   TaktProvidersConfig,
+  TelemetryConfig,
 } from '../../core/models/config-types.js';
 import { validateProviderModelCompatibility } from './providerModelCompatibility.js';
 import {
   normalizeConfigProviderReferenceDetailed,
   type ConfigProviderReference,
 } from './providerReference.js';
-import type { NormalizeProviderOptionsOptions } from './providerOptions.js';
+import { normalizeProviderOptions, type NormalizeProviderOptionsOptions } from './providerOptions.js';
 
 type RawCommandQualityGate = Omit<CommandQualityGate, 'timeoutMs'> & {
   timeout_ms?: number;
@@ -38,6 +40,23 @@ type RawProviderRoutingEntry = string | {
 
 type RawQualityGate = string | RawCommandQualityGate;
 type RawQualityGateOverride = { quality_gates?: RawQualityGate[] };
+
+type RawAutoRoutingConfig = {
+  strategy: AutoRoutingConfig['strategy'];
+  router: {
+    provider: AutoRoutingConfig['router']['provider'];
+    model: string;
+  };
+  candidates: Array<{
+    name: string;
+    description: string;
+    provider: AutoRoutingConfig['candidates'][number]['provider'];
+    model: string;
+    cost_tier: AutoRoutingConfig['candidates'][number]['costTier'];
+    provider_options?: Record<string, unknown>;
+  }>;
+  rules?: AutoRoutingConfig['rules'];
+};
 
 function normalizeQualityGate(gate: RawQualityGate): QualityGate {
   if (typeof gate === 'string') {
@@ -115,6 +134,62 @@ export function normalizeRateLimitFallback(
       };
     }),
   };
+}
+
+export function normalizeAutoRoutingConfig(
+  raw: RawAutoRoutingConfig | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): AutoRoutingConfig | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  validateProviderModelCompatibility(raw.router.provider, raw.router.model, {
+    modelFieldName: 'Configuration error: auto_routing.router.model',
+  });
+
+  return {
+    strategy: raw.strategy,
+    router: {
+      provider: raw.router.provider,
+      model: raw.router.model,
+    },
+    candidates: raw.candidates.map((candidate, index) => {
+      validateProviderModelCompatibility(candidate.provider, candidate.model, {
+        modelFieldName: `Configuration error: auto_routing.candidates[${index}].model`,
+      });
+      return {
+        name: candidate.name,
+        description: candidate.description,
+        provider: candidate.provider,
+        model: candidate.model,
+        costTier: candidate.cost_tier,
+        providerOptions: normalizeProviderOptions(candidate.provider_options, {
+          ...options,
+          pathPrefix: `auto_routing.candidates[${index}].provider_options`,
+        }),
+      };
+    }),
+    rules: raw.rules,
+  };
+}
+
+export function normalizeTelemetryConfig(
+  raw: { routing_decisions?: boolean } | undefined,
+): TelemetryConfig | undefined {
+  if (!raw || raw.routing_decisions === undefined) {
+    return undefined;
+  }
+  return { routingDecisions: raw.routing_decisions };
+}
+
+export function denormalizeTelemetryConfig(
+  config: TelemetryConfig | undefined,
+): Record<string, unknown> | undefined {
+  if (!config || config.routingDecisions === undefined) {
+    return undefined;
+  }
+  return { routing_decisions: config.routingDecisions };
 }
 
 export function denormalizeRateLimitFallback(

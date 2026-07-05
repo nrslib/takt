@@ -3,16 +3,22 @@
  */
 
 import type { Language } from '../../../core/models/index.js';
-import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/models/config-types.js';
+import type {
+  AutoRoutingConfig,
+  AutoRoutingStrategy,
+  PersonaProviderEntry,
+  ProviderRoutingConfig,
+  ProviderTypeOrAuto,
+} from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { McpServerConfig, WorkflowResumePoint } from '../../../core/models/index.js';
 import type {
   AskUserQuestionHandler,
   StepProviderInfo,
+  WorkflowCallResolver,
   WorkflowTraceTaskMetadata,
 } from '../../../core/workflow/types.js';
-import type { ProviderType } from '../../../infra/providers/index.js';
 import type {
   ProviderOptionsOriginResolver,
   ProviderOptionsSource,
@@ -153,7 +159,7 @@ export interface WorkflowExecutionOptions {
   initialIterationOverride?: number;
   /** Language for instruction metadata */
   language?: Language;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   /** Source layer of `provider`. */
   providerSource?: ProviderResolutionSource;
   model?: string;
@@ -163,6 +169,10 @@ export interface WorkflowExecutionOptions {
   reportFallbackProvider?: StepProviderInfo;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  /** Resolved automatic provider/model routing configuration */
+  autoRouting?: AutoRoutingConfig;
+  /** Strategy override for automatic provider/model routing. */
+  autoStrategy?: AutoRoutingStrategy;
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
   /** Nested origin resolver for resolved provider options */
@@ -185,6 +195,8 @@ export interface WorkflowExecutionOptions {
   resumePoint?: WorkflowResumePoint;
   /** Source direct run metadata for resumed direct executions */
   directResume?: DirectResumeMetadata;
+  /** Resolver used to inspect workflow_call targets before engine construction. */
+  workflowCallResolver?: WorkflowCallResolver;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
@@ -202,12 +214,14 @@ export interface WorkflowExecutionOptions {
 }
 
 export interface TaskExecutionOptions {
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   /** Source layer of `provider` (defaults to 'cli' when set via --provider). */
   providerSource?: ProviderResolutionSource;
   model?: string;
   /** Source layer of `model` (defaults to 'cli' when set via --model). */
   modelSource?: ProviderResolutionSource;
+  /** Strategy override for automatic provider/model routing. */
+  autoStrategy?: AutoRoutingStrategy;
 }
 
 export interface TaskExecutionContextOverride {
@@ -304,8 +318,10 @@ export interface PipelineExecutionOptions {
   skipGit?: boolean;
   /** Working directory */
   cwd: string;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   model?: string;
+  /** Strategy override for automatic provider/model routing. */
+  autoStrategy?: AutoRoutingStrategy;
   /** Whether to create worktree for task execution */
   createWorktree?: boolean | undefined;
 }

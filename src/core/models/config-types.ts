@@ -12,6 +12,33 @@ import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, Workflo
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
+export type ProviderTypeOrAuto = ProviderType | 'auto';
+export type CostTier = 'high' | 'medium' | 'low';
+export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
+
+export interface AutoRoutingCandidate {
+  name: string;
+  description: string;
+  provider: ProviderType;
+  model: string;
+  costTier: CostTier;
+  providerOptions?: StepProviderOptions;
+}
+
+export interface AutoRoutingConfig {
+  strategy: AutoRoutingStrategy;
+  router: {
+    provider: ProviderType;
+    model: string;
+  };
+  candidates: AutoRoutingCandidate[];
+  rules?: {
+    tags?: Record<string, string>;
+    steps?: Record<string, string>;
+    personas?: Record<string, string>;
+  };
+}
+
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
@@ -109,6 +136,12 @@ export interface AnalyticsConfig {
   retentionDays?: number;
 }
 
+/** Local-only telemetry configuration */
+export interface TelemetryConfig {
+  /** Enable local routing decision recording to .takt/events (default: true) */
+  routingDecisions?: boolean;
+}
+
 /** Project-level submodule acquisition selection */
 export type SubmoduleSelection = 'all' | string[];
 
@@ -185,7 +218,7 @@ export interface ProjectConfig {
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   /** Model selection for agent runtime */
   model?: string;
   /** Allow git hooks during TAKT-managed auto-commit */
@@ -228,10 +261,14 @@ export interface ProjectConfig {
   syncProjectLocalTaktOnRetry?: boolean;
   /** Project-level analytics overrides */
   analytics?: AnalyticsConfig;
+  /** Local-only telemetry settings */
+  telemetry?: TelemetryConfig;
   /** Project-level observability opt-in overrides */
   observability?: ObservabilityConfig;
   /** Provider-specific options (overrides global, overridden by workflow/step) */
   providerOptions?: StepProviderOptions;
+  /** Automatic provider/model routing configuration. */
+  autoRouting?: AutoRoutingConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */
@@ -264,7 +301,6 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   language: Language;
   /** @globalOnly */
   logging?: LoggingConfig;
-  /** @globalOnly */
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;
   /** @globalOnly */

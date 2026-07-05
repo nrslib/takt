@@ -1086,6 +1086,49 @@ describe('workflow step tags', () => {
     });
   });
 
+  it('Given workflow_config provider is auto and provider_routing defines provider, When resolving step, Then routing is above auto fallback', () => {
+    const workflowPath = join(tempDir, 'provider-routing-workflow-config-auto.yaml');
+    writeFileSync(workflowPath, [
+      'name: provider-routing-workflow-config-auto',
+      'initial_step: implement',
+      'max_steps: 1',
+      'workflow_config:',
+      '  provider: auto',
+      '  model: workflow-model',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    tags:',
+      '      - implementation',
+      '    instruction: "{task}"',
+    ].join('\n'));
+
+    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
+    const step = workflow.steps[0];
+
+    expect(step).toMatchObject({
+      provider: 'auto',
+      providerSpecified: false,
+    });
+    expect(resolveStepProviderModel({
+      step,
+      provider: 'auto',
+      providerSource: 'project',
+      model: 'workflow-model',
+      modelSource: 'project',
+      providerRouting: {
+        tags: {
+          implementation: { provider: 'codex', model: 'gpt-5' },
+        },
+      },
+    })).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'provider_routing.tags',
+      modelSource: 'provider_routing.tags',
+    });
+  });
+
   it('Given parallel sub-step inherits workflow_config fallback, When resolving sub-step, Then routing remains above workflow fallback', () => {
     const workflowPath = join(tempDir, 'provider-routing-parallel-workflow-config.yaml');
     writeFileSync(workflowPath, [
@@ -1149,6 +1192,53 @@ describe('workflow step tags', () => {
       },
     }).buildBaseOptions(subStep).providerOptions).toEqual({
       codex: { networkAccess: true },
+    });
+  });
+
+  it('Given parallel sub-step inherits workflow_config auto fallback, When resolving sub-step, Then routing remains above auto fallback', () => {
+    const workflowPath = join(tempDir, 'provider-routing-parallel-workflow-config-auto.yaml');
+    writeFileSync(workflowPath, [
+      'name: provider-routing-parallel-workflow-config-auto',
+      'initial_step: implement',
+      'max_steps: 1',
+      'workflow_config:',
+      '  provider: auto',
+      '  model: workflow-model',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    parallel:',
+      '      - name: implement-api',
+      '        persona: coder',
+      '        tags:',
+      '          - implementation',
+      '        instruction: "{task}"',
+    ].join('\n'));
+
+    const workflow = loadWorkflowFromFile(workflowPath, tempDir);
+    const subStep = workflow.steps[0].parallel?.[0];
+    if (!subStep) {
+      throw new Error('parallel sub-step must be normalized');
+    }
+
+    expect(subStep).toMatchObject({
+      provider: 'auto',
+      providerSpecified: false,
+      model: 'workflow-model',
+      modelSpecified: false,
+    });
+    expect(resolveStepProviderModel({
+      step: subStep,
+      providerRouting: {
+        tags: {
+          implementation: { provider: 'codex', model: 'gpt-5' },
+        },
+      },
+    })).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'provider_routing.tags',
+      modelSource: 'provider_routing.tags',
     });
   });
 

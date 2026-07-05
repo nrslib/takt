@@ -76,6 +76,7 @@ function createBridgeHarness(options?: {
     onStepReport: vi.fn(),
     onFindingLedgerUpdated: vi.fn(),
     seedFindingContractFindingIds: vi.fn(),
+    onRoutingDecision: vi.fn(),
   };
   const usageEventLogger = {
     setStep: vi.fn(),
@@ -225,7 +226,7 @@ describe('bindWorkflowExecutionEvents', () => {
     writeFileSync(analyticsPath, 'not a directory', 'utf-8');
     initAnalyticsWriter(true, analyticsPath);
     try {
-      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model');
+      const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'parent');
       const { engine, runMetaManager, analyticsEmitter } = createBridgeHarness();
       analyticsEmitter.onFindingLedgerUpdated.mockImplementation((ledger: FindingLedger) => {
         actualAnalyticsEmitter.onFindingLedgerUpdated(ledger);
@@ -268,6 +269,45 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(analyticsEmitter.seedFindingContractFindingIds).toHaveBeenCalledWith(['F-0001', 'F-0002']);
   });
 
+  it('routing decision event を analytics emitter に渡す', () => {
+    const { engine, analyticsEmitter } = createBridgeHarness();
+    const step = {
+      name: 'implement.part-1',
+      personaDisplayName: 'Coder',
+      instruction: 'Implement API',
+    } as WorkflowStep;
+    const response = {
+      persona: 'implement.part-1',
+      status: 'done',
+      content: 'done',
+      timestamp: new Date('2026-02-18T10:00:00.000Z'),
+    };
+    const providerInfo = {
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.ai',
+      autoRoutingDecision: {
+        candidateName: 'coding',
+        costTier: 'medium',
+        strategy: 'balanced',
+        candidateCount: 2,
+      },
+    };
+
+    engine.emit('routing:decision', step, response, 'Implement API', providerInfo, 'agent', 1234, 2);
+
+    expect(analyticsEmitter.onRoutingDecision).toHaveBeenCalledWith(
+      step,
+      response,
+      'Implement API',
+      providerInfo,
+      'agent',
+      1234,
+      2,
+      'parent',
+    );
+  });
+
   it('step model が明示省略された場合は configured model へ戻さず default として記録する', () => {
     const { engine, out, usageEventLogger, analyticsEmitter } = createBridgeHarness({
       currentProvider: 'cursor',
@@ -287,7 +327,7 @@ describe('bindWorkflowExecutionEvents', () => {
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
     expect(usageEventLogger.setProvider).toHaveBeenCalledWith('cursor', '(default)');
-    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'cursor', '(default)');
+    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'cursor', '(default)', 'parent');
   });
 
   it('loop monitor judge model が明示省略された場合は usage に default として記録する', () => {
@@ -309,7 +349,7 @@ describe('bindWorkflowExecutionEvents', () => {
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
     expect(usageEventLogger.setProvider).toHaveBeenCalledWith('codex', '(default)');
-    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'codex', '(default)');
+    expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'codex', '(default)', 'parent');
   });
 
   it('OpenCode variant を step start の provider option 表示に含める', () => {

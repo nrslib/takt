@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
-import type { GlobalConfig } from '../../../core/models/config-types.js';
+import type { GlobalConfig, TaktProviderConfigEntry } from '../../../core/models/config-types.js';
 import type { QualityGate } from '../../../core/models/workflow-types.js';
 import {
   normalizeConfigProviderReference,
@@ -17,6 +17,8 @@ import {
   buildRawTaktProvidersOrThrow,
   normalizeRuntime,
   normalizeRateLimitFallback,
+  normalizeAutoRoutingConfig,
+  normalizeTelemetryConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -126,6 +128,7 @@ export class GlobalConfigManager {
       language: parsed.language,
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
+      autoRouting: normalizeAutoRoutingConfig(parsed.auto_routing),
       logging: parsed.logging ? {
         level: parsed.logging.level,
         trace: parsed.logging.trace,
@@ -138,6 +141,7 @@ export class GlobalConfigManager {
         eventsPath: expandOptionalHomePath(parsed.analytics.events_path),
         retentionDays: parsed.analytics.retention_days,
       } : undefined,
+      telemetry: normalizeTelemetryConfig(parsed.telemetry),
       observability: normalizeObservabilityConfig(parsed.observability),
       worktreeDir: expandOptionalHomePath(parsed.worktree_dir),
       allowGitHooks: parsed.allow_git_hooks,
@@ -216,7 +220,7 @@ export class GlobalConfigManager {
       taktProviders: normalizeTaktProviders(
         parsed.takt_providers as {
           assistant?: {
-            provider?: GlobalConfig['provider'];
+            provider?: TaktProviderConfigEntry['provider'];
             model?: string;
           };
         } | undefined,
@@ -243,7 +247,9 @@ export class GlobalConfigManager {
       interactivePreviewSteps: resolveAliasedPreviewCount(parsed as Record<string, unknown>),
       syncProjectLocalTaktOnRetry: parsed.sync_project_local_takt_on_retry as boolean | undefined,
     };
-    validateProviderModelCompatibility(config.provider, config.model);
+    if (config.provider !== 'auto') {
+      validateProviderModelCompatibility(config.provider, config.model);
+    }
     this.cachedConfig = config;
     this.cachedTrace = trace;
     return config;

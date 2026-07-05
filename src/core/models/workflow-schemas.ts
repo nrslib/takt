@@ -7,10 +7,12 @@ import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
+  AutoRoutingSchema,
   StepProviderOptionsObjectSchema,
   OutputContractsFieldSchema,
   PermissionModeSchema,
   ProviderReferenceSchema,
+  ProviderReferenceOrAutoSchema,
   RateLimitFallbackSchema,
   QualityGatesSchema,
   hasProviderOptionsLeaf,
@@ -58,7 +60,7 @@ function hasProviderOptionsTarget(
 }
 
 const WorkflowProviderOptionsWithExtendsSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
+  provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
   runtime: RuntimeConfigSchema,
@@ -217,7 +219,7 @@ export const ParallelSubStepRawSchema = z.object({
   allow_git_commit: z.boolean().optional(),
   allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
-  provider: ProviderReferenceSchema.optional(),
+  provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().nullable().optional(),
   promotion: z.never().optional(),
   permission_mode: z.never().optional(),
@@ -247,7 +249,7 @@ export const ParallelSubStepRawSchema = z.object({
 const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 
 const WorkflowCallOverridesRawSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
+  provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
 }).strict().superRefine((data, ctx) => {
@@ -319,7 +321,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     allow_git_commit: z.boolean().optional(),
     allowed_tools: z.never().optional(),
     mcp_servers: McpServersSchema,
-    provider: ProviderReferenceSchema.optional(),
+    provider: ProviderReferenceOrAutoSchema.optional(),
     model: z.string().nullable().optional(),
     promotion: z.array(WorkflowPromotionRawSchema).optional(),
     permission_mode: z.never().optional(),
@@ -564,6 +566,7 @@ export const WorkflowConfigRawSchema = z.object({
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
   finding_contract: FindingContractConfigRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsWithExtendsSchema,
+  auto_routing: AutoRoutingSchema.optional(),
   rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),

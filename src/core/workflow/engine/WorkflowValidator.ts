@@ -114,10 +114,28 @@ function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig
   }
 }
 
+function stepUsesAutoProvider(step: WorkflowConfig['steps'][number]): boolean {
+  if (step.provider === 'auto') {
+    return true;
+  }
+  if (step.kind === 'workflow_call' && step.overrides?.provider === 'auto') {
+    return true;
+  }
+  return Array.isArray(step.parallel)
+    ? step.parallel.some((subStep) => subStep.provider === 'auto')
+    : false;
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
+  }
+  if (
+    (options.provider === 'auto' || config.provider === 'auto' || config.steps.some(stepUsesAutoProvider))
+    && options.autoRouting === undefined
+  ) {
+    throw new Error('Configuration error: provider: auto requires auto_routing configuration');
   }
   validateFindingContractParallelStructuredOutput(config);
   validateFindingContractInvalidManagerOutputRules(config);

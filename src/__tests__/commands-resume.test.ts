@@ -57,6 +57,9 @@ vi.mock('../app/cli/program.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   clearPersonaSessions: vi.fn(),
+  disableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: true })),
+  enableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: true })),
+  getRoutingTelemetryStatus: vi.fn(() => ({ localRecordingEnabled: true })),
   resolveConfigValue: vi.fn(),
 }));
 

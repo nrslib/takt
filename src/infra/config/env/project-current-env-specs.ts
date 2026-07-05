@@ -20,6 +20,8 @@ export const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'analytics.enabled', type: 'boolean' },
   { path: 'analytics.events_path', type: 'string' },
   { path: 'analytics.retention_days', type: 'number' },
+  { path: 'telemetry', type: 'json' },
+  { path: 'telemetry.routing_decisions', type: 'boolean' },
   { path: 'observability', type: 'json' },
   { path: 'observability.enabled', type: 'boolean' },
   { path: 'observability.monitor', type: 'boolean' },

@@ -2,7 +2,7 @@
  * Tests for AnalyticsWriter — JSONL append, date rotation, ON/OFF toggle.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import {
   isAnalyticsEnabled,
   writeAnalyticsEvent,
 } from '../features/analytics/index.js';
-import type { StepResultEvent, ReviewFindingEvent } from '../features/analytics/index.js';
+import type { StepResultEvent, ReviewFindingEvent, RoutingDecisionEvent } from '../features/analytics/index.js';
 
 describe('AnalyticsWriter', () => {
   let testDir: string;
@@ -24,6 +24,8 @@ describe('AnalyticsWriter', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
     resetAnalyticsWriter();
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -217,4 +219,104 @@ describe('AnalyticsWriter', () => {
       expect(isAnalyticsEnabled()).toBe(false);
     });
   });
+
+  describe('routing telemetry', () => {
+    it('writes routing decisions as NDJSON to the project events directory even when local analytics is disabled', () => {
+      const routingDir = join(testDir, '.takt', 'events');
+      initAnalyticsWriter(false, join(testDir, 'analytics'), { routingEventsDir: routingDir });
+
+      writeAnalyticsEvent(createRoutingDecisionEvent());
+      writeAnalyticsEvent({
+        ...createRoutingDecisionEvent(),
+        stepName: 'review',
+        selectedCategory: 'review',
+        provider: 'claude-sdk',
+        model: 'claude-sonnet-4-20250514',
+        timestamp: '2026-07-04T10:01:00.000Z',
+      });
+
+      const filePath = join(routingDir, '2026-07-04.jsonl');
+      expect(existsSync(filePath)).toBe(true);
+      const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
+      expect(lines).toHaveLength(2);
+      const parsed = JSON.parse(lines[0]) as RoutingDecisionEvent;
+      expect(parsed).toMatchObject({
+        type: 'routing_decision',
+        stepName: 'implement',
+        stepTags: ['implementation'],
+        personaKey: 'coder',
+        workflowName: 'auto-routing',
+        stepType: 'normal',
+        instructionTokenCount: 12,
+        phaseCount: 1,
+        provider: 'codex',
+        model: 'gpt-5',
+        selectedCategory: 'coding',
+        selectedCostTier: 'medium',
+        candidateCount: 3,
+        strategy: 'balanced',
+        resolutionSource: 'auto.rules',
+        stepSuccess: true,
+        durationMs: 100,
+        taktVersion: '0.49.0',
+        iteration: 1,
+        runId: 'run-routing',
+      });
+      expect(parsed.timestamp).toBe('2026-07-04T10:00:00.000Z');
+    });
+
+    it('does not upload routing decisions', () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const routingDir = join(testDir, '.takt', 'events');
+      initAnalyticsWriter(false, join(testDir, 'analytics'), {
+        routingEventsDir: routingDir,
+      });
+
+      writeAnalyticsEvent(createRoutingDecisionEvent());
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(existsSync(join(routingDir, '2026-07-04.jsonl'))).toBe(true);
+    });
+
+    it('does not write routing decisions when no local routing events directory is configured', () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const analyticsDir = join(testDir, 'analytics');
+      const routingDir = join(testDir, '.takt', 'events');
+      initAnalyticsWriter(true, analyticsDir);
+
+      writeAnalyticsEvent(createRoutingDecisionEvent());
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(existsSync(routingDir)).toBe(false);
+      expect(existsSync(join(analyticsDir, '2026-07-04.jsonl'))).toBe(false);
+    });
+  });
 });
+
+function createRoutingDecisionEvent(): RoutingDecisionEvent {
+  return {
+    type: 'routing_decision',
+    stepName: 'implement',
+    stepTags: ['implementation'],
+    personaKey: 'coder',
+    workflowName: 'auto-routing',
+    stepType: 'normal',
+    instructionTokenCount: 12,
+    phaseCount: 1,
+    provider: 'codex',
+    model: 'gpt-5',
+    selectedCategory: 'coding',
+    selectedCostTier: 'medium',
+    candidateCount: 3,
+    strategy: 'balanced',
+    resolutionSource: 'auto.rules',
+    stepSuccess: true,
+    durationMs: 100,
+    taktVersion: '0.49.0',
+    iteration: 1,
+    runId: 'run-routing',
+    timestamp: '2026-07-04T10:00:00.000Z',
+  };
+}

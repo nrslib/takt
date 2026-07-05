@@ -13,6 +13,7 @@ import {
 } from '../../../infra/config/index.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { resolveAssistantScopedProviderModelFromConfig } from '../../../core/config/provider-resolution.js';
+import { toConcreteProvider } from '../../../core/workflow/provider-resolution.js';
 import type { StepProviderInfo, WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -168,6 +169,7 @@ export async function executeTaskWorkflow(
     providerSource: agentOverrides?.providerSource,
     model: agentOverrides?.model,
     modelSource: agentOverrides?.modelSource,
+    autoStrategy: agentOverrides?.autoStrategy,
     reportFallbackProvider: resolveReportFallbackProviderModel(projectCwd),
     outputMode,
     eventSink,
@@ -202,12 +204,12 @@ function resolveReportFallbackProviderModel(projectCwd: string): StepProviderInf
   const global = loadGlobalConfig();
   const resolved = resolveAssistantScopedProviderModelFromConfig({
     local: {
-      provider: project.provider,
+      provider: toConcreteProvider(project.provider),
       model: project.model,
       taktProviders: project.taktProviders,
     },
     global: {
-      provider: global.provider,
+      provider: toConcreteProvider(global.provider),
       model: global.model,
       taktProviders: global.taktProviders,
     },

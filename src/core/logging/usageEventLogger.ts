@@ -1,6 +1,7 @@
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { ProviderTypeOrAuto } from '../models/config-types.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import { USAGE_EVENTS_LOG_FILE_SUFFIX } from './contracts.js';
 import {
@@ -12,7 +13,7 @@ export interface UsageEventLoggerConfig {
   readonly logsDir: string;
   readonly sessionId: string;
   readonly runId: string;
-  readonly provider: ProviderType;
+  readonly provider: ProviderTypeOrAuto;
   readonly providerModel: string;
   readonly step: string;
   readonly stepType: StepType;
@@ -48,7 +49,7 @@ export function createUsageEventLogger(config: UsageEventLoggerConfig): UsageEve
   const filepath = join(config.logsDir, `${config.sessionId}${USAGE_EVENTS_LOG_FILE_SUFFIX}`);
   let step = config.step;
   let stepType = config.stepType;
-  let provider = config.provider;
+  let provider: ProviderTypeOrAuto = config.provider;
   let providerModel = config.providerModel;
   let hasReportedWriteFailure = false;
 
@@ -71,6 +72,9 @@ export function createUsageEventLogger(config: UsageEventLoggerConfig): UsageEve
     }): void {
       if (!config.enabled) {
         return;
+      }
+      if (provider === 'auto') {
+        throw new Error('[usage-events] provider must be resolved before logging usage');
       }
 
       const record = buildUsageEventRecord(

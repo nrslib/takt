@@ -13,8 +13,9 @@ import type {
 import type { WorkflowRuleTransition } from './transitions.js';
 import { decrementStepIteration, incrementStepIteration } from './state-manager.js';
 import { handleBlocked } from './blocked-handler.js';
-import { isDelegatedWorkflowStep } from '../step-kind.js';
+import { getWorkflowStepKind, isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
+import { resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 import { runWithStepSpan, type StepSpanParams } from '../observability/workflowSpans.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 
@@ -89,6 +90,69 @@ async function resolveStepPromotionRuntime(
     childProcessEnv: deps.options.childProcessEnv,
     resolveStepProviderModel: deps.resolveStepProviderModel,
   }, step, stepIteration, runtime);
+}
+
+async function resolveStepAutoRoutingRuntime(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  runtime: RuntimeStepResolution | undefined,
+  instruction: string | undefined,
+): Promise<RuntimeStepResolution | undefined> {
+  if (
+    !deps.options.autoRouting
+    || runtime?.fallback
+    || getWorkflowStepKind(step) !== 'agent'
+    || isDelegatedWorkflowStep(step)
+    || step.parallel
+  ) {
+    return runtime;
+  }
+
+  const currentProviderInfo = deps.resolveStepProviderModel(step, runtime);
+  const autoRuntime = await resolveAutoRoutingRuntime({
+    autoRouting: deps.options.autoRouting,
+    step: {
+      name: step.name,
+      tags: step.tags,
+      personaKey: step.providerRoutingPersonaKey,
+      instruction,
+    },
+    currentProviderInfo,
+    routeWithAi: deps.options.autoRoutingAiRouter?.routeStep,
+    logger: log,
+  });
+  if (!autoRuntime) {
+    return runtime;
+  }
+  return {
+    ...runtime,
+    ...autoRuntime,
+  };
+}
+
+function emitNormalRoutingDecision(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  response: AgentResponse,
+  instruction: string,
+  providerInfo: StepProviderInfo,
+  durationMs: number,
+  iteration: number,
+): void {
+  if (isDelegatedWorkflowStep(step) || providerInfo.autoRoutingDecision === undefined) {
+    return;
+  }
+  deps.emit(
+    'routing:decision',
+    step,
+    response,
+    instruction,
+    providerInfo,
+    'normal',
+    durationMs,
+    iteration,
+    deps.getWorkflowName(),
+  );
 }
 
 function sameFallbackProvider(
@@ -378,18 +442,20 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       ? undefined
       : incrementStepIteration(deps.state, step.name);
     const promotedRuntime = await resolveStepPromotionRuntime(deps, step, stepIteration, baseStepRuntime);
-    const stepRuntime = withFallbackRuntime(deps.state, promotedRuntime);
+    const fallbackRuntime = withFallbackRuntime(deps.state, promotedRuntime);
     const prebuiltInstruction = stepIteration !== undefined
       ? deps.buildInstruction(step, stepIteration)
       : undefined;
+    const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, prebuiltInstruction);
     const stepInstruction = prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '';
     deps.setActiveStep(step, activeIteration);
     const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
-    deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo);
+    deps.emit('step:start', step, activeIteration, stepInstruction, providerInfo, deps.getWorkflowName());
 
     try {
+      const startedAt = Date.now();
       const result = await runWithStepSpan({
         enabled: deps.options.observability?.enabled === true,
         runId: deps.options.observabilityRunId,
@@ -405,13 +471,23 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         traceTaskMetadata: deps.options.traceTaskMetadata,
       }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
       const { response, instruction, providerInfo: resultProviderInfo } = result;
+      const completedProviderInfo = resultProviderInfo ?? providerInfo;
+      emitNormalRoutingDecision(
+        deps,
+        step,
+        response,
+        instruction,
+        completedProviderInfo,
+        Math.max(0, Date.now() - startedAt),
+        activeIteration,
+      );
       if (stepRuntime?.fallback) {
         deps.state.pendingFallback = undefined;
       }
       deps.emit('step:complete', step, response, instruction);
 
       if (response.status === 'rate_limited') {
-        const currentProvider = resultProviderInfo ?? providerInfo;
+        const currentProvider = completedProviderInfo;
         const consumedStepIterations = result.consumedStepIterations ?? [step.name];
         const fallbackResult = prepareRateLimitFallback(
           deps,
@@ -592,12 +668,14 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     stepIteration = incrementStepIteration(deps.state, step.name);
   }
   const promotedRuntime = await resolveStepPromotionRuntime(deps, step, stepIteration, baseStepRuntime);
-  const stepRuntime = withFallbackRuntime(deps.state, promotedRuntime);
+  const fallbackRuntime = withFallbackRuntime(deps.state, promotedRuntime);
   let prebuiltInstruction: string | undefined;
   if (!isDelegated && stepIteration !== undefined) {
     prebuiltInstruction = deps.buildInstruction(step, stepIteration);
   }
+  const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, prebuiltInstruction);
   const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
+  const startedAt = Date.now();
   const result = await runWithStepSpan({
     enabled: deps.options.observability?.enabled === true,
     runId: deps.options.observabilityRunId,
@@ -615,6 +693,16 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     traceTaskMetadata: deps.options.traceTaskMetadata,
   }, () => deps.runStep(step, prebuiltInstruction, stepRuntime));
   const { response, providerInfo: resultProviderInfo } = result;
+  const completedProviderInfo = resultProviderInfo ?? providerInfo;
+  emitNormalRoutingDecision(
+    deps,
+    step,
+    response,
+    result.instruction,
+    completedProviderInfo,
+    Math.max(0, Date.now() - startedAt),
+    activeIteration,
+  );
   if (stepRuntime?.fallback) {
     deps.state.pendingFallback = undefined;
   }
@@ -624,7 +712,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
   if (response.status === 'rate_limited') {
-    const currentProvider = resultProviderInfo ?? providerInfo;
+    const currentProvider = completedProviderInfo;
     const consumedStepIterations = result.consumedStepIterations ?? [step.name];
     const fallbackResult = prepareRateLimitFallback(
       deps,

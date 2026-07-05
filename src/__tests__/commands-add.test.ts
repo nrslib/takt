@@ -57,6 +57,9 @@ vi.mock('../app/cli/program.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   clearPersonaSessions: vi.fn(),
+  disableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: false })),
+  enableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: true })),
+  getRoutingTelemetryStatus: vi.fn(() => ({ localRecordingEnabled: true })),
   resolveConfigValue: vi.fn(),
 }));
 
@@ -122,12 +125,16 @@ vi.mock('../commands/repertoire/list.js', () => ({
 
 import '../app/cli/commands.js';
 const configFeatures = await import('../features/config/index.js');
+const infraConfig = await import('../infra/config/index.js');
+const sharedUi = await import('../shared/ui/index.js');
 
 describe('CLI add command', () => {
   beforeEach(() => {
     mockAddTask.mockClear();
     mockLogError.mockClear();
     mockProcessExit.mockClear();
+    vi.mocked(sharedUi.info).mockClear();
+    vi.mocked(sharedUi.success).mockClear();
     for (const key of Object.keys(mockOpts)) {
       delete mockOpts[key];
     }
@@ -225,5 +232,43 @@ describe('CLI add command', () => {
       .toHaveBeenCalledWith('Export takt workflows/agents as Claude Code Skill (~/.claude/)');
     expect(commandMocks.get('root.export-codex')?.description)
       .toHaveBeenCalledWith('Export takt workflows/agents as Codex Skill (~/.agents/)');
+  });
+
+  it('should register telemetry subcommands and wire them to config operations', async () => {
+    const statusAction = commandActions.get('root.telemetry.status');
+    const enableAction = commandActions.get('root.telemetry.enable');
+    const disableAction = commandActions.get('root.telemetry.disable');
+    const telemetryCommand = commandMocks.get('root.telemetry');
+    const enableCommand = commandMocks.get('root.telemetry.enable');
+    const disableCommand = commandMocks.get('root.telemetry.disable');
+
+    expect(statusAction).toBeTypeOf('function');
+    expect(enableAction).toBeTypeOf('function');
+    expect(disableAction).toBeTypeOf('function');
+    expect(telemetryCommand?.description).toHaveBeenCalledWith('Manage TAKT local routing event recording');
+    expect(enableCommand?.description).toHaveBeenCalledWith('Enable local routing event recording');
+    expect(disableCommand?.description).toHaveBeenCalledWith('Disable local routing event recording');
+
+    await statusAction?.();
+    await enableAction?.();
+    await disableAction?.();
+
+    expect(infraConfig.getRoutingTelemetryStatus).toHaveBeenCalledWith('/test/cwd');
+    expect(infraConfig.enableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
+    expect(infraConfig.disableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
+    const messages = [
+      ...vi.mocked(sharedUi.info).mock.calls.map((call) => String(call[0])),
+      ...vi.mocked(sharedUi.success).mock.calls.map((call) => String(call[0])),
+    ];
+    expect(messages).toHaveLength(3);
+    const [statusMessage, enableMessage, disableMessage] = messages;
+    expect(statusMessage).toContain('Local recording: enabled');
+    expect(enableMessage).toContain('Local recording: enabled');
+    expect(disableMessage).toContain('Local recording: disabled');
+    const externalSendingTerms = ['up' + 'load', 'to' + 'ken', 're' + 'voke', 'end' + 'point'];
+    for (const message of [statusMessage, enableMessage, disableMessage]) {
+      expect(message).toContain('Routing decision recording is local only and writes to .takt/events');
+      expect(message).not.toMatch(new RegExp(externalSendingTerms.join('|'), 'i'));
+    }
   });
 });

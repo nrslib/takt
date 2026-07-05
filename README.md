@@ -267,6 +267,33 @@ model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
 
+To let TAKT choose provider/model per step, set `provider: auto` and define `auto_routing` candidates:
+
+```yaml
+provider: auto
+auto_routing:
+  strategy: balanced   # cost, balanced, or performance
+  router:
+    provider: claude-sdk
+    model: claude-haiku-4-5-20251001
+  candidates:
+    - name: coding
+      description: Implementation, tests, debugging, and refactoring
+      provider: codex
+      model: gpt-5
+      cost_tier: medium
+    - name: lightweight
+      description: Formatting and small mechanical edits
+      provider: claude-sdk
+      model: claude-haiku-4-5-20251001
+      cost_tier: low
+  rules:
+    tags:
+      implementation: coding
+```
+
+Auto-routing decisions are written locally to `.takt/events/` as NDJSON. TAKT does not upload routing decisions. Local recording is enabled by default, can be configured with `telemetry.routing_decisions`, and can be inspected or changed with `takt telemetry status|enable|disable`.
+
 Or use API keys directly (no CLI installation required for Claude, Codex, OpenCode):
 
 ```bash

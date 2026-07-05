@@ -22,6 +22,7 @@ vi.mock('node:os', async () => {
 const mockSelectOption = vi.fn().mockResolvedValue('en');
 vi.mock('../shared/prompt/index.js', () => ({
   selectOptionWithDefault: mockSelectOption,
+  confirm: vi.fn(),
 }));
 
 // Import after mocks are set up

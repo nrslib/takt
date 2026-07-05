@@ -20,6 +20,7 @@ import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
+import { toConcreteProvider } from '../provider-resolution.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
@@ -247,6 +248,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack,
     onPhaseStart: phaseRelay.onPhaseStart,
     onPhaseComplete: phaseRelay.onPhaseComplete,
+    emitEvent: params.emitEvent,
   });
 
   const systemStepExecutor = new SystemStepExecutor({
@@ -258,7 +260,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       const providerInfo = optionsBuilder.resolveStepProviderModel(step);
       return {
         cwd: params.getCwd(),
-          provider: step.provider ?? params.options.provider,
+          provider: toConcreteProvider(step.provider) ?? toConcreteProvider(params.options.provider),
           resolvedProvider: providerInfo.provider,
           resolvedModel: providerInfo.model,
           childProcessEnv: params.options.childProcessEnv,
@@ -280,7 +282,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
     onStepStart: (step, iteration, instruction, providerInfo) => {
-      params.emitEvent('step:start', step, iteration, instruction, providerInfo);
+      params.emitEvent('step:start', step, iteration, instruction, providerInfo, params.config.name);
     },
     onStepComplete: (step, response, instruction) => {
       params.emitEvent('step:complete', step, response, instruction);

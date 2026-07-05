@@ -148,6 +148,10 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 #     ## Summary
 #     {issue_body}
 #     Closes #{issue}
+
+# Routing decision telemetry is local-only.
+# telemetry:
+#   routing_decisions: true       # Write auto-routing decisions to .takt/events/ (default: true)
 ```
 
 ### Global Config Field Reference
@@ -195,6 +199,7 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 | `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
 | `takt_providers` | object | - | TAKT internal provider overrides. `assistant` routes the interactive planning conversation and is also used as the Report phase fallback provider after an OpenCode report retry fails. Project `takt_providers.assistant` overrides global `takt_providers.assistant`; if neither is set, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
+| `telemetry` | object | `{ routing_decisions: true }` | Local-only routing decision recording. `telemetry.routing_decisions` controls whether auto-routing decisions are written as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. |
 | `workflow_mcp_servers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
@@ -510,6 +515,53 @@ step YAML provider/model
 ```
 
 The resolved input is determined before workflow execution from CLI flags, then project `.takt/config.yaml`, then global `~/.takt/config.yaml`, then the provider default. Promotion entries, when active, are higher priority than the step YAML value.
+
+### Auto Routing
+
+Set `provider: auto` when TAKT should choose both provider and model from an effective `auto_routing` candidate list. Define `auto_routing` in project or global config to apply it across workflows; a workflow-level `auto_routing` block may override that config for a self-contained workflow.
+
+```yaml
+provider: auto
+
+auto_routing:
+  strategy: balanced # cost | balanced | performance
+  router:
+    provider: claude-sdk
+    model: claude-haiku-4-5-20251001
+  candidates:
+    - name: reasoning
+      description: Complex reasoning, architecture, and ambiguous decisions
+      provider: claude-sdk
+      model: claude-opus-4-20250514
+      cost_tier: high
+    - name: coding
+      description: Implementation, tests, debugging, and refactoring
+      provider: codex
+      model: gpt-5
+      cost_tier: medium
+      provider_options:
+        codex:
+          reasoning_effort: high
+    - name: lightweight
+      description: Formatting and small mechanical edits
+      provider: claude-sdk
+      model: claude-haiku-4-5-20251001
+      cost_tier: low
+  rules:
+    tags:
+      implementation: coding
+      architecture: reasoning
+    steps:
+      security-audit: reasoning
+    personas:
+      architect: reasoning
+```
+
+Resolution order stays conservative: `promotion`, explicit step provider/model, `provider_routing`, and `persona_providers` win before auto routing. Auto routing then checks rules in `tags`, `steps`, `personas` order. If multiple step tags match, the later tag on the step wins. If no rule matches, TAKT asks the configured router model to select a candidate from descriptions; router failures log a warning and fall back to the strategy default: `cost` chooses the first `low` candidate, `balanced` the first `medium`, and `performance` the first `high`.
+
+Candidate `cost_tier` is limited to `high`, `medium`, or `low`. Candidate `provider_options` are merged at step priority, so env/CLI-resolved option leaves still win. `model: auto` is not supported; use multiple candidates instead. CLI can override the strategy with `--auto-strategy cost|balanced|performance`; the override applies when the effective workflow, step, parallel sub-step, workflow_call override, or resolved workflow_call child uses `provider: auto`. When no auto provider path is present, the strategy flag is ignored with a warning.
+
+Routing decisions are local-only telemetry. When `telemetry.routing_decisions` is enabled, TAKT writes them as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. Use `takt telemetry status`, `takt telemetry enable`, and `takt telemetry disable` to inspect or change only this local recording setting.
 
 In workflow YAML, `model: null` is treated as an explicit entry-level value. It stops model resolution at the step, parallel sub-step, or `loop_monitors.judge`, so lower-priority sources and triggering-step inheritance are not consulted for `model`. Omitting the `model` field keeps normal fallback behavior.
 

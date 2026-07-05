@@ -1,19 +1,17 @@
-/**
- * Analytics event writer — JSONL append-only with date-based rotation.
- *
- * Writes to ~/.takt/analytics/events/YYYY-MM-DD.jsonl when analytics.enabled = true.
- * Does nothing when disabled.
- */
-
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AnalyticsEvent } from './events.js';
+import type { AnalyticsEvent, RoutingDecisionEvent } from './events.js';
+
+export interface AnalyticsWriterOptions {
+  routingEventsDir?: string;
+}
 
 export class AnalyticsWriter {
   private static instance: AnalyticsWriter | null = null;
 
   private enabled = false;
   private eventsDir: string | null = null;
+  private routingEventsDir: string | null = null;
 
   private constructor() {}
 
@@ -25,22 +23,23 @@ export class AnalyticsWriter {
   }
 
   static resetInstance(): void {
+    AnalyticsWriter.instance?.dispose();
     AnalyticsWriter.instance = null;
   }
 
-  /**
-   * Initialize writer.
-   * @param enabled Whether analytics collection is active
-   * @param eventsDir Absolute path to the events directory (e.g. ~/.takt/analytics/events)
-   */
-  init(enabled: boolean, eventsDir: string): void {
+  init(enabled: boolean, eventsDir: string, options: AnalyticsWriterOptions = {}): void {
+    this.dispose();
     this.enabled = enabled;
     this.eventsDir = eventsDir;
+    this.routingEventsDir = options.routingEventsDir ?? null;
 
     if (this.enabled) {
       if (!existsSync(this.eventsDir)) {
         mkdirSync(this.eventsDir, { recursive: true });
       }
+    }
+    if (this.routingEventsDir !== null && !existsSync(this.routingEventsDir)) {
+      mkdirSync(this.routingEventsDir, { recursive: true });
     }
   }
 
@@ -48,14 +47,27 @@ export class AnalyticsWriter {
     return this.enabled;
   }
 
-  /** Append an analytics event to the current day's JSONL file */
   write(event: AnalyticsEvent): void {
+    if (event.type === 'routing_decision') {
+      this.writeRoutingDecision(event);
+      return;
+    }
+
     if (!this.enabled || !this.eventsDir) {
       return;
     }
 
-    const filePath = join(this.eventsDir, `${formatDate(event.timestamp)}.jsonl`);
-    appendFileSync(filePath, JSON.stringify(event) + '\n', 'utf-8');
+    appendJsonlEvent(this.eventsDir, event);
+  }
+
+  private writeRoutingDecision(event: RoutingDecisionEvent): void {
+    if (this.routingEventsDir !== null) {
+      appendJsonlEvent(this.routingEventsDir, event);
+    }
+  }
+
+  private dispose(): void {
+    this.routingEventsDir = null;
   }
 }
 
@@ -63,10 +75,15 @@ function formatDate(isoTimestamp: string): string {
   return isoTimestamp.slice(0, 10);
 }
 
+function appendJsonlEvent(eventsDir: string, event: AnalyticsEvent): void {
+  const filePath = join(eventsDir, `${formatDate(event.timestamp)}.jsonl`);
+  appendFileSync(filePath, JSON.stringify(event) + '\n', 'utf-8');
+}
+
 // ---- Module-level convenience functions ----
 
-export function initAnalyticsWriter(enabled: boolean, eventsDir: string): void {
-  AnalyticsWriter.getInstance().init(enabled, eventsDir);
+export function initAnalyticsWriter(enabled: boolean, eventsDir: string, options?: AnalyticsWriterOptions): void {
+  AnalyticsWriter.getInstance().init(enabled, eventsDir, options);
 }
 
 export function resetAnalyticsWriter(): void {

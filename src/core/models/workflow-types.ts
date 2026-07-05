@@ -1,4 +1,5 @@
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { AutoRoutingConfig, ProviderTypeOrAuto } from './config-types.js';
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
 import type { InteractiveMode } from './interactive-mode.js';
@@ -165,7 +166,7 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   session?: 'continue' | 'refresh';
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   providerSpecified?: boolean;
   model?: string;
   modelSpecified?: boolean;
@@ -308,9 +309,10 @@ export interface WorkflowConfig {
   subworkflow?: WorkflowSubworkflowConfig;
   findingContract?: FindingContractConfig;
   schemas?: Record<string, string>;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   model?: string;
   providerOptions?: StepProviderOptions;
+  autoRouting?: AutoRoutingConfig;
   rateLimitFallback?: RateLimitFallbackConfig;
   runtime?: WorkflowRuntimeConfig;
   personas?: Record<string, string>;

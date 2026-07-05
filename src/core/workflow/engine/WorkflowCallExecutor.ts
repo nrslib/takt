@@ -13,6 +13,7 @@ import type {
 } from '../../models/config-types.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
+import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import type {
   WorkflowAbortKind,
@@ -41,11 +42,12 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
     return entries;
   }
 
+  const overrideProvider = overrides.provider === 'auto' ? undefined : overrides.provider;
   return Object.fromEntries(
     Object.entries(entries).map(([key, entry]) => {
       const nextEntry: T = {
-        ...(overrides.provider !== undefined
-          ? { provider: overrides.provider }
+        ...(overrideProvider !== undefined
+          ? { provider: overrideProvider }
           : entry.provider !== undefined
             ? { provider: entry.provider }
             : {}),
@@ -195,6 +197,7 @@ export class WorkflowCallExecutor {
     for (const eventName of [
       'step:start',
       'step:complete',
+      'routing:decision',
       'step:report',
       'findings:ledger',
       'step:blocked',
@@ -236,6 +239,11 @@ export class WorkflowCallExecutor {
         request.parentProviderOptions,
         request.step.overrides?.providerOptions,
       ),
+      autoRouting: applyAutoRoutingStrategyOverride(
+        request.childWorkflow.autoRouting ?? options.autoRouting,
+        options.autoStrategyOverride,
+      ),
+      autoRoutingAiRouter: undefined,
       personaProviders: request.personaProviders,
       providerRouting: request.providerRouting,
       startStep: this.resolveChildResumeStartStep(request.childWorkflow, childResumePoint),

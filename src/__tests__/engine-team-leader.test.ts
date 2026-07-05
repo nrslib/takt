@@ -6,6 +6,7 @@ import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { makeStep, makeRule, makeResponse, createTestTmpDir, applyDefaultMocks } from './engine-test-helpers.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { initNdjsonLog } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { renderTraceReportFromLogs } from '../features/tasks/execute/traceReport.js';
@@ -51,6 +52,30 @@ function buildTeamLeaderConfig(): WorkflowConfig {
         rules: [makeRule('done', 'COMPLETE')],
       }),
     ],
+  };
+}
+
+function createAutoRoutingConfig(): AutoRoutingConfig {
+  return {
+    strategy: 'balanced',
+    router: {
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+    },
+    candidates: [
+      {
+        name: 'coding',
+        description: 'Implementation and tests',
+        provider: 'codex',
+        model: 'gpt-5',
+        costTier: 'medium',
+      },
+    ],
+    rules: {
+      tags: {
+        implementation: 'coding',
+      },
+    },
   };
 }
 
@@ -117,6 +142,299 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('API done');
     expect(output!.content).toContain('## part-2: Test');
     expect(output!.content).toContain('Tests done');
+  });
+
+  it('team leader と worker の auto routing decision を routing event として発行する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.tags = ['implementation'];
+    step.teamLeader.partTags = ['implementation'];
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'auto',
+      autoRouting: createAutoRoutingConfig(),
+    });
+    const routingEvents: unknown[][] = [];
+    engine.on('routing:decision', (...args) => {
+      routingEvents.push(args);
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(routingEvents).toHaveLength(2);
+    expect(routingEvents[0]?.[0]).toMatchObject({
+      name: 'implement',
+      tags: ['implementation'],
+    });
+    expect(routingEvents[0]?.[3]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: {
+        candidateName: 'coding',
+      },
+    });
+    expect(routingEvents[0]?.[4]).toBe('agent');
+    expect(typeof routingEvents[0]?.[5]).toBe('number');
+    expect(routingEvents[1]?.[0]).toMatchObject({
+      name: 'implement.part-1',
+      tags: ['implementation'],
+    });
+    expect(routingEvents[1]?.[3]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: {
+        candidateName: 'coding',
+      },
+    });
+    expect(routingEvents[1]?.[4]).toBe('agent');
+    expect(typeof routingEvents[1]?.[5]).toBe('number');
+  });
+
+  it('team leader の providerRoutingPersonaKey に一致する persona rule で leader 候補を選ぶ', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.providerRoutingPersonaKey = 'team-leader';
+    step.teamLeader.partTags = ['implementation'];
+    const autoRouting: AutoRoutingConfig = {
+      strategy: 'balanced',
+      router: {
+        provider: 'claude-sdk',
+        model: 'claude-haiku-4-5-20251001',
+      },
+      candidates: [
+        {
+          name: 'leader',
+          description: 'Team leader planning',
+          provider: 'mock',
+          model: 'mock-1',
+          costTier: 'medium',
+        },
+        {
+          name: 'coding',
+          description: 'Implementation and tests',
+          provider: 'codex',
+          model: 'gpt-5',
+          costTier: 'medium',
+        },
+      ],
+      rules: {
+        tags: {
+          implementation: 'coding',
+        },
+        personas: {
+          'team-leader': 'leader',
+        },
+      },
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'auto',
+      autoRouting,
+    });
+    const routingEvents: unknown[][] = [];
+    engine.on('routing:decision', (...args) => {
+      routingEvents.push(args);
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(routingEvents.map((event) => (event[0] as { name: string }).name)).toEqual([
+      'implement',
+      'implement.part-1',
+    ]);
+    expect(routingEvents[0]?.[3]).toMatchObject({
+      provider: 'mock',
+      model: 'mock-1',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: {
+        candidateName: 'leader',
+      },
+    });
+    expect(routingEvents[1]?.[3]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: {
+        candidateName: 'coding',
+      },
+    });
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: 'mock',
+      resolvedModel: 'mock-1',
+    });
+  });
+
+  it('team leader worker の auto routing provider が part model と非互換なら worker 実行前に失敗する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.partPersona = 'coder';
+    step.teamLeader.partTags = ['implementation'];
+    const autoRouting: AutoRoutingConfig = {
+      strategy: 'balanced',
+      router: {
+        provider: 'claude-sdk',
+        model: 'claude-haiku-4-5-20251001',
+      },
+      candidates: [
+        {
+          name: 'leader',
+          description: 'Team leader planning',
+          provider: 'mock',
+          model: 'leader-model',
+          costTier: 'medium',
+        },
+        {
+          name: 'coding',
+          description: 'Implementation and tests',
+          provider: 'codex',
+          model: 'sonnet',
+          costTier: 'medium',
+        },
+      ],
+      rules: {
+        tags: {
+          implementation: 'coding',
+        },
+        steps: {
+          implement: 'leader',
+        },
+      },
+    };
+    const abortReasons: string[] = [];
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'auto',
+      autoRouting,
+    });
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReasons.push(reason);
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReasons[0]).toMatch(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+  });
+
+  it('team leader が feedback で追加した part に auto routing を適用する', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.tags = ['implementation'];
+    step.teamLeader.maxConcurrency = 1;
+    step.teamLeader.partTags = ['implementation'];
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'auto',
+      autoRouting: createAutoRoutingConfig(),
+    });
+    const routingEvents: unknown[][] = [];
+    engine.on('routing:decision', (...args) => {
+      routingEvents.push(args);
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          done: false,
+          reasoning: 'add test part',
+          parts: [
+            { id: 'part-2', title: 'Tests', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'Tests done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(routingEvents).toHaveLength(3);
+    expect(routingEvents.map((event) => (event[0] as { name: string }).name)).toEqual([
+      'implement',
+      'implement.part-1',
+      'implement.part-2',
+    ]);
+    expect(vi.mocked(runAgent).mock.calls[3]?.[2]).toMatchObject({
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
+    });
   });
 
   it('passes childProcessEnv to team leader decomposition and feedback calls', async () => {

@@ -92,7 +92,7 @@ export interface StepProviderOptions {
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';
 
 export interface WorkflowCallOverrides {
-  provider?: ProviderType;
+  provider?: ProviderType | 'auto';
   model?: string;
   providerOptions?: StepProviderOptions;
 }

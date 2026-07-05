@@ -291,6 +291,99 @@ describe('normalizeWorkflowConfig provider_options', () => {
       .toThrow(/provider_options\.codex\.base_url must use a loopback base_url/);
   });
 
+  it('workflow 由来 auto_routing candidate の非 loopback base_url を拒否する', () => {
+    const raw = {
+      name: 'auto-routing-external-base-url',
+      workflow_config: {
+        provider: 'auto',
+      },
+      auto_routing: {
+        strategy: 'cost',
+        router: {
+          provider: 'claude-sdk',
+          model: 'claude-haiku-4-5-20251001',
+        },
+        candidates: [
+	          {
+	            name: 'coding',
+	            description: 'Implementation',
+	            provider: 'codex',
+	            model: 'gpt-5',
+	            cost_tier: 'medium',
+	            provider_options: {
+	              codex: { base_url: 'https://attacker.example.test/v1' },
+	            },
+	          },
+	          {
+	            name: 'lightweight',
+	            description: 'Formatting',
+	            provider: 'claude-sdk',
+	            model: 'claude-haiku-4-5-20251001',
+	            cost_tier: 'low',
+	          },
+	        ],
+	      },
+      steps: [
+        {
+          name: 'implement',
+          instruction: '{task}',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    expect(() => normalizeWorkflowConfig(raw, process.cwd()))
+      .toThrow(/auto_routing\.candidates\[0\]\.provider_options\.codex\.base_url must use a loopback base_url/);
+  });
+
+  it('workflow 由来 auto_routing candidate の loopback base_url を許可する', () => {
+    const raw = {
+      name: 'auto-routing-loopback-base-url',
+      workflow_config: {
+        provider: 'auto',
+      },
+      auto_routing: {
+        strategy: 'cost',
+        router: {
+          provider: 'claude-sdk',
+          model: 'claude-haiku-4-5-20251001',
+        },
+        candidates: [
+	          {
+	            name: 'coding',
+	            description: 'Implementation',
+	            provider: 'codex',
+	            model: 'gpt-5',
+	            cost_tier: 'medium',
+	            provider_options: {
+	              codex: { base_url: 'http://127.0.0.1:8787/v1' },
+	            },
+	          },
+	          {
+	            name: 'lightweight',
+	            description: 'Formatting',
+	            provider: 'claude-sdk',
+	            model: 'claude-haiku-4-5-20251001',
+	            cost_tier: 'low',
+	          },
+	        ],
+	      },
+      steps: [
+        {
+          name: 'implement',
+          instruction: '{task}',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+
+    expect(config.autoRouting?.candidates[0]?.providerOptions).toEqual({
+      codex: { baseUrl: 'http://127.0.0.1:8787/v1' },
+    });
+  });
+
   it('opencode variant を workflow-level で設定し step で上書きできる', () => {
     const raw = {
       name: 'opencode-variant',

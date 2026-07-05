@@ -23,6 +23,7 @@ import {
 } from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
+import { toConcreteProvider } from '../../core/workflow/provider-resolution.js';
 import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
@@ -84,6 +85,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       cwd: resolvedCwd,
       provider: agentOverrides?.provider,
       model: agentOverrides?.model,
+      autoStrategy: agentOverrides?.autoStrategy,
     });
 
     if (exitCode !== 0) {
@@ -187,13 +189,14 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     case 'assistant': {
       let selectedSessionId: string | undefined;
       if (opts.continue === true) {
-        const { provider: providerType } = resolveAssistantProviderModelFromConfig(
+        const { provider } = resolveAssistantProviderModelFromConfig(
           resolveAssistantConfigLayers(resolvedCwd),
           {
-            provider: agentOverrides?.provider,
+            provider: toConcreteProvider(agentOverrides?.provider),
             model: agentOverrides?.model,
           },
         );
+        const providerType = toConcreteProvider(provider);
         if (!providerType) {
           throw new Error('Provider is not configured.');
         }
@@ -208,7 +211,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
       const assistantModeOptions = {
         ...interactiveOpts,
-        ...(agentOverrides?.provider ? { provider: agentOverrides.provider } : {}),
+        ...(toConcreteProvider(agentOverrides?.provider) ? { provider: toConcreteProvider(agentOverrides?.provider) } : {}),
         ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
       };
       result = await interactiveMode(

@@ -1,5 +1,5 @@
 import type { LoopMonitorJudge, WorkflowConfig, WorkflowStep } from '../models/types.js';
-import type { PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry } from '../models/config-types.js';
+import type { PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry, ProviderTypeOrAuto } from '../models/config-types.js';
 import {
   resolveProviderModelCandidates,
   resolveModelFromCandidates,
@@ -15,7 +15,7 @@ export interface StepProviderModelInput {
     providerRoutingPersonaKey?: string;
     tags?: string[];
   };
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   model?: string;
   providerRouting?: ProviderRoutingConfig;
   personaProviders?: Record<string, PersonaProviderEntry>;
@@ -34,12 +34,12 @@ export interface StepProviderModelOutput {
 
 export interface WorkflowCallProviderModelInput {
   workflow: Pick<WorkflowConfig, 'provider' | 'model'>;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   model?: string;
 }
 
 export interface WorkflowCallProviderModelOutput {
-  provider: ProviderType | undefined;
+  provider: ProviderTypeOrAuto | undefined;
   model: string | undefined;
 }
 
@@ -56,37 +56,19 @@ export interface LoopMonitorJudgeProviderModelOutput {
 }
 
 export interface AgentProviderModelInput {
-  cliProvider?: ProviderType;
+  cliProvider?: ProviderTypeOrAuto;
   cliModel?: string;
   personaProviders?: Record<string, PersonaProviderEntry>;
   personaDisplayName?: string;
-  localProvider?: ProviderType;
+  localProvider?: ProviderTypeOrAuto;
   localModel?: string;
-  globalProvider?: ProviderType;
+  globalProvider?: ProviderTypeOrAuto;
   globalModel?: string;
 }
 
 export interface AgentProviderModelOutput {
   provider?: ProviderType;
   model?: string;
-}
-
-export function resolveAgentProviderModel(input: AgentProviderModelInput): AgentProviderModelOutput {
-  const personaEntry = input.personaProviders?.[input.personaDisplayName ?? ''];
-  const provider = resolveProviderModelCandidates([
-    { provider: input.cliProvider },
-    { provider: personaEntry?.provider },
-    { provider: input.localProvider },
-    { provider: input.globalProvider },
-  ]).provider;
-  const model = resolveModelFromCandidates([
-    { model: input.cliModel },
-    { model: personaEntry?.model },
-    { model: input.localModel, provider: input.localProvider },
-    { model: input.globalModel, provider: input.globalProvider },
-  ], provider);
-
-  return { provider, model };
 }
 
 function resolveTagProviderRoutingEntry(
@@ -113,6 +95,32 @@ function resolveTagProviderRoutingEntry(
   return resolved;
 }
 
+function isAutoProvider(provider: ProviderTypeOrAuto | undefined): provider is 'auto' {
+  return provider === 'auto';
+}
+
+export function toConcreteProvider(provider: ProviderTypeOrAuto | undefined): ProviderType | undefined {
+  return isAutoProvider(provider) ? undefined : provider;
+}
+
+export function resolveAgentProviderModel(input: AgentProviderModelInput): AgentProviderModelOutput {
+  const personaEntry = input.personaProviders?.[input.personaDisplayName ?? ''];
+  const provider = resolveProviderModelCandidates([
+    { provider: toConcreteProvider(input.cliProvider) },
+    { provider: personaEntry?.provider },
+    { provider: toConcreteProvider(input.localProvider) },
+    { provider: toConcreteProvider(input.globalProvider) },
+  ]).provider;
+  const model = resolveModelFromCandidates([
+    { model: input.cliModel },
+    { model: personaEntry?.model },
+    { model: input.localModel, provider: toConcreteProvider(input.localProvider) },
+    { model: input.globalModel, provider: toConcreteProvider(input.globalProvider) },
+  ], provider);
+
+  return { provider, model };
+}
+
 export function resolveStepProviderModel(input: StepProviderModelInput): StepProviderModelOutput {
   if (input.providerRouting?.steps && input.step.name === undefined) {
     throw new Error('Provider routing step resolution requires step.name');
@@ -125,16 +133,24 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
     ? input.providerRouting?.personas?.[input.step.providerRoutingPersonaKey]
     : undefined;
   const personaEntry = input.personaProviders?.[input.step.personaDisplayName];
-  const stepProviderIsDirect = input.step.provider !== undefined && input.step.providerSpecified !== false;
+  const stepProviderIsAuto = isAutoProvider(input.step.provider) && input.step.providerSpecified !== false;
+  const stepProviderIsDirect = input.step.provider !== undefined
+    && !stepProviderIsAuto
+    && input.step.providerSpecified !== false;
   const stepModelIsDirect = input.step.modelSpecified === true
     || (input.step.model !== undefined && input.step.modelSpecified !== false);
-  const workflowProvider = input.step.providerSpecified === false ? input.step.provider : undefined;
+  const workflowProvider = input.step.providerSpecified === false && !isAutoProvider(input.step.provider)
+    ? input.step.provider
+    : undefined;
   const workflowModel = input.step.modelSpecified === false ? input.step.model : undefined;
 
   let provider: ProviderType | undefined;
   let providerSource: ProviderResolutionSource | undefined;
-  if (stepProviderIsDirect) {
-    provider = input.step.provider;
+  if (stepProviderIsAuto) {
+    provider = undefined;
+    providerSource = undefined;
+  } else if (stepProviderIsDirect) {
+    provider = toConcreteProvider(input.step.provider);
     providerSource = 'step';
   } else if (routingStepEntry?.provider !== undefined) {
     provider = routingStepEntry.provider;
@@ -151,8 +167,8 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   } else if (workflowProvider !== undefined) {
     provider = workflowProvider;
     providerSource = 'workflow';
-  } else if (input.provider !== undefined) {
-    provider = input.provider;
+  } else if (input.provider !== undefined && !isAutoProvider(input.provider)) {
+    provider = toConcreteProvider(input.provider);
     providerSource = input.providerSource;
   }
 
@@ -187,10 +203,7 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
 export function resolveWorkflowCallProviderModel(
   input: WorkflowCallProviderModelInput,
 ): WorkflowCallProviderModelOutput {
-  const provider = resolveProviderModelCandidates([
-    { provider: input.workflow.provider },
-    { provider: input.provider },
-  ]).provider;
+  const provider = input.workflow.provider ?? input.provider;
   const model = resolveProviderModelCandidates([
     { model: input.workflow.model },
     { model: input.model },

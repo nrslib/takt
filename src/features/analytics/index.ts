@@ -7,12 +7,14 @@ export type {
   ReviewFindingEvent,
   FixActionEvent,
   StepResultEvent,
+  RoutingDecisionEvent,
 } from './events.js';
 
 export {
   initAnalyticsWriter,
   isAnalyticsEnabled,
   writeAnalyticsEvent,
+  type AnalyticsWriterOptions,
 } from './writer.js';
 
 export {

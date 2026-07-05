@@ -20,6 +20,7 @@ export interface PartResult {
     provider: ProviderType | undefined;
     model: string | undefined;
   };
+  durationMs?: number;
 }
 
 /** team_leader config on a step */

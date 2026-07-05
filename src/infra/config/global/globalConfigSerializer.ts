@@ -6,6 +6,7 @@ import {
   denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
   denormalizeRateLimitFallback,
+  denormalizeTelemetryConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -40,6 +41,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     if (Object.keys(analyticsRaw).length > 0) {
       raw.analytics = analyticsRaw;
     }
+  }
+  const rawTelemetry = denormalizeTelemetryConfig(config.telemetry);
+  if (rawTelemetry) {
+    raw.telemetry = rawTelemetry;
   }
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {

@@ -157,4 +157,14 @@ describe('resolveAgentOverrides', () => {
       modelSource: 'cli',
     });
   });
+
+  it('returns auto strategy when provider is resolved from config', () => {
+    const program = {
+      opts: () => ({ autoStrategy: 'cost' }),
+    } as unknown as Command;
+
+    expect(resolveAgentOverrides(program)).toEqual({
+      autoStrategy: 'cost',
+    });
+  });
 });

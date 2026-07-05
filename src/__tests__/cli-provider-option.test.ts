@@ -16,6 +16,21 @@ describe('CLI --provider option', () => {
     expect(providerOption?.description).toMatch(/claude\|/);
   });
 
+  it('Given auto routing is available, When inspecting provider help text, Then provider auto is listed', () => {
+    const providerOption = program.options.find((option) => option.long === '--provider');
+
+    expect(providerOption?.description).toContain('auto');
+  });
+
+  it('Given auto routing is available, When inspecting CLI options, Then --auto-strategy is exposed with supported strategies', () => {
+    const autoStrategyOption = program.options.find((option) => option.long === '--auto-strategy');
+
+    expect(autoStrategyOption).toBeDefined();
+    expect(autoStrategyOption?.description).toContain('cost');
+    expect(autoStrategyOption?.description).toContain('balanced');
+    expect(autoStrategyOption?.description).toContain('performance');
+  });
+
   it('should expose only one workflow option', () => {
     const workflowOptions = program.options.filter((option) => option.long === '--workflow');
 

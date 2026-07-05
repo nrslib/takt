@@ -195,6 +195,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         name: 'implement',
         persona: 'team-leader',
       }),
+      undefined,
     );
     expect(mockRunWithPhaseSpan).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -8,6 +8,7 @@ import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import {
   AnalyticsConfigSchema,
+  AutoRoutingSchema,
   LanguageSchema,
   LoggingConfigSchema,
   ObservabilityConfigSchema,
@@ -16,11 +17,12 @@ import {
   PersonaProviderReferenceSchema,
   PipelineConfigSchema,
   ProviderPermissionProfilesSchema,
-  ProviderReferenceSchema,
+  ProviderReferenceOrAutoSchema,
   QualityGatesSchema,
   RateLimitFallbackSchema,
   RuntimeConfigSchema,
   TaktProvidersSchema,
+  TelemetryConfigSchema,
 } from './schema-base.js';
 
 /** Workflow overrides schema for config-level overrides */
@@ -86,11 +88,13 @@ export const WorkflowCategoryOverlaySchema = z.object({
 }).strict();
 
 /** Project config schema */
-const ProjectConfigObjectSchema = z.object({
+const ProjectConfigObjectBaseSchema = z.object({
   language: LanguageSchema.optional(),
-  provider: ProviderReferenceSchema.optional(),
+  provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().optional(),
+  auto_routing: AutoRoutingSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
+  telemetry: TelemetryConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
   allow_git_hooks: z.boolean().optional(),
   allow_git_filters: z.boolean().optional(),
@@ -130,6 +134,8 @@ const ProjectConfigObjectSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
+const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema;
+
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
@@ -168,10 +174,10 @@ const GlobalOnlyConfigSchema = z.object({
 });
 
 /** Global config schema = ProjectConfig + global-only fields. */
-export const GlobalConfigSchema = ProjectConfigObjectSchema
+export const GlobalConfigSchema = ProjectConfigObjectBaseSchema
   .omit({ submodules: true, with_submodules: true, assistant: true })
   .merge(GlobalOnlyConfigSchema)
   .extend({
-    provider: ProviderReferenceSchema.optional().default('claude'),
+    provider: ProviderReferenceOrAutoSchema.optional().default('claude'),
   })
   .strict();

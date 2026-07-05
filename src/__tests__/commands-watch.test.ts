@@ -58,6 +58,9 @@ vi.mock('../app/cli/program.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   clearPersonaSessions: vi.fn(),
+  disableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: true })),
+  enableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: true })),
+  getRoutingTelemetryStatus: vi.fn(() => ({ localRecordingEnabled: true })),
   resolveConfigValue: vi.fn(),
 }));
 
@@ -147,6 +150,7 @@ describe('CLI watch command', () => {
   it('watch 実行時に ignoreExceed を agentOverrides と合わせて watchTasks へ渡す', async () => {
     mockProgramOpts.provider = 'openai';
     mockProgramOpts.model = 'gpt-5';
+    mockProgramOpts.autoStrategy = 'performance';
     mockWatchCommandOpts.ignoreExceed = true;
 
     const watchAction = commandActions.get('root.watch');
@@ -163,6 +167,7 @@ describe('CLI watch command', () => {
       providerSource: 'cli',
       model: 'gpt-5',
       modelSource: 'cli',
+      autoStrategy: 'performance',
       ignoreExceed: true,
     });
   });

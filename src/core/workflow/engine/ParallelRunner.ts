@@ -28,6 +28,7 @@ import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import { resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
@@ -48,6 +49,7 @@ type ParallelSubStepResult = {
   response: AgentResponse;
   instruction: string;
   providerInfo?: StepRunResult['providerInfo'];
+  durationMs?: number;
   qualityGateFailure?: boolean;
 };
 
@@ -194,16 +196,42 @@ export class ParallelRunner {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
     const findingLedgerCopyPath = this.prepareFindingContractLedgerCopy();
+    const routedProviderInfoByStep = this.deps.engineOptions.autoRouting
+      ? await resolveAutoRoutingBatch({
+          autoRouting: this.deps.engineOptions.autoRouting,
+          items: subSteps.map((subStep) => ({
+            id: subStep.name,
+            step: {
+              name: subStep.name,
+              tags: subStep.tags,
+              personaKey: subStep.providerRoutingPersonaKey,
+            },
+            currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModel(subStep, runtime),
+          })),
+          routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
+          logger: log,
+        })
+      : new Map();
 
     // Run all sub-steps concurrently (failures are captured, not thrown)
     // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
+    const subStepStartedAtByName = new Map<string, number>();
+    const subStepInstructionByName = new Map<string, string>();
     const settled = await Promise.allSettled(
       subSteps.map(async (subStep, index) => {
         if (semaphore) {
           await semaphore.acquire();
         }
+        const startedAt = Date.now();
+        subStepStartedAtByName.set(subStep.name, startedAt);
         try {
           const executableSubStep = this.withFindingContractStructuredOutput(subStep, findingLedgerCopyPath);
+          const subRuntime = routedProviderInfoByStep.has(subStep.name)
+            ? {
+                ...runtime,
+                providerInfo: routedProviderInfoByStep.get(subStep.name)!,
+              }
+            : runtime;
           const subIteration = incrementStepIteration(state, subStep.name);
           const subInstruction = this.deps.stepExecutor.buildInstruction(
             executableSubStep,
@@ -211,7 +239,7 @@ export class ParallelRunner {
             state,
             task,
             maxSteps,
-            runtime?.fallback,
+            subRuntime?.fallback,
             findingLedgerCopyPath
               ? {
                   ledgerCopyPath: findingLedgerCopyPath,
@@ -222,11 +250,12 @@ export class ParallelRunner {
               : undefined,
           );
           const phase1Instruction = findingLedgerCopyPath
-            ? this.deps.stepExecutor.buildPhase1Instruction(subInstruction, executableSubStep, runtime)
+            ? this.deps.stepExecutor.buildPhase1Instruction(subInstruction, executableSubStep, subRuntime)
             : subInstruction;
+          subStepInstructionByName.set(subStep.name, phase1Instruction);
           const parentIteration = state.iteration;
-          const subPm = runtime
-            ? this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, runtime)
+          const subPm = subRuntime
+            ? this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, subRuntime)
             : this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep);
           const subRuleCtx = {
             ...parentRuleCtx,
@@ -240,7 +269,7 @@ export class ParallelRunner {
         const subSessionKey = buildSessionKey(executableSubStep, subPm.provider);
 
         // Phase 1: main execution (Write excluded if sub-step has report)
-        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, runtime);
+        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subRuntime);
         let didEmitPhaseStart = false;
         let resolvedPromptParts: PhasePromptParts | undefined;
         const phaseExecutionId = buildPhaseExecutionId({
@@ -280,7 +309,7 @@ export class ParallelRunner {
           providerUsage: result.providerUsage,
         }));
         if (findingLedgerCopyPath) {
-          subResponse = this.deps.stepExecutor.normalizeStructuredOutput(executableSubStep, subResponse, runtime);
+          subResponse = this.deps.stepExecutor.normalizeStructuredOutput(executableSubStep, subResponse, subRuntime);
         }
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
@@ -299,7 +328,13 @@ export class ParallelRunner {
         }
         if (subResponse.status === 'error' || subResponse.status === 'blocked' || subResponse.status === 'rate_limited') {
           state.stepOutputs.set(subStep.name, subResponse);
-          return { subStep, response: subResponse, instruction: phase1Instruction, providerInfo: subPm };
+          return {
+            subStep,
+            response: subResponse,
+            instruction: phase1Instruction,
+            providerInfo: subPm,
+            durationMs: Math.max(0, subResponse.timestamp.getTime() - startedAt),
+          };
         }
 
         // Phase 2/3 context resolves the same runtime-aware session key as Phase 1.
@@ -311,7 +346,7 @@ export class ParallelRunner {
           this.deps.onPhaseComplete,
           this.deps.onJudgeStage,
           parentIteration,
-          runtime,
+          subRuntime,
         );
 
         // Phase 2: report output for sub-step
@@ -325,7 +360,13 @@ export class ParallelRunner {
                 content: reportResult.response.content,
               };
               state.stepOutputs.set(subStep.name, blockedResponse);
-              return { subStep, response: blockedResponse, instruction: phase1Instruction, providerInfo: subPm };
+              return {
+                subStep,
+                response: blockedResponse,
+                instruction: phase1Instruction,
+                providerInfo: subPm,
+                durationMs: Math.max(0, blockedResponse.timestamp.getTime() - startedAt),
+              };
             }
             if (reportResult && 'rateLimited' in reportResult) {
               const rateLimitedResponse: AgentResponse = {
@@ -333,7 +374,13 @@ export class ParallelRunner {
                 persona: subStep.name,
               };
               state.stepOutputs.set(subStep.name, rateLimitedResponse);
-              return { subStep, response: rateLimitedResponse, instruction: phase1Instruction, providerInfo: subPm };
+              return {
+                subStep,
+                response: rateLimitedResponse,
+                instruction: phase1Instruction,
+                providerInfo: subPm,
+                durationMs: Math.max(0, rateLimitedResponse.timestamp.getTime() - startedAt),
+              };
             }
           } catch (reportError) {
             if (reportError instanceof ReportPhaseGenerationError) {
@@ -383,6 +430,7 @@ export class ParallelRunner {
             response: qualityGateResult.response,
             instruction: phase1Instruction,
             providerInfo: subPm,
+            durationMs: Math.max(0, qualityGateResult.response.timestamp.getTime() - startedAt),
             qualityGateFailure: true,
           };
         }
@@ -390,7 +438,13 @@ export class ParallelRunner {
         state.stepOutputs.set(subStep.name, finalResponse);
         this.deps.stepExecutor.emitStepReports(subStep);
 
-        return { subStep, response: finalResponse, instruction: phase1Instruction, providerInfo: subPm };
+        return {
+          subStep,
+          response: finalResponse,
+          instruction: phase1Instruction,
+          providerInfo: subPm,
+          durationMs: Math.max(0, finalResponse.timestamp.getTime() - startedAt),
+        };
         } finally {
           if (semaphore) {
             semaphore.release();
@@ -415,8 +469,19 @@ export class ParallelRunner {
         error: errorMsg,
       };
       state.stepOutputs.set(failedStep.name, errorResponse);
-      return { subStep: failedStep, response: errorResponse, instruction: '', providerInfo: undefined };
+      const startedAt = subStepStartedAtByName.get(failedStep.name);
+      const instruction = subStepInstructionByName.get(failedStep.name);
+      return {
+        subStep: failedStep,
+        response: errorResponse,
+        instruction: instruction === undefined ? '' : instruction,
+        providerInfo: routedProviderInfoByStep.get(failedStep.name),
+        durationMs: startedAt === undefined
+          ? 0
+          : Math.max(0, errorResponse.timestamp.getTime() - startedAt),
+      };
     });
+    this.emitSubStepRoutingDecisionEvents(subResults, state.iteration);
 
     const terminalResults = this.collectTerminalResults(subResults);
     const rateLimitedResult = terminalResults.find((r) => r.response.status === 'rate_limited');
@@ -571,6 +636,26 @@ export class ParallelRunner {
       this.deps.emitEvent('findings:ledger', result.ledger);
     }
     return result;
+  }
+
+  private emitSubStepRoutingDecisionEvents(subResults: ParallelSubStepResult[], iteration: number): void {
+    for (const result of subResults) {
+      const providerInfo = result.providerInfo;
+      if (providerInfo?.autoRoutingDecision === undefined) {
+        continue;
+      }
+      this.deps.emitEvent(
+        'routing:decision',
+        result.subStep,
+        result.response,
+        result.instruction,
+        providerInfo,
+        'parallel',
+        result.durationMs ?? 0,
+        iteration,
+        this.deps.getWorkflowName(),
+      );
+    }
   }
 
   private prepareFindingContractLedgerCopy(): string | undefined {

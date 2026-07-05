@@ -4,6 +4,7 @@ import { ProjectConfigSchema } from '../../../core/models/index.js';
 import type { QualityGate } from '../../../core/models/workflow-types.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
+import type { TaktProviderConfigEntry } from '../../../core/models/config-types.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -25,7 +26,10 @@ import {
   denormalizeWorkflowOverrides,
   normalizeRuntime,
   normalizeRateLimitFallback,
+  normalizeAutoRoutingConfig,
   denormalizeRateLimitFallback,
+  normalizeTelemetryConfig,
+  denormalizeTelemetryConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -87,7 +91,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     submodules,
     with_submodules,
     provider_options,
+    auto_routing,
     analytics,
+    telemetry,
     pipeline,
     assistant,
     takt_providers,
@@ -143,7 +149,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   const normalizedTaktProviders = normalizeTaktProviders(
     takt_providers as {
       assistant?: {
-        provider?: ProjectConfig['provider'];
+        provider?: TaktProviderConfigEntry['provider'];
         model?: string;
       };
     } | undefined,
@@ -174,10 +180,12 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       ...analyticsConfig,
       eventsPath: expandOptionalHomePath(analyticsConfig.eventsPath),
     } : undefined,
+    telemetry: normalizeTelemetryConfig(telemetry),
     observability: normalizeObservabilityConfig(observability),
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
+    autoRouting: normalizeAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -229,6 +237,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     savePayload.analytics = rawAnalytics;
   } else {
     delete savePayload.analytics;
+  }
+
+  const rawTelemetry = denormalizeTelemetryConfig(config.telemetry);
+  if (rawTelemetry) {
+    savePayload.telemetry = rawTelemetry;
+  } else {
+    delete savePayload.telemetry;
   }
 
   const rawObservability = denormalizeObservabilityConfig(config.observability);
