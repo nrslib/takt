@@ -91,6 +91,22 @@ describe('validateFindingManagerOutput', () => {
     }
   });
 
+  it('should reject a waiver when the id appears outside a Disputed Findings block', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: 'F-0001 was fixed in src/types.ts:94. No disputes.',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
   it('should reject a waiver without file:line evidence', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),

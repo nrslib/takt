@@ -165,6 +165,14 @@ function buildManagerInputLedger(ledger: FindingLedger): unknown {
   };
 }
 
+
+/** 内容中の backtick 連長より長いフェンスで text ブロック化する（フェンス破り注入対策）。 */
+function renderFencedTextBlock(content: string): string {
+  const longestRun = content.match(/`+/g)?.reduce((max, run) => Math.max(max, run.length), 0) ?? 0;
+  const fence = '`'.repeat(Math.max(longestRun + 1, 5));
+  return [`${fence}text`, content, fence].join('\n');
+}
+
 function buildManagerInstruction(input: {
   contract: FindingContractConfig;
   previousLedger: FindingLedger;
@@ -181,11 +189,7 @@ function buildManagerInstruction(input: {
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),
     rawFindingsPath: input.rawFindingsPath,
     rawFindings: renderFencedJsonBlock(input.rawFindings),
-    coderResponse: [
-      '`````text',
-      input.priorStepResponseText ?? '(no prior step response)',
-      '`````',
-    ].join('\n'),
+    coderResponse: renderFencedTextBlock(input.priorStepResponseText ?? '(no prior step response)'),
   });
 }
 

@@ -57,6 +57,29 @@ export function validateFindingManagerOutput(
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
 }
 
+
+/** path-like token + 行番号（例: src/types.ts:94）。裸の「word:1」は通さない。 */
+const FILE_LINE_EVIDENCE_PATTERN = /[^\s:]+\.[A-Za-z0-9_]+:\d+/;
+
+/**
+ * 直前ステップ応答から「Disputed Findings」見出し配下のブロックを抜き出し、
+ * 対象 finding ID と file:line 証跡が申告ブロック内にあるかを判定する。
+ */
+function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId: string): boolean {
+  if (priorStepResponseText === undefined) {
+    return false;
+  }
+  const lines = priorStepResponseText.split('\n');
+  const headingIndex = lines.findIndex((line) => /^#{1,6}\s.*disputed findings/i.test(line.trim()));
+  if (headingIndex === -1) {
+    return false;
+  }
+  const rest = lines.slice(headingIndex + 1);
+  const nextHeading = rest.findIndex((line) => /^#{1,6}\s/.test(line.trim()));
+  const block = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).join('\n');
+  return block.includes(findingId) && FILE_LINE_EVIDENCE_PATTERN.test(block);
+}
+
 function validateRawFindingDecisionRefs(
   managerOutput: FindingManagerOutput,
   context: ValidationContext,
@@ -263,13 +286,13 @@ function validateFindingDecisionRefs(
     const severityErrors = finding !== undefined && finding.severity === 'critical'
       ? [`Cannot waive finding "${waived.findingId}" because critical findings must stay open in ${decision}`]
       : [];
-    // waive は coder の明示的な異議申告が前提: 直前応答に対象 finding ID が
-    // 現れない waive は manager の発明として機械拒否する。
-    const claimErrors = context.priorStepResponseText === undefined
-      || !context.priorStepResponseText.includes(waived.findingId)
-      ? [`Cannot waive finding "${waived.findingId}" because the prior step response contains no dispute claim for it in ${decision}`]
-      : [];
-    const evidenceErrors = /:\d+/.test(waived.evidence)
+    // waive は coder の明示的な異議申告が前提: 「Disputed Findings」見出しの
+    // ブロック内に対象 finding ID がある場合だけを申告と認める（ID が修正報告
+    // 等の別文脈に現れただけでは通さない）。
+    const claimErrors = hasDisputeClaimFor(context.priorStepResponseText, waived.findingId)
+      ? []
+      : [`Cannot waive finding "${waived.findingId}" because the prior step response contains no dispute claim for it in ${decision}`];
+    const evidenceErrors = FILE_LINE_EVIDENCE_PATTERN.test(waived.evidence)
       ? []
       : [`Waiver evidence for "${waived.findingId}" must cite file:line evidence in ${decision}`];
     return [...statusErrors, ...severityErrors, ...claimErrors, ...evidenceErrors];
