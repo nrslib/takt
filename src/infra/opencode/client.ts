@@ -38,7 +38,7 @@ import {
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
-import { UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
+import { InvalidToolArgumentLoopDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 
 export type { OpenCodeCallOptions } from './types.js';
@@ -766,6 +766,7 @@ export class OpenCodeClient {
         let failureMessage = '';
         const state = createStreamTrackingState();
         const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
+        const invalidArgumentLoopDetector = new InvalidToolArgumentLoopDetector();
         const echoState = { remainingPrompts: buildPromptEchoCandidates(prompt, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
@@ -816,10 +817,15 @@ export class OpenCodeClient {
                   toolPart.callID || toolPart.id,
                   toolPart.tool,
                   toolPart.state.error,
+                ) ?? invalidArgumentLoopDetector.observe(
+                  toolPart.callID || toolPart.id,
+                  toolPart.tool,
+                  toolPart.state.error,
                 )
                 : undefined;
               if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
+                invalidArgumentLoopDetector.reset();
               }
               handlePartUpdated(part, delta, options.onStream, state);
               if (loopError !== undefined) {

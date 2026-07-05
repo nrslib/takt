@@ -74,3 +74,14 @@ If CodeRabbit reviews your PR, go through each comment, decide whether it should
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
+
+## Instruction / facet 変更時の canary
+
+`InstructionBuilder` や `builtins/{lang}/facets/instructions` などプロンプト組み立てに影響する変更は、ユニットテストでは捕まらない「弱いモデルのツール呼び出し不安定化」を引き起こすことがある（実例: 台帳が空の段階への異議申告ガイド注入で implement が連続失敗）。変更時は実プロバイダでの canary 実行を推奨する。
+
+```bash
+npm run build
+npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
+```
+
+小さな implement 1走を現行の指示組み立てで実行し、完走とツールエラー数を確認する。PR の必須ゲートではない（実プロバイダのコストがかかるため）。
