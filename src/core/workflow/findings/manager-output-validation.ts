@@ -80,9 +80,10 @@ function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId
   const nextHeading = rest.findIndex((line) => /^#{1,6}\s/.test(line.trim()));
   const blockLines = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
 
-  // 行頭（箇条書き prefix 許容）の findingId フィールドのみを entry 開始と認める。
-  // note: 等の付随テキスト内や relatedFindingId のような別フィールドは拾わない。
-  const findingIdLinePattern = /^\s*(?:[-*+]\s*)?findingId\s*[:：=]\s*[`"']?([A-Za-z0-9_-]+)/i;
+  // entry 開始と認めるのは「列0の裸の findingId フィールド」か「箇条書き
+  // prefix 付きの findingId フィールド」のみ。インデントだけの裸フィールド
+  // （複数行 note の内側等）や relatedFindingId のような別フィールドは拾わない。
+  const findingIdLinePattern = /^(?:findingId|\s*[-*+]\s+findingId)\s*[:：=]\s*[`"']?([A-Za-z0-9_-]+)/i;
   const entryStarts = blockLines
     .map((line, index) => ({ index, match: findingIdLinePattern.exec(line) }))
     .filter((candidate): candidate is { index: number; match: RegExpExecArray } => candidate.match !== null);
