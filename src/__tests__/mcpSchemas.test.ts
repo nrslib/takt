@@ -104,6 +104,22 @@ describe('MCP tool input schemas', () => {
   });
 
   it.each([
+    ['enqueue', enqueueTaskInputSchema],
+    ['issue enqueue', createIssueAndEnqueueTaskInputSchema],
+  ])('Given %s input missing one task decision, When parsing, Then each decision is required independently', (_name, schema) => {
+    expect(() => schema.parse({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+      autoPr: false,
+    })).toThrow(/workflow/i);
+    expect(() => schema.parse({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+      workflow: 'default',
+    })).toThrow(/autoPr/i);
+  });
+
+  it.each([
     '/tmp/takt/unsafe-worktree',
     '../outside-project',
     'feature/mcp',
