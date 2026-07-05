@@ -10,7 +10,7 @@
  * builtins/{lang}/facets/instructions を変更したときの推奨手順。
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,24 +56,30 @@ writeFileSync(join(workflowDir, 'canary.yaml'), [
 const task = 'greet.ts を作成し、greet(name: string): string 関数（"Hello, <name>!" を返す）を export してください。既存ファイルの変更は不要です。';
 
 console.log(`canary: ${provider}/${model} @ ${workDir}`);
-const result = spawnSync('node', [join(repoRoot, 'bin', 'takt'), '-t', task, '-w', 'canary', '--pipeline', '--skip-git', '-q'], {
-  cwd: workDir,
-  encoding: 'utf-8',
-  timeout: 10 * 60 * 1000,
-});
+try {
+  const result = spawnSync('node', [join(repoRoot, 'bin', 'takt'), '-t', task, '-w', 'canary', '--pipeline', '--skip-git', '-q'], {
+    cwd: workDir,
+    encoding: 'utf-8',
+    timeout: 10 * 60 * 1000,
+  });
 
-const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-const toolErrors = (output.match(/✗ Tool/g) ?? []).length;
-const completed = result.status === 0 && !/aborted/i.test(output);
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  const toolErrors = (output.match(/✗ Tool/g) ?? []).length;
+  const runCompleted = result.status === 0 && !/aborted/i.test(output);
+  // 完了宣言だけの空振りを弾く: 成果物の実在と内容まで確認する
+  const artifactPath = join(workDir, 'greet.ts');
+  const artifactOk = existsSync(artifactPath)
+    && /export\s+(function\s+greet|const\s+greet)/.test(readFileSync(artifactPath, 'utf-8'));
 
-console.log(output.split('\n').slice(-15).join('\n'));
-console.log(`---\ncanary result: completed=${completed} toolErrors=${toolErrors}`);
+  console.log(output.split('\n').slice(-15).join('\n'));
+  console.log(`---\ncanary result: completed=${runCompleted} artifact=${artifactOk} toolErrors=${toolErrors}`);
 
-rmSync(workDir, { recursive: true, force: true });
-
-const TOOL_ERROR_BUDGET = 5;
-if (!completed || toolErrors > TOOL_ERROR_BUDGET) {
-  console.error(`canary FAILED (completed=${completed}, toolErrors=${toolErrors} > budget ${TOOL_ERROR_BUDGET})`);
-  process.exit(1);
+  const TOOL_ERROR_BUDGET = 5;
+  if (!runCompleted || !artifactOk || toolErrors > TOOL_ERROR_BUDGET) {
+    console.error(`canary FAILED (completed=${runCompleted}, artifact=${artifactOk}, toolErrors=${toolErrors} > budget ${TOOL_ERROR_BUDGET})`);
+    process.exit(1);
+  }
+  console.log('canary OK');
+} finally {
+  rmSync(workDir, { recursive: true, force: true });
 }
-console.log('canary OK');
