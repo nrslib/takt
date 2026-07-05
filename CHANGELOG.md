@@ -6,6 +6,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.50.0] - 2026-07-06
+
+### Added
+
+- MCP server — `takt-mcp` (#938, #943, #972). TAKT can now run as a stdio Model Context Protocol server, so an MCP client (e.g. Codex via `codex mcp add takt -- takt-mcp`) can drive TAKT without shelling out to `takt add` / `takt run`. Three tools ship: `takt_enqueue_task` (add a pending task), `takt_create_issue_and_enqueue_task` (create an issue through the configured issue provider, then enqueue), and `takt_run_next_task` (run at most one pending task). Every tool `cwd` is resolved with `realpath` and must stay inside the server's allowed project root — the directory where `takt-mcp` was started. See the [CLI Reference](./docs/cli-reference.md).
+- ACP agent — `takt-acp` (#913, #916). TAKT can now run as an Agent Client Protocol agent over stdio JSON-RPC, launched from an ACP-compatible client. `session/prompt` is enqueue-first: prompts such as "enqueue this task" add a pending task to `.takt/tasks.yaml` (with `worktree: true`) for later `takt run`, while explicit "run it now" prompts execute directly. `/go` follows the session default action (enqueue by default) and `/play <task>` remains a compatibility-only direct-execution command. `session/new` may declare stdio MCP servers, which are passed through to workflow execution.
+- `cli` builtin workflow (#947). A CLI-development workflow: plan → write_tests → draft (implement + AI self-review) → peer-review (parallel reviewers + fix) → supervise → complete, with network access enabled for Codex and OpenCode.
+- `-for-local-llm` workflow family (#958, #974). Five workflows — `takt-default-for-local-llm`, `frontend-for-local-llm`, `backend-for-local-llm`, `backend-cqrs-for-local-llm`, and `dual-for-local-llm` — run four (five for `dual`) parallel deep reviewers (architecture / AI anti-pattern / coding / implementation semantics) with the Finding Contract (ledger, resolution confirmations, dispute adjudication) and a flat merge-readiness final gate, to build discipline for weaker models structurally. The lineup adds a new implementation-semantics reviewer that checks data structure choice, single source of truth for derived values, naming alignment, and fail-fast, and a new "Local LLM" workflow category groups the family.
+- Merge-readiness final gate (#949, #954). A merge-readiness review gate now runs in parallel with supervision as a final gate before completion, integrated into the builtin `default`, `review-*`, `backend-maintenance`, and TAKT development workflows. New `merge-readiness-final-gate` and `merge-readiness-dual-final-gate` subworkflows package the gate, and `provider_routing` tags were added so provider/model overrides can target the final-gate steps.
+- Dispute/waiver lifecycle for the finding contract (#969, #973). Finding-contract runs gained a second, audited exit for findings that are valid but unfixable. The coder states dispute claims under a fixed `## Disputed Findings` heading; the findings manager may waive a finding (`open` → `waived`, recorded with reason and evidence, removed from the blocking set) or reject the claim via dispute notes (stays open and blocking). Critical findings can never be waived, waivers require reason and evidence, and waived findings can be reopened when their premise collapses. Dispute guidance is injected only when open findings exist.
+- Report phase fallback provider (#911). When a step's Report phase fails on OpenCode, TAKT retries and — if the retry still fails — falls back to the `takt_providers.assistant` provider to produce the report. Fallback is disabled when no assistant provider is configured; top-level `provider` / `model` are not used as an implicit fallback.
+
+### Changed
+
+- OpenCode structured output (#963, #965, #967). Reviewers now use OpenCode's native `json_schema` structured output. Invalid structured output is retried once with a corrective prompt, and when the provider does not produce native structured output, TAKT falls back to a formatless retry instead of failing.
+- Review report requirements (#951, #953). Review reports now require re-scan evidence, and reviewers aggregate findings at the family level and treat already-published state as immutable.
+
+### Removed
+
+- **BREAKING:** `takt-default-with-fc` and `peer-review-with-fc` workflows removed (#974). The Finding Contract lineup they provided is superseded by the `-for-local-llm` workflow family. Custom setups that reference these workflow names by value should switch to a `-for-local-llm` workflow.
+
+### Fixed
+
+- OpenCode session is preserved across step phases via per-prompt tool restriction (#948).
+- Report phase failure and empty Phase 1 output are now handled as soft errors instead of surfacing as opaque failures (#927).
+- Isolated clones detach HEAD before fetching into a checked-out branch (#924).
+- `bash` is restored in `allowed_tools` when the permission mode is readonly (#918) and removed from `OPENCODE_UNSAFE_WITHOUT_EDIT_TOOL_NAMES` (#919).
+- Out-of-workspace denial is kept effective and non-fatal for OpenCode (#957).
+- Symlinked stdio entrypoints are handled correctly (#955).
+- Finding-contract resolution is now reachable and supports guarded tag rules (#961); empty raw-finding location and suggestion are treated as unset (#962); guarded Records are no longer flagged by the implementation-semantics knowledge (#968).
+
+### Internal
+
+- Test gates parallelized with new Vitest shard configs (unit/IT parallel slices plus audited serial Git and workflow-loader groups) (#920).
+- promptfoo-based prompt quality eval for facets (#946) and a rescan-semantics eval suite (#952, #959).
+- Review/test facet contracts hardened: write-tests contract (#966), review facet contract checks (#944), review-fix facet checks (#932), facet review contracts (#917), and a cross-layer duplicate-test prohibition in the testing policy (#915).
+- Requeue-on-instruct workflow fix (#942) and MCP task workflow / auto-PR decision guidance (#972).
+- CQRS documentation clarified: reactive polling (#940), notification waiting (#941), and CQRS+ES adoption criteria in the knowledge facet (#925).
+
 ## [0.49.0] - 2026-06-28
 
 ### Added

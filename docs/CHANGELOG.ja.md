@@ -6,6 +6,45 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.50.0] - 2026-07-06
+
+### Added
+
+- MCP サーバー — `takt-mcp` (#938, #943, #972)。TAKT を stdio の Model Context Protocol サーバーとして起動できるようになりました。MCP クライアント（例: Codex なら `codex mcp add takt -- takt-mcp`）から、`takt add` / `takt run` をシェル経由で呼ばずに TAKT を操作できます。3 つのツールを同梱します。`takt_enqueue_task`（保留タスクを追加）、`takt_create_issue_and_enqueue_task`（設定済みの issue プロバイダで issue を作成してからキュー投入）、`takt_run_next_task`（保留タスクを最大 1 件実行）。各ツールの `cwd` は `realpath` で解決され、サーバーの許可プロジェクトルート（`takt-mcp` を起動したディレクトリ）の内側に収まる必要があります。詳細は [CLI Reference](./cli-reference.md) を参照してください。
+- ACP エージェント — `takt-acp` (#913, #916)。TAKT を stdio JSON-RPC 上の Agent Client Protocol エージェントとして起動し、ACP 対応クライアントから利用できるようになりました。`session/prompt` はエンキュー優先です。「このタスクをキューに入れて」のようなプロンプトは `.takt/tasks.yaml` に保留タスク（`worktree: true`）を追加し、後で `takt run` で実行できます。「今すぐ実行して」のような明示的なプロンプトは直接実行します。`/go` はセッションのデフォルトアクション（既定ではエンキュー）に従い、`/play <task>` は互換性維持のための直接実行コマンドとして残ります。`session/new` では stdio MCP サーバーを宣言でき、ワークフロー実行にそのまま引き渡されます。
+- `cli` ビルトインワークフロー (#947)。CLI 開発向けワークフロー。plan → write_tests → draft（実装 + AI セルフレビュー）→ peer-review（並列レビュアー + fix）→ supervise → complete。Codex と OpenCode でネットワークアクセスを有効化しています。
+- `-for-local-llm` ワークフローファミリー (#958, #974)。5 つのワークフロー（`takt-default-for-local-llm`、`frontend-for-local-llm`、`backend-for-local-llm`、`backend-cqrs-for-local-llm`、`dual-for-local-llm`）が、4 つ（`dual` は 5 つ）の並列ディープレビュアー（architecture / AI アンチパターン / coding / implementation semantics）を Finding Contract（台帳、解決確認、異議申し立ての裁定）と平坦なマージレディネス最終ゲートとともに実行し、非力なモデルにも構造的に規律を与えます。この編成には、データ構造の選択・派生値の単一の情報源・命名の整合・フェイルファストを見る新しい implementation-semantics レビュアーが加わり、ファミリーは新設の「Local LLM」ワークフローカテゴリにまとめられています。
+- マージレディネス最終ゲート (#949, #954)。マージレディネスレビューゲートが、完了前の最終ゲートとして supervise と並列で実行されるようになり、ビルトインの `default`、`review-*`、`backend-maintenance`、TAKT 開発ワークフローに統合されました。新しい `merge-readiness-final-gate` と `merge-readiness-dual-final-gate` サブワークフローがこのゲートをパッケージ化し、`provider_routing` タグを追加して最終ゲートのステップにプロバイダ/モデルの上書きを適用できます。
+- Finding Contract の異議申し立て/waiver ライフサイクル (#969, #973)。Finding Contract の実行に、妥当だが修正不能な finding のための、監査可能な 2 つ目の出口が追加されました。コーダーは固定見出し `## Disputed Findings` の下で異議の主張を記述します。findings マネージャーは finding を waive する（`open` → `waived`、理由と証拠を記録し、ブロッキング集合から除外）か、dispute notes で主張を却下する（open かつブロッキングのまま）ことができます。critical な finding は決して waive できず、waiver には理由と証拠が必須で、前提が崩れた場合には waived の finding を reopen できます。異議申し立てのガイダンスは open な finding が存在するときにのみ注入されます。
+- Report フェーズのフォールバックプロバイダ (#911)。ステップの Report フェーズが OpenCode で失敗した場合、TAKT はリトライし、それでも失敗したときは `takt_providers.assistant` プロバイダにフォールバックしてレポートを生成します。assistant プロバイダが未設定の場合、フォールバックは無効です。トップレベルの `provider` / `model` は暗黙のフォールバックには使われません。
+
+### Changed
+
+- OpenCode の構造化出力 (#963, #965, #967)。レビュアーが OpenCode ネイティブの `json_schema` 構造化出力を使用するようになりました。不正な構造化出力は是正プロンプト付きで 1 回リトライされ、プロバイダがネイティブの構造化出力を生成しない場合は失敗させずにフォーマットなしリトライにフォールバックします。
+- レビューレポートの要件 (#951, #953)。レビューレポートに再走査の証跡を必須化し、レビュアーは finding をファミリー単位で集約し、公開済みの状態を不変として扱うようになりました。
+
+### Removed
+
+- **BREAKING:** `takt-default-with-fc` と `peer-review-with-fc` ワークフローを削除 (#974)。これらが提供していた Finding Contract 編成は `-for-local-llm` ワークフローファミリーに置き換えられました。これらのワークフロー名を直接参照しているカスタム設定は、`-for-local-llm` ワークフローに切り替えてください。
+
+### Fixed
+
+- ステップフェーズ間で OpenCode セッションをプロンプトごとのツール制限により保持 (#948)。
+- Report フェーズの失敗と Phase 1 の空出力を、不透明な失敗ではなくソフトエラーとして扱うように修正 (#927)。
+- 独立クローンで、チェックアウト済みブランチへ fetch する前に HEAD を detach するよう修正 (#924)。
+- パーミッションモードが readonly のとき `allowed_tools` に `bash` を復元 (#918)、`OPENCODE_UNSAFE_WITHOUT_EDIT_TOOL_NAMES` から `bash` を除去 (#919)。
+- OpenCode でワークスペース外への拒否を有効かつ非致命的に維持 (#957)。
+- シンボリックリンクされた stdio エントリポイントを正しく処理 (#955)。
+- Finding Contract の解決を到達可能にし、ガード付きタグルールをサポート (#961)。空の raw-finding の location と suggestion を未設定として扱う (#962)。ガードされた Record を implementation-semantics ナレッジがフラグしないよう修正 (#968)。
+
+### Internal
+
+- 新しい Vitest シャード設定でテストゲートを並列化（unit/IT の並列スライスと、監査対象の直列 Git・workflow-loader グループ）(#920)。
+- ファセット向けの promptfoo ベースのプロンプト品質 eval (#946) と rescan-semantics eval スイート (#952, #959)。
+- レビュー/テストのファセットコントラクトを強化: write-tests コントラクト (#966)、レビューファセットのコントラクトチェック (#944)、review-fix ファセットチェック (#932)、ファセットレビューコントラクト (#917)、テストポリシーへのレイヤー間重複テスト禁止ルール (#915)。
+- instruct 時の再キュー投入ワークフローの修正 (#942)、MCP タスクワークフロー / 自動 PR 判断ガイダンス (#972)。
+- CQRS ドキュメントの明確化: リアクティブポーリング (#940)、通知待機 (#941)、ナレッジファセットへの CQRS+ES 採用基準 (#925)。
+
 ## [0.49.0] - 2026-06-28
 
 ### Added

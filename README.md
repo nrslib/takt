@@ -257,6 +257,15 @@ When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it throu
 
 Normal agent steps, parallel sub-steps, and loop detection judges may set `session_key` to share or isolate persona sessions. System steps, workflow_call steps, and parallel parent steps cannot set `session_key`. TAKT builds the runtime key as `session_key` plus the resolved provider, so values must be non-empty strings that do not collide with other generated session routes.
 
+### Run as an MCP server or ACP agent
+
+TAKT ships two extra entry points so other tools can drive it directly:
+
+- `takt-mcp` — runs TAKT as a stdio Model Context Protocol server. Register it in an MCP client (e.g. `codex mcp add takt -- takt-mcp`) to enqueue tasks, create an issue and enqueue the task, or run the next pending task without shelling out to `takt add` / `takt run`.
+- `takt-acp` — runs TAKT as an Agent Client Protocol agent over stdio JSON-RPC, launched from an ACP-compatible client. `session/prompt` is enqueue-first: prompts like "enqueue this task" add a pending task for later `takt run`, while "run it now" executes directly.
+
+See the [CLI Reference](./docs/cli-reference.md) for the full tool list and setup.
+
 ## Configuration
 
 Minimal `~/.takt/config.yaml`:
