@@ -559,4 +559,111 @@ describe('validateWorkflowConfig', () => {
       'Configuration error: workflowCallResolver is required when workflow contains workflow_call steps',
     );
   });
+
+  it('fails fast when parallel workflow_call is configured without workflowCallResolver', () => {
+    const workflow = createWorkflow({
+      initialStep: 'reviewers',
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [
+            {
+              name: 'delegate',
+              kind: 'workflow_call',
+              call: 'takt/coding',
+              personaDisplayName: 'delegate',
+              instruction: '',
+              passPreviousResponse: true,
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Configuration error: workflowCallResolver is required when workflow contains workflow_call steps',
+    );
+  });
+
+  it('fails fast when a parallel step contains duplicate sibling sub-step names', () => {
+    const workflow = createWorkflow({
+      initialStep: 'reviewers',
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [
+            {
+              name: 'delegate',
+              persona: 'reviewer-a',
+              personaDisplayName: 'reviewer-a',
+              instruction: 'review api',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+            {
+              name: 'delegate',
+              persona: 'reviewer-b',
+              personaDisplayName: 'reviewer-b',
+              instruction: 'review ui',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Configuration error: parallel step "reviewers" contains duplicate sub-step name "delegate"',
+    );
+  });
+
+  it('accepts the same parallel sub-step name under different parent steps', () => {
+    const workflow = createWorkflow({
+      initialStep: 'api-reviewers',
+      steps: [
+        {
+          name: 'api-reviewers',
+          personaDisplayName: 'api-reviewers',
+          instruction: 'review api',
+          parallel: [
+            {
+              name: 'delegate',
+              persona: 'api-reviewer',
+              personaDisplayName: 'api-reviewer',
+              instruction: 'review api',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("approved")', next: 'ui-reviewers' }],
+        },
+        {
+          name: 'ui-reviewers',
+          personaDisplayName: 'ui-reviewers',
+          instruction: 'review ui',
+          parallel: [
+            {
+              name: 'delegate',
+              persona: 'ui-reviewer',
+              personaDisplayName: 'ui-reviewer',
+              instruction: 'review ui',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
 });

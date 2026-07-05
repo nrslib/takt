@@ -110,7 +110,7 @@ describe('WorkflowCallExecutor', () => {
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    });
+    }, { syncParentState: true });
 
     expect(createEngine).toHaveBeenCalledWith(
       childConfig,
@@ -205,7 +205,7 @@ describe('WorkflowCallExecutor', () => {
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }) as WorkflowState & { abortKind?: string; abortReason?: string };
+    }, { syncParentState: true }) as WorkflowState & { abortKind?: string; abortReason?: string };
 
     expect(result.status).toBe('aborted');
     expect(result.abortKind).toBe('runtime_error');
@@ -265,7 +265,7 @@ describe('WorkflowCallExecutor', () => {
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    });
+    }, { syncParentState: true });
 
     expect(result.status).toBe('completed');
     expect(childEngine.runWithResult).toHaveBeenCalledTimes(1);
@@ -327,7 +327,7 @@ describe('WorkflowCallExecutor', () => {
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }) as WorkflowState & { returnValue?: string };
+    }, { syncParentState: true }) as WorkflowState & { returnValue?: string };
 
     expect(result.status).toBe('completed');
     expect(result.returnValue).toBe('retry_plan');

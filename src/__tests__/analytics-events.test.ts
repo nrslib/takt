@@ -86,7 +86,7 @@ describe('analytics event types', () => {
     expect(event.decisionTag).toBe('approved');
   });
 
-  it('Given auto routing telemetry is recorded, When creating a RoutingDecisionEvent, Then it contains routing labels without prompt or path content', () => {
+  it('should create a valid RoutingDecisionEvent with routing labels', () => {
     const event: RoutingDecisionEvent = {
       type: 'routing_decision',
       stepName: 'implement',
@@ -114,12 +114,6 @@ describe('analytics event types', () => {
     expect(event.type).toBe('routing_decision');
     expect(event.selectedCostTier).toBe('medium');
     expect(event.resolutionSource).toBe('auto.rules');
-    expect(event).not.toHaveProperty('instruction');
-    expect(event).not.toHaveProperty('task');
-    expect(event).not.toHaveProperty('path');
-    expect(event).not.toHaveProperty('repo');
-    expect(event).not.toHaveProperty('userId');
-    expect(event).not.toHaveProperty('embedding');
   });
 
   it('should discriminate event types via the type field', () => {

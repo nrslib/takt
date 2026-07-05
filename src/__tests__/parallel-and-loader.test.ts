@@ -10,6 +10,7 @@ import {
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../core/models/workflow-condition-expression.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('ParallelSubStepRawSchema', () => {
   it('should validate a valid parallel sub-step', () => {
@@ -110,27 +111,91 @@ describe('ParallelSubStepRawSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('should reject workflow_call fields on parallel sub-step', () => {
+  it('Given workflow_call fields on a parallel sub-step, When parsing, Then the schema preserves the call contract', () => {
     const raw = {
       name: 'delegate-review',
       kind: 'workflow_call',
       call: 'review-workflow',
-      instruction: 'Review',
+      overrides: { provider: 'auto' },
+      args: {
+        review_policy: 'strict-review',
+        evidence: ['plan-report', 'draft-report'],
+      },
+      rules: [
+        { condition: 'COMPLETE', next: 'COMPLETE' },
+        { condition: 'ABORT', next: 'ABORT' },
+      ],
     };
 
     const result = ParallelSubStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    const parsed = result.data as Record<string, unknown>;
+    expect(parsed.kind).toBe('workflow_call');
+    expect(parsed.call).toBe('review-workflow');
+    expect(parsed.overrides).toEqual({ provider: 'auto' });
+    expect(parsed.args).toEqual({
+      review_policy: 'strict-review',
+      evidence: ['plan-report', 'draft-report'],
+    });
   });
 
-  it('should reject workflow_call overrides on parallel sub-step', () => {
+  it('Given a call-only workflow_call parallel sub-step, When parsing, Then the schema preserves the call contract', () => {
     const raw = {
       name: 'delegate-review',
-      overrides: { provider: 'auto' },
-      instruction: 'Review',
+      call: 'review-workflow',
+      rules: [
+        { condition: 'COMPLETE', next: 'COMPLETE' },
+      ],
     };
 
     const result = ParallelSubStepRawSchema.safeParse(raw);
-    expect(result.success).toBe(false);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        name: 'delegate-review',
+        call: 'review-workflow',
+      });
+    }
+  });
+
+  it('Given workflow_call sub-step uses a callable return condition, When parsing, Then the schema accepts the child return route', () => {
+    const raw = {
+      name: 'delegate-review',
+      kind: 'workflow_call',
+      call: 'review-workflow',
+      rules: [
+        { condition: 'retry_plan', next: 'fix-plan' },
+      ],
+    };
+
+    const result = ParallelSubStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.rules?.[0]?.condition).toBe('retry_plan');
+    }
+  });
+
+  it('Given workflow_call sub-step adds agent-only instruction, When parsing, Then only that invalid shape is rejected', () => {
+    const validWorkflowCall = {
+      name: 'delegate-review',
+      kind: 'workflow_call',
+      call: 'review-workflow',
+      rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+    };
+
+    const validResult = ParallelSubStepRawSchema.safeParse(validWorkflowCall);
+    const invalidResult = ParallelSubStepRawSchema.safeParse({
+      ...validWorkflowCall,
+      instruction: 'Review',
+    });
+
+    expect(validResult.success).toBe(true);
+    expect(invalidResult.success).toBe(false);
   });
 
   it('should accept rules on sub-steps', () => {
@@ -247,6 +312,71 @@ describe('WorkflowStepRawSchema with parallel', () => {
 
     const result = WorkflowStepRawSchema.safeParse(raw);
     expect(result.success).toBe(true);
+  });
+
+  it('Given a workflow step with a parallel workflow_call sub-step, When parsing, Then the call shape is accepted at the workflow entrypoint', () => {
+    const raw = {
+      name: 'parallel-workflow-call',
+      parallel: [
+        {
+          name: 'delegate-review',
+          kind: 'workflow_call',
+          call: 'shared/review',
+          overrides: { provider: 'auto' },
+          args: {
+            review_policy: 'strict-review',
+          },
+          rules: [
+            { condition: 'COMPLETE', next: 'COMPLETE' },
+            { condition: 'ABORT', next: 'ABORT' },
+          ],
+        },
+      ],
+      rules: [
+        { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+      ],
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.data.parallel?.[0]).toMatchObject({
+      name: 'delegate-review',
+      kind: 'workflow_call',
+      call: 'shared/review',
+      overrides: { provider: 'auto' },
+    });
+  });
+
+  it('Given a workflow step with a call-only parallel workflow_call sub-step, When parsing, Then the workflow entrypoint accepts the call shape', () => {
+    const raw = {
+      name: 'parallel-workflow-call',
+      parallel: [
+        {
+          name: 'delegate-review',
+          call: 'shared/review',
+          rules: [
+            { condition: 'COMPLETE', next: 'COMPLETE' },
+          ],
+        },
+      ],
+      rules: [
+        { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+      ],
+    };
+
+    const result = WorkflowStepRawSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.parallel?.[0]).toMatchObject({
+        name: 'delegate-review',
+        call: 'shared/review',
+      });
+    }
   });
 });
 
@@ -367,6 +497,57 @@ describe('WorkflowConfigRawSchema with parallel steps', () => {
       expect(result.data.steps[0].persona).toBe('planner.md');
       expect(result.data.steps[2].parallel).toHaveLength(2);
     }
+  });
+
+  it('Given workflow YAML contains a parallel workflow_call sub-step, When normalizing, Then the sub-step remains a workflow_call', () => {
+    const raw = {
+      name: 'parallel-workflow-call-normalization',
+      initial_step: 'review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'review',
+          parallel: [
+            {
+              name: 'delegate-review',
+              call: 'shared/review',
+              overrides: {
+                provider: 'codex',
+                model: 'gpt-5-codex',
+              },
+              args: {
+                review_policy: 'strict-review',
+              },
+              rules: [
+                { condition: 'COMPLETE', next: 'COMPLETE' },
+                { condition: 'ABORT', next: 'ABORT' },
+              ],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    };
+
+    const config = normalizeWorkflowConfig(raw, process.cwd());
+    const subStep = config.steps[0]?.parallel?.[0];
+
+    expect(subStep).toMatchObject({
+      name: 'delegate-review',
+      kind: 'workflow_call',
+      call: 'shared/review',
+      overrides: {
+        provider: 'codex',
+        model: 'gpt-5-codex',
+      },
+      args: {
+        review_policy: 'strict-review',
+      },
+      instruction: '',
+      personaDisplayName: 'delegate-review',
+    });
   });
 });
 

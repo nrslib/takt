@@ -118,8 +118,7 @@ function resolveRetryResume(
     resumePoint,
     resolveWorkflowCall: (parentWorkflow, step) => resolveWorkflowCallTarget(
       parentWorkflow,
-      step.call,
-      step.name,
+      step,
       projectCwd,
       lookupCwd,
     ),

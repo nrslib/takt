@@ -10,6 +10,30 @@ import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.
 
 const workflowDir = join(process.cwd(), 'src', '__tests__');
 
+type SchemaIssue = {
+  readonly path: readonly (string | number)[];
+  readonly errors?: readonly (readonly SchemaIssue[])[];
+};
+
+function isSamePath(actualPath: readonly (string | number)[], expectedPath: readonly (string | number)[]): boolean {
+  return actualPath.join('.') === expectedPath.join('.');
+}
+
+function issueContainsPath(
+  issue: SchemaIssue,
+  expectedPath: readonly (string | number)[],
+  parentPath: readonly (string | number)[] = [],
+): boolean {
+  const issuePath = [...parentPath, ...issue.path];
+  if (isSamePath(issuePath, expectedPath)) {
+    return true;
+  }
+
+  return issue.errors?.some((branch) =>
+    branch.some((nestedIssue) => issueContainsPath(nestedIssue, expectedPath, issuePath)),
+  ) ?? false;
+}
+
 function expectFailurePath(
   result:
     | ReturnType<typeof WorkflowStepRawSchema.safeParse>
@@ -23,7 +47,7 @@ function expectFailurePath(
     return;
   }
 
-  expect(result.error.issues.some((issue) => issue.path.join('.') === expectedPath.join('.'))).toBe(true);
+  expect(result.error.issues.some((issue) => issueContainsPath(issue, expectedPath))).toBe(true);
 }
 
 describe('instruction_template removal', () => {

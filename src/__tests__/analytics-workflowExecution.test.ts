@@ -123,11 +123,12 @@ describe('routing_decision event assembly', () => {
   it('writes normal step routing decisions from explicit routing event data', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
     const emitter = new AnalyticsEmitter('run-routing', 'mock', 'test-model', 'auto-workflow');
+    const sentinelInstruction = 'Implement API with SECRET_PROMPT_SENTINEL and /tmp/private-repo';
     const step = {
       name: 'implement',
       tags: ['implementation'],
       persona: 'coder',
-      instruction: 'Implement API',
+      instruction: sentinelInstruction,
     } as WorkflowStep;
     const providerInfo: StepProviderInfo = {
       provider: 'codex',
@@ -147,9 +148,10 @@ describe('routing_decision event assembly', () => {
       status: 'done',
       content: 'done',
       timestamp: new Date('2026-02-18T10:00:04.200Z'),
-    }, 'Implement API', providerInfo, 'normal', 4200, 3, 'auto-workflow');
+    }, sentinelInstruction, providerInfo, 'normal', 4200, 3, 'auto-workflow');
 
-    const lines = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8').trim().split('\n');
+    const content = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8').trim();
+    const lines = content.split('\n');
     const routingEvent = JSON.parse(lines[0]) as RoutingDecisionEvent;
     expect(routingEvent).toMatchObject({
       type: 'routing_decision',
@@ -161,6 +163,35 @@ describe('routing_decision event assembly', () => {
       workflowName: 'auto-workflow',
       iteration: 3,
     });
+    expect(Object.keys(routingEvent).sort()).toEqual([
+      'candidateCount',
+      'durationMs',
+      'instructionTokenCount',
+      'iteration',
+      'model',
+      'personaKey',
+      'phaseCount',
+      'provider',
+      'resolutionSource',
+      'runId',
+      'selectedCategory',
+      'selectedCostTier',
+      'stepName',
+      'stepSuccess',
+      'stepTags',
+      'stepType',
+      'strategy',
+      'taktVersion',
+      'timestamp',
+      'type',
+      'workflowName',
+    ].sort());
+    const eventValues = Object.values(routingEvent)
+      .flatMap((value) => (Array.isArray(value) ? value : [value]))
+      .map(String)
+      .join('\n');
+    expect(eventValues).not.toContain('SECRET_PROMPT_SENTINEL');
+    expect(eventValues).not.toContain('/tmp/private-repo');
   });
 
   it('does not duplicate routing decisions when the same step completes', () => {

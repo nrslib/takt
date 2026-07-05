@@ -573,8 +573,8 @@ describe('system workflow PR sync integration', () => {
         },
       ],
     }, {
-      workflowCallResolver: ({ identifier }: { identifier: string }) => {
-        return identifier === 'prepare-merge-child' ? childConfig : null;
+      workflowCallResolver: ({ step }) => {
+        return step.call === 'prepare-merge-child' ? childConfig : null;
       },
     });
 

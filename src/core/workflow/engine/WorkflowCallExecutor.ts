@@ -24,6 +24,12 @@ import type {
   WorkflowSharedRuntimeState,
 } from '../types.js';
 
+export type WorkflowCallSessionUpdates = ReadonlyMap<string, string | undefined>;
+export interface WorkflowCallIsolatedStateSync {
+  iteration: number;
+  maxSteps?: WorkflowMaxSteps;
+}
+
 function encodeWorkflowNamespaceValue(value: string): string {
   return encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
@@ -131,10 +137,16 @@ interface ExecuteWorkflowCallRequest {
   providerRouting: WorkflowEngineOptions['providerRouting'];
 }
 
+interface ExecuteWorkflowCallOptions {
+  syncParentState: boolean;
+}
+
 export type WorkflowCallExecutionResult = WorkflowState & {
   abortKind?: WorkflowAbortKind;
   abortReason?: string;
   returnValue?: string;
+  sessionUpdates?: WorkflowCallSessionUpdates;
+  isolatedStateSync?: WorkflowCallIsolatedStateSync;
 };
 
 export class WorkflowCallExecutor {
@@ -186,8 +198,7 @@ export class WorkflowCallExecutor {
       ],
       resolveWorkflowCall: (parentWorkflow, nestedStep) => this.deps.resolveWorkflowCall({
         parentWorkflow,
-        identifier: nestedStep.call,
-        stepName: nestedStep.name,
+        step: nestedStep,
         projectCwd: this.deps.projectCwd,
         lookupCwd: this.deps.getCwd(),
       }),
@@ -226,10 +237,14 @@ export class WorkflowCallExecutor {
     this.deps.setActiveResumePoint(step, this.deps.state.iteration);
   }
 
-  async execute(request: ExecuteWorkflowCallRequest): Promise<WorkflowCallExecutionResult> {
+  async execute(
+    request: ExecuteWorkflowCallRequest,
+    executeOptions: ExecuteWorkflowCallOptions,
+  ): Promise<WorkflowCallExecutionResult> {
     const options = this.deps.getOptions();
     const parentConfig = this.deps.getConfig();
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
+    const sessionUpdates = new Map<string, string | undefined>();
     const childAutoStrategyOverride = workflowUsesAutoProvider({
       workflowConfig: request.childWorkflow,
       effectiveProvider: request.childProviderInfo.provider,
@@ -256,6 +271,11 @@ export class WorkflowCallExecutor {
       ),
       autoStrategyOverride: childAutoStrategyOverride,
       autoRoutingAiRouter: undefined,
+      onSessionUpdate: executeOptions.syncParentState
+        ? options.onSessionUpdate
+        : (persona, sessionId) => {
+            sessionUpdates.set(persona, sessionId);
+          },
       personaProviders: request.personaProviders,
       providerRouting: request.providerRouting,
       startStep: this.resolveChildResumeStartStep(request.childWorkflow, childResumePoint),
@@ -273,10 +293,23 @@ export class WorkflowCallExecutor {
     this.relayChildEvents(childEngine);
     const childResult = await childEngine.runWithResult();
     const childState = childResult.state;
-    this.syncStateFromChild(request.step, childState);
+    if (executeOptions.syncParentState) {
+      this.syncStateFromChild(request.step, childState);
+    }
     return {
       ...childState,
       ...(childResult.returnValue !== undefined ? { returnValue: childResult.returnValue } : {}),
+      ...(!executeOptions.syncParentState
+        ? {
+            sessionUpdates,
+            isolatedStateSync: {
+              iteration: childState.iteration,
+              ...(this.deps.sharedRuntime.maxSteps !== undefined
+                ? { maxSteps: this.deps.sharedRuntime.maxSteps }
+                : {}),
+            },
+          }
+        : {}),
       ...(childResult.abort
         ? {
             abortKind: childResult.abort.kind,

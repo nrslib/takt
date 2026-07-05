@@ -143,6 +143,8 @@ function makeParallelRunner(): ParallelRunner {
       requestMoreParts: vi.fn(),
     },
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+    updateMaxSteps: vi.fn(),
+    setActiveResumePoint: vi.fn(),
   };
   return new ParallelRunner(deps);
 }

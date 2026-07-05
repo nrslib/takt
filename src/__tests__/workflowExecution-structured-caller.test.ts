@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
 import {
   CapabilityAwareStructuredCaller,
   DefaultStructuredCaller,
@@ -594,15 +594,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: 'takt/coding',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -649,15 +647,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: 'default',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -711,15 +707,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: './child.yaml',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });

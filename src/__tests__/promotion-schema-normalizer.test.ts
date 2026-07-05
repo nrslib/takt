@@ -6,6 +6,11 @@ import { WorkflowStepRawSchema } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import type { AgentWorkflowStep } from '../core/models/index.js';
 
+function expectPath(actual: readonly unknown[], expected: readonly unknown[]): boolean {
+  return actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
 describe('WorkflowStepRawSchema promotion', () => {
   it('accepts promotion entries with at, condition, provider, model, and provider_options', () => {
     const result = WorkflowStepRawSchema.safeParse({
@@ -226,9 +231,13 @@ describe('WorkflowStepRawSchema promotion', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({ path: ['parallel', 0, 'promotion'] }),
-      ]));
+      expect(result.error.issues.some((issue) =>
+        issue.code === 'invalid_union'
+        && expectPath(issue.path, ['parallel', 0])
+        && issue.errors.some((branch) =>
+          branch.some((branchIssue) => expectPath(branchIssue.path, ['promotion'])),
+        ),
+      )).toBe(true);
     }
   });
 

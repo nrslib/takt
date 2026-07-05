@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   GlobalConfigSchema,
   ProjectConfigSchema,
@@ -572,7 +572,7 @@ describe('auto_routing workflow schema', () => {
         {
           name: 'call-child',
           kind: 'workflow_call',
-          workflow: 'child',
+          call: 'child',
           overrides: { provider: 'auto' },
           rules: [{ condition: 'done', next: 'COMPLETE' }],
         },
@@ -581,12 +581,143 @@ describe('auto_routing workflow schema', () => {
 
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
-      workflowCallResolver: async () => workflow,
+      workflowCallResolver: () => workflow,
     })).toThrow(/auto_routing/);
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       autoRouting: createRuntimeAutoRoutingConfig(),
-      workflowCallResolver: async () => workflow,
+      workflowCallResolver: () => workflow,
+    })).not.toThrow();
+  });
+
+  it('Given parallel workflow_call child workflow top-level provider auto without parent override, When validating workflow config, Then validation fails fast', () => {
+    const childWorkflow: WorkflowConfig = {
+      name: 'parallel-child-auto-provider',
+      provider: 'auto',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          instruction: 'review',
+          passPreviousResponse: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent-with-parallel-child-auto-provider',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [
+            {
+              name: 'call-child',
+              kind: 'workflow_call',
+              call: 'parallel-child-auto-provider',
+              personaDisplayName: 'call-child',
+              instruction: '',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+        },
+      ],
+    };
+    const resolver = vi.fn(() => childWorkflow);
+
+    expect(() => validateWorkflowConfig(parentWorkflow, {
+      projectCwd: process.cwd(),
+      workflowCallResolver: resolver,
+    })).toThrow(/auto_routing/);
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      parentWorkflow,
+      step: parentWorkflow.steps[0]!.parallel![0],
+    }));
+    expect(() => validateWorkflowConfig(parentWorkflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createRuntimeAutoRoutingConfig(),
+      workflowCallResolver: resolver,
+    })).not.toThrow();
+  });
+
+  it('Given workflow_call resolver throws during auto provider validation, When validating workflow config, Then the resolver error propagates', () => {
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent-with-broken-child',
+      initialStep: 'call-child',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'call-child',
+          kind: 'workflow_call',
+          call: 'missing-child',
+          personaDisplayName: 'call-child',
+          instruction: '',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    expect(() => validateWorkflowConfig(parentWorkflow, {
+      projectCwd: process.cwd(),
+      workflowCallResolver: () => {
+        throw new Error('resolver boom');
+      },
+    })).toThrow('resolver boom');
+  });
+
+  it('Given workflow_call child workflow top-level provider auto without parent override, When validating workflow config, Then validation fails fast', () => {
+    const childWorkflow: WorkflowConfig = {
+      name: 'child-auto-provider',
+      provider: 'auto',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'review',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          instruction: 'review',
+          passPreviousResponse: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+    const parentWorkflow: WorkflowConfig = {
+      name: 'parent-with-child-auto-provider',
+      initialStep: 'call-child',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'call-child',
+          kind: 'workflow_call',
+          call: 'child-auto-provider',
+          personaDisplayName: 'call-child',
+          instruction: '',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        },
+      ],
+    };
+    const resolver = vi.fn(() => childWorkflow);
+
+    expect(() => validateWorkflowConfig(parentWorkflow, {
+      projectCwd: process.cwd(),
+      workflowCallResolver: resolver,
+    })).toThrow(/auto_routing/);
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      parentWorkflow,
+      step: parentWorkflow.steps[0],
+    }));
+    expect(() => validateWorkflowConfig(parentWorkflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createRuntimeAutoRoutingConfig(),
+      workflowCallResolver: resolver,
     })).not.toThrow();
   });
 

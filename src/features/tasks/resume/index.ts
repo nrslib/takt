@@ -111,7 +111,7 @@ function resolveResumePoint(
     workflow: workflowConfig,
     resumePoint: run.meta.resumePoint,
     resolveWorkflowCall: (parentWorkflow, step) =>
-      resolveWorkflowCallTarget(parentWorkflow, step.call, step.name, projectDir, projectDir),
+      resolveWorkflowCallTarget(parentWorkflow, step, projectDir, projectDir),
   });
 }
 

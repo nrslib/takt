@@ -103,6 +103,8 @@ describe('runner rule evaluation childProcessEnv propagation', () => {
       detectRuleIndex: () => -1,
       structuredCaller,
       runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+      updateMaxSteps: vi.fn(),
+      setActiveResumePoint: vi.fn(),
     };
     const step = makeStep({
       name: 'reviewers',

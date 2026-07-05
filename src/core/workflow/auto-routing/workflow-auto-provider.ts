@@ -41,8 +41,7 @@ function resolveWorkflowCallChild(
   }
   const childWorkflow = resolver({
     parentWorkflow: workflowConfig,
-    identifier: step.call,
-    stepName: step.name,
+    step,
     projectCwd,
     lookupCwd,
   });

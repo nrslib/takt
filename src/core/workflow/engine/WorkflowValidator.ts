@@ -5,7 +5,7 @@ import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
-import { workflowStepUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
+import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -118,6 +118,25 @@ function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig
   }
 }
 
+function validateParallelSubStepNamesUnique(config: WorkflowConfig): void {
+  for (const step of config.steps) {
+    const names = new Set<string>();
+    for (const subStep of step.parallel ?? []) {
+      if (names.has(subStep.name)) {
+        throw new Error(`Configuration error: parallel step "${step.name}" contains duplicate sub-step name "${subStep.name}"`);
+      }
+      names.add(subStep.name);
+    }
+  }
+}
+
+function workflowContainsWorkflowCall(config: WorkflowConfig): boolean {
+  const stepContainsWorkflowCall = (step: WorkflowConfig['steps'][number]): boolean =>
+    isWorkflowCallStep(step) || (step.parallel ?? []).some(stepContainsWorkflowCall);
+
+  return config.steps.some(stepContainsWorkflowCall);
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
@@ -125,13 +144,21 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   }
   const workflowProvider = options.provider ?? config.provider;
   if (
-    (workflowProvider === 'auto' || config.steps.some(workflowStepUsesAutoProvider))
+    workflowUsesAutoProvider({
+      workflowConfig: config,
+      effectiveProvider: workflowProvider,
+      cliProvider: options.provider,
+      projectCwd: options.projectCwd,
+      lookupCwd: options.projectCwd,
+      workflowCallResolver: options.workflowCallResolver,
+    })
     && options.autoRouting === undefined
   ) {
     throw new Error('Configuration error: provider: auto requires auto_routing configuration');
   }
   validateFindingContractParallelStructuredOutput(config);
   validateFindingContractInvalidManagerOutputRules(config);
+  validateParallelSubStepNamesUnique(config);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);
@@ -140,7 +167,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     }
   }
 
-  if (config.steps.some((step) => isWorkflowCallStep(step)) && !options.workflowCallResolver) {
+  if (workflowContainsWorkflowCall(config) && !options.workflowCallResolver) {
     throw new Error('Configuration error: workflowCallResolver is required when workflow contains workflow_call steps');
   }
 

@@ -46,11 +46,12 @@ import {
   mockDetectMatchedRuleSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
-import type { AutoRoutingConfig } from '../core/models/index.js';
+import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import type { RoutingDecisionEvent } from '../features/analytics/index.js';
+import type { WorkflowCallResolver } from '../core/workflow/types.js';
 
 function writeWorkflow(projectDir: string, relativePath: string, content: string): void {
   const filePath = join(projectDir, '.takt', 'workflows', relativePath);
@@ -60,6 +61,30 @@ function writeWorkflow(projectDir: string, relativePath: string, content: string
 
 function createParentWorkflow(projectDir: string, raw: Record<string, unknown>) {
   return normalizeWorkflowConfig(raw, projectDir);
+}
+
+function findWorkflowCallStep(
+  workflow: WorkflowConfig,
+  stepName: string,
+  call?: string,
+): WorkflowCallStep {
+  const visit = (steps: readonly WorkflowStep[]): WorkflowCallStep | undefined => {
+    for (const step of steps) {
+      if (step.kind === 'workflow_call' && step.name === stepName && (call === undefined || step.call === call)) {
+        return step;
+      }
+      const nested = visit(step.parallel ?? []);
+      if (nested) {
+        return nested;
+      }
+    }
+    return undefined;
+  };
+  const step = visit(workflow.steps);
+  if (!step) {
+    throw new Error(`workflow_call step "${stepName}" was not found in test workflow "${workflow.name}"`);
+  }
+  return step;
 }
 
 function loadWorkflowOrThrow(identifier: string, projectDir: string, basePath?: string) {
@@ -78,17 +103,15 @@ function createWorkflowCallOptions(
     model: 'parent-model',
     workflowCallResolver: ({
       parentWorkflow,
-      identifier,
-      stepName,
+      step,
       projectCwd: resolverProjectCwd,
       lookupCwd,
     }: {
       parentWorkflow: Parameters<typeof resolveWorkflowCallTarget>[0];
-      identifier: Parameters<typeof resolveWorkflowCallTarget>[1];
-      stepName: Parameters<typeof resolveWorkflowCallTarget>[2];
-      projectCwd: Parameters<typeof resolveWorkflowCallTarget>[3];
+      step: Parameters<typeof resolveWorkflowCallTarget>[1];
+      projectCwd: Parameters<typeof resolveWorkflowCallTarget>[2];
       lookupCwd: string;
-    }) => resolveWorkflowCallTarget(parentWorkflow, identifier, stepName, resolverProjectCwd, lookupCwd),
+    }) => resolveWorkflowCallTarget(parentWorkflow, step, resolverProjectCwd, lookupCwd),
     ...overrides,
   };
 }
@@ -770,11 +793,12 @@ steps:
       ],
     });
 
-    engine = new WorkflowEngine(config, tmpDir, 'Reject reserved child return names', createWorkflowCallOptions(tmpDir));
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
+    expect(() => new WorkflowEngine(
+      config,
+      tmpDir,
+      'Reject reserved child return names',
+      createWorkflowCallOptions(tmpDir),
+    )).toThrow(/subworkflow\.returns must not include reserved result/);
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
@@ -2215,11 +2239,12 @@ steps:
         next: ABORT
 `);
 
-    engine = new WorkflowEngine(loadWorkflowOrThrow('parent', tmpDir), tmpDir, 'Block privileged child', createWorkflowCallOptions(tmpDir));
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
+    expect(() => new WorkflowEngine(
+      loadWorkflowOrThrow('parent', tmpDir),
+      tmpDir,
+      'Block privileged child',
+      createWorkflowCallOptions(tmpDir),
+    )).toThrow(`Workflow step "delegate" cannot call privileged workflow "privileged-child" across trust boundary`);
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
@@ -2349,7 +2374,11 @@ steps:
 `, 'utf-8');
 
     const parentWorkflow = loadWorkflowOrThrow(externalParentPath, tmpDir);
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2413,7 +2442,11 @@ steps:
 `, 'utf-8');
 
     const parentWorkflow = loadWorkflowOrThrow(externalParentPath, tmpDir);
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2460,7 +2493,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2508,7 +2545,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    expect(() => resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir)).toThrow(
+    expect(() => resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    )).toThrow(
       'Workflow step "delegate" cannot call privileged workflow "takt/coding" across trust boundary',
     );
   });
@@ -2559,7 +2600,11 @@ steps:
       ],
     });
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2585,7 +2630,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, 'default', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('default');
   });
@@ -2619,7 +2668,11 @@ steps:
 `);
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, './child.yaml', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('project-child');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2661,7 +2714,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, externalWorkflowPath, 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('external-child');
   });
@@ -2718,8 +2775,7 @@ steps:
 
     const childWorkflow = resolveWorkflowCallTargetWithMockedHomedir(
       parentWorkflow,
-      '~/.takt/workflows/workflow-call-tilde-test/external.yaml',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
       tmpDir,
     );
 
@@ -2759,7 +2815,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    expect(() => resolveWorkflowCallTarget(parentWorkflow, 'takt/../../outside', 'delegate', tmpDir)).toThrow(
+    expect(() => resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    )).toThrow(
       'Workflow step "delegate" cannot call invalid workflow identifier "takt/../../outside"',
     );
   });
@@ -2802,7 +2862,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, '@nrslib/takt-ensemble/expert', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('external-child');
   });
@@ -2845,7 +2909,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2895,7 +2963,12 @@ steps:
       isProjectWorkflowRoot: false,
     });
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow!, './takt/coding.yaml', 'delegate', tmpDir, worktreeDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      tmpDir,
+      worktreeDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2953,7 +3026,12 @@ steps:
     const parentWorkflow = loadWorkflowByIdentifier('./.takt/workflows/parent.yaml', tmpDir, { lookupCwd: worktreeDir });
     expect(parentWorkflow).not.toBeNull();
 
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow!, 'takt/coding', 'delegate', tmpDir, worktreeDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      tmpDir,
+      worktreeDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -2997,7 +3075,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    expect(() => resolveWorkflowCallTarget(parentWorkflow, externalWorkflowPath, 'delegate', tmpDir)).toThrow(
+    expect(() => resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    )).toThrow(
       'Workflow step "delegate" cannot call privileged workflow "external-child" across trust boundary',
     );
   });
@@ -3036,7 +3118,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow('parent', tmpDir);
 
-    expect(() => resolveWorkflowCallTarget(parentWorkflow, externalWorkflowPath, 'delegate', tmpDir)).toThrow(
+    expect(() => resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    )).toThrow(
       'Workflow step "delegate" cannot call privileged workflow "external-child" across trust boundary',
     );
   });
@@ -3071,10 +3157,12 @@ steps:
       - condition: done
         next: COMPLETE
 `);
-    const projectWorkflowPath = join(tmpDir, '.takt', 'workflows', 'takt', 'coding.yaml');
-
     const parentWorkflow = loadWorkflowOrThrow(externalParentPath, tmpDir);
-    const childWorkflow = resolveWorkflowCallTarget(parentWorkflow, projectWorkflowPath, 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.name).toBe('takt/coding');
     expect(childWorkflow?.steps[0]).toMatchObject({
@@ -3118,7 +3206,11 @@ steps:
 
     const parentWorkflow = loadWorkflowOrThrow(externalParentPath, tmpDir);
 
-    expect(() => resolveWorkflowCallTarget(parentWorkflow, 'takt/coding', 'delegate', tmpDir)).toThrow(
+    expect(() => resolveWorkflowCallTarget(
+      parentWorkflow,
+      findWorkflowCallStep(parentWorkflow, 'delegate'),
+      tmpDir,
+    )).toThrow(
       'Workflow step "delegate" cannot call privileged workflow "takt/coding" across trust boundary',
     );
   });
@@ -3671,7 +3763,11 @@ steps:
       ],
     });
 
-    const childWorkflow = resolveWorkflowCallTarget(config, 'takt/coding', 'delegate', tmpDir);
+    const childWorkflow = resolveWorkflowCallTarget(
+      config,
+      findWorkflowCallStep(config, 'delegate'),
+      tmpDir,
+    );
 
     expect(childWorkflow?.maxSteps).toBe(5);
   });
@@ -4504,6 +4600,21 @@ steps:
         },
       }),
     });
+    const resolveWorkflowCall: WorkflowCallResolver = ({
+      parentWorkflow,
+      step,
+      projectCwd,
+      lookupCwd,
+    }) => resolveWorkflowCallTarget(
+      parentWorkflow,
+      step,
+      projectCwd,
+      lookupCwd,
+      {
+        sourcePath: getWorkflowSourcePath(rootWorkflow),
+        trustInfo: getWorkflowTrustInfo(rootWorkflow, projectCwd),
+      },
+    );
     const runner = new WorkflowCallRunner({
       getConfig: () => rootWorkflow,
       state: {
@@ -4532,23 +4643,7 @@ steps:
       } as never,
       setActiveResumePoint: vi.fn(),
       emit: vi.fn(),
-      resolveWorkflowCall: ({
-        parentWorkflow,
-        identifier,
-        stepName,
-        projectCwd,
-        lookupCwd,
-      }) => resolveWorkflowCallTarget(
-        parentWorkflow,
-        identifier,
-        stepName,
-        projectCwd,
-        lookupCwd,
-        {
-          sourcePath: getWorkflowSourcePath(rootWorkflow),
-          trustInfo: getWorkflowTrustInfo(rootWorkflow, projectCwd),
-        },
-      ),
+      resolveWorkflowCall,
       createEngine,
     });
 
@@ -4557,16 +4652,14 @@ steps:
     const childWorkflow = createEngine.mock.calls[0]?.[0];
     const childResolver = createEngine.mock.calls[0]?.[3]?.workflowCallResolver as (args: {
       parentWorkflow: Parameters<typeof resolveWorkflowCallTarget>[0];
-      identifier: Parameters<typeof resolveWorkflowCallTarget>[1];
-      stepName: Parameters<typeof resolveWorkflowCallTarget>[2];
-      projectCwd: Parameters<typeof resolveWorkflowCallTarget>[3];
+      step: Parameters<typeof resolveWorkflowCallTarget>[1];
+      projectCwd: Parameters<typeof resolveWorkflowCallTarget>[2];
       lookupCwd: string;
     }) => ReturnType<typeof resolveWorkflowCallTarget>;
 
     const nestedWorkflow = childResolver({
       parentWorkflow: childWorkflow,
-      identifier: './nested.yaml',
-      stepName: 'delegate_nested',
+      step: findWorkflowCallStep(childWorkflow, 'delegate_nested'),
       projectCwd: tmpDir,
       lookupCwd: tmpDir,
     });
@@ -4800,5 +4893,574 @@ steps:
     expect(firstNamespace).toEqual(['subworkflows', 'iteration-1--step-delegate--workflow-takt%2Fcoding']);
     expect(secondNamespace).toEqual(['subworkflows', 'iteration-3--step-delegate--workflow-takt%2Fcoding']);
     expect(firstNamespace).not.toEqual(secondNamespace);
+  });
+
+  it('parallel 内 workflow_call は child workflow 実行結果を親 parallel 集約へ渡す', async () => {
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review through child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'delegate-review',
+              kind: 'workflow_call',
+              call: 'shared/review',
+              rules: [
+                { condition: 'COMPLETE', next: 'COMPLETE' },
+                { condition: 'ABORT', next: 'ABORT' },
+              ],
+            },
+            {
+              name: 'local-review',
+              persona: 'local-reviewer',
+              instruction: 'Review locally',
+              rules: [
+                { condition: 'COMPLETE', next: 'COMPLETE' },
+              ],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'child-reviewer') {
+        return makeResponse({ persona, content: 'Child review complete' });
+      }
+      if (persona === 'local-reviewer') {
+        return makeResponse({ persona, content: 'Local review complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+    const delegatedOutput = state.stepOutputs.get('delegate-review');
+    const parentOutput = state.stepOutputs.get('reviewers');
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(delegatedOutput?.content).toBe('Child review complete');
+    expect(parentOutput?.content).toContain('## delegate-review\nChild review complete');
+    expect(parentOutput?.content).toContain('## local-review\nLocal review complete');
+  });
+
+  it('parallel 内 workflow_call 後は親 parallel step の resume point に戻す', async () => {
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review through child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'delegate-review',
+              kind: 'workflow_call',
+              call: 'shared/review',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'child-reviewer') {
+        return makeResponse({ persona, content: 'Child review complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+    const resumePoint = engine.getResumePoint();
+
+    expect(state.status).toBe('completed');
+    expect(resumePoint?.stack).toHaveLength(1);
+    expect(resumePoint?.stack[0]).toEqual(expect.objectContaining({
+      workflow: 'parent',
+      step: 'reviewers',
+    }));
+  });
+
+  it('parallel 内 workflow_call の iteration limit 延長を親 workflow に同期する', async () => {
+    writeWorkflow(tmpDir, 'shared/two-step-review.yaml', `name: shared/two-step-review
+subworkflow:
+  callable: true
+initial_step: child-first
+max_steps: 10
+steps:
+  - name: child-first
+    persona: child-reviewer
+    instruction: "First child step"
+    rules:
+      - condition: done
+        next: child-second
+  - name: child-second
+    persona: child-reviewer
+    instruction: "Second child step"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'delegate-review',
+              kind: 'workflow_call',
+              call: 'shared/two-step-review',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'finish' },
+          ],
+        },
+        {
+          name: 'finish',
+          persona: 'finisher',
+          instruction: 'Finish parent workflow',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+    const onIterationLimit = vi.fn().mockResolvedValueOnce(3);
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (prompt.includes('First child step')) {
+        return makeResponse({ persona: String(persona), content: 'First child complete' });
+      }
+      if (prompt.includes('Second child step')) {
+        return makeResponse({ persona: String(persona), content: 'Second child complete' });
+      }
+      if (persona === 'finisher') {
+        return makeResponse({ persona, content: 'Parent finish complete' });
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir, {
+      onIterationLimit,
+    }));
+
+    const state = await engine.run();
+
+    expect(onIterationLimit).toHaveBeenCalledWith({
+      currentIteration: 2,
+      maxSteps: 2,
+      currentStep: 'child-second',
+    });
+    expect(state.status).toBe('completed');
+    expect(state.lastOutput?.content).toBe('Parent finish complete');
+    expect(state.iteration).toBe(4);
+  });
+
+  it('parallel fallback retry 中の workflow_call は fallback provider を child workflow へ渡す', async () => {
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review through child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 4,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'delegate-review',
+              kind: 'workflow_call',
+              call: 'shared/review',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+            {
+              name: 'local-review',
+              persona: 'local-reviewer',
+              instruction: 'Review locally',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    });
+    const childProviderCalls: Array<{ resolvedProvider: string | undefined; resolvedModel: string | undefined }> = [];
+    let localAttempts = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'child-reviewer') {
+        childProviderCalls.push({
+          resolvedProvider: options?.resolvedProvider,
+          resolvedModel: options?.resolvedModel,
+        });
+        return makeResponse({ persona, content: 'Child review complete' });
+      }
+      if (persona === 'local-reviewer') {
+        localAttempts += 1;
+        if (localAttempts === 1) {
+          return makeResponse({
+            persona,
+            status: 'rate_limited',
+            content: '',
+            error: 'Rate limit exceeded. Please try again later.',
+            errorKind: 'rate_limit',
+            rateLimitInfo: {
+              provider: 'mock',
+              detectedAt: new Date('2026-05-13T03:00:00.000Z'),
+              source: 'sdk_error',
+            },
+          } as Partial<ReturnType<typeof makeResponse>>);
+        }
+        return makeResponse({ persona, content: 'Local review complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir, {
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(localAttempts).toBe(2);
+    expect(childProviderCalls).toEqual([
+      { resolvedProvider: 'mock', resolvedModel: 'parent-model' },
+      { resolvedProvider: 'codex', resolvedModel: 'gpt-5' },
+    ]);
+  });
+
+  it('parallel 内 workflow_call の解決失敗は parent parallel の error として集約する', async () => {
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'delegate-review',
+              kind: 'workflow_call',
+              call: 'missing/review',
+              rules: [
+                { condition: 'COMPLETE', next: 'COMPLETE' },
+              ],
+            },
+            {
+              name: 'local-review',
+              persona: 'local-reviewer',
+              instruction: 'Review locally',
+              rules: [
+                { condition: 'COMPLETE', next: 'COMPLETE' },
+              ],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'local-reviewer') {
+        return makeResponse({ persona, content: 'Local review complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel review', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+    const delegatedOutput = state.stepOutputs.get('delegate-review');
+    const parentOutput = state.stepOutputs.get('reviewers');
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+    expect(delegatedOutput?.status).toBe('error');
+    expect(delegatedOutput?.error).toContain('references unknown workflow "missing/review"');
+    expect(parentOutput?.status).toBe('error');
+    expect(parentOutput?.content).toContain('delegate-review');
+    expect(parentOutput?.content).toContain('references unknown workflow "missing/review"');
+    expect(parentOutput?.content).not.toContain('did not return session updates');
+  });
+
+  it('parallel 内 workflow_call は child session を sub-step 定義順で決定的に merge する', async () => {
+    writeWorkflow(tmpDir, 'shared/slow-review.yaml', `name: shared/slow-review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Slow child review"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'shared/fast-review.yaml', `name: shared/fast-review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Fast child review"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'slow-delegate',
+              kind: 'workflow_call',
+              call: 'shared/slow-review',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+            {
+              name: 'fast-delegate',
+              kind: 'workflow_call',
+              call: 'shared/fast-review',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (prompt.includes('Slow child review')) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return makeResponse({ persona: String(persona), content: 'Slow review complete', sessionId: 'slow-session' });
+      }
+      if (prompt.includes('Fast child review')) {
+        return makeResponse({ persona: String(persona), content: 'Fast review complete', sessionId: 'fast-session' });
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel reviews', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.stepOutputs.get('slow-delegate')?.content).toBe('Slow review complete');
+    expect(state.stepOutputs.get('fast-delegate')?.content).toBe('Fast review complete');
+    expect(state.personaSessions.get('child-reviewer:mock')).toBe('fast-session');
+  });
+
+  it('parallel 内 workflow_call は更新していない inherited child session を merge しない', async () => {
+    writeWorkflow(tmpDir, 'shared/update-session.yaml', `name: shared/update-session
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Update inherited session"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'shared/inherit-session.yaml', `name: shared/inherit-session
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Use inherited session"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'reviewers',
+          instruction: 'Run reviewers',
+          parallel: [
+            {
+              name: 'update-delegate',
+              kind: 'workflow_call',
+              call: 'shared/update-session',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+            {
+              name: 'inherit-delegate',
+              kind: 'workflow_call',
+              call: 'shared/inherit-session',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [
+            { condition: 'all("COMPLETE")', next: 'COMPLETE' },
+          ],
+        },
+      ],
+    });
+    const sessionUpdates = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (prompt.includes('Update inherited session')) {
+        return makeResponse({ persona: String(persona), content: 'Session updated', sessionId: 'updated-session' });
+      }
+      if (prompt.includes('Use inherited session')) {
+        return makeResponse({ persona: String(persona), content: 'Inherited session used', sessionId: undefined });
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run delegated parallel reviews', createWorkflowCallOptions(tmpDir, {
+      initialSessions: {
+        'child-reviewer:mock': 'initial-session',
+      },
+      onSessionUpdate: sessionUpdates,
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.stepOutputs.get('update-delegate')?.content).toBe('Session updated');
+    expect(state.stepOutputs.get('inherit-delegate')?.content).toBe('Inherited session used');
+    expect(state.personaSessions.get('child-reviewer:mock')).toBe('updated-session');
+    expect(sessionUpdates).toHaveBeenCalledOnce();
+    expect(sessionUpdates).toHaveBeenCalledWith('child-reviewer:mock', 'updated-session');
   });
 });

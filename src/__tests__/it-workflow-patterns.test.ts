@@ -122,8 +122,8 @@ function createEngine(config: WorkflowConfig, dir: string, task: string): Workfl
     provider: 'mock',
     detectRuleIndex,
     structuredCaller,
-    workflowCallResolver: ({ parentWorkflow, identifier, stepName, projectCwd, lookupCwd }) => {
-      const child = resolveWorkflowCallTarget(parentWorkflow, identifier, stepName, projectCwd, lookupCwd);
+    workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) => {
+      const child = resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd);
       return child ? stripClaudeAllowedTools(child) : null;
     },
   });

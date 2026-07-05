@@ -195,6 +195,24 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     ...phaseRelay,
   });
 
+  const workflowCallRunner = new WorkflowCallRunner({
+    getConfig: () => params.config,
+    getMaxSteps: params.getMaxSteps,
+    updateMaxSteps: params.updateMaxSteps,
+    state: params.state as never,
+    projectCwd: params.projectCwd,
+    getCwd: params.getCwd,
+    task: params.task,
+    getOptions: () => params.options,
+    sharedRuntime: params.sharedRuntime,
+    resumeStackPrefix: params.resumeStackPrefix ?? [],
+    runPaths: params.runPaths,
+    setActiveResumePoint: params.setActiveResumePoint as never,
+    emit: params.emitEvent,
+    resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
+    createEngine: params.createEngine,
+  });
+
   const parallelRunner = new ParallelRunner({
     optionsBuilder,
     stepExecutor,
@@ -213,6 +231,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     emitEvent: params.emitEvent,
     findingContract: params.config.findingContract,
     findingLedgerStore: params.findingLedgerStore,
+    getWorkflowCallRunner: () => workflowCallRunner,
+    updateMaxSteps: params.updateMaxSteps,
+    setActiveResumePoint: params.setActiveResumePoint,
     getRunId: () => params.runPaths.slug,
     runQualityGates,
     ...phaseRelay,
@@ -293,24 +314,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       }
     },
     resetCycleDetector: params.resetCycleDetector,
-  });
-
-  const workflowCallRunner = new WorkflowCallRunner({
-    getConfig: () => params.config,
-    getMaxSteps: params.getMaxSteps,
-    updateMaxSteps: params.updateMaxSteps,
-    state: params.state as never,
-    projectCwd: params.projectCwd,
-    getCwd: params.getCwd,
-    task: params.task,
-    getOptions: () => params.options,
-    sharedRuntime: params.sharedRuntime,
-    resumeStackPrefix: params.resumeStackPrefix ?? [],
-    runPaths: params.runPaths,
-    setActiveResumePoint: params.setActiveResumePoint as never,
-    emit: params.emitEvent,
-    resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
-    createEngine: params.createEngine,
   });
 
   return {

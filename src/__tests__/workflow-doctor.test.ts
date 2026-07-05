@@ -641,6 +641,45 @@ steps:
     );
   });
 
+  it('reports unsupported parallel workflow_call child return conditions', () => {
+    writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        return: ok
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    parallel:
+      - name: delegate
+        kind: workflow_call
+        call: child
+        rules:
+          - condition: retry_plan
+            next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Workflow "parent.yaml" failed to load: workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
   it('reports unsupported nested workflow_call child return conditions', () => {
     writeWorkflow(projectDir, '.takt/workflows/grandchild.yaml', `name: grandchild
 subworkflow:

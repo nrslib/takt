@@ -187,7 +187,7 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   systemInputs?: never;
   effects?: never;
   outputContracts?: OutputContractEntry[];
-  parallel?: AgentWorkflowStep[];
+  parallel?: WorkflowStep[];
   concurrency?: number;
   arpeggio?: ArpeggioStepConfig;
   teamLeader?: TeamLeaderConfig;

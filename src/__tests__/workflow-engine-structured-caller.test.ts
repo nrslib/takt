@@ -22,6 +22,7 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import type { WorkflowConfig, WorkflowRule } from '../core/models/index.js';
+import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
@@ -38,6 +39,39 @@ function createTestTmpDir(): string {
 
 function getAuthoritativeLedgerPath(cwd: string): string {
   return join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
+}
+
+function createStructuredCorrectionAutoRoutingConfig(): AutoRoutingConfig {
+  return {
+    strategy: 'balanced',
+    router: {
+      provider: 'claude',
+      model: 'claude-haiku-4-5-20251001',
+    },
+    candidates: [
+      {
+        name: 'reviewer',
+        description: 'Reviewer sub-step',
+        provider: 'claude',
+        model: 'claude-sonnet-4-5-20250929',
+        costTier: 'medium',
+      },
+    ],
+    rules: {
+      steps: {
+        'solo-review': 'reviewer',
+      },
+    },
+  };
+}
+
+async function runWithFixedDateNow<T>(isoTimestamp: string, action: () => Promise<T>): Promise<T> {
+  const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date(isoTimestamp).getTime());
+  try {
+    return await action();
+  } finally {
+    dateNowSpy.mockRestore();
+  }
 }
 
 describe('WorkflowEngine structured caller defaults', () => {
@@ -877,18 +911,138 @@ describe('WorkflowEngine structured caller defaults', () => {
     mkdirSync(dirname(ledgerPath), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
 
-    const result = await new WorkflowEngine(config, cwd, 'task', {
+    const routingEvents: unknown[][] = [];
+    const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
-      provider: 'claude',
+      provider: 'auto' as never,
+      autoRouting: createStructuredCorrectionAutoRoutingConfig(),
       reportDirName: 'test-report-dir',
       detectRuleIndex: () => -1,
-    }).run();
+    });
+    engine.on('routing:decision', (...args) => {
+      routingEvents.push(args);
+    });
+    const result = await runWithFixedDateNow('2026-06-13T00:00:00.000Z', () => engine.run());
 
-    // rate_limited が error に化けず、メタデータごと保持される
     const soloOutput = result.stepOutputs.get('solo-review');
     expect(soloOutput?.status).toBe('rate_limited');
+    expect(soloOutput?.content).toBe('Review report body.');
+    expect(soloOutput?.error).toBe('Rate limited by provider');
     expect(soloOutput?.errorKind).toBe('rate_limit');
     expect(soloOutput?.rateLimitInfo).toMatchObject({ provider: 'claude', source: 'sdk_error' });
+    expect(soloOutput?.timestamp.toISOString()).toBe('2026-06-13T00:00:02.000Z');
+    expect(routingEvents).toHaveLength(1);
+    expect(routingEvents[0]?.[1]).toMatchObject({
+      status: 'rate_limited',
+      timestamp: new Date('2026-06-13T00:00:02.000Z'),
+    });
+    expect(routingEvents[0]?.[5]).toBe(2000);
+  });
+
+  it('是正コールが blocked を返しても Phase 1 の本文を保持する', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'structured-retry-blocked-test',
+      nextId: 1,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    };
+
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"rawFindings"')) {
+        reviewerCalls += 1;
+        if (reviewerCalls === 1) {
+          return {
+            persona: 'reviewer',
+            status: 'done',
+            content: 'Review report body.',
+            structuredOutput: { rawFindings: [{ rawFindingId: 'raw-1', efamilyTag: 'bug' }] },
+            timestamp: new Date('2026-06-13T00:00:01.000Z'),
+          };
+        }
+        return {
+          persona: 'reviewer',
+          status: 'blocked',
+          content: 'Correction requires user input.',
+          error: 'Permission prompt blocked correction',
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'ok',
+        timestamp: new Date('2026-06-13T00:00:04.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'structured-retry-blocked-test',
+      maxSteps: 2,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'solo-review',
+              persona: 'solo-reviewer',
+              instruction: 'Review.',
+              rules: [makeRule('true', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('findings.open.count == 0', 'COMPLETE'),
+            makeRule('invalid manager output', 'ABORT', { returnValue: 'needs_fix' }),
+          ],
+        }),
+      ],
+    };
+
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+
+    const routingEvents: unknown[][] = [];
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'auto' as never,
+      autoRouting: createStructuredCorrectionAutoRoutingConfig(),
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    engine.on('routing:decision', (...args) => {
+      routingEvents.push(args);
+    });
+    const result = await runWithFixedDateNow('2026-06-13T00:00:00.000Z', () => engine.run());
+
+    const soloOutput = result.stepOutputs.get('solo-review');
+    expect(soloOutput?.status).toBe('blocked');
+    expect(soloOutput?.content).toBe('Review report body.');
+    expect(soloOutput?.error).toBe('Permission prompt blocked correction');
+    expect(soloOutput?.timestamp.toISOString()).toBe('2026-06-13T00:00:02.000Z');
+    expect(routingEvents).toHaveLength(1);
+    expect(routingEvents[0]?.[1]).toMatchObject({
+      status: 'blocked',
+      timestamp: new Date('2026-06-13T00:00:02.000Z'),
+    });
+    expect(routingEvents[0]?.[5]).toBe(2000);
   });
 
   it('parallel sub-step の phase 3 判定でも findings ガードが不成立なら採用せずフォールバックする', async () => {

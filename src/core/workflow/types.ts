@@ -6,6 +6,7 @@ import type {
   Language,
   LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
@@ -171,8 +172,7 @@ export interface WorkflowCallChildEngine {
 
 export interface WorkflowCallResolutionRequest {
   parentWorkflow: WorkflowConfig;
-  identifier: string;
-  stepName: string;
+  step: WorkflowCallStep;
   projectCwd: string;
   lookupCwd: string;
 }

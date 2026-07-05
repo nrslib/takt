@@ -590,7 +590,7 @@ describe('WorkflowEngine auto routing integration', () => {
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
-  it('Given parallel sub-steps need AI routing, When the parent runs, Then routeBatch receives metadata without instructions once', async () => {
+  it('Given parallel sub-steps need AI routing, When the parent runs, Then routeBatch receives raw instructions once', async () => {
     const autoRouting = {
       ...createAutoRoutingConfig(),
       rules: undefined,
@@ -610,10 +610,12 @@ describe('WorkflowEngine auto routing integration', () => {
           parallel: [
             makeStep('api-review', {
               tags: ['implementation'],
+              instruction: 'Review API changes for {task} without expanded context',
               rules: [makeRule('approved', 'COMPLETE')],
             }),
             makeStep('format-review', {
               tags: ['format'],
+              instruction: 'Review formatting for {task} without expanded context',
               rules: [makeRule('approved', 'COMPLETE')],
             }),
           ],
@@ -655,14 +657,23 @@ describe('WorkflowEngine auto routing integration', () => {
         name: 'api-review',
         tags: ['implementation'],
         personaKey: undefined,
+        instruction: 'Review API changes for {task} without expanded context',
       },
       {
         id: 'format-review',
         name: 'format-review',
         tags: ['format'],
         personaKey: undefined,
+        instruction: 'Review formatting for {task} without expanded context',
       },
     ]);
+    const routedInstructions = routeBatch.mock.calls[0]?.[1].map((step) => step.instruction);
+    expect(routedInstructions).toEqual([
+      'Review API changes for {task} without expanded context',
+      'Review formatting for {task} without expanded context',
+    ]);
+    expect(routedInstructions?.join('\n')).not.toContain('review feature');
+    expect(routedInstructions?.join('\n')).not.toContain('test-report-dir');
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5',

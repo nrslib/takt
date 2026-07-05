@@ -109,6 +109,8 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
       requestMoreParts: vi.fn(),
     },
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+    updateMaxSteps: vi.fn(),
+    setActiveResumePoint: vi.fn(),
   };
   return { runner: new ParallelRunner(deps), deps };
 }
