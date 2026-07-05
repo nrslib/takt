@@ -410,6 +410,45 @@ describe('builtin takt-default provider_options refs', () => {
       }
     });
 
+    it(`${locale} every for-local-llm workflow should share the FC gate rule contract`, () => {
+      const family = [
+        'takt-default-for-local-llm',
+        'frontend-for-local-llm',
+        'backend-for-local-llm',
+        'backend-cqrs-for-local-llm',
+        'dual-for-local-llm',
+      ];
+      for (const name of family) {
+        const workflow = loadBuiltinWorkflow(locale, `${name}.yaml`);
+        const normalized = normalizeBuiltinWorkflow(workflow, locale);
+
+        expect(normalized.findingContract, name).toMatchObject({
+          ledgerPath: `.takt/findings/${name}.json`,
+          rawFindingsPath: `.takt/findings/${name}/raw`,
+        });
+
+        const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
+        const reviewerRules = reviewers?.rules ?? [];
+        expect(reviewerRules.map((rule) => rule.next), name).toEqual([
+          'final-gate', 'fix', 'fix', 'fix', 'ABORT',
+        ]);
+        expect(reviewerRules[0], name).toMatchObject({
+          isAggregateCondition: true,
+          aggregateType: 'all',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+        });
+
+        const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
+        const gateRules = finalGate?.rules ?? [];
+        expect(gateRules.map((rule) => rule.next), name).toEqual([
+          'COMPLETE', 'fix', 'fix', 'fix', 'ABORT',
+        ]);
+        expect(gateRules[0], name).toMatchObject({
+          condition: 'approved',
+          guardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+        });
+      }
+    });
     it(`${locale} takt-default-for-local-llm should use Finding Contract-specific output contracts`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'takt-default-for-local-llm.yaml');
       const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
