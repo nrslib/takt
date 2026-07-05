@@ -278,6 +278,11 @@ export class CodexClient {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       sandboxMode,
+      // TAKT runs Codex non-interactively — there is no human to approve escalations.
+      // Force `never` so the sandbox mode is the sole authority: without it, Codex falls
+      // back to its configured approval policy (e.g. on-request + approvals_reviewer=auto_review),
+      // which auto-approves escalation past a read-only sandbox and lets writes through.
+      approvalPolicy: 'never' as const,
       ...(options.reasoningEffort ? { modelReasoningEffort: options.reasoningEffort } : {}),
       ...(options.networkAccess === undefined ? {} : { networkAccessEnabled: options.networkAccess }),
     };
