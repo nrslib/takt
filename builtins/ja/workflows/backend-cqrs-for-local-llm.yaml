@@ -7,7 +7,7 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
-max_steps: 40
+max_steps: 50
 initial_step: plan
 workflow_config:
   provider_options:
