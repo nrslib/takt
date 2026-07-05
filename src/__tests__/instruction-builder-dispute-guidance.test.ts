@@ -88,6 +88,16 @@ describe('reviewer duty gating', () => {
     expect(section).not.toContain('waived');
   });
 
+  it('should inject the waived duty independently of open findings', () => {
+    const section = extractFindingContractSection(new InstructionBuilder(
+      makeStep(),
+      makeContext({ hasOpenFindings: false, hasWaivedFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
+    ).build());
+
+    expect(section).toContain('listed as waived');
+    expect(section).not.toContain('resolution_confirmation');
+  });
+
   it('should inject confirmation duties when open findings exist and waived duty only with waived findings', () => {
     const withOpen = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
