@@ -63,7 +63,9 @@ const FILE_LINE_EVIDENCE_PATTERN = /[^\s:]+\.[A-Za-z0-9_]+:\d+/;
 
 /**
  * 直前ステップ応答から「Disputed Findings」見出し配下のブロックを抜き出し、
- * 対象 finding ID と file:line 証跡が申告ブロック内にあるかを判定する。
+ * findingId 行を単位とする claim entry に分割したうえで、「対象 ID と完全一致
+ * する entry があり、その同一 entry 内に file:line 証跡がある」ことを判定する。
+ * 別 finding の entry 内に対象 ID が付随的に現れただけでは claim と認めない。
  */
 function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId: string): boolean {
   if (priorStepResponseText === undefined) {
@@ -76,8 +78,21 @@ function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId
   }
   const rest = lines.slice(headingIndex + 1);
   const nextHeading = rest.findIndex((line) => /^#{1,6}\s/.test(line.trim()));
-  const block = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).join('\n');
-  return block.includes(findingId) && FILE_LINE_EVIDENCE_PATTERN.test(block);
+  const blockLines = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+
+  const findingIdLinePattern = /findingId\s*[:：=]\s*[\`"']?([A-Za-z0-9_-]+)/i;
+  const entryStarts = blockLines
+    .map((line, index) => ({ index, match: findingIdLinePattern.exec(line) }))
+    .filter((candidate): candidate is { index: number; match: RegExpExecArray } => candidate.match !== null);
+
+  return entryStarts.some((start, position) => {
+    if (start.match[1] !== findingId) {
+      return false;
+    }
+    const entryEnd = position + 1 < entryStarts.length ? entryStarts[position + 1]!.index : blockLines.length;
+    const entryText = blockLines.slice(start.index, entryEnd).join('\n');
+    return FILE_LINE_EVIDENCE_PATTERN.test(entryText);
+  });
 }
 
 function validateRawFindingDecisionRefs(
