@@ -75,6 +75,42 @@ describe('validateFindingManagerOutput', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('should accept a waiver claimed with a column-zero bare findingId field', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen public contract mandates Record', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        'findingId: F-0001',
+        'reason: frozen contract',
+        'evidence: src/types.ts:94',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('should reject duplicate dispute notes for the same finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        disputeNotes: [
+          { findingId: 'F-0001', reason: 'first note', evidence: 'src/a.ts:1' },
+          { findingId: 'F-0001', reason: 'second note', evidence: 'src/a.ts:2' },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('Duplicate dispute note');
+    }
+  });
+
   it('should reject a waiver when the prior response contains no claim for the finding', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),

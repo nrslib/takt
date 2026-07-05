@@ -112,10 +112,15 @@ function assertFindingIdsHaveSingleDecision(managerOutput: FindingManagerOutput)
     ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
     ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
   ]);
+  const seenDisputeIds = new Set<string>();
   for (const note of managerOutput.disputeNotes) {
     if (transitioned.has(note.findingId)) {
       throw new Error(`Cannot record a dispute on "${note.findingId}" because it also has a state transition in this output`);
     }
+    if (seenDisputeIds.has(note.findingId)) {
+      throw new Error(`Duplicate dispute note for finding "${note.findingId}"`);
+    }
+    seenDisputeIds.add(note.findingId);
   }
   for (const conflict of managerOutput.conflicts) {
     assertUniqueIds(conflict.findingIds, 'finding id');
@@ -397,6 +402,16 @@ function reconcileLedgerConflicts(input: {
 }
 
 export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): FindingLedger {
+  // 手組みの manager output（zod を経ない経路）でも新配列の欠落で落ちないよう
+  // 入口で正規化する。
+  input = {
+    ...input,
+    managerOutput: {
+      ...input.managerOutput,
+      waivedFindings: input.managerOutput.waivedFindings ?? [],
+      disputeNotes: input.managerOutput.disputeNotes ?? [],
+    },
+  };
   const validation = validateFindingManagerOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,

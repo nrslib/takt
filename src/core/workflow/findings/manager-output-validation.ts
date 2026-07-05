@@ -40,6 +40,16 @@ interface FindingDecisionRef {
 export function validateFindingManagerOutput(
   input: ValidateFindingManagerOutputInput,
 ): FindingManagerValidationResult {
+  // zod 経路は default([]) で補完されるが、手組みの manager output が渡る
+  // 経路も実在するため、入口で新配列の欠落を正規化する。
+  input = {
+    ...input,
+    managerOutput: {
+      ...input.managerOutput,
+      waivedFindings: input.managerOutput.waivedFindings ?? [],
+      disputeNotes: input.managerOutput.disputeNotes ?? [],
+    },
+  };
   const context: ValidationContext = {
     previousFindingsById: new Map(input.previousLedger.findings.map((finding) => [finding.id, finding])),
     previousConflictsById: new Map(input.previousLedger.conflicts.map((conflict) => [conflict.id, conflict])),
@@ -320,15 +330,23 @@ function validateFindingDecisionRefs(
     ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
     ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
   ]);
+  // disputeNotes は matches / conflicts との併存を意図的に許す（同ラウンドで
+  // 再観測されつつ異議が却下されるのは正常）。禁止するのは状態遷移との矛盾と、
+  // 同一 finding への重複記録のみ。
+  const seenDisputeIds = new Set<string>();
   const disputeErrors = managerOutput.disputeNotes.flatMap((note, index) => {
     const decision = `disputeNotes[${index}]`;
-    // 状態遷移と同時の dispute 記録は矛盾（不承認は open 維持が前提）
     const contradictionErrors = transitionedIds.has(note.findingId)
       ? [`Cannot record a dispute on "${note.findingId}" because it also has a state transition in this output (${decision})`]
       : [];
+    const duplicateErrors = seenDisputeIds.has(note.findingId)
+      ? [`Duplicate dispute note for finding "${note.findingId}" in ${decision}`]
+      : [];
+    seenDisputeIds.add(note.findingId);
     return [
       ...validateFindingDecision(note.findingId, decision, 'record a dispute on', ['open'], context),
       ...contradictionErrors,
+      ...duplicateErrors,
     ];
   });
 
