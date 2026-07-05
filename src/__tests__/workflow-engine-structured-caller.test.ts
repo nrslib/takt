@@ -822,6 +822,12 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'rate_limited',
           content: '',
           error: 'Rate limited by provider',
+          errorKind: 'rate_limit',
+          rateLimitInfo: {
+            provider: 'claude',
+            detectedAt: new Date('2026-06-13T00:00:02.000Z'),
+            source: 'sdk_error',
+          },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
       }
@@ -878,8 +884,11 @@ describe('WorkflowEngine structured caller defaults', () => {
       detectRuleIndex: () => -1,
     }).run();
 
-    // rate_limited が error に化けず、サブステップの応答として保持される
-    expect(result.stepOutputs.get('solo-review')?.status).toBe('rate_limited');
+    // rate_limited が error に化けず、メタデータごと保持される
+    const soloOutput = result.stepOutputs.get('solo-review');
+    expect(soloOutput?.status).toBe('rate_limited');
+    expect(soloOutput?.errorKind).toBe('rate_limit');
+    expect(soloOutput?.rateLimitInfo).toMatchObject({ provider: 'claude', source: 'sdk_error' });
   });
 
   it('parallel sub-step の phase 3 判定でも findings ガードが不成立なら採用せずフォールバックする', async () => {
