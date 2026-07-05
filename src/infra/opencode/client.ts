@@ -571,7 +571,11 @@ export class OpenCodeClient {
     // あるため、その失敗を検出したら format なし（手書き JSON + 下流の
     // 是正リトライ）へフォールバックする。
     let disableNativeStructuredOutput = false;
-    for (let attempt = 1; attempt <= OPENCODE_RETRY_MAX_ATTEMPTS; attempt++) {
+    // フォールバック（format なし再試行）は transient 再試行の予算とは別枠で
+    // 1回だけ確保する: 先行の transient エラーで予算を使い切っていても、
+    // 最終試行の format 失敗から救済できるようにする。
+    let maxAttempts = OPENCODE_RETRY_MAX_ATTEMPTS;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
       const timeoutMessage = `OpenCode stream timed out after ${Math.floor(OPENCODE_STREAM_IDLE_TIMEOUT_MS / 60000)} minutes of inactivity`;
@@ -1093,9 +1097,9 @@ export class OpenCodeClient {
             options.outputSchema !== undefined
             && !disableNativeStructuredOutput
             && message.toLowerCase().includes('did not produce structured output')
-            && attempt < OPENCODE_RETRY_MAX_ATTEMPTS
           ) {
             disableNativeStructuredOutput = true;
+            maxAttempts = Math.max(maxAttempts, attempt + 1);
             log.info('Native structured output failed; retrying without format', { agentType, attempt });
             await this.waitForRetryDelay(attempt, options.abortSignal);
             continue;

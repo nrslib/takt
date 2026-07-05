@@ -2354,9 +2354,69 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('done');
     expect(result.structuredOutput).toEqual({ rawFindings: [] });
-    // 1回目は format 付き、2回目（フォールバック）は format なし
+    // 1回目は format 付き、2回目（フォールバック）は format なし。追加の再試行はしない
+    expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
     expect(promptAsync.mock.calls[1]?.[0]).not.toHaveProperty('format');
+  });
+
+  it('should still fall back when the format failure lands on the last transient-budget attempt', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    // transient は promptAsync 例外経路（abortCause: prompt）でのみリトライされる
+    const emptyStream = () => new MockEventStream([]);
+    const formatFailureStream = new MockEventStream([
+      {
+        type: 'message.updated',
+        properties: {
+          info: { sessionID: 'session-budget', role: 'assistant', error: { name: 'StructuredOutputError', data: { message: 'Model did not produce structured output' } } },
+        },
+      },
+    ]);
+    const successStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
+          delta: 'report\n```json\n{"rawFindings": []}\n```',
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-budget' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: emptyStream() })
+      .mockResolvedValueOnce({ stream: emptyStream() })
+      .mockResolvedValueOnce({ stream: formatFailureStream })
+      .mockResolvedValueOnce({ stream: successStream });
+    const promptAsync = vi.fn()
+      .mockRejectedValueOnce(new Error('transport error'))
+      .mockRejectedValueOnce(new Error('transport error'))
+      .mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-budget' } }),
+          promptAsync,
+        },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    // transient 2回で基礎予算(3)の最終試行に format 失敗が来ても、別枠でフォールバックできる
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(promptAsync).toHaveBeenCalledTimes(4);
+    expect(promptAsync.mock.calls[3]?.[0]).not.toHaveProperty('format');
   });
 
   it('should pass the external_directory deny in the server config', async () => {
