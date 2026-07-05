@@ -129,6 +129,28 @@ describe('validateFindingManagerOutput', () => {
     }
   });
 
+  it('should reject a waiver when findingId only appears inside another entry note line', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        '- findingId: F-0002',
+        '  reason: external constraint',
+        '  evidence: src/b.ts:20',
+        '  note: findingId: F-0001 was fixed in src/a.ts:1',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
   it('should reject a waiver without file:line evidence', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
