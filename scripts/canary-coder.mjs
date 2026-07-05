@@ -77,9 +77,11 @@ try {
   const TOOL_ERROR_BUDGET = 5;
   if (!runCompleted || !artifactOk || toolErrors > TOOL_ERROR_BUDGET) {
     console.error(`canary FAILED (completed=${runCompleted}, artifact=${artifactOk}, toolErrors=${toolErrors} > budget ${TOOL_ERROR_BUDGET})`);
-    process.exit(1);
+    // process.exit は finally を飛ばすため、exitCode で自然終了させる
+    process.exitCode = 1;
+  } else {
+    console.log('canary OK');
   }
-  console.log('canary OK');
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }
