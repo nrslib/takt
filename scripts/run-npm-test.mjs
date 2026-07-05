@@ -190,15 +190,19 @@ async function runNpmCommand(npmArgs) {
 }
 
 export async function runNpmTest(args) {
-  for (const run of selectNpmTestRuns(args)) {
+  const runs = selectNpmTestRuns(args);
+  const results = await Promise.all(runs.map(async (run) => {
     const result = await runNpmCommand(run.npmArgs);
-    if (result.code !== 0) {
-      const suffix = result.signal ? ` signal=${result.signal}` : '';
-      console.error(`[takt] npm ${run.npmArgs.join(' ')} failed with exit=${result.code}${suffix}`);
-      return result.code;
-    }
+    return { run, result };
+  }));
+
+  const failed = results.filter(({ result }) => result.code !== 0);
+  for (const { run, result } of failed) {
+    const suffix = result.signal ? ` signal=${result.signal}` : '';
+    console.error(`[takt] npm ${run.npmArgs.join(' ')} failed with exit=${result.code}${suffix}`);
   }
-  return 0;
+
+  return failed[0]?.result.code ?? 0;
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
