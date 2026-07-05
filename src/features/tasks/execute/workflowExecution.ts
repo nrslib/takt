@@ -218,7 +218,7 @@ async function executeWorkflowInternal(
       rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
       providerOptions: options.providerOptions,
       autoRouting: bootstrap.effectiveWorkflowConfig.autoRouting,
-      autoStrategyOverride: options.autoStrategy,
+      autoStrategyOverride: bootstrap.autoStrategyOverride,
       providerOptionsSource: options.providerOptionsSource,
       providerOptionsOriginResolver: options.providerOptionsOriginResolver,
       personaProviders: options.personaProviders,

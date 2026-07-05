@@ -70,8 +70,7 @@ describe('createAutoRoutingAiRouter', () => {
     expect(persona).toBe('auto-router');
     expect(prompt).toContain('Workflow: child-workflow');
     expect(prompt).toContain('name: implement');
-    expect(prompt).not.toContain('instruction:');
-    expect(prompt).not.toContain('Implement API');
+    expect(prompt).toContain('instruction: Implement API');
     expect(options).toMatchObject({
       cwd: '/repo',
       provider: 'claude-sdk',
@@ -107,11 +106,97 @@ describe('createAutoRoutingAiRouter', () => {
     expect(candidates.get('b')?.name).toBe('review');
   });
 
-  it('Given AI returns an unknown candidate, When routing, Then the adapter returns undefined for resolver fallback', async () => {
+  it('Given AI returns an unknown candidate, When routing, Then the adapter rejects without echoing the raw candidate', async () => {
+    const rawCandidate = 'Authorization: Bearer sk-test';
     vi.mocked(runAgent).mockResolvedValue({
       persona: 'auto-router',
       status: 'done',
-      content: '{"selected_candidate":"missing"}',
+      content: JSON.stringify({ selected_candidate: rawCandidate }),
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-1',
+    });
+
+    try {
+      await router.routeStep(createAutoRoutingConfig(), {
+        name: 'unknown',
+        instruction: 'Unknown task',
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/unknown candidate/i);
+      expect((error as Error).message).not.toContain(rawCandidate);
+      return;
+    }
+    throw new Error('Expected auto routing to reject the unknown candidate');
+  });
+
+  it('Given AI returns an unexpected batch id, When routing, Then the adapter rejects without echoing the raw id', async () => {
+    const rawId = 'Authorization: Bearer sk-test';
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: JSON.stringify({
+        selections: [{ id: rawId, selected_candidate: 'coding' }],
+      }),
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-1',
+    });
+
+    try {
+      await router.routeBatch(createAutoRoutingConfig(), [
+        { id: 'a', name: 'implement', instruction: 'Implement' },
+        { id: 'b', name: 'review', instruction: 'Review' },
+      ]);
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/unexpected step/i);
+      expect((error as Error).message).not.toContain(rawId);
+      return;
+    }
+    throw new Error('Expected auto routing to reject the unexpected batch id');
+  });
+
+  it('Given AI router returns non-done content, When routing, Then the adapter rejects without echoing raw content', async () => {
+    const rawContent = 'Authorization: Bearer sk-test';
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'blocked',
+      content: rawContent,
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-1',
+    });
+
+    try {
+      await router.routeStep(createAutoRoutingConfig(), {
+        name: 'unknown',
+        instruction: 'Unknown task',
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/non-done status/i);
+      expect((error as Error).message).not.toContain(rawContent);
+      return;
+    }
+    throw new Error('Expected auto routing to reject the non-done router response');
+  });
+
+  it('Given AI omits the single selected_candidate, When routing one step, Then the adapter rejects before resolver fallback', async () => {
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{}',
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
     });
     const router = createAutoRoutingAiRouter({
@@ -123,7 +208,26 @@ describe('createAutoRoutingAiRouter', () => {
     await expect(router.routeStep(createAutoRoutingConfig(), {
       name: 'unknown',
       instruction: 'Unknown task',
-    })).resolves.toBeUndefined();
+    })).rejects.toThrow(/selected_candidate|selection/i);
+  });
+
+  it('Given AI omits a batch step selection, When routing multiple steps, Then the adapter rejects before partial default fallback', async () => {
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{"selections":[{"id":"a","selected_candidate":"coding"}]}',
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-1',
+    });
+
+    await expect(router.routeBatch(createAutoRoutingConfig(), [
+      { id: 'a', name: 'implement', instruction: 'Implement' },
+      { id: 'b', name: 'review', instruction: 'Review' },
+    ])).rejects.toThrow(/missing|selection|b/i);
   });
 
   it('Given the same run step and instruction are routed twice, When routeStep is called again, Then the router returns the cached candidate', async () => {
@@ -181,6 +285,82 @@ describe('createAutoRoutingAiRouter', () => {
     expect(first?.name).toBe('coding');
     expect(second?.name).toBe('review');
     expect(runAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('Given the same run step has different tags, When routeStep is called again, Then the router evaluates the new cache key', async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{"selected_candidate":"coding"}',
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    }).mockResolvedValueOnce({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{"selected_candidate":"review"}',
+      timestamp: new Date('2026-01-01T00:00:01.000Z'),
+    });
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-cache-metadata-boundary',
+    });
+
+    const first = await router.routeStep(createAutoRoutingConfig(), {
+      name: 'review',
+      tags: ['implementation'],
+      personaKey: 'coder',
+      instruction: 'Assess change',
+    });
+    const second = await router.routeStep(createAutoRoutingConfig(), {
+      name: 'review',
+      tags: ['quality'],
+      personaKey: 'coder',
+      instruction: 'Assess change',
+    });
+
+    expect(first?.name).toBe('coding');
+    expect(second?.name).toBe('review');
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('tags: implementation');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('tags: quality');
+  });
+
+  it('Given the same run step has a different persona, When routeStep is called again, Then the router evaluates the new cache key', async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{"selected_candidate":"coding"}',
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+    }).mockResolvedValueOnce({
+      persona: 'auto-router',
+      status: 'done',
+      content: '{"selected_candidate":"review"}',
+      timestamp: new Date('2026-01-01T00:00:01.000Z'),
+    });
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-cache-persona-boundary',
+    });
+
+    const first = await router.routeStep(createAutoRoutingConfig(), {
+      name: 'review',
+      tags: ['quality'],
+      personaKey: 'coder',
+      instruction: 'Assess change',
+    });
+    const second = await router.routeStep(createAutoRoutingConfig(), {
+      name: 'review',
+      tags: ['quality'],
+      personaKey: 'reviewer',
+      instruction: 'Assess change',
+    });
+
+    expect(first?.name).toBe('coding');
+    expect(second?.name).toBe('review');
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[1]).toContain('persona: coder');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('persona: reviewer');
   });
 
   it('Given a batch includes cached and uncached steps, When routeBatch is called again, Then only uncached steps are sent to the AI router', async () => {

@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
-import type { WorkflowCallStep, WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
@@ -32,6 +32,7 @@ import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/ut
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
 import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
 import { applyAutoRoutingStrategyOverride } from '../../../core/workflow/auto-routing/resolver.js';
+import { workflowUsesAutoProvider } from '../../../core/workflow/auto-routing/workflow-auto-provider.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { ensureWorktreeTaktGitignore } from '../../../infra/task/projectLocalTaktSync.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
@@ -46,96 +47,6 @@ import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.j
 const log = createLogger('workflow');
 
 type DisplayStreamEvent = Parameters<ReturnType<StreamDisplay['createHandler']>>[0];
-
-function stepUsesAutoProvider(step: WorkflowConfig['steps'][number]): boolean {
-  if (step.provider === 'auto') {
-    return true;
-  }
-  if (step.kind === 'workflow_call' && step.overrides?.provider === 'auto') {
-    return true;
-  }
-  return Array.isArray(step.parallel)
-    ? step.parallel.some((subStep) => subStep.provider === 'auto')
-    : false;
-}
-
-function resolveWorkflowCallChild(
-  workflowConfig: WorkflowConfig,
-  step: WorkflowCallStep,
-  projectCwd: string,
-  lookupCwd: string,
-  resolver: WorkflowExecutionOptions['workflowCallResolver'],
-): WorkflowConfig | undefined {
-  if (!resolver) {
-    return undefined;
-  }
-  const childWorkflow = resolver({
-    parentWorkflow: workflowConfig,
-    identifier: step.call,
-    stepName: step.name,
-    projectCwd,
-    lookupCwd,
-  });
-  return childWorkflow ?? undefined;
-}
-
-function workflowCallChildUsesAutoProvider(
-  workflowConfig: WorkflowConfig,
-  step: WorkflowConfig['steps'][number],
-  projectCwd: string,
-  lookupCwd: string,
-  resolver: WorkflowExecutionOptions['workflowCallResolver'],
-  visited: ReadonlySet<string>,
-): boolean {
-  if (step.kind !== 'workflow_call') {
-    return false;
-  }
-  const childWorkflow = resolveWorkflowCallChild(
-    workflowConfig,
-    step as WorkflowCallStep,
-    projectCwd,
-    lookupCwd,
-    resolver,
-  );
-  return childWorkflow !== undefined && workflowUsesAutoProvider(
-    childWorkflow,
-    childWorkflow.provider,
-    undefined,
-    projectCwd,
-    lookupCwd,
-    resolver,
-    visited,
-  );
-}
-
-function workflowUsesAutoProvider(
-  workflowConfig: WorkflowConfig,
-  effectiveProvider: WorkflowExecutionOptions['provider'],
-  cliProvider: WorkflowExecutionOptions['provider'],
-  projectCwd: string,
-  lookupCwd: string,
-  resolver: WorkflowExecutionOptions['workflowCallResolver'],
-  visited: ReadonlySet<string> = new Set(),
-): boolean {
-  if (visited.has(workflowConfig.name)) {
-    return false;
-  }
-  const nextVisited = new Set(visited);
-  nextVisited.add(workflowConfig.name);
-
-  return effectiveProvider === 'auto'
-    || workflowConfig.provider === 'auto'
-    || workflowConfig.steps.some(stepUsesAutoProvider)
-    || workflowConfig.steps.some((step) => workflowCallChildUsesAutoProvider(
-      workflowConfig,
-      step,
-      projectCwd,
-      lookupCwd,
-      resolver,
-      nextVisited,
-    ))
-    || cliProvider === 'auto';
-}
 
 export interface WorkflowExecutionBootstrap {
   interactiveUserInput: boolean;
@@ -163,6 +74,7 @@ export interface WorkflowExecutionBootstrap {
   configuredModel: string | undefined;
   configuredModelSource: ProviderResolutionSource;
   effectiveWorkflowConfig: WorkflowConfig;
+  autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   providerEventLogger: ReturnType<typeof createProviderEventLogger>;
   usageEventLogger: ReturnType<typeof createUsageEventLogger>;
   observability: ResolvedObservabilityConfig;
@@ -282,14 +194,14 @@ export async function createWorkflowExecutionBootstrap(
   if (!currentProvider) {
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
-  const autoStrategyApplies = workflowUsesAutoProvider(
+  const autoStrategyApplies = workflowUsesAutoProvider({
     workflowConfig,
-    currentProvider,
-    options.provider,
+    effectiveProvider: currentProvider,
+    cliProvider: options.provider,
     projectCwd,
-    cwd,
-    options.workflowCallResolver,
-  );
+    lookupCwd: cwd,
+    workflowCallResolver: options.workflowCallResolver,
+  });
   if (options.autoStrategy !== undefined && !autoStrategyApplies) {
     log.warn('--auto-strategy is ignored unless the effective provider is auto');
   }
@@ -311,6 +223,7 @@ export async function createWorkflowExecutionBootstrap(
   const resolvedAutoRouting = autoStrategyApplies
     ? applyAutoRoutingStrategyOverride(workflowConfig.autoRouting ?? globalConfig.autoRouting, options.autoStrategy)
     : workflowConfig.autoRouting ?? globalConfig.autoRouting;
+  const autoStrategyOverride = autoStrategyApplies ? options.autoStrategy : undefined;
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
     autoRouting: resolvedAutoRouting,
@@ -440,6 +353,7 @@ export async function createWorkflowExecutionBootstrap(
     configuredModel,
     configuredModelSource,
     effectiveWorkflowConfig,
+    autoStrategyOverride,
     providerEventLogger,
     usageEventLogger,
     observability: globalConfig.observability,

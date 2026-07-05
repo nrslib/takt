@@ -47,9 +47,8 @@ type ResolvedRunAgentOptions = RunAgentOptions & {
 
 function isAutoProviderOptionsSource(
   source: ProviderResolutionSource | undefined,
-): source is 'auto.rules' | 'auto.classifier' | 'auto.ai' | 'auto.default' {
+): source is 'auto.rules' | 'auto.ai' | 'auto.default' {
   return source === 'auto.rules'
-    || source === 'auto.classifier'
     || source === 'auto.ai'
     || source === 'auto.default';
 }

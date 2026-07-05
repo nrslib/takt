@@ -21,7 +21,6 @@ export type ProviderResolutionSource =
   | 'env'
   | 'promotion'
   | 'auto.rules'
-  | 'auto.classifier'
   | 'auto.ai'
   | 'auto.default'
   | 'cli'

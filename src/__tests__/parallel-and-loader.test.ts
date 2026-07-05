@@ -110,6 +110,29 @@ describe('ParallelSubStepRawSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('should reject workflow_call fields on parallel sub-step', () => {
+    const raw = {
+      name: 'delegate-review',
+      kind: 'workflow_call',
+      call: 'review-workflow',
+      instruction: 'Review',
+    };
+
+    const result = ParallelSubStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject workflow_call overrides on parallel sub-step', () => {
+    const raw = {
+      name: 'delegate-review',
+      overrides: { provider: 'auto' },
+      instruction: 'Review',
+    };
+
+    const result = ParallelSubStepRawSchema.safeParse(raw);
+    expect(result.success).toBe(false);
+  });
+
   it('should accept rules on sub-steps', () => {
     const raw = {
       name: 'reviewed',

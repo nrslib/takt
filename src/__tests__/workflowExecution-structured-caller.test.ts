@@ -880,6 +880,71 @@ steps:
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('mock');
   });
 
+  it('should not pass ignored autoStrategy override through to WorkflowEngine', async () => {
+    const autoRouting = {
+      strategy: 'cost',
+      router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+      candidates: [
+        {
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'codex',
+          model: 'gpt-5',
+          costTier: 'medium',
+        },
+      ],
+    } satisfies NonNullable<WorkflowConfig['autoRouting']>;
+    const config = {
+      ...makeConfig(),
+      autoRouting,
+    };
+
+    await executeWorkflow(config, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(autoRouting);
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBeUndefined();
+  });
+
+  it('should pass applied autoStrategy override through to WorkflowEngine', async () => {
+    const config = {
+      ...makeConfig(),
+      provider: 'auto',
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+        candidates: [
+          {
+            name: 'reasoning',
+            description: 'Reasoning',
+            provider: 'claude-sdk',
+            model: 'claude-opus-4-20250514',
+            costTier: 'high',
+          },
+          {
+            name: 'coding',
+            description: 'Implementation',
+            provider: 'codex',
+            model: 'gpt-5',
+            costTier: 'medium',
+          },
+        ],
+      },
+    } satisfies WorkflowConfig;
+
+    await executeWorkflow(config, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBe('performance');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(expect.objectContaining({
+      strategy: 'performance',
+    }));
+  });
+
   it('should avoid native structured output judge calls when the step provider override is unsupported', async () => {
     mockGetProvider.mockImplementation((provider: string) => ({
       supportsStructuredOutput: provider === 'claude',

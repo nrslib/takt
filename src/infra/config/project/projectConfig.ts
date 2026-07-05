@@ -27,6 +27,7 @@ import {
   normalizeRuntime,
   normalizeRateLimitFallback,
   normalizeAutoRoutingConfig,
+  denormalizeAutoRoutingConfig,
   denormalizeRateLimitFallback,
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
@@ -246,6 +247,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.telemetry;
   }
 
+  const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
+  if (rawAutoRouting) {
+    savePayload.auto_routing = rawAutoRouting;
+  } else {
+    delete savePayload.auto_routing;
+  }
+
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {
     savePayload.observability = rawObservability;
@@ -317,7 +325,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

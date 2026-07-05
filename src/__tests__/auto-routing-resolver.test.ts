@@ -243,19 +243,19 @@ describe('resolveAutoRoutingRuntime', () => {
       routeWithAi: vi.fn(),
     });
 
-	  expect(result?.providerInfo).toMatchObject({
-	    provider: 'codex',
-	    model: 'gpt-5-step-override',
-	    providerSource: 'auto.rules',
-	    modelSource: 'step',
-	    autoRoutingDecision: {
-	      candidateName: 'coding',
-	      costTier: 'medium',
-	      strategy: 'balanced',
-	      candidateCount: 3,
-	    },
-	  });
-	});
+    expect(result?.providerInfo).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5-step-override',
+      providerSource: 'auto.rules',
+      modelSource: 'step',
+      autoRoutingDecision: {
+        candidateName: 'coding',
+        costTier: 'medium',
+        strategy: 'balanced',
+        candidateCount: 3,
+      },
+    });
+  });
 
   it('Given AI routing fails and no rule matches, When resolving auto routing, Then it warns and uses the strategy default candidate', async () => {
     const warn = vi.fn();
@@ -278,7 +278,33 @@ describe('resolveAutoRoutingRuntime', () => {
         modelSource: 'auto.default',
       },
     });
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/router timeout|auto routing/i));
+    expect(warn).toHaveBeenCalledWith('Auto routing AI router failed; falling back to strategy default');
+  });
+
+  it('Given AI routing returns undefined and no rule matches, When resolving auto routing, Then it warns before strategy default fallback', async () => {
+    const warn = vi.fn();
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig({ strategy: 'cost', rules: {} }),
+      step: createStepMetadata({ name: 'unknown', tags: ['unknown'], personaKey: 'unknown' }),
+      currentProviderInfo: {
+        provider: undefined,
+        model: undefined,
+      },
+      routeWithAi: vi.fn().mockResolvedValue(undefined),
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith('Auto routing AI router failed; falling back to strategy default');
+    expect(result).toMatchObject({
+      providerInfo: {
+        provider: 'claude-sdk',
+        providerSource: 'auto.default',
+        autoRoutingDecision: {
+          candidateName: 'lightweight',
+          costTier: 'low',
+        },
+      },
+    });
   });
 
   it('Given no rule matches and AI routing selects a candidate, When resolving auto routing, Then the AI candidate is used', async () => {
@@ -302,6 +328,19 @@ describe('resolveAutoRoutingRuntime', () => {
         costTier: 'medium',
       },
     });
+  });
+
+  it('Given no rule matches and AI routing selects an incompatible provider for an existing model, When resolving runtime, Then validation fails fast', async () => {
+    await expect(resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig({ strategy: 'cost', rules: {} }),
+      step: createStepMetadata({ name: 'unknown', tags: ['unknown'], personaKey: 'unknown' }),
+      currentProviderInfo: {
+        provider: undefined,
+        model: 'sonnet',
+        modelSource: 'step',
+      },
+      routeWithAi: vi.fn().mockResolvedValue(createAutoRoutingConfig().candidates[1]),
+    })).rejects.toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
   });
 });
 
@@ -370,19 +409,19 @@ describe('resolveAutoRoutingBatch', () => {
       routeWithAi: vi.fn(),
     });
 
-	  expect(result.get('part-1')).toMatchObject({
-	    provider: 'codex',
-	    model: 'gpt-5-provider-routing',
-	    providerSource: 'auto.rules',
-	    modelSource: 'provider_routing.tags',
-	    autoRoutingDecision: {
-	      candidateName: 'coding',
-	      costTier: 'medium',
-	      strategy: 'balanced',
-	      candidateCount: 3,
-	    },
-	  });
-	});
+    expect(result.get('part-1')).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5-provider-routing',
+      providerSource: 'auto.rules',
+      modelSource: 'provider_routing.tags',
+      autoRoutingDecision: {
+        candidateName: 'coding',
+        costTier: 'medium',
+        strategy: 'balanced',
+        candidateCount: 3,
+      },
+    });
+  });
 
   it('Given batch auto routing selects a provider incompatible with a higher-priority part model, When resolving batch, Then validation fails fast', async () => {
     await expect(resolveAutoRoutingBatch({
@@ -432,96 +471,209 @@ describe('resolveAutoRoutingBatch', () => {
       provider: 'codex',
       providerSource: 'auto.ai',
     });
-	  expect(result.get('part-2')).toMatchObject({
-	    provider: 'claude-sdk',
-	    providerSource: 'auto.ai',
-	  });
-	});
-
-	it('Given batch AI routing rejects, When resolving a batch, Then all unresolved items warn and use the strategy default', async () => {
-	  const warn = vi.fn();
-	  const routeBatchWithAi = vi.fn().mockRejectedValue(new Error('batch router timeout'));
-
-	  const result = await resolveAutoRoutingBatch({
-	    autoRouting: createAutoRoutingConfig({ strategy: 'cost', rules: {} }),
-	    items: [
-	      {
-	        id: 'part-1',
-	        step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
-	        currentProviderInfo: { provider: undefined, model: undefined },
-	      },
-	      {
-	        id: 'part-2',
-	        step: createStepMetadata({ name: 'part-2', tags: ['unknown'] }),
-	        currentProviderInfo: { provider: undefined, model: undefined },
-	      },
-	    ],
-	    routeBatchWithAi,
-	    logger: { warn },
-	  });
-
-	  expect(routeBatchWithAi).toHaveBeenCalledTimes(1);
-	  expect(warn).toHaveBeenCalledWith(expect.stringMatching(/batch router timeout|auto routing/i));
-	  expect(result.get('part-1')).toMatchObject({
-	    provider: 'claude-sdk',
-	    model: 'claude-haiku-4-5-20251001',
-	    providerSource: 'auto.default',
-	    modelSource: 'auto.default',
-	    autoRoutingDecision: {
-	      candidateName: 'lightweight',
-	      costTier: 'low',
-	    },
-	  });
-	  expect(result.get('part-2')).toMatchObject({
-	    provider: 'claude-sdk',
-	    model: 'claude-haiku-4-5-20251001',
-	    providerSource: 'auto.default',
-	    modelSource: 'auto.default',
-	    autoRoutingDecision: {
-	      candidateName: 'lightweight',
-	      costTier: 'low',
-	    },
-	  });
-	});
-
-	it('Given batch AI routing omits an item, When resolving a batch, Then only the missing item uses the strategy default', async () => {
-	  const autoRouting = createAutoRoutingConfig({ strategy: 'cost', rules: {} });
-	  const routeBatchWithAi = vi.fn().mockResolvedValue(new Map([
-	    ['part-1', autoRouting.candidates[1]],
-	  ]));
-
-	  const result = await resolveAutoRoutingBatch({
-	    autoRouting,
-	    items: [
-	      {
-	        id: 'part-1',
-	        step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
-	        currentProviderInfo: { provider: undefined, model: undefined },
-	      },
-	      {
-	        id: 'part-2',
-	        step: createStepMetadata({ name: 'part-2', tags: ['unknown'] }),
-	        currentProviderInfo: { provider: undefined, model: undefined },
-	      },
-	    ],
-	    routeBatchWithAi,
-	  });
-
-	  expect(result.get('part-1')).toMatchObject({
-	    provider: 'codex',
-	    providerSource: 'auto.ai',
-	    autoRoutingDecision: {
-	      candidateName: 'coding',
-	      costTier: 'medium',
-	    },
-	  });
-	  expect(result.get('part-2')).toMatchObject({
-	    provider: 'claude-sdk',
-	    providerSource: 'auto.default',
-	    autoRoutingDecision: {
-	      candidateName: 'lightweight',
-	      costTier: 'low',
-	    },
-	  });
-	});
+    expect(result.get('part-2')).toMatchObject({
+      provider: 'claude-sdk',
+      providerSource: 'auto.ai',
+    });
   });
+
+  it('Given batch AI routing selects an incompatible provider for an existing model, When resolving a batch, Then validation fails fast', async () => {
+    const autoRouting = createAutoRoutingConfig({ strategy: 'cost', rules: {} });
+    const routeBatchWithAi = vi.fn().mockResolvedValue(new Map([
+      ['part-1', autoRouting.candidates[1]],
+    ]));
+
+    await expect(resolveAutoRoutingBatch({
+      autoRouting,
+      items: [
+        {
+          id: 'part-1',
+          step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
+          currentProviderInfo: {
+            provider: undefined,
+            model: 'sonnet',
+            modelSource: 'provider_routing.tags',
+          },
+        },
+      ],
+      routeBatchWithAi,
+    })).rejects.toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
+  });
+
+  it('Given per-item AI routing is used for a batch, When resolving unresolved items, Then all AI routes start before the first result is awaited', async () => {
+    const autoRouting = createAutoRoutingConfig({ rules: {} });
+    const startedSteps: string[] = [];
+    const resolvers: Array<() => void> = [];
+    const routeWithAi = vi.fn((_autoRouting, step) => new Promise<typeof autoRouting.candidates[number]>((resolve) => {
+      startedSteps.push(step.name);
+      resolvers.push(() => resolve(autoRouting.candidates[1]!));
+    }));
+
+    const resultPromise = resolveAutoRoutingBatch({
+      autoRouting,
+      items: [
+        {
+          id: 'part-1',
+          step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+        {
+          id: 'part-2',
+          step: createStepMetadata({ name: 'part-2', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+      ],
+      routeWithAi,
+    });
+
+    await Promise.resolve();
+    expect(startedSteps).toEqual(['part-1', 'part-2']);
+
+    for (const resolve of resolvers) {
+      resolve();
+    }
+    const result = await resultPromise;
+
+    expect(routeWithAi).toHaveBeenCalledTimes(2);
+    expect(result.get('part-1')?.providerSource).toBe('auto.ai');
+    expect(result.get('part-2')?.providerSource).toBe('auto.ai');
+  });
+
+  it('Given batch AI routing rejects, When resolving a batch, Then all unresolved items warn and use the strategy default', async () => {
+    const warn = vi.fn();
+    const routeBatchWithAi = vi.fn().mockRejectedValue(new Error('batch router timeout'));
+
+    const result = await resolveAutoRoutingBatch({
+      autoRouting: createAutoRoutingConfig({ strategy: 'cost', rules: {} }),
+      items: [
+        {
+          id: 'part-1',
+          step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+        {
+          id: 'part-2',
+          step: createStepMetadata({ name: 'part-2', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+      ],
+      routeBatchWithAi,
+      logger: { warn },
+    });
+
+    expect(routeBatchWithAi).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('Auto routing AI router failed; falling back to strategy default');
+    expect(result.get('part-1')).toMatchObject({
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+      providerSource: 'auto.default',
+      modelSource: 'auto.default',
+      autoRoutingDecision: {
+        candidateName: 'lightweight',
+        costTier: 'low',
+      },
+    });
+    expect(result.get('part-2')).toMatchObject({
+      provider: 'claude-sdk',
+      model: 'claude-haiku-4-5-20251001',
+      providerSource: 'auto.default',
+      modelSource: 'auto.default',
+      autoRoutingDecision: {
+        candidateName: 'lightweight',
+        costTier: 'low',
+      },
+    });
+  });
+
+  it('Given batch AI routing omits an item, When resolving a batch, Then the router failure is warned before strategy default fallback', async () => {
+    const autoRouting = createAutoRoutingConfig({ strategy: 'cost', rules: {} });
+    const routeBatchWithAi = vi.fn().mockResolvedValue(new Map([
+      ['part-1', autoRouting.candidates[1]],
+    ]));
+    const warn = vi.fn();
+
+    const result = await resolveAutoRoutingBatch({
+      autoRouting,
+      items: [
+        {
+          id: 'part-1',
+          step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+        {
+          id: 'part-2',
+          step: createStepMetadata({ name: 'part-2', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+      ],
+      routeBatchWithAi,
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith('Auto routing AI router failed; falling back to strategy default');
+    expect(result.get('part-1')).toMatchObject({
+      provider: 'claude-sdk',
+      providerSource: 'auto.default',
+      autoRoutingDecision: {
+        candidateName: 'lightweight',
+        costTier: 'low',
+      },
+    });
+    expect(result.get('part-2')).toMatchObject({
+      provider: 'claude-sdk',
+      providerSource: 'auto.default',
+      autoRoutingDecision: {
+        candidateName: 'lightweight',
+        costTier: 'low',
+      },
+    });
+  });
+
+  it('Given batch AI routing returns undefined selection, When resolving a batch, Then the router failure is warned before strategy default fallback', async () => {
+    const autoRouting = createAutoRoutingConfig({ strategy: 'cost', rules: {} });
+    const routeBatchWithAi = vi.fn().mockResolvedValue(new Map([
+      ['part-1', undefined],
+    ]));
+    const warn = vi.fn();
+
+    const result = await resolveAutoRoutingBatch({
+      autoRouting,
+      items: [
+        {
+          id: 'part-1',
+          step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+      ],
+      routeBatchWithAi,
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith('Auto routing AI router failed; falling back to strategy default');
+    expect(result.get('part-1')).toMatchObject({
+      provider: 'claude-sdk',
+      providerSource: 'auto.default',
+      autoRoutingDecision: {
+        candidateName: 'lightweight',
+        costTier: 'low',
+      },
+    });
+  });
+
+  it('Given AI routing throws a raw secret-like error, When resolving runtime, Then warning uses a fixed message before default fallback', async () => {
+    const rawMessage = 'Authorization: Bearer sk-test';
+    const warn = vi.fn();
+
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig({ strategy: 'cost', rules: {} }),
+      step: createStepMetadata({ name: 'unknown', tags: ['unknown'], personaKey: 'unknown' }),
+      currentProviderInfo: { provider: undefined, model: undefined },
+      routeWithAi: vi.fn().mockRejectedValue(new Error(rawMessage)),
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith('Auto routing AI router failed; falling back to strategy default');
+    expect(warn.mock.calls.flat().join('\n')).not.toContain(rawMessage);
+    expect(result?.providerInfo.providerSource).toBe('auto.default');
+  });
+});

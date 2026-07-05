@@ -104,7 +104,7 @@ export class TeamLeaderRunner {
       task,
       maxSteps,
     );
-    const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime, instruction);
+    const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
     const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
     const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
     const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(leaderStep, undefined, leaderRuntime);
@@ -417,7 +417,6 @@ export class TeamLeaderRunner {
   private async resolveLeaderAutoRouting(
     leaderStep: WorkflowStep,
     runtime: RuntimeStepResolution | undefined,
-    instruction: string,
   ): Promise<RuntimeStepResolution | undefined> {
     if (!this.deps.engineOptions.autoRouting || runtime?.fallback) {
       return runtime;
@@ -430,7 +429,7 @@ export class TeamLeaderRunner {
         name: leaderStep.name,
         tags: leaderStep.tags,
         personaKey: leaderStep.providerRoutingPersonaKey,
-        instruction,
+        instruction: leaderStep.instruction,
       },
       currentProviderInfo,
       routeWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeStep,
@@ -576,7 +575,6 @@ export class TeamLeaderRunner {
             name: partStep.name,
             tags: partStep.tags,
             personaKey: partStep.providerRoutingPersonaKey,
-            instruction: part.instruction,
           },
           currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModel(partStep, partResolutionRuntime),
         };

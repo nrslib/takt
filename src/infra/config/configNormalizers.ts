@@ -174,6 +174,37 @@ export function normalizeAutoRoutingConfig(
   };
 }
 
+export function denormalizeAutoRoutingConfig(
+  config: AutoRoutingConfig | undefined,
+): RawAutoRoutingConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+  return {
+    strategy: config.strategy,
+    router: {
+      provider: config.router.provider,
+      model: config.router.model,
+    },
+    candidates: config.candidates.map((candidate, index) => {
+      const path = `auto_routing.candidates[${index}]`;
+      const rawProviderOptions = denormalizeProviderOptions(candidate.providerOptions);
+      if (candidate.providerOptions !== undefined) {
+        assertNormalizedProviderOptions(path, rawProviderOptions);
+      }
+      return {
+        name: candidate.name,
+        description: candidate.description,
+        provider: candidate.provider,
+        model: candidate.model,
+        cost_tier: candidate.costTier,
+        ...(rawProviderOptions !== undefined ? { provider_options: rawProviderOptions } : {}),
+      };
+    }),
+    ...(config.rules !== undefined ? { rules: config.rules } : {}),
+  };
+}
+
 export function normalizeTelemetryConfig(
   raw: { routing_decisions?: boolean } | undefined,
 ): TelemetryConfig | undefined {

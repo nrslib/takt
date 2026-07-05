@@ -447,6 +447,48 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('effort: high');
   });
 
+  it('should preserve auto_routing when saveGlobalConfig is called with loaded config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'provider: auto',
+        'auto_routing:',
+        '  strategy: balanced',
+        '  router:',
+        '    provider: claude-sdk',
+        '    model: claude-haiku-4-5-20251001',
+        '  candidates:',
+        '    - name: coding',
+        '      description: Implementation and tests',
+        '      provider: codex',
+        '      model: gpt-5',
+        '      cost_tier: medium',
+        '      provider_options:',
+        '        codex:',
+        '          reasoning_effort: high',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const loaded = loadGlobalConfig();
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.autoRouting).toEqual(loaded.autoRouting);
+    const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
+    expect(raw).toContain('auto_routing:');
+    expect(raw).toContain('cost_tier: medium');
+    expect(raw).toContain('provider_options:');
+    expect(raw).toContain('reasoning_effort: high');
+    expect(raw).not.toContain('autoRouting:');
+    expect(raw).not.toContain('costTier:');
+    expect(raw).not.toContain('providerOptions:');
+  });
+
   it('should round-trip copilot global fields', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });

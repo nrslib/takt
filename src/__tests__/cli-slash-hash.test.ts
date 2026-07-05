@@ -158,7 +158,7 @@ describe('resolveAgentOverrides', () => {
     });
   });
 
-  it('returns auto strategy when provider is resolved from config', () => {
+  it('returns auto strategy override without adding provider or model overrides', () => {
     const program = {
       opts: () => ({ autoStrategy: 'cost' }),
     } as unknown as Command;

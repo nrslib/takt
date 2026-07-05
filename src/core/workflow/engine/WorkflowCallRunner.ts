@@ -28,6 +28,18 @@ import {
   type WorkflowCallExecutionResult,
 } from './WorkflowCallExecutor.js';
 
+function workflowCallOverrideModel(
+  overrides: WorkflowCallStep['overrides'],
+  inheritedModel: string | undefined,
+): string | undefined {
+  if (overrides?.model !== undefined) {
+    return overrides.model;
+  }
+  return overrides?.provider === undefined || overrides.provider === 'auto'
+    ? inheritedModel
+    : undefined;
+}
+
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
   getMaxSteps: () => WorkflowMaxSteps;
@@ -103,7 +115,7 @@ export class WorkflowCallRunner {
 
     return {
       provider: step.overrides.provider ?? childProviderInfo.provider,
-      model: step.overrides.model ?? (step.overrides.provider !== undefined ? undefined : childProviderInfo.model),
+      model: workflowCallOverrideModel(step.overrides, childProviderInfo.model),
     };
   }
 
@@ -111,9 +123,7 @@ export class WorkflowCallRunner {
     const parentProviderInfo = this.resolveParentWorkflowProviderContext();
     const workflowCallProviderModel = {
       provider: step.overrides?.provider ?? parentProviderInfo.provider,
-      model: step.overrides?.model ?? (
-        step.overrides?.provider !== undefined ? undefined : parentProviderInfo.model
-      ),
+      model: workflowCallOverrideModel(step.overrides, parentProviderInfo.model),
     };
     return {
       providerInfo: {

@@ -739,6 +739,46 @@ unexpected_overrides:
       expect(raw).not.toContain('allowedTools:');
     });
 
+    it('should save autoRouting as auto_routing with snake_case candidate keys', () => {
+      const config = {
+        autoRouting: {
+          strategy: 'balanced',
+          router: {
+            provider: 'claude-sdk',
+            model: 'claude-haiku-4-5-20251001',
+          },
+          candidates: [
+            {
+              name: 'coding',
+              description: 'Implementation and tests',
+              provider: 'codex',
+              model: 'gpt-5',
+              costTier: 'medium',
+              providerOptions: {
+                codex: {
+                  reasoningEffort: 'high',
+                },
+              },
+            },
+          ],
+        },
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).toContain('auto_routing:');
+      expect(raw).toContain('cost_tier: medium');
+      expect(raw).toContain('provider_options:');
+      expect(raw).toContain('reasoning_effort: high');
+      expect(raw).not.toContain('autoRouting:');
+      expect(raw).not.toContain('costTier:');
+      expect(raw).not.toContain('providerOptions:');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.autoRouting).toEqual(config.autoRouting);
+    });
+
     it('should save interactive preview count with canonical step key', () => {
       saveProjectConfig(testDir, {
         interactivePreviewSteps: 2,

@@ -210,6 +210,9 @@ export const TeamLeaderConfigRawSchema = z.object({
 /** Sub-step schema for parallel execution */
 export const ParallelSubStepRawSchema = z.object({
   name: z.string().min(1),
+  kind: z.never().optional(),
+  call: z.never().optional(),
+  overrides: z.never().optional(),
   session_key: z.string().trim().min(1).optional(),
   persona: z.string().optional(),
   persona_name: z.string().optional(),

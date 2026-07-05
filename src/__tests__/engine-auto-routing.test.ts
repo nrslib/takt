@@ -166,52 +166,103 @@ describe('WorkflowEngine auto routing integration', () => {
     });
     expect(routingEvents[0]?.[4]).toBe('normal');
     expect(typeof routingEvents[0]?.[5]).toBe('number');
-	  expect(routingEvents[0]?.[7]).toBe('auto-routing-normal');
-	});
+    expect(routingEvents[0]?.[7]).toBe('auto-routing-normal');
+  });
 
-	it('Given workflow-level autoRouting and direct engine options omit autoRouting, When a normal step runs, Then the engine uses the workflow-level config', async () => {
-	  const step = makeStep('implement', {
-	    tags: ['implementation'],
-	    providerRoutingPersonaKey: 'coder',
-	    rules: [makeRule('done', 'COMPLETE')],
-	  });
-	  const config: WorkflowConfig = {
-	    name: 'auto-routing-workflow-level',
-	    provider: 'auto',
-	    autoRouting: createAutoRoutingConfig(),
-	    initialStep: 'implement',
-	    maxSteps: 1,
-	    steps: [step],
-	  };
-	  const stepStarts: StepProviderInfo[] = [];
+  it('Given a normal step needs AI routing, When the router prompt is built, Then it receives raw step instruction only', async () => {
+    const step = makeStep('implement', {
+      instruction: 'Route using workflow instruction with {task} and {previous_response}',
+      providerRoutingPersonaKey: 'coder',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const autoRouting = {
+      ...createAutoRoutingConfig(),
+      rules: undefined,
+    };
+    const config: WorkflowConfig = {
+      name: 'auto-routing-normal-ai-raw-instruction',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [step],
+    };
 
-	  engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
-	    projectCwd: tmpDir,
-	    provider: 'auto',
-	    providerSource: 'cli',
-	  });
-	  engine.on('step:start', (_step, _iteration, _instruction, providerInfo) => {
-	    stepStarts.push(providerInfo);
-	  });
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      if (persona === 'auto-router') {
+        return makeResponse({
+          persona: 'auto-router',
+          content: '{"selected_candidate":"coding"}',
+        });
+      }
+      return makeResponse({ persona: step.persona, content: 'done' });
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
 
-	  mockRunAgentSequence([
-	    makeResponse({ persona: step.persona, content: 'done' }),
-	  ]);
-	  mockDetectMatchedRuleSequence([
-	    { index: 0, method: 'phase1_tag' },
-	  ]);
+    engine = new WorkflowEngine(
+      config,
+      tmpDir,
+      'SECRET_TASK_SHOULD_NOT_REACH_ROUTER',
+      createEngineOptions(tmpDir, { autoRouting }),
+    );
 
-	  const state = await engine.run();
+    const state = await engine.run();
+    const routerPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => persona === 'auto-router')?.[1];
 
-	  expect(state.status).toBe('completed');
-	  expect(stepStarts[0]).toMatchObject({
-	    provider: 'codex',
-	    model: 'gpt-5',
-	    providerSource: 'auto.rules',
-	    modelSource: 'auto.rules',
-	    autoRoutingDecision: { candidateName: 'coding' },
-	  });
-	});
+    expect(state.status).toBe('completed');
+    expect(routerPrompt).toContain('instruction: Route using workflow instruction with {task} and {previous_response}');
+    expect(routerPrompt).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
+    expect(routerPrompt).not.toContain('Previous Response');
+    expect(routerPrompt).not.toContain('Report Directory');
+  });
+
+  it('Given workflow-level autoRouting and direct engine options omit autoRouting, When a normal step runs, Then the engine uses the workflow-level config', async () => {
+    const step = makeStep('implement', {
+      tags: ['implementation'],
+      providerRoutingPersonaKey: 'coder',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'auto-routing-workflow-level',
+      provider: 'auto',
+      autoRouting: createAutoRoutingConfig(),
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [step],
+    };
+    const stepStarts: StepProviderInfo[] = [];
+
+    engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'auto',
+      providerSource: 'cli',
+    });
+    engine.on('step:start', (_step, _iteration, _instruction, providerInfo) => {
+      stepStarts.push(providerInfo);
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(stepStarts[0]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.rules',
+      modelSource: 'auto.rules',
+      autoRoutingDecision: { candidateName: 'coding' },
+    });
+  });
 
   it('Given direct engine strategy override requires a missing tier, When constructing the engine, Then validation fails fast', () => {
     const step = makeStep('implement', {
@@ -260,7 +311,7 @@ describe('WorkflowEngine auto routing integration', () => {
     await expect(engine.run()).rejects.toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
   });
 
-	it('Given a step explicitly sets provider, When engine provider is auto, Then explicit step provider still wins', async () => {
+  it('Given a step explicitly sets provider, When engine provider is auto, Then explicit step provider still wins', async () => {
     const step = makeStep('security-audit', {
       provider: 'claude-sdk',
       model: 'claude-opus-4-20250514',
@@ -321,14 +372,14 @@ describe('WorkflowEngine auto routing integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-	    expect(stepStarts[0]).toMatchObject({
-	      provider: 'codex',
-	      model: 'gpt-5-step-override',
-	      providerSource: 'auto.rules',
-	      modelSource: 'step',
-	      autoRoutingDecision: { candidateName: 'coding' },
-	    });
-	    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+    expect(stepStarts[0]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5-step-override',
+      providerSource: 'auto.rules',
+      modelSource: 'step',
+      autoRoutingDecision: { candidateName: 'coding' },
+    });
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5-step-override',
     });
@@ -414,14 +465,14 @@ describe('WorkflowEngine auto routing integration', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-	    expect(stepStarts[0]).toMatchObject({
-	      provider: 'codex',
-	      model: 'gpt-5-provider-routing',
-	      providerSource: 'auto.rules',
-	      modelSource: 'provider_routing.tags',
-	      autoRoutingDecision: { candidateName: 'coding' },
-	    });
-	    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+    expect(stepStarts[0]).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5-provider-routing',
+      providerSource: 'auto.rules',
+      modelSource: 'provider_routing.tags',
+      autoRoutingDecision: { candidateName: 'coding' },
+    });
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5-provider-routing',
     });

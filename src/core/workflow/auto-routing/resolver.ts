@@ -55,6 +55,8 @@ const STRATEGY_COST_TIER: Record<AutoRoutingStrategy, AutoRoutingCandidate['cost
   performance: 'high',
 };
 
+const AI_ROUTER_FAILURE_WARNING = 'Auto routing AI router failed; falling back to strategy default';
+
 export function validateAutoRoutingStrategyDefaultCandidate(autoRouting: AutoRoutingConfig): void {
   const requiredTier = STRATEGY_COST_TIER[autoRouting.strategy];
   if (autoRouting.candidates.some((item) => item.costTier === requiredTier)) {
@@ -85,6 +87,29 @@ function findCandidate(autoRouting: AutoRoutingConfig, name: string | undefined)
     return undefined;
   }
   return autoRouting.candidates.find((candidate) => candidate.name === name);
+}
+
+function validateBatchAiSelections(
+  aiCandidates: Map<string, AutoRoutingCandidate | undefined>,
+  aiItems: ResolveAutoRoutingBatchItem[],
+): void {
+  const missingIds = aiItems
+    .map((item) => item.id)
+    .filter((id) => !aiCandidates.has(id));
+
+  if (missingIds.length > 0) {
+    throw new Error(`Auto routing AI response is missing selection for batch item(s): ${missingIds.join(', ')}`);
+  }
+
+  const undefinedSelectionIds = aiItems
+    .map((item) => item.id)
+    .filter((id) => aiCandidates.get(id) === undefined);
+
+  if (undefinedSelectionIds.length > 0) {
+    throw new Error(
+      `Auto routing AI response has undefined selection for batch item(s): ${undefinedSelectionIds.join(', ')}`,
+    );
+  }
 }
 
 function collectProviderOptionsSources(
@@ -186,20 +211,26 @@ export async function resolveAutoRoutingRuntime(
     };
   }
 
-  try {
-    const aiCandidate = await input.routeWithAi?.(input.autoRouting, input.step);
-    if (aiCandidate !== undefined) {
-      return {
-        providerInfo: candidateToProviderInfo(
-          aiCandidate,
-          'auto.ai',
-          input.autoRouting,
-          input.currentProviderInfo,
-        ),
-      };
+  let aiCandidate: AutoRoutingCandidate | undefined;
+  if (input.routeWithAi !== undefined) {
+    try {
+      aiCandidate = await input.routeWithAi(input.autoRouting, input.step);
+      if (aiCandidate === undefined) {
+        input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
+      }
+    } catch {
+      input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
     }
-  } catch (error) {
-    input.logger?.warn(`Auto routing AI router failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (aiCandidate !== undefined) {
+    return {
+      providerInfo: candidateToProviderInfo(
+        aiCandidate,
+        'auto.ai',
+        input.autoRouting,
+        input.currentProviderInfo,
+      ),
+    };
   }
 
   const defaultCandidate = selectStrategyDefaultCandidate(input.autoRouting);
@@ -240,11 +271,18 @@ export async function resolveAutoRoutingBatch(
   }
 
   if (input.routeBatchWithAi !== undefined) {
+    let aiCandidates: Map<string, AutoRoutingCandidate | undefined> | undefined;
     try {
-      const aiCandidates = await input.routeBatchWithAi(
+      const batchAiCandidates = await input.routeBatchWithAi(
         input.autoRouting,
         aiItems.map((item) => ({ id: item.id, ...item.step })),
       );
+      validateBatchAiSelections(batchAiCandidates, aiItems);
+      aiCandidates = batchAiCandidates;
+    } catch {
+      input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
+    }
+    if (aiCandidates !== undefined) {
       for (const item of aiItems) {
         const aiCandidate = aiCandidates.get(item.id);
         if (aiCandidate !== undefined) {
@@ -254,21 +292,29 @@ export async function resolveAutoRoutingBatch(
           );
         }
       }
-    } catch (error) {
-      input.logger?.warn(`Auto routing AI router failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   } else {
-    for (const item of aiItems) {
-      try {
-        const aiCandidate = await input.routeWithAi?.(input.autoRouting, item.step);
-        if (aiCandidate !== undefined) {
-          result.set(
-            item.id,
-            candidateToProviderInfo(aiCandidate, 'auto.ai', input.autoRouting, item.currentProviderInfo),
-          );
+    const routedItems = await Promise.all(aiItems.map(async (item) => {
+      let aiCandidate: AutoRoutingCandidate | undefined;
+      if (input.routeWithAi !== undefined) {
+        try {
+          aiCandidate = await input.routeWithAi(input.autoRouting, item.step);
+          if (aiCandidate === undefined) {
+            input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
+          }
+        } catch {
+          input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
         }
-      } catch (error) {
-        input.logger?.warn(`Auto routing AI router failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return { item, aiCandidate };
+    }));
+
+    for (const { item, aiCandidate } of routedItems) {
+      if (aiCandidate !== undefined) {
+        result.set(
+          item.id,
+          candidateToProviderInfo(aiCandidate, 'auto.ai', input.autoRouting, item.currentProviderInfo),
+        );
       }
     }
   }

@@ -5,6 +5,7 @@ import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
+import { workflowStepUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -117,25 +118,14 @@ function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig
   }
 }
 
-function stepUsesAutoProvider(step: WorkflowConfig['steps'][number]): boolean {
-  if (step.provider === 'auto') {
-    return true;
-  }
-  if (step.kind === 'workflow_call' && step.overrides?.provider === 'auto') {
-    return true;
-  }
-  return Array.isArray(step.parallel)
-    ? step.parallel.some((subStep) => subStep.provider === 'auto')
-    : false;
-}
-
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
   }
+  const workflowProvider = options.provider ?? config.provider;
   if (
-    (options.provider === 'auto' || config.provider === 'auto' || config.steps.some(stepUsesAutoProvider))
+    (workflowProvider === 'auto' || config.steps.some(workflowStepUsesAutoProvider))
     && options.autoRouting === undefined
   ) {
     throw new Error('Configuration error: provider: auto requires auto_routing configuration');

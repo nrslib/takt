@@ -65,6 +65,7 @@ function formatStep(step: AutoRoutingAiStep): string {
     `name: ${step.name}`,
     `tags: ${(step.tags ?? []).join(', ')}`,
     `persona: ${step.personaKey ?? ''}`,
+    `instruction: ${step.instruction ?? ''}`,
   ].join('\n');
 }
 
@@ -95,10 +96,19 @@ function buildRoutingPrompt(
   ].join('\n');
 }
 
-function findCandidate(autoRouting: AutoRoutingConfig, name: unknown): AutoRoutingCandidate | undefined {
-  return typeof name === 'string'
-    ? autoRouting.candidates.find((candidate) => candidate.name === name)
-    : undefined;
+function findCandidate(
+  autoRouting: AutoRoutingConfig,
+  name: unknown,
+  context: string,
+): AutoRoutingCandidate {
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error(`Auto routing AI response is missing selected_candidate for ${context}`);
+  }
+  const candidate = autoRouting.candidates.find((item) => item.name === name);
+  if (candidate === undefined) {
+    throw new Error(`Auto routing AI response selected an unknown candidate for ${context}`);
+  }
+  return candidate;
 }
 
 function parseJsonObject(content: string): Record<string, unknown> {
@@ -126,18 +136,30 @@ function parseSelections(
     if (step === undefined) {
       throw new Error('Auto routing AI selection requires a step');
     }
-    result.set(step.id, findCandidate(autoRouting, response.selected_candidate));
+    result.set(step.id, findCandidate(autoRouting, response.selected_candidate, `step "${step.id}"`));
     return result;
   }
 
-  const selections = Array.isArray(response.selections) ? response.selections : [];
+  if (!Array.isArray(response.selections)) {
+    throw new Error('Auto routing AI response is missing selections for batch routing');
+  }
+  const selections = response.selections;
+  const expectedStepIds = new Set(steps.map((step) => step.id));
   for (const selection of selections) {
     if (typeof selection !== 'object' || selection === null) {
-      continue;
+      throw new Error('Auto routing AI response contains an invalid batch selection');
     }
     const entry = selection as Record<string, unknown>;
     if (typeof entry.id === 'string') {
-      result.set(entry.id, findCandidate(autoRouting, entry.selected_candidate));
+      if (!expectedStepIds.has(entry.id)) {
+        throw new Error('Auto routing AI response selected an unexpected step');
+      }
+      result.set(entry.id, findCandidate(autoRouting, entry.selected_candidate, `step "${entry.id}"`));
+    }
+  }
+  for (const step of steps) {
+    if (!result.has(step.id)) {
+      throw new Error(`Auto routing AI response is missing selection for step "${step.id}"`);
     }
   }
   return result;
@@ -147,8 +169,18 @@ function hashInstruction(instruction: string | undefined): string {
   return createHash('sha256').update(instruction ?? '').digest('hex');
 }
 
+function hashStepRoutingMetadata(step: AutoRoutingAiStep): string {
+  return createHash('sha256')
+    .update(JSON.stringify({
+      tags: step.tags ?? [],
+      personaKey: step.personaKey ?? '',
+      instruction: step.instruction ?? '',
+    }))
+    .digest('hex');
+}
+
 function createRoutingCacheKey(runId: string, step: AutoRoutingAiStep): string {
-  return [runId, step.name, hashInstruction(step.instruction)].join('\0');
+  return [runId, step.name, hashInstruction(step.instruction), hashStepRoutingMetadata(step)].join('\0');
 }
 
 async function runAutoRouterAgent(
@@ -218,7 +250,7 @@ export function createAutoRoutingAiRouter(options: AutoRoutingAiRouterOptions): 
     const prompt = buildRoutingPrompt(options.workflowName, autoRouting, uncachedSteps);
     const response = await runAutoRouterAgent(autoRouting, options, prompt);
     if (response.status !== 'done') {
-      throw new Error(response.error ?? response.content ?? 'Auto routing AI router failed');
+      throw new Error('Auto routing AI router returned a non-done status');
     }
 
     const parsed = response.structuredOutput ?? parseJsonObject(response.content);

@@ -96,7 +96,7 @@ async function resolveStepAutoRoutingRuntime(
   deps: WorkflowRunLoopDeps,
   step: WorkflowStep,
   runtime: RuntimeStepResolution | undefined,
-  instruction: string | undefined,
+  routingInstruction: string | undefined,
 ): Promise<RuntimeStepResolution | undefined> {
   if (
     !deps.options.autoRouting
@@ -115,7 +115,7 @@ async function resolveStepAutoRoutingRuntime(
       name: step.name,
       tags: step.tags,
       personaKey: step.providerRoutingPersonaKey,
-      instruction,
+      instruction: routingInstruction,
     },
     currentProviderInfo,
     routeWithAi: deps.options.autoRoutingAiRouter?.routeStep,
@@ -446,7 +446,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     const prebuiltInstruction = stepIteration !== undefined
       ? deps.buildInstruction(step, stepIteration)
       : undefined;
-    const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, prebuiltInstruction);
+    const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
     const stepInstruction = prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '';
@@ -673,7 +673,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   if (!isDelegated && stepIteration !== undefined) {
     prebuiltInstruction = deps.buildInstruction(step, stepIteration);
   }
-  const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, prebuiltInstruction);
+  const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
   const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
   const startedAt = Date.now();
   const result = await runWithStepSpan({

@@ -101,7 +101,7 @@ export interface StepProviderInfo {
   autoRoutingDecision?: {
     candidateName: string;
     costTier: 'high' | 'medium' | 'low';
-    strategy: 'cost' | 'balanced' | 'performance';
+    strategy: AutoRoutingStrategy;
     candidateCount: number;
   };
 }

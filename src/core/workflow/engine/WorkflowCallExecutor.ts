@@ -14,6 +14,7 @@ import type {
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
+import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import type {
   WorkflowAbortKind,
@@ -55,7 +56,7 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
 
       if (overrides.model !== undefined) {
         nextEntry.model = overrides.model;
-      } else if (overrides.provider === undefined && entry.model !== undefined) {
+      } else if (overrideProvider === undefined && entry.model !== undefined) {
         nextEntry.model = entry.model;
       }
       if (entry.providerOptions !== undefined) {
@@ -229,6 +230,16 @@ export class WorkflowCallExecutor {
     const options = this.deps.getOptions();
     const parentConfig = this.deps.getConfig();
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
+    const childAutoStrategyOverride = workflowUsesAutoProvider({
+      workflowConfig: request.childWorkflow,
+      effectiveProvider: request.childProviderInfo.provider,
+      cliProvider: undefined,
+      projectCwd: this.deps.projectCwd,
+      lookupCwd: this.deps.getCwd(),
+      workflowCallResolver: this.deps.resolveWorkflowCall,
+    })
+      ? options.autoStrategyOverride
+      : undefined;
     const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
@@ -241,8 +252,9 @@ export class WorkflowCallExecutor {
       ),
       autoRouting: applyAutoRoutingStrategyOverride(
         request.childWorkflow.autoRouting ?? options.autoRouting,
-        options.autoStrategyOverride,
+        childAutoStrategyOverride,
       ),
+      autoStrategyOverride: childAutoStrategyOverride,
       autoRoutingAiRouter: undefined,
       personaProviders: request.personaProviders,
       providerRouting: request.providerRouting,

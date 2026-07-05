@@ -5,7 +5,7 @@
  * and sets up the preAction hook for initialization.
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { resolve } from 'node:path';
 import {
   initGlobalDirs,
@@ -51,7 +51,8 @@ program
     '--provider <name>',
     'Override agent provider (auto|claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)',
   )
-  .option('--auto-strategy <strategy>', 'Auto routing strategy (cost|balanced|performance)')
+  .addOption(new Option('--auto-strategy <strategy>', 'Auto routing strategy (cost|balanced|performance)')
+    .choices(['cost', 'balanced', 'performance']))
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to issue reference)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')

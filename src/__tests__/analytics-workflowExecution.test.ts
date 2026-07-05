@@ -295,7 +295,7 @@ describe('routing_decision event assembly', () => {
     expect(parsed.phaseCount).toBe(3);
   });
 
-  it('does not write routing decisions when provider source is not an auto routing source', () => {
+  it('skips non-auto provider sources while still writing auto routing decisions', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
     const emitter = new AnalyticsEmitter('run-non-auto-source', 'mock', 'test-model', 'auto-workflow');
     const step = {
@@ -333,6 +333,33 @@ describe('routing_decision event assembly', () => {
     );
 
     expect(existsSync(join(routingEventsDir, '2026-02-18.jsonl'))).toBe(false);
+
+    emitter.onRoutingDecision(
+      step,
+      {
+        persona: 'coder',
+        status: 'done',
+        content: 'done',
+        timestamp: new Date('2026-02-18T10:00:06.000Z'),
+      },
+      'Implement API',
+      {
+        ...providerInfo,
+        providerSource: 'auto.rules',
+      },
+      'normal',
+      901,
+      4,
+      'auto-workflow',
+    );
+
+    const parsed = JSON.parse(readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8').trim()) as RoutingDecisionEvent;
+    expect(parsed).toMatchObject({
+      type: 'routing_decision',
+      stepName: 'implement',
+      resolutionSource: 'auto.rules',
+      selectedCategory: 'coding',
+    });
   });
 
   it('writes routing decisions when auto routing selects the provider and a higher-priority layer selects the model', () => {

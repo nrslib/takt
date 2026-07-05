@@ -184,6 +184,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
     : undefined;
   let result: InteractiveModeResult;
+  const assistantOverrideProvider = toConcreteProvider(agentOverrides?.provider);
 
   switch (selectedMode) {
     case 'assistant': {
@@ -192,16 +193,15 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         const { provider } = resolveAssistantProviderModelFromConfig(
           resolveAssistantConfigLayers(resolvedCwd),
           {
-            provider: toConcreteProvider(agentOverrides?.provider),
+            provider: assistantOverrideProvider,
             model: agentOverrides?.model,
           },
         );
-        const providerType = toConcreteProvider(provider);
-        if (!providerType) {
+        if (!provider) {
           throw new Error('Provider is not configured.');
         }
-        const savedSessions = loadPersonaSessions(resolvedCwd, providerType);
-        const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', providerType);
+        const savedSessions = loadPersonaSessions(resolvedCwd, provider);
+        const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', provider);
         if (savedSessionId) {
           selectedSessionId = savedSessionId;
         } else {
@@ -211,7 +211,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
       const assistantModeOptions = {
         ...interactiveOpts,
-        ...(toConcreteProvider(agentOverrides?.provider) ? { provider: toConcreteProvider(agentOverrides?.provider) } : {}),
+        ...(assistantOverrideProvider ? { provider: assistantOverrideProvider } : {}),
         ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
       };
       result = await interactiveMode(

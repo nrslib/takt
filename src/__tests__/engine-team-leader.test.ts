@@ -308,6 +308,64 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
   });
 
+  it('team leader の AI routing には raw instruction だけを渡し worker part instruction は渡さない', async () => {
+    const config = buildTeamLeaderConfig();
+    const autoRouting: AutoRoutingConfig = {
+      ...createAutoRoutingConfig(),
+      rules: undefined,
+    };
+    const routeStep = vi.fn().mockResolvedValue(autoRouting.candidates[0]);
+    const routeBatch = vi.fn(async (_autoRouting: AutoRoutingConfig, steps: Array<{ id: string; instruction?: string }>) =>
+      new Map(steps.map((step) => [step.id, autoRouting.candidates[0]])));
+    const engine = new WorkflowEngine(config, tmpDir, 'SECRET_TASK_SHOULD_NOT_REACH_ROUTER', {
+      projectCwd: tmpDir,
+      provider: 'auto',
+      autoRouting,
+      autoRoutingAiRouter: {
+        routeStep,
+        routeBatch,
+      },
+    });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement SECRET_TASK_SHOULD_NOT_REACH_ROUTER API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+    const routedStep = routeStep.mock.calls[0]?.[1];
+    const routedParts = routeBatch.mock.calls[0]?.[1];
+
+    expect(state.status).toBe('completed');
+    expect(routedStep).toMatchObject({
+      name: 'implement',
+      instruction: 'Task: {task}',
+    });
+    expect(routedStep?.instruction).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
+    expect(routedStep?.instruction).not.toContain('Previous Response');
+    expect(routedStep?.instruction).not.toContain('Report Directory');
+    expect(routedParts).toEqual([
+      expect.objectContaining({
+        id: 'part-1',
+        name: 'implement.part-1',
+      }),
+    ]);
+    expect(routedParts?.[0]?.instruction).toBeUndefined();
+    expect(JSON.stringify(routedParts)).not.toContain('SECRET_TASK_SHOULD_NOT_REACH_ROUTER');
+  });
+
   it('team leader worker の auto routing provider が part model と非互換なら worker 実行前に失敗する', async () => {
     const config = buildTeamLeaderConfig();
     const step = config.steps[0];
@@ -371,7 +429,10 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(abortReasons[0]).toMatch(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
+    expect(abortReasons[0]).toBe(
+      "Step execution failed: Configuration error: model 'sonnet' is a Claude model alias but provider is 'codex'. " +
+      "Either change the provider to 'claude-sdk' (or headless 'claude') or specify a codex-compatible model.",
+    );
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 

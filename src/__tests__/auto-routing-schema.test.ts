@@ -447,6 +447,92 @@ describe('auto_routing workflow schema', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(/auto_routing/);
   });
 
+  it('Given CLI concrete provider overrides workflow-level provider auto, When validating without autoRouting, Then validation accepts the effective provider', () => {
+    const workflow: WorkflowConfig = {
+      name: 'workflow-auto-overridden-by-cli',
+      provider: 'auto',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          personaDisplayName: 'coder',
+          provider: 'auto',
+          providerSpecified: false,
+          instruction: 'implement',
+          passPreviousResponse: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'mock',
+      providerSource: 'cli',
+    })).not.toThrow();
+  });
+
+  it('Given CLI concrete provider overrides inherited parallel provider auto, When validating without autoRouting, Then validation accepts the effective provider', () => {
+    const workflow: WorkflowConfig = {
+      name: 'parallel-workflow-auto-overridden-by-cli',
+      provider: 'auto',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [
+            {
+              name: 'coding-review',
+              persona: 'reviewer',
+              provider: 'auto',
+              providerSpecified: false,
+              instruction: 'review code',
+            },
+          ],
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'mock',
+      providerSource: 'cli',
+    })).not.toThrow();
+  });
+
+  it('Given explicit step-level provider auto and CLI concrete provider, When validating without autoRouting, Then validation fails fast', () => {
+    const workflow: WorkflowConfig = {
+      name: 'explicit-step-auto-with-cli-provider',
+      provider: 'auto',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          personaDisplayName: 'coder',
+          provider: 'auto',
+          providerSpecified: true,
+          instruction: 'implement',
+          passPreviousResponse: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'mock',
+      providerSource: 'cli',
+    })).toThrow(/auto_routing/);
+  });
+
   it('Given parallel sub-step provider auto without autoRouting, When validating workflow config, Then validation fails fast', () => {
     const workflow: WorkflowConfig = {
       name: 'missing-parallel-auto-routing',
