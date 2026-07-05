@@ -408,4 +408,6 @@ export interface OpenCodeCallOptions {
   opencodeApiKey?: string;
   interactionTimeoutMs?: number;
   childProcessEnv?: Readonly<Record<string, string>>;
+  /** JSON schema for native structured output (OpenCode format: json_schema). */
+  outputSchema?: Record<string, unknown>;
 }

@@ -11,6 +11,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
+import { parseLastJsonBlock } from '../../agents/structured-caller/shared.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
@@ -731,6 +732,11 @@ export class OpenCodeClient {
           ...(agentName !== undefined ? { agent: agentName } : {}),
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
+          // ネイティブ構造化出力: OpenCode がスキーマのキー構造を強制する
+          // （enum 等の値制約までは保証されないため、下流のスキーマ検証は維持）。
+          ...(options.outputSchema !== undefined
+            ? { format: { type: 'json_schema' as const, schema: options.outputSchema, retryCount: 2 } }
+            : {}),
           parts: [{ type: 'text' as const, text: prompt }],
         };
         const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];
@@ -748,6 +754,7 @@ export class OpenCodeClient {
 
         let content = '';
         let success = true;
+        let capturedStructuredOutput: Record<string, unknown> | undefined;
         let failureMessage = '';
         const state = createStreamTrackingState();
         const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
@@ -947,11 +954,15 @@ export class OpenCodeClient {
                 role?: 'assistant' | 'user';
                 time?: { completed?: number };
                 error?: unknown;
+                structured?: unknown;
               };
             };
             const info = messageProps.info;
             const isCurrentAssistantMessage = info?.sessionID === activeSessionId && info?.role === 'assistant';
             if (isCurrentAssistantMessage) {
+              if (info?.structured !== undefined && info.structured !== null && typeof info.structured === 'object' && !Array.isArray(info.structured)) {
+                capturedStructuredOutput = info.structured as Record<string, unknown>;
+              }
               const streamError = extractOpenCodeErrorMessage(info?.error);
               if (streamError) {
                 success = false;
@@ -969,11 +980,15 @@ export class OpenCodeClient {
                 sessionID?: string;
                 role?: 'assistant' | 'user';
                 error?: unknown;
+                structured?: unknown;
               };
             };
             const info = completedProps.info;
             const isCurrentAssistantMessage = info?.sessionID === activeSessionId && info?.role === 'assistant';
             if (isCurrentAssistantMessage) {
+              if (info?.structured !== undefined && info.structured !== null && typeof info.structured === 'object' && !Array.isArray(info.structured)) {
+                capturedStructuredOutput = info.structured as Record<string, unknown>;
+              }
               const streamError = extractOpenCodeErrorMessage(info?.error);
               if (streamError) {
                 success = false;
@@ -1090,12 +1105,26 @@ export class OpenCodeClient {
         const trimmed = content.trim();
         emitResult(options.onStream, true, trimmed, activeSessionId);
 
+        // format 要求時に structured がイベントで捕捉できなかった場合は、
+        // 本文の末尾 JSON をフォールバックとして採取する（検証は下流で行う）。
+        if (capturedStructuredOutput === undefined && options.outputSchema !== undefined) {
+          try {
+            const parsed = parseLastJsonBlock(trimmed);
+            if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+              capturedStructuredOutput = parsed as Record<string, unknown>;
+            }
+          } catch {
+            // フォールバック採取の失敗は無視する（下流の検証と是正リトライに委ねる）
+          }
+        }
+
         return {
           persona: agentType,
           status: 'done',
           content: trimmed,
           timestamp: new Date(),
           sessionId: activeSessionId,
+          ...(capturedStructuredOutput !== undefined ? { structuredOutput: capturedStructuredOutput } : {}),
         };
       } catch (error) {
         const message = getErrorMessage(error);

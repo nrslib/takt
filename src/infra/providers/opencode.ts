@@ -47,12 +47,13 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     onAskUserQuestion: options.onAskUserQuestion,
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),
     childProcessEnv: options.childProcessEnv,
+    outputSchema: options.outputSchema,
   };
 }
 
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
-  readonly supportsStructuredOutput = false;
+  readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null {

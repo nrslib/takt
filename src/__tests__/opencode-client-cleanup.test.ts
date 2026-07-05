@@ -2155,6 +2155,94 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.content).toContain('abort');
   });
 
+  it('should request native structured output and capture info.structured', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const stream = new MockEventStream([
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            sessionID: 'session-structured',
+            role: 'assistant',
+            structured: { rawFindings: [] },
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-structured' } },
+    ]);
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-structured' } }),
+          promptAsync,
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(promptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        format: { type: 'json_schema', schema, retryCount: 2 },
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('should fall back to the trailing JSON block when structured is not emitted', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'part-1',
+            type: 'text',
+            text: 'report text\n```json\n{"rawFindings": []}\n```',
+          },
+          delta: 'report text\n```json\n{"rawFindings": []}\n```',
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-fallback' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-fallback' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+  });
+
   it('should pass the external_directory deny in the server config', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
