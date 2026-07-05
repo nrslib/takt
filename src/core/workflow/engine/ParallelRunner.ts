@@ -39,7 +39,7 @@ import {
   type FindingManagerRunResult,
   runFindingManagerForParallelStep,
 } from '../findings/manager-runner.js';
-import { ledgerHasOpenFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 
 const log = createLogger('parallel-runner');
@@ -222,6 +222,7 @@ export class ParallelRunner {
                   ledgerSummary: this.renderFindingLedgerSummary(),
                   reportLedgerSummary: this.renderFindingLedgerReportSummary(),
                   hasOpenFindings: this.ledgerHasOpenFindings(),
+                  hasWaivedFindings: this.ledgerHasWaivedFindings(),
                   rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
                 }
               : undefined,
@@ -660,6 +661,13 @@ export class ParallelRunner {
       return false;
     }
     return ledgerHasOpenFindings(this.deps.findingLedgerStore.loadLedger());
+  }
+
+  private ledgerHasWaivedFindings(): boolean {
+    if (!this.deps.findingLedgerStore) {
+      return false;
+    }
+    return ledgerHasWaivedFindings(this.deps.findingLedgerStore.loadLedger());
   }
 
   private renderFindingLedgerSummary(): string {

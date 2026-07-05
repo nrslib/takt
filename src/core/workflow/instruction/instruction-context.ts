@@ -12,6 +12,8 @@ export interface FindingContractInstructionContext {
   reportLedgerSummary: string;
   /** Whether the ledger currently has open findings (computed from the ledger, not re-parsed from the summary). */
   hasOpenFindings: boolean;
+  /** Whether the ledger currently has waived findings. */
+  hasWaivedFindings: boolean;
   rawFindingsJsonSchema?: Record<string, unknown>;
 }
 

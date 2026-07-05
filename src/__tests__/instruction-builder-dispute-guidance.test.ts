@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
-import { ledgerHasOpenFindings } from '../core/workflow/findings/context.js';
+import { ledgerHasOpenFindings, ledgerHasWaivedFindings } from '../core/workflow/findings/context.js';
 import type { FindingLedger } from '../core/models/finding-types.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import type { WorkflowStep } from '../core/models/types.js';
@@ -15,7 +15,7 @@ function makeStep(): WorkflowStep {
   } as WorkflowStep;
 }
 
-function makeContext(options: { hasOpenFindings: boolean; rawFindingsJsonSchema?: Record<string, unknown> }): InstructionContext {
+function makeContext(options: { hasOpenFindings: boolean; hasWaivedFindings?: boolean; rawFindingsJsonSchema?: Record<string, unknown> }): InstructionContext {
   return {
     task: 'task',
     iteration: 1,
@@ -30,6 +30,7 @@ function makeContext(options: { hasOpenFindings: boolean; rawFindingsJsonSchema?
       ledgerSummary: '{}',
       reportLedgerSummary: '{}',
       hasOpenFindings: options.hasOpenFindings,
+      hasWaivedFindings: options.hasWaivedFindings ?? false,
       ...(options.rawFindingsJsonSchema !== undefined ? { rawFindingsJsonSchema: options.rawFindingsJsonSchema } : {}),
     },
   } as unknown as InstructionContext;
@@ -74,6 +75,35 @@ describe('dispute guidance injection', () => {
   });
 });
 
+describe('reviewer duty gating', () => {
+  it('should omit confirmation and waived duties for reviewers when the ledger is empty', () => {
+    const instruction = new InstructionBuilder(
+      makeStep(),
+      makeContext({ hasOpenFindings: false, rawFindingsJsonSchema: { type: 'object' } }),
+    ).build();
+
+    const section = extractFindingContractSection(instruction);
+    expect(section).toContain('kind "issue"');
+    expect(section).not.toContain('resolution_confirmation');
+    expect(section).not.toContain('waived');
+  });
+
+  it('should inject confirmation duties when open findings exist and waived duty only with waived findings', () => {
+    const withOpen = extractFindingContractSection(new InstructionBuilder(
+      makeStep(),
+      makeContext({ hasOpenFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
+    ).build());
+    expect(withOpen).toContain('resolution_confirmation');
+    expect(withOpen).not.toContain('listed as waived');
+
+    const withWaived = extractFindingContractSection(new InstructionBuilder(
+      makeStep(),
+      makeContext({ hasOpenFindings: true, hasWaivedFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
+    ).build());
+    expect(withWaived).toContain('listed as waived');
+  });
+});
+
 describe('ledgerHasOpenFindings', () => {
   function makeLedger(statuses: Array<'open' | 'resolved' | 'waived'>): FindingLedger {
     return {
@@ -107,5 +137,10 @@ describe('ledgerHasOpenFindings', () => {
 
   it('should be true when any finding is open', () => {
     expect(ledgerHasOpenFindings(makeLedger(['resolved', 'open', 'waived']))).toBe(true);
+  });
+
+  it('should detect waived findings independently', () => {
+    expect(ledgerHasWaivedFindings(makeLedger(['resolved', 'open']))).toBe(false);
+    expect(ledgerHasWaivedFindings(makeLedger(['waived']))).toBe(true);
   });
 });

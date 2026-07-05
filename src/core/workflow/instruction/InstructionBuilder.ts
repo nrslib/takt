@@ -245,13 +245,21 @@ export class InstructionBuilder {
     ];
 
     if (this.context.findingContract.rawFindingsJsonSchema) {
+      // 状態に該当しない指示は注入しない: 確認・再指摘系は open がある
+      // ラウンドだけ、waived 除外は waived が実在するときだけ。
       lines.push(
         '',
         '- Report every issue you observe as structured raw findings with kind "issue" (empty targetFindingId).',
-        '- Each round, verify the open ledger findings that fall within your review scope.',
-        '- When you have confirmed an open finding is fixed, report it as a raw finding with kind "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.',
-        '- Do not re-report an open finding that is still unfixed; report a new issue only if it regressed or changed.',
-        '- Do not re-report findings listed as waived in the ledger summary. If you observe that a waiver premise no longer holds, report that observation as a new issue citing the waived finding id.',
+        ...(this.context.findingContract.hasOpenFindings
+          ? [
+              '- Each round, verify the open ledger findings that fall within your review scope.',
+              '- When you have confirmed an open finding is fixed, report it as a raw finding with kind "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.',
+              '- Do not re-report an open finding that is still unfixed; report a new issue only if it regressed or changed.',
+            ]
+          : []),
+        ...(this.context.findingContract.hasWaivedFindings
+          ? ['- Do not re-report findings listed as waived in the ledger summary. If you observe that a waiver premise no longer holds, report that observation as a new issue citing the waived finding id.']
+          : []),
         '- Use rawFindingId values that are unique within this response.',
         '- Copy each Observed Findings family_tag value into the structured familyTag field.',
         '- Return structured output matching this raw findings schema:',

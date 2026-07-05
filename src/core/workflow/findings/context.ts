@@ -67,6 +67,11 @@ export function ledgerHasOpenFindings(ledger: FindingLedger): boolean {
   return ledger.findings.some((finding) => finding.status === 'open');
 }
 
+/** 台帳に waived な指摘が存在するか（waived 除外指示の注入判定に使う）。 */
+export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
+  return ledger.findings.some((finding) => finding.status === 'waived');
+}
+
 export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
