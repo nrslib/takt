@@ -2301,6 +2301,64 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   });
 
+  it('should fall back to formatless retry when the model does not produce structured output', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          {
+            type: 'message.updated',
+            properties: {
+              info: {
+                sessionID: 'session-fmt',
+                role: 'assistant',
+                error: { name: 'StructuredOutputError', data: { message: 'Model did not produce structured output' } },
+              },
+            },
+          },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
+              delta: 'report\n```json\n{"rawFindings": []}\n```'
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: 'session-fmt' } },
+        ]),
+      });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-fmt' } }),
+          promptAsync,
+        },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    // 1回目は format 付き、2回目（フォールバック）は format なし
+    expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
+    expect(promptAsync.mock.calls[1]?.[0]).not.toHaveProperty('format');
+  });
+
   it('should pass the external_directory deny in the server config', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
