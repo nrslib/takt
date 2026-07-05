@@ -1112,9 +1112,16 @@ export class OpenCodeClient {
             const parsed = parseLastJsonBlock(trimmed);
             if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
               capturedStructuredOutput = parsed as Record<string, unknown>;
+            } else {
+              log.debug('Structured output fallback found non-object JSON', { agentType });
             }
-          } catch {
-            // フォールバック採取の失敗は無視する（下流の検証と是正リトライに委ねる）
+          } catch (fallbackError) {
+            // フォールバック採取の失敗は握りつぶすが、調査用に痕跡は残す
+            // （下流の検証と是正リトライに委ねる）。
+            log.debug('Structured output fallback extraction failed', {
+              agentType,
+              error: getErrorMessage(fallbackError),
+            });
           }
         }
 
