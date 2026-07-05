@@ -62,6 +62,11 @@ export function renderFindingLedgerReportSummary(ledger: FindingLedger): string 
   }, null, 2);
 }
 
+/** 台帳に open な指摘が存在するか（異議申告ガイドの注入判定に使う）。 */
+export function ledgerHasOpenFindings(ledger: FindingLedger): boolean {
+  return ledger.findings.some((finding) => finding.status === 'open');
+}
+
 export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');

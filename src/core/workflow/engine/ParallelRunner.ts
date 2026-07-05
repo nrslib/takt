@@ -39,7 +39,7 @@ import {
   type FindingManagerRunResult,
   runFindingManagerForParallelStep,
 } from '../findings/manager-runner.js';
-import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { ledgerHasOpenFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 
 const log = createLogger('parallel-runner');
@@ -659,7 +659,7 @@ export class ParallelRunner {
     if (!this.deps.findingLedgerStore) {
       return false;
     }
-    return this.deps.findingLedgerStore.loadLedger().findings.some((finding) => finding.status === 'open');
+    return ledgerHasOpenFindings(this.deps.findingLedgerStore.loadLedger());
   }
 
   private renderFindingLedgerSummary(): string {

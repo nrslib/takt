@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { ledgerHasOpenFindings } from '../core/workflow/findings/context.js';
+import type { FindingLedger } from '../core/models/finding-types.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import type { WorkflowStep } from '../core/models/types.js';
 
@@ -69,5 +71,41 @@ describe('dispute guidance injection', () => {
     expect(section).toContain('raw findings schema');
     expect(section).not.toContain('Disputed Findings');
     expect(section).not.toContain('dispute claim');
+  });
+});
+
+describe('ledgerHasOpenFindings', () => {
+  function makeLedger(statuses: Array<'open' | 'resolved' | 'waived'>): FindingLedger {
+    return {
+      version: 1,
+      workflowName: 'w',
+      nextId: statuses.length + 1,
+      updatedAt: '2026-07-05T00:00:00.000Z',
+      rawFindings: [],
+      conflicts: [],
+      findings: statuses.map((status, index) => ({
+        id: `F-000${index + 1}`,
+        status,
+        lifecycle: status === 'open' ? 'new' : status,
+        severity: 'high',
+        title: `Finding ${index + 1}`,
+        reviewers: ['reviewer'],
+        rawFindingIds: [],
+        firstSeen: { runId: 'r', stepName: 's', timestamp: '2026-07-05T00:00:00.000Z' },
+        lastSeen: { runId: 'r', stepName: 's', timestamp: '2026-07-05T00:00:00.000Z' },
+      })),
+    };
+  }
+
+  it('should be false for an empty ledger', () => {
+    expect(ledgerHasOpenFindings(makeLedger([]))).toBe(false);
+  });
+
+  it('should be false when all findings are resolved or waived', () => {
+    expect(ledgerHasOpenFindings(makeLedger(['resolved', 'waived']))).toBe(false);
+  });
+
+  it('should be true when any finding is open', () => {
+    expect(ledgerHasOpenFindings(makeLedger(['resolved', 'open', 'waived']))).toBe(true);
   });
 });
