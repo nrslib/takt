@@ -18,7 +18,7 @@ import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
-import { isDeterministicCondition } from '../evaluation/rule-utils.js';
+import { findImmediateDeterministicMatch, isDeterministicCondition } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -421,6 +421,13 @@ export class ParallelRunner {
         // Phase 3 はルール番号を直接採用するため、ガード（findings 条件）を
         // ここで評価する。不成立なら採用せず、ガード対応済みの通常ルール
         // 評価へフォールバックする（StepExecutor 側と同じ扱い）。
+        // StepExecutor 側と同じく、採用前にエンジン所有の決定的条件を先行評価
+        const subPreemptIndex = subPhase3 !== undefined
+          ? findImmediateDeterministicMatch(subStep.rules, state, this.deps.getInteractive())
+          : -1;
+        if (subPhase3 !== undefined && subPreemptIndex !== -1) {
+          subPhase3 = { ...subPhase3, ruleIndex: subPreemptIndex, method: 'auto_select' };
+        }
         const subPhase3Rule = subPhase3 !== undefined ? subStep.rules?.[subPhase3.ruleIndex] : undefined;
         const subPhase3GuardFailed = (subPhase3Rule?.guardCondition !== undefined
           && !evaluateWhenExpression(subPhase3Rule.guardCondition, state))

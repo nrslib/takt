@@ -2,7 +2,8 @@
  * Shared rule utility functions used by both engine.ts and instruction-builder.ts.
  */
 
-import type { WorkflowStep, WorkflowRule, OutputContractEntry } from '../../models/types.js';
+import type { WorkflowState, WorkflowStep, WorkflowRule, OutputContractEntry } from '../../models/types.js';
+import { evaluateWhenExpression } from './when-evaluator.js';
 import { isEscapedQuote } from '../../models/workflow-condition-expression.js';
 
 const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect|findings)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
@@ -102,3 +103,30 @@ export function getJudgmentReportFiles(outputContracts: OutputContractEntry[] | 
     .filter((entry) => entry.useJudge !== false)
     .map((entry) => entry.name);
 }
+
+/**
+ * 即時決定的条件（findings.* 等、'true' の deferred を除く）を順に実状態で
+ * 評価し、最初に成立した rule index を返す。Phase 3 判定の採用前に
+ * エンジン所有の事実を先行させるための共有ヘルパ
+ * （RuleEvaluator.evaluateImmediateDeterministicConditions と同一規則）。
+ */
+export function findImmediateDeterministicMatch(
+  rules: readonly WorkflowRule[] | undefined,
+  state: WorkflowState,
+  interactive: boolean | undefined,
+): number {
+  if (!rules) return -1;
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    if (!rule) continue;
+    if (rule.interactiveOnly && interactive !== true) continue;
+    if (rule.isAiCondition || rule.isAggregateCondition) continue;
+    if (!isDeterministicCondition(rule.condition)) continue;
+    if (isDeferredDeterministicCondition(rule.condition)) continue;
+    if (evaluateWhenExpression(rule.condition, state)) {
+      return i;
+    }
+  }
+  return -1;
+}
+

@@ -680,6 +680,97 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.stepOutputs.has('fix')).toBe(true);
   });
 
+  it('真に成立している決定的ルールは phase 3 の approved 判定より先行して採用される', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'phase3-preempt-test',
+      nextId: 1,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [
+        {
+          id: 'C-TEST',
+          status: 'active',
+          findingIds: [],
+          rawFindingIds: [],
+          description: 'Reviewers disagree.',
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+    };
+
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"step"')) {
+        // 判定は approved(=1) を主張する
+        return {
+          persona: 'judge',
+          status: 'done',
+          content: '{"step": 1}',
+          structuredOutput: { step: 1 },
+          timestamp: new Date('2026-06-13T00:00:03.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'All good, approving.',
+        timestamp: new Date('2026-06-13T00:00:01.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'phase3-preempt-test',
+      maxSteps: 3,
+      initialStep: 'final-gate',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'final-gate',
+          persona: 'merge-readiness-reviewer',
+          instruction: 'Judge merge readiness.',
+          outputContracts: [{ name: 'merge-readiness-review.md', format: '# Merge Readiness Review' }],
+          rules: [
+            makeRule('approved', 'COMPLETE'),
+            makeRule('needs_fix', 'fix'),
+            makeRule('findings.conflicts.count > 0', 'ABORT'),
+          ],
+        }),
+        makeStep({
+          name: 'fix',
+          persona: 'coder',
+          instruction: 'Fix.',
+          rules: [makeRule('true', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    }).run();
+
+    // conflict が実在する以上、approved 判定でも ABORT が先行する
+    expect(result.status).toBe('aborted');
+  });
+
   it('parallel sub-step の構造化出力が壊れていたら同一セッションで1回是正して続行する', async () => {
     const initialLedger = {
       version: 1,

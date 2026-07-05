@@ -22,7 +22,7 @@ import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
-import { isDeterministicCondition } from '../evaluation/rule-utils.js';
+import { findImmediateDeterministicMatch, isDeterministicCondition } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
@@ -518,12 +518,25 @@ export class StepExecutor {
       // Phase 3 の判定はタグ/構造化出力からルール番号を直接採用するため、
       // ここでガード（findings 条件）を評価する。不成立なら採用せず、
       // ガード対応済みの通常ルール評価へフォールバックする。
+      // Phase 3 の採用前に、エンジン所有の決定的条件（findings.* 等）を
+      // 実状態で先行評価する。成立していれば判定結果より優先して採用する
+      // （判定は決定的ルールを選べないため、真に成立している ABORT 等が
+      // 判定成功時に素通りしないよう、ここで拾う）。
+      const preemptIndex = findImmediateDeterministicMatch(step.rules, state, this.deps.getInteractive());
+      if (preemptIndex !== -1) {
+        log.debug('Deterministic rule preempts phase 3 result', {
+          step: step.name,
+          preemptIndex,
+          judgedIndex: phase3Result.ruleIndex,
+        });
+        phase3Result = { ...phase3Result, ruleIndex: preemptIndex, method: 'auto_select' };
+      }
       const phase3Rule = step.rules?.[phase3Result.ruleIndex];
       if (
         (phase3Rule?.guardCondition !== undefined
           && !evaluateWhenExpression(phase3Rule.guardCondition, state))
-        // 決定的条件（findings.* 等）は選択候補から除外済みだが、万一
-        // 選ばれて返ってきても申告では成立させず、実状態で再評価する。
+        // 決定的条件は選択候補から除外済みだが、万一選ばれて返ってきても
+        // 申告では成立させず、実状態で再評価する。
         || (phase3Rule !== undefined
           && isDeterministicCondition(phase3Rule.condition)
           && !evaluateWhenExpression(phase3Rule.condition, state))

@@ -9,6 +9,7 @@
  */
 
 import type { WorkflowRule, Language } from '../../models/types.js';
+import { isDeterministicCondition } from '../evaluation/rule-utils.js';
 
 /** Components of the generated status rules */
 export interface StatusRulesComponents {
@@ -35,7 +36,10 @@ export function generateStatusRulesComponents(
   const interactiveEnabled = options?.interactive;
   const visibleRules = rules
     .map((rule, index) => ({ rule, index }))
-    .filter(({ rule }) => interactiveEnabled !== false || !rule.interactiveOnly);
+    .filter(({ rule }) => interactiveEnabled !== false || !rule.interactiveOnly)
+    // 決定的条件はエンジンが実状態から評価する（モデルに選ばせない）。
+    // 表示から除外しても原 index を保持するため番号はずれない。
+    .filter(({ rule }) => !isDeterministicCondition(rule.condition));
 
   // Build criteria table rows
   const headerNum = '#';
