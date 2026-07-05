@@ -191,6 +191,11 @@ export class RuleEvaluator {
     if (rule?.guardCondition !== undefined && !evaluateWhenExpression(rule.guardCondition, this.ctx.state)) {
       return -1;
     }
+    // 決定的条件のルールはタグ申告（[STEP:N]）でも成立させない。
+    // 実状態で偽なら不一致として扱い、決定的評価ステージに委ねる。
+    if (rule !== undefined && isDeterministicCondition(rule.condition) && !evaluateWhenExpression(rule.condition, this.ctx.state)) {
+      return -1;
+    }
 
     return ruleIndex;
   }

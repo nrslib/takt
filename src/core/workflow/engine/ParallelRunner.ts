@@ -18,6 +18,7 @@ import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
+import { isDeterministicCondition } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -421,8 +422,12 @@ export class ParallelRunner {
         // ここで評価する。不成立なら採用せず、ガード対応済みの通常ルール
         // 評価へフォールバックする（StepExecutor 側と同じ扱い）。
         const subPhase3Rule = subPhase3 !== undefined ? subStep.rules?.[subPhase3.ruleIndex] : undefined;
-        const subPhase3GuardFailed = subPhase3Rule?.guardCondition !== undefined
-          && !evaluateWhenExpression(subPhase3Rule.guardCondition, state);
+        const subPhase3GuardFailed = (subPhase3Rule?.guardCondition !== undefined
+          && !evaluateWhenExpression(subPhase3Rule.guardCondition, state))
+          // 決定的条件は申告では成立させない（StepExecutor 側と同じ防御）
+          || (subPhase3Rule !== undefined
+            && isDeterministicCondition(subPhase3Rule.condition)
+            && !evaluateWhenExpression(subPhase3Rule.condition, state));
         if (subPhase3GuardFailed && subPhase3 !== undefined) {
           log.debug('Phase 3 rule guard failed for sub-step; falling back to rule evaluation', {
             step: subStep.name,
