@@ -16,6 +16,7 @@ interface ReconcileFindingLedgerInput {
   rawFindings: RawFinding[];
   managerOutput: FindingManagerOutput;
   context: FindingReconcileContext;
+  priorStepResponseText?: string;
 }
 
 function formatFindingId(nextId: number): string {
@@ -105,6 +106,16 @@ function assertFindingIdsHaveSingleDecision(managerOutput: FindingManagerOutput)
   }
   for (const waived of managerOutput.waivedFindings) {
     markFindingIdDecision(usedFindingDecisions, waived.findingId, 'waive');
+  }
+  const transitioned = new Set([
+    ...managerOutput.waivedFindings.map((waived) => waived.findingId),
+    ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
+    ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
+  ]);
+  for (const note of managerOutput.disputeNotes) {
+    if (transitioned.has(note.findingId)) {
+      throw new Error(`Cannot record a dispute on "${note.findingId}" because it also has a state transition in this output`);
+    }
   }
   for (const conflict of managerOutput.conflicts) {
     assertUniqueIds(conflict.findingIds, 'finding id');
@@ -390,6 +401,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
     managerOutput: input.managerOutput,
+    priorStepResponseText: input.priorStepResponseText,
   });
   if (!validation.ok) {
     throw new Error(validation.errors.join('\n'));
@@ -515,6 +527,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
   for (const note of input.managerOutput.disputeNotes) {
     assertKnownFinding(knownFindingIds, note.findingId);
     const finding = updatedById.get(note.findingId)!;
+    assertFindingStatus(finding, 'open', 'record a dispute on');
     // 却下された異議は記録のみ: status は open のまま（ゲートを塞ぎ続ける）
     updatedById.set(note.findingId, {
       ...finding,

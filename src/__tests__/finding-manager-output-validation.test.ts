@@ -59,17 +59,69 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
   };
 }
 
+const CLAIM = '## Disputed Findings\n- findingId: F-0001\n  reason: frozen contract\n  evidence: src/types.ts:94';
+
 describe('validateFindingManagerOutput', () => {
-  it('should accept a waiver for an open non-critical finding', () => {
+  it('should accept a waiver backed by a dispute claim in the prior response', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
       rawFindings: [],
       managerOutput: makeManagerOutput({
         waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen public contract mandates Record', evidence: 'src/types.ts:94' }],
       }),
+      priorStepResponseText: CLAIM,
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it('should reject a waiver when the prior response contains no claim for the finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: 'All findings fixed.',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver without file:line evidence', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'because I said so' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('file:line evidence');
+    }
+  });
+
+  it('should reject a dispute note recorded alongside a state transition', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+        disputeNotes: [{ findingId: 'F-0001', reason: 'also disputed', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('state transition');
+    }
   });
 
   it('should reject waiving a critical finding', () => {
@@ -81,6 +133,7 @@ describe('validateFindingManagerOutput', () => {
       managerOutput: makeManagerOutput({
         waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
       }),
+      priorStepResponseText: CLAIM,
     });
 
     expect(result.ok).toBe(false);
@@ -98,6 +151,7 @@ describe('validateFindingManagerOutput', () => {
       managerOutput: makeManagerOutput({
         waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
       }),
+      priorStepResponseText: CLAIM,
     });
 
     expect(result.ok).toBe(false);
@@ -111,6 +165,7 @@ describe('validateFindingManagerOutput', () => {
         matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
         waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
       }),
+      priorStepResponseText: CLAIM,
     });
 
     expect(result.ok).toBe(false);

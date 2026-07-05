@@ -150,6 +150,8 @@ function buildManagerInputLedger(ledger: FindingLedger): unknown {
         .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined),
       firstSeen: finding.firstSeen,
       lastSeen: finding.lastSeen,
+      waivers: finding.waivers,
+      disputes: finding.disputes,
     })),
     conflicts: ledger.conflicts.map((conflict) => ({
       id: conflict.id,
@@ -179,7 +181,11 @@ function buildManagerInstruction(input: {
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),
     rawFindingsPath: input.rawFindingsPath,
     rawFindings: renderFencedJsonBlock(input.rawFindings),
-    coderResponse: input.priorStepResponseText ?? '(no prior step response)',
+    coderResponse: [
+      '`````text',
+      input.priorStepResponseText ?? '(no prior step response)',
+      '`````',
+    ].join('\n'),
   });
 }
 
@@ -247,6 +253,7 @@ async function runManagerWithSemanticRetry(input: {
   instruction: string;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  priorStepResponseText?: string;
 }): Promise<ValidatedManagerOutputRun> {
   const firstManagerOutput = await runManagerAttempt({
     managerStep: input.managerStep,
@@ -258,6 +265,7 @@ async function runManagerWithSemanticRetry(input: {
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
     managerOutput: firstManagerOutput,
+    priorStepResponseText: input.priorStepResponseText,
   });
   if (firstValidation.ok) {
     return { managerOutput: firstManagerOutput, validation: firstValidation, invalidAttempts: [] };
@@ -282,6 +290,7 @@ async function runManagerWithSemanticRetry(input: {
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
     managerOutput: retryManagerOutput,
+    priorStepResponseText: input.priorStepResponseText,
   });
 
   return {
@@ -333,6 +342,7 @@ export async function runFindingManagerForParallelStep(
     instruction,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
+    priorStepResponseText: input.priorStepResponseText,
   });
 
   if (!validation.ok) {
@@ -356,6 +366,7 @@ export async function runFindingManagerForParallelStep(
   }
 
   const nextLedger = reconcileFindingLedger({
+    priorStepResponseText: input.priorStepResponseText,
     previousLedger,
     rawFindings,
     managerOutput,

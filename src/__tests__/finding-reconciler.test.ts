@@ -88,6 +88,7 @@ describe('dispute/waiver transitions', () => {
       managerOutput: makeManagerOutput({
         waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen contract mandates Record', evidence: 'src/types.ts:94' }],
       }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/types.ts:94',
       context: makeContext(),
     });
 
@@ -144,6 +145,7 @@ describe('dispute/waiver transitions', () => {
       managerOutput: makeManagerOutput({
         waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
       }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/a.ts:1',
       context: makeContext(),
     })).toThrow('critical findings must stay open');
   });

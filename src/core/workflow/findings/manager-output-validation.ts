@@ -14,6 +14,8 @@ interface ValidateFindingManagerOutputInput {
   previousLedger: FindingLedger;
   rawFindings: RawFinding[];
   managerOutput: FindingManagerOutput;
+  /** Prior step response (coder's fix report); required source of dispute claims for waivers. */
+  priorStepResponseText?: string;
 }
 
 interface ValidationContext {
@@ -22,6 +24,7 @@ interface ValidationContext {
   currentRawFindingIds: ReadonlySet<string>;
   currentRawFindingsById: ReadonlyMap<string, RawFinding>;
   previousRawFindingsById: ReadonlyMap<string, RawFinding>;
+  priorStepResponseText?: string;
 }
 
 interface RawFindingDecisionRef {
@@ -43,6 +46,7 @@ export function validateFindingManagerOutput(
     currentRawFindingIds: new Set(input.rawFindings.map((finding) => finding.rawFindingId)),
     currentRawFindingsById: new Map(input.rawFindings.map((finding) => [finding.rawFindingId, finding])),
     previousRawFindingsById: new Map(input.previousLedger.rawFindings.map((finding) => [finding.rawFindingId, finding])),
+    priorStepResponseText: input.priorStepResponseText,
   };
   const errors = [
     ...validateRawFindingDecisionRefs(input.managerOutput, context),
@@ -259,11 +263,33 @@ function validateFindingDecisionRefs(
     const severityErrors = finding !== undefined && finding.severity === 'critical'
       ? [`Cannot waive finding "${waived.findingId}" because critical findings must stay open in ${decision}`]
       : [];
-    return [...statusErrors, ...severityErrors];
+    // waive は coder の明示的な異議申告が前提: 直前応答に対象 finding ID が
+    // 現れない waive は manager の発明として機械拒否する。
+    const claimErrors = context.priorStepResponseText === undefined
+      || !context.priorStepResponseText.includes(waived.findingId)
+      ? [`Cannot waive finding "${waived.findingId}" because the prior step response contains no dispute claim for it in ${decision}`]
+      : [];
+    const evidenceErrors = /:\d+/.test(waived.evidence)
+      ? []
+      : [`Waiver evidence for "${waived.findingId}" must cite file:line evidence in ${decision}`];
+    return [...statusErrors, ...severityErrors, ...claimErrors, ...evidenceErrors];
   });
-  const disputeErrors = managerOutput.disputeNotes.flatMap((note, index) => (
-    validateFindingDecision(note.findingId, `disputeNotes[${index}]`, 'record a dispute on', ['open'], context)
-  ));
+  const transitionedIds = new Set([
+    ...managerOutput.waivedFindings.map((waived) => waived.findingId),
+    ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
+    ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
+  ]);
+  const disputeErrors = managerOutput.disputeNotes.flatMap((note, index) => {
+    const decision = `disputeNotes[${index}]`;
+    // 状態遷移と同時の dispute 記録は矛盾（不承認は open 維持が前提）
+    const contradictionErrors = transitionedIds.has(note.findingId)
+      ? [`Cannot record a dispute on "${note.findingId}" because it also has a state transition in this output (${decision})`]
+      : [];
+    return [
+      ...validateFindingDecision(note.findingId, decision, 'record a dispute on', ['open'], context),
+      ...contradictionErrors,
+    ];
+  });
 
   return [
     ...matchErrors,
