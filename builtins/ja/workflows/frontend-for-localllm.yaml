@@ -19,6 +19,18 @@ workflow_config:
 loop_monitors:
   - cycle:
       - reviewers
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（指摘数が減少、修正が反映されている）
+          next: reviewers
+        - condition: 非生産的（同じ指摘が繰り返される）
+          next: ABORT
+  - cycle:
+      - reviewers
       - final-gate
       - fix
     threshold: 3

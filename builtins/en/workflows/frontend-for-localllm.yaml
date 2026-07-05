@@ -19,6 +19,18 @@ workflow_config:
 loop_monitors:
   - cycle:
       - reviewers
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: converging (findings decreasing, fixes applied)
+          next: reviewers
+        - condition: unproductive (same findings repeating)
+          next: ABORT
+  - cycle:
+      - reviewers
       - final-gate
       - fix
     threshold: 3

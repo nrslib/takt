@@ -25,10 +25,6 @@ Organized by category.
 | | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | | `default-high` | Full-spec development workflow. Test-first with team-leader implementation, AI antipattern review with arbitration, specialist peer review, merge-readiness gate, and supervision. plan → write_tests → team-leader draft → peer-review (specialists → merge-readiness → fix loop) → supervise → complete. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
-| | `frontend-for-localllm` | Frontend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
-| | `backend-for-localllm` | Backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
-| | `backend-cqrs-for-localllm` | CQRS+ES backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
-| | `dual-for-localllm` | Full-stack development workflow for local LLMs. Five parallel deep reviewers plus the Finding Contract. |
 | | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
 | | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
 | ⚡ Mini | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
@@ -67,12 +63,16 @@ Organized by category.
 | 🎵 TAKT Development | `takt-default` | TAKT development workflow: plan → write tests → draft (implement + AI self-review) → peer-review (specialists + merge-readiness + fix) → supervise → complete. |
 | | `takt-default-refresh-all` | All-step `session: refresh` comparison variant of the TAKT development workflow, intended to isolate conversation carry-over effects in Codex/Claude runs. |
 | | `takt-default-refresh-fast` | Refresh-optimized variant of the TAKT development workflow. Keeps reasoning effort and loop rules unchanged, and adds `session: refresh` only to context-heavy steps such as `write_tests`, `ai-antipattern-review-1st`, reviewer steps, and `fix`. |
-| | `takt-default-for-localllm` | TAKT development workflow for local LLMs. Four parallel deep reviewers (architecture / AI anti-pattern / coding / implementation semantics) plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally. |
 | | `takt-default-team-leader` | TAKT development workflow with team leader: plan → write tests → team-leader draft → peer-review (specialists + merge-readiness + fix) → supervise → complete. |
 | | `takt-default-with-fc` | Finding Contract-enabled TAKT development workflow: plan → write tests → draft (implement + AI self-review) → peer-review (specialists + merge-readiness + fix) → supervise → complete. Findings are tracked in a structured ledger with lifecycle states. |
 | | `review-fix-takt-default` | TAKT development code review + fix loop: gather → plan → tests → draft → peer-review (specialists + merge-readiness + fix) → supervise. |
 | | `deep-peer-review` | peer-review with an added implementation-semantics reviewer for deeper coverage. Specialist parallel reviewers ⇄ fix loop, followed by the parallel merge-readiness/supervise final gate. |
 | | `peer-review-with-fc` | Finding Contract-enabled peer review. Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) followed by merge-readiness review, with fix loop and findings-manager reconciliation. |
+| 🖥️ Local LLM | `takt-default-for-localllm` | TAKT development workflow for local LLMs. Four parallel deep reviewers (architecture / AI anti-pattern / coding / implementation semantics) plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally. |
+| | `frontend-for-localllm` | Frontend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
+| | `backend-for-localllm` | Backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
+| | `backend-cqrs-for-localllm` | CQRS+ES backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
+| | `dual-for-localllm` | Full-stack development workflow for local LLMs. Five parallel deep reviewers plus the Finding Contract. |
 | Others | `research` | Research workflow: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research workflow: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
