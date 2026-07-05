@@ -13,6 +13,8 @@ Choose collection and dictionary types that match the meaning of the data. In pa
 | Dynamic-key dictionaries use `Map`, or block the inheritance chain via `Object.create(null)` / `Object.hasOwn` | OK |
 | A plain object is used for a fixed, finite key set (e.g. a config object) | OK |
 
+Never flag a guarded `Record` as "should be a `Map`". Blocking the inheritance chain via `Object.hasOwn` / `Object.create(null)` is a complete mitigation, and continuing to use `Record` on top of it is not a design flaw. In particular, when a published contract (a frozen type definition) mandates `Record`, guarding is everything the implementation can do. The only reportable finding is a remaining unguarded access, and it must be cited with its location.
+
 ```typescript
 // REJECT - passing the ID "toString" reports it as present despite never being registered
 const reservations: Record<string, Reservation> = {};
