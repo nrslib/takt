@@ -227,6 +227,19 @@ export class InstructionBuilder {
     return [structureHeader, ...stepLines].join('\n');
   }
 
+  private hasOpenLedgerFindings(): boolean {
+    const summary = this.context.findingContract?.ledgerSummary;
+    if (summary === undefined) {
+      return false;
+    }
+    try {
+      const parsed = JSON.parse(summary) as { open?: unknown[] };
+      return Array.isArray(parsed.open) && parsed.open.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   private appendFindingContractInstruction(instructions: string): string {
     if (!this.context.findingContract) {
       return instructions;
@@ -257,7 +270,10 @@ export class InstructionBuilder {
         '- Return structured output matching this raw findings schema:',
         renderFencedJsonBlock(this.context.findingContract.rawFindingsJsonSchema),
       );
-    } else {
+    } else if (this.hasOpenLedgerFindings()) {
+      // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の
+      // 段階（初回 implement 等）では無意味であり、無関係なプロトコル文が
+      // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。
       lines.push(
         '',
         '- If an open finding is valid but cannot be fixed (frozen public contract, external constraint, deliberate trade-off), do NOT loop on it. State a dispute claim in your response under a "## Disputed Findings" heading, one entry per finding:',
