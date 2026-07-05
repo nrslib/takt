@@ -69,10 +69,10 @@ workflow_categories:
       - takt-default
       - takt-default-refresh-all
       - takt-default-refresh-fast
-      - takt-default-for-local-llm
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
+      - takt-default-for-local-llm
   🖥️ ローカルLLM:
     workflows:
       - takt-default-for-local-llm

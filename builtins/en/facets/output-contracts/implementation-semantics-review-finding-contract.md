@@ -18,3 +18,11 @@
 ## REJECT Criteria
 - REJECT only when at least one blocking finding exists
 ```
+
+**Cognitive-load rules:**
+- APPROVE -> summary only (within 5 lines)
+- REJECT -> only the relevant findings in the table (within 30 lines)
+
+**Cognitive-load rules:**
+- APPROVE -> summary only (within 5 lines)
+- REJECT -> only the relevant findings in the table (within 30 lines)
