@@ -2080,7 +2080,115 @@ describe('OpenCodeClient stream cleanup', () => {
     }, expect.any(Object));
   });
 
-  it('should reject OpenCode permission request when allowedTools is empty', async () => {
+  it('should fail instead of reporting success when the stream is aborted without throwing', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const abortController = new AbortController();
+    // Ends only when the stream abort signal fires (mirrors SSE behaviour):
+    // the loop then falls through without an exception and the post-loop
+    // guard must turn the aborted stream into an error, not a success.
+    const buildAbortEndingStream = (signal: AbortSignal) => {
+      let emitted = false;
+      return {
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+        next(): Promise<{ done: boolean; value?: unknown }> {
+          if (!emitted) {
+            emitted = true;
+            return Promise.resolve({
+              done: false,
+              value: {
+                type: 'permission.asked',
+                properties: {
+                  id: 'perm-stall',
+                  sessionID: 'session-stall',
+                  permission: 'read',
+                  patterns: ['**'],
+                  always: [],
+                },
+              },
+            });
+          }
+          return new Promise((resolve) => {
+            if (signal.aborted) {
+              resolve({ done: true });
+              return;
+            }
+            signal.addEventListener('abort', () => resolve({ done: true }), { once: true });
+          });
+        },
+        return: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+      };
+    };
+    const permissionReply = vi.fn().mockImplementation(() => {
+      // 最初の（そして唯一の）イベント処理後に外部 abort を発生させる
+      queueMicrotask(() => abortController.abort());
+      return Promise.resolve({ data: {} });
+    });
+    const subscribe = vi.fn().mockImplementation(
+      (_args: unknown, opts: { signal: AbortSignal }) =>
+        Promise.resolve({ stream: buildAbortEndingStream(opts.signal) }),
+    );
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-stall' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe },
+        permission: { reply: permissionReply },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      permissionMode: 'edit',
+      allowedTools: [],
+      abortSignal: abortController.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('abort');
+  });
+
+  it('should pass the external_directory deny in the server config', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-config-deny' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-config-deny' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    await client.call('coder', 'hello', { cwd: '/tmp', model: 'opencode/big-pickle' });
+
+    // Prompt-level tools maps rewrite session.permission on the server, so
+    // the out-of-workspace deny must live in the server config, which that
+    // rewrite does not touch.
+    expect(createOpencodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          permission: { external_directory: 'deny' },
+        }),
+      }),
+    );
+  });
+
+  it('should reject the permission but continue the call when allowedTools is empty', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       {
@@ -2125,8 +2233,10 @@ describe('OpenCodeClient stream cleanup', () => {
       onStream,
     });
 
-    expect(result.status).toBe('error');
-    expect(result.content).toContain('OpenCode permission rejected: read');
+    // A rejected permission is a per-tool failure: the call keeps consuming
+    // the stream and finishes normally on session.idle instead of aborting.
+    expect(result.status).not.toBe('error');
+    expect(result.error).toBeUndefined();
     expect(onStream).toHaveBeenCalledWith({
       type: 'permission_asked',
       data: {
@@ -2145,55 +2255,6 @@ describe('OpenCodeClient stream cleanup', () => {
     }, expect.any(Object));
   });
 
-  it('should fail fast after rejected permission when OpenCode does not emit idle', async () => {
-    const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const stream = new StallingEventStream({
-      type: 'permission.asked',
-      properties: {
-        id: 'perm-deny-no-idle',
-        sessionID: 'session-deny-no-idle',
-        permission: 'read',
-        patterns: ['**'],
-        always: [],
-      },
-    });
-
-    const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-deny-no-idle' } });
-    const subscribe = vi.fn().mockResolvedValue({ stream });
-    const permissionReply = vi.fn().mockResolvedValue({ data: {} });
-
-    createOpencodeMock.mockResolvedValue({
-      client: {
-        instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
-        event: { subscribe },
-        permission: { reply: permissionReply },
-      },
-      server: { close: vi.fn() },
-    });
-
-    const client = new OpenCodeClient();
-    const result = await Promise.race([
-      client.call('coder', 'hello', {
-        cwd: '/tmp',
-        model: 'opencode/big-pickle',
-        permissionMode: 'edit',
-        allowedTools: [],
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), 500)),
-    ]);
-
-    expect(result.status).toBe('error');
-    expect(result.content).toContain('OpenCode permission rejected: read');
-    expect(permissionReply).toHaveBeenCalledWith({
-      requestID: 'perm-deny-no-idle',
-      directory: '/tmp',
-      reply: 'reject',
-    }, expect.any(Object));
-    expect(stream.returnSpy).toHaveBeenCalled();
-  });
-
   it('should wait for rejected permission promptAsync settlement before releasing same config queue', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const firstPrompt = deferred();
@@ -2206,16 +2267,19 @@ describe('OpenCodeClient stream cleanup', () => {
     const permissionReply = vi.fn().mockResolvedValue({ data: {} });
     const subscribe = vi.fn()
       .mockResolvedValueOnce({
-        stream: new StallingEventStream({
-          type: 'permission.asked',
-          properties: {
-            id: 'perm-reject-before-queue',
-            sessionID: 'session-permission-reject',
-            permission: 'read',
-            patterns: ['**'],
-            always: [],
+        stream: new MockEventStream([
+          {
+            type: 'permission.asked',
+            properties: {
+              id: 'perm-reject-before-queue',
+              sessionID: 'session-permission-reject',
+              permission: 'read',
+              patterns: ['**'],
+              always: [],
+            },
           },
-        }),
+          { type: 'session.idle', properties: { sessionID: 'session-permission-reject' } },
+        ]),
       })
       .mockResolvedValueOnce({
         stream: new MockEventStream([
@@ -2256,8 +2320,8 @@ describe('OpenCodeClient stream cleanup', () => {
     firstPrompt.resolve();
 
     const [firstResult, secondResult] = await Promise.all([firstCall, secondCall]);
-    expect(firstResult.status).toBe('error');
-    expect(firstResult.content).toContain('OpenCode permission rejected: read');
+    expect(firstResult.status).not.toBe('error');
+    expect(firstResult.error).toBeUndefined();
     expect(secondResult.status).toBe('done');
     expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(promptAsync).toHaveBeenCalledTimes(2);

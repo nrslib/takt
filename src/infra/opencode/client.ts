@@ -176,6 +176,14 @@ async function createSharedServer(
       config: {
         model,
         small_model: model,
+        // Session-level permission rules are rewritten whenever a prompt
+        // carries a tools map (OpenCode materializes the map into
+        // session.permission), so session-scoped denies do not survive the
+        // first prompt. Server-config permission is outside that rewrite and
+        // is the only layer that reliably keeps out-of-workspace access a
+        // soft tool error instead of an ask (which would depend on the
+        // user's global OpenCode config).
+        permission: { external_directory: 'deny' },
         ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
         agent: {
           [TAKT_AGENT]: {
@@ -859,9 +867,15 @@ export class OpenCodeClient {
                   'OpenCode permission reply timed out',
                 );
                 if (reply === 'reject') {
-                  success = false;
-                  failureMessage = buildPermissionRejectedMessage(permProps.permission);
-                  break;
+                  // A rejected permission is a per-tool failure, not a fatal
+                  // one: OpenCode returns the rejection to the model as a tool
+                  // error and generation continues (verified against a live
+                  // server). Aborting here used to turn a single stray
+                  // out-of-workspace access into a whole-step failure.
+                  log.info(buildPermissionRejectedMessage(permProps.permission), {
+                    permission: permProps.permission,
+                    patterns: permProps.patterns,
+                  });
                 }
               } catch (e) {
                 success = false;
@@ -1022,6 +1036,16 @@ export class OpenCodeClient {
             }
             continue;
           }
+        }
+
+        // The idle watchdog and external aborts cancel the stream. If the
+        // iterator ends without throwing, the loop falls through with
+        // success still true - do not let a timed-out or aborted stream
+        // pass as a completed call (a stalled stream after a rejected
+        // permission would otherwise be reported as done).
+        if (success && streamAbortController.signal.aborted && (abortCause === 'timeout' || abortCause === 'external')) {
+          success = false;
+          failureMessage = abortCause === 'timeout' ? timeoutMessage : OPENCODE_STREAM_ABORTED_MESSAGE;
         }
 
         content = [...textContentParts.values()].join('\n');

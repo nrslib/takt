@@ -4,6 +4,68 @@ import {
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../../../core/models/workflow-condition-expression.js';
+import { isDeterministicCondition, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+
+function splitTopLevelPreservingEmpties(expression: string, separator: '&&'): string[] {
+  const parts: string[] = [];
+  let inString = false;
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < expression.length - 1; index++) {
+    const current = expression[index];
+    if (current === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString && current === '(') {
+      depth++;
+      continue;
+    }
+    if (!inString && current === ')') {
+      depth--;
+      continue;
+    }
+    if (!inString && depth === 0 && expression.slice(index, index + 2) === separator) {
+      parts.push(expression.slice(start, index).trim());
+      start = index + 2;
+      index++;
+    }
+  }
+  parts.push(expression.slice(start).trim());
+  return parts;
+}
+
+/**
+ * Split a plain compound condition "<tag text> && <findings guard>" into its
+ * tag-matching text and deterministic guard. The when-evaluator cannot parse
+ * bare status text as an operand, so compounds must be decomposed here.
+ * Returns undefined when the condition is not in that shape.
+ */
+export function splitTagFindingsCondition(condition: string): { tagText: string; guard: string } | undefined {
+  // 文字列リテラル・括弧内の && では分割しない（exists(...) 等を壊さない）。
+  // splitTopLevel は空 clause を除去するため、壊れた設定（"a && && b" 等）の
+  // fail-fast 用に空 clause を保持する分割をここで行う。
+  const clauses = splitTopLevelPreservingEmpties(condition, '&&');
+  if (clauses.length < 2 || clauses.some((clause) => clause.length === 0)) {
+    return undefined;
+  }
+  const [tagText, ...guardClauses] = clauses;
+  if (tagText === undefined) {
+    return undefined;
+  }
+  // 左辺が決定的条件（findings./structured./context. 等）なら分解しない:
+  // 複合全体を when-evaluator がそのまま評価できる。
+  if (isDeterministicCondition(tagText)) {
+    return undefined;
+  }
+  // ガード側は「全節が findings 条件」のときだけ分解する。1節でも散文が
+  // 混ざる場合（例: 日本語タグ文が && を含む）は分解せず、従来どおり
+  // 条件全体をタグ文として扱う。
+  if (!guardClauses.every((clause) => isFindingsCondition(clause))) {
+    return undefined;
+  }
+  return { tagText, guard: guardClauses.join(' && ') };
+}
 
 export function normalizeRule(rule: {
   condition?: string;
@@ -49,6 +111,19 @@ export function normalizeRule(rule: {
       ...(aggregateExpression.guardCondition !== undefined
         ? { aggregateGuardCondition: aggregateExpression.guardCondition }
         : {}),
+    };
+  }
+
+  const compound = splitTagFindingsCondition(condition);
+  if (compound) {
+    return {
+      condition: compound.tagText,
+      next,
+      returnValue: rule.return,
+      appendix: rule.appendix,
+      requiresUserInput: rule.requires_user_input,
+      interactiveOnly: rule.interactive_only,
+      guardCondition: compound.guard,
     };
   }
 

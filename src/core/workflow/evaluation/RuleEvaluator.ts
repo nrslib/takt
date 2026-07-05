@@ -169,7 +169,8 @@ export class RuleEvaluator {
         return false;
       }
       return isFindingsCondition(rule.condition)
-        || (rule.aggregateGuardCondition !== undefined && isFindingsCondition(rule.aggregateGuardCondition));
+        || (rule.aggregateGuardCondition !== undefined && isFindingsCondition(rule.aggregateGuardCondition))
+        || (rule.guardCondition !== undefined && isFindingsCondition(rule.guardCondition));
     }) === true;
   }
 
@@ -183,6 +184,11 @@ export class RuleEvaluator {
 
     const rule = this.step.rules[ruleIndex];
     if (rule?.interactiveOnly && !interactiveEnabled) {
+      return -1;
+    }
+    // タグは一致してもガード（findings 条件）が成立しない場合は
+    // このステージでは不一致として扱い、後続の検出ステージに委ねる。
+    if (rule?.guardCondition !== undefined && !evaluateWhenExpression(rule.guardCondition, this.ctx.state)) {
       return -1;
     }
 
@@ -314,6 +320,7 @@ export class RuleEvaluator {
     const judgeableRules = this.step.rules
       .map((rule, index) => ({ rule, index }))
       .filter(({ rule }) => !rule.isAggregateCondition && !isDeterministicCondition(rule.condition))
+      .filter(({ rule }) => rule.guardCondition === undefined || evaluateWhenExpression(rule.guardCondition, this.ctx.state))
       .filter(({ rule }) => this.ctx.interactive === true || !rule.interactiveOnly);
     const conditions = buildJudgeConditions(
       judgeableRules.map(({ rule }) => rule),

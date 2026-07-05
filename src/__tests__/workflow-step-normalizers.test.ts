@@ -154,3 +154,122 @@ describe('workflow step normalizer helpers', () => {
     });
   });
 });
+
+describe('normalizeRule tag-and-findings compound conditions', () => {
+  it('should split a tag condition with a findings guard', () => {
+    const normalized = normalizeRule({ condition: 'approved && findings.open.count == 0', next: 'COMPLETE' });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('findings.open.count == 0');
+    expect(normalized.isAggregateCondition).toBeUndefined();
+  });
+
+  it('should join multiple findings clauses into one guard', () => {
+    const normalized = normalizeRule({
+      condition: 'approved && findings.open.count == 0 && findings.conflicts.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('findings.open.count == 0 && findings.conflicts.count == 0');
+  });
+
+  it('should not split pure findings conditions', () => {
+    const normalized = normalizeRule({ condition: 'findings.open.count > 0', next: 'fix' });
+
+    expect(normalized.condition).toBe('findings.open.count > 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should not split plain tag conditions or non-findings compounds', () => {
+    expect(normalizeRule({ condition: 'approved', next: 'COMPLETE' }).guardCondition).toBeUndefined();
+    expect(normalizeRule({ condition: 'approved && rejected', next: 'COMPLETE' }).guardCondition).toBeUndefined();
+  });
+
+  it('should not split compounds whose left side is itself a deterministic condition', () => {
+    const normalized = normalizeRule({
+      condition: 'structured.status == "approved" && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('structured.status == "approved" && findings.open.count == 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should not split malformed compounds with empty clauses', () => {
+    const normalized = normalizeRule({
+      condition: 'approved && && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('approved && && findings.open.count == 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should not split prose tags containing && when any clause is not a findings condition', () => {
+    const normalized = normalizeRule({
+      condition: 'レビュー && 承認 && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('レビュー && 承認 && findings.open.count == 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should split guards containing top-level-protected && inside exists()', () => {
+    const normalized = normalizeRule({
+      condition: 'approved && exists(findings.open.items, item.severity == "high" && item.id == "F-0001")',
+      next: 'fix',
+    });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('exists(findings.open.items, item.severity == "high" && item.id == "F-0001")');
+  });
+
+  it('should keep aggregate guard splitting on the aggregate path', () => {
+    const normalized = normalizeRule({
+      condition: 'all("approved") && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+});
+
+describe('guarded compound rejection on unsupported paths', () => {
+  it('should reject tag-and-findings compounds on loop monitor judge rules', async () => {
+    const { normalizeLoopMonitors } = await import('../infra/config/loaders/workflowLoopMonitorNormalizer.js');
+
+    expect(() => normalizeLoopMonitors(
+      [
+        {
+          cycle: ['review', 'fix'],
+          threshold: 3,
+          judge: {
+            rules: [
+              { condition: '健全 && findings.open.count == 0', next: 'review' },
+            ],
+          },
+        },
+      ] as Parameters<typeof normalizeLoopMonitors>[0],
+      ...([undefined, undefined, undefined] as unknown as never[]),
+    )).toThrow('loop_monitor judge rule');
+  });
+
+  it('should reject findings guards on workflow_call rules', async () => {
+    const { validateWorkflowCallRulesAgainstChildReturns } = await import('../infra/config/loaders/workflowCallContracts.js');
+
+    expect(() => validateWorkflowCallRulesAgainstChildReturns(
+      {
+        kind: 'workflow_call',
+        name: 'final-gate',
+        call: 'merge-readiness-final-gate',
+        rules: [
+          { condition: 'COMPLETE', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
+        ],
+      } as Parameters<typeof validateWorkflowCallRulesAgainstChildReturns>[0],
+      { name: 'child', maxSteps: 1, initialStep: 'x', steps: [] } as Parameters<typeof validateWorkflowCallRulesAgainstChildReturns>[1],
+    )).toThrow('does not support findings guards');
+  });
+});

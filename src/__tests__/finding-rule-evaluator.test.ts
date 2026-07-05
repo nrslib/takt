@@ -280,3 +280,55 @@ describe('RuleEvaluator findings conditions', () => {
     expect(evaluateCondition).toHaveBeenCalledOnce();
   });
 });
+
+describe('RuleEvaluator guarded tag rules', () => {
+  const openFindings = {
+    open: {
+      count: 1,
+      bySeverity: { high: 1 },
+      items: [{ id: 'F-0001', severity: 'high', title: 'Blocks release' }],
+    },
+    resolved: { count: 0 },
+    conflicts: { count: 0, items: [] },
+  };
+  const noFindings = {
+    open: { count: 0, bySeverity: {}, items: [] },
+    resolved: { count: 1 },
+    conflicts: { count: 0, items: [] },
+  };
+
+  it('should accept a tag-matched rule when its findings guard holds', async () => {
+    const state = makeState(noFindings);
+    const step = makeStep({
+      name: 'final-gate',
+      rules: [
+        { condition: 'approved', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
+        { condition: 'needs_fix', next: 'fix' },
+      ],
+    });
+    const ctx = makeContext(state);
+    ctx.detectRuleIndex = vi.fn().mockReturnValue(0);
+
+    const result = await new RuleEvaluator(step, ctx).evaluate('', '[FINAL-GATE:1]');
+
+    expect(result).toEqual({ index: 0, method: 'phase3_tag' });
+  });
+
+  it('should skip a tag-matched rule whose findings guard fails and fall through to deterministic rules', async () => {
+    const state = makeState(openFindings);
+    const step = makeStep({
+      name: 'final-gate',
+      rules: [
+        { condition: 'approved', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
+        { condition: 'findings.open.count > 0', next: 'fix' },
+      ],
+    });
+    const ctx = makeContext(state);
+    ctx.detectRuleIndex = vi.fn().mockReturnValue(0);
+
+    const result = await new RuleEvaluator(step, ctx).evaluate('', '[FINAL-GATE:1]');
+
+    expect(result).toEqual({ index: 1, method: 'auto_select' });
+    expect(ctx.structuredCaller.evaluateCondition).not.toHaveBeenCalled();
+  });
+});

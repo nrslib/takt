@@ -13,7 +13,10 @@ function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   return isFindingsCondition(rule.condition)
     || ('aggregateGuardCondition' in rule
       && rule.aggregateGuardCondition !== undefined
-      && isFindingsCondition(rule.aggregateGuardCondition));
+      && isFindingsCondition(rule.aggregateGuardCondition))
+    || ('guardCondition' in rule
+      && rule.guardCondition !== undefined
+      && isFindingsCondition(rule.guardCondition));
 }
 
 function validateFindingsRuleContract(

@@ -140,15 +140,39 @@ function assertResolvedEvidenceRawFindings(input: {
   finding: FindingRecord;
   resolvedRawFindingIds: readonly string[];
   previousRawFindingsById: ReadonlyMap<string, RawFinding>;
+  currentRawFindingsById: ReadonlyMap<string, RawFinding>;
 }): void {
-  assertKnownRawFindings(new Set(input.finding.rawFindingIds), input.resolvedRawFindingIds);
+  let hasCurrentConfirmation = false;
   for (const rawFindingId of input.resolvedRawFindingIds) {
-    const rawFinding = input.previousRawFindingsById.get(rawFindingId);
-    if (rawFinding === undefined) {
+    const currentRawFinding = input.currentRawFindingsById.get(rawFindingId);
+    if (currentRawFinding !== undefined) {
+      if (currentRawFinding.kind !== 'resolution_confirmation') {
+        throw new Error(
+          `Resolved finding "${input.finding.id}" references current raw finding "${rawFindingId}" that is not a resolution_confirmation`,
+        );
+      }
+      if (currentRawFinding.targetFindingId !== input.finding.id) {
+        throw new Error(
+          `Resolution confirmation "${rawFindingId}" targets "${currentRawFinding.targetFindingId ?? '(none)'}" but was cited for "${input.finding.id}"`,
+        );
+      }
+      hasCurrentConfirmation = true;
+      continue;
+    }
+    if (!input.finding.rawFindingIds.includes(rawFindingId)) {
+      throw new Error(`Unknown raw finding id "${rawFindingId}"`);
+    }
+    if (input.previousRawFindingsById.get(rawFindingId) === undefined) {
       throw new Error(
         `Resolved finding "${input.finding.id}" references previous raw finding "${rawFindingId}" that is not in the ledger`,
       );
     }
+  }
+  // 解消には現在ラウンドの解消確認が必須（レビュアーの沈黙では解消させない）。
+  if (!hasCurrentConfirmation) {
+    throw new Error(
+      `Resolved finding "${input.finding.id}" requires at least one current resolution_confirmation raw finding targeting it`,
+    );
   }
 }
 
@@ -374,6 +398,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     finding,
   ]));
   const knownFindingIds = new Set(previousById.keys());
+  const currentRawFindingsById = new Map(input.rawFindings.map((finding) => [finding.rawFindingId, finding]));
   assertFindingIdsHaveSingleDecision(input.managerOutput);
   let nextId = input.previousLedger.nextId;
   const usedRawFindingIds = new Set<string>();
@@ -417,7 +442,12 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       finding,
       resolvedRawFindingIds: resolved.rawFindingIds,
       previousRawFindingsById,
+      currentRawFindingsById,
     });
+    markRawFindingIdsUsed(
+      usedRawFindingIds,
+      resolved.rawFindingIds.filter((rawFindingId) => currentRawFindingsById.has(rawFindingId)),
+    );
     updatedById.set(resolved.findingId, {
       ...finding,
       status: 'resolved',
@@ -485,6 +515,8 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
   });
 
   const unmentionedNewFindings = input.rawFindings
+    // 解消確認は問題の観測ではないため、未言及でも新規 finding にしない。
+    .filter((rawFinding) => rawFinding.kind !== 'resolution_confirmation')
     .filter((rawFinding) => !usedRawFindingIds.has(rawFinding.rawFindingId))
     .map((rawFinding) => {
       const id = formatFindingId(nextId);

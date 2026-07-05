@@ -58,6 +58,9 @@ export interface FindingLedger {
   conflicts: FindingLedgerConflict[];
 }
 
+export const RAW_FINDING_KINDS = ['issue', 'resolution_confirmation'] as const;
+export type RawFindingKind = typeof RAW_FINDING_KINDS[number];
+
 export interface RawFinding {
   rawFindingId: string;
   stepName: string;
@@ -68,6 +71,10 @@ export interface RawFinding {
   location?: string;
   description: string;
   suggestion?: string;
+  /** Omitted means 'issue' (backward compatible with pre-existing ledgers). */
+  kind?: RawFindingKind;
+  /** Ledger finding id this entry confirms as resolved (resolution_confirmation only). */
+  targetFindingId?: string;
 }
 
 export interface FindingManagerMatch {

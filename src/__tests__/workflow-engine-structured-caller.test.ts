@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -96,6 +96,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -573,6 +575,457 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 
+  it('phase 3 のタグ判定が選んだルールでも findings ガードが不成立なら採用せずフォールバックする', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'phase3-guard-test',
+      nextId: 2,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Unresolved issue',
+          reviewers: ['merge-readiness-review'],
+          rawFindingIds: ['raw-existing'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+      rawFindings: [
+        {
+          rawFindingId: 'raw-existing',
+          stepName: 'reviewers',
+          reviewer: 'merge-readiness-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Unresolved issue',
+          description: 'Still open in the ledger.',
+        },
+      ],
+      conflicts: [],
+    };
+
+    // 呼び出し順に依存しないモック: 判定ステージ（step スキーマ）だけ
+    // approved(=1) を返し、それ以外は素通しのテキストを返す。
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"step"')) {
+        return {
+          persona: 'judge',
+          status: 'done',
+          content: '{"step": 1}',
+          structuredOutput: { step: 1 },
+          timestamp: new Date('2026-06-13T00:00:03.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'Everything looks fine to me. Fixed where needed.',
+        timestamp: new Date('2026-06-13T00:00:01.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'phase3-guard-test',
+      maxSteps: 3,
+      initialStep: 'final-gate',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'final-gate',
+          persona: 'merge-readiness-reviewer',
+          instruction: 'Judge merge readiness.',
+          outputContracts: [{ name: 'merge-readiness-review.md', format: '# Merge Readiness Review' }],
+          rules: [
+            makeRule('approved', 'COMPLETE', { guardCondition: 'findings.open.count == 0' }),
+            makeRule('findings.open.count > 0', 'fix'),
+          ],
+        }),
+        makeStep({
+          name: 'fix',
+          persona: 'coder',
+          instruction: 'Fix.',
+          rules: [makeRule('true', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    const result = await engine.run();
+
+    // ガード不成立で approved は採用されず、決定的ルールで fix に流れて完走する
+    expect(result.status).toBe('completed');
+    expect(result.stepOutputs.has('fix')).toBe(true);
+  });
+
+  it('parallel sub-step の構造化出力が壊れていたら同一セッションで1回是正して続行する', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'structured-retry-test',
+      nextId: 1,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    };
+
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"matches"')) {
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: '{}',
+          structuredOutput: {
+            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:03.000Z'),
+        };
+      }
+      if (schemaText.includes('"rawFindings"')) {
+        reviewerCalls += 1;
+        if (reviewerCalls === 1) {
+          // 1回目: スキーマ違反（タイポキー）の構造化出力
+          return {
+            persona: 'reviewer',
+            status: 'done',
+            content: 'Review report body.',
+            structuredOutput: { rawFindings: [{ rawFindingId: 'raw-1', efamilyTag: 'bug' }] },
+            timestamp: new Date('2026-06-13T00:00:01.000Z'),
+          };
+        }
+        // 2回目（是正コール）: 正しい出力。是正では tools を絞り、
+        // Phase 1 のイベントコールバックを引き継がないことも検証する
+        expect(instruction).toContain('failed schema validation');
+        expect(options?.permissionMode).toBe('readonly');
+        expect(options?.allowedTools).toEqual([]);
+        expect(options?.onPromptResolved).toBeUndefined();
+        return {
+          persona: 'reviewer',
+          status: 'done',
+          content: '{"rawFindings": []}',
+          structuredOutput: { rawFindings: [] },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'ok',
+        timestamp: new Date('2026-06-13T00:00:04.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'structured-retry-test',
+      maxSteps: 2,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'solo-review',
+              persona: 'solo-reviewer',
+              instruction: 'Review.',
+              rules: [makeRule('true', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('findings.open.count == 0', 'COMPLETE'),
+            makeRule('invalid manager output', 'ABORT', { returnValue: 'needs_fix' }),
+          ],
+        }),
+      ],
+    };
+
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    }).run();
+
+    expect(result.status).toBe('completed');
+    expect(reviewerCalls).toBe(2);
+    // レポート本文は元の Phase 1 出力が維持される
+    expect(result.stepOutputs.get('solo-review')?.content).toBe('Review report body.');
+  });
+
+  it('是正コールが rate_limited を返したら error に潰さずそのまま伝播する', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'structured-retry-ratelimit-test',
+      nextId: 1,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    };
+
+    let reviewerCalls = 0;
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"rawFindings"')) {
+        reviewerCalls += 1;
+        if (reviewerCalls === 1) {
+          return {
+            persona: 'reviewer',
+            status: 'done',
+            content: 'Review report body.',
+            structuredOutput: { rawFindings: [{ rawFindingId: 'raw-1', efamilyTag: 'bug' }] },
+            timestamp: new Date('2026-06-13T00:00:01.000Z'),
+          };
+        }
+        return {
+          persona: 'reviewer',
+          status: 'rate_limited',
+          content: '',
+          error: 'Rate limited by provider',
+          errorKind: 'rate_limit',
+          rateLimitInfo: {
+            provider: 'claude',
+            detectedAt: new Date('2026-06-13T00:00:02.000Z'),
+            source: 'sdk_error',
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'ok',
+        timestamp: new Date('2026-06-13T00:00:04.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'structured-retry-ratelimit-test',
+      maxSteps: 2,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'solo-review',
+              persona: 'solo-reviewer',
+              instruction: 'Review.',
+              rules: [makeRule('true', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('findings.open.count == 0', 'COMPLETE'),
+            makeRule('invalid manager output', 'ABORT', { returnValue: 'needs_fix' }),
+          ],
+        }),
+      ],
+    };
+
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    }).run();
+
+    // rate_limited が error に化けず、メタデータごと保持される
+    const soloOutput = result.stepOutputs.get('solo-review');
+    expect(soloOutput?.status).toBe('rate_limited');
+    expect(soloOutput?.errorKind).toBe('rate_limit');
+    expect(soloOutput?.rateLimitInfo).toMatchObject({ provider: 'claude', source: 'sdk_error' });
+  });
+
+  it('parallel sub-step の phase 3 判定でも findings ガードが不成立なら採用せずフォールバックする', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'parallel-phase3-guard-test',
+      nextId: 2,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Unresolved issue',
+          reviewers: ['guarded-review'],
+          rawFindingIds: ['raw-existing'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+      rawFindings: [
+        {
+          rawFindingId: 'raw-existing',
+          stepName: 'reviewers',
+          reviewer: 'guarded-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Unresolved issue',
+          description: 'Still open in the ledger.',
+        },
+      ],
+      conflicts: [],
+    };
+
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"matches"')) {
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: '{}',
+          structuredOutput: {
+            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:03.000Z'),
+        };
+      }
+      if (schemaText.includes('"rawFindings"')) {
+        return {
+          persona: 'guarded-reviewer',
+          status: 'done',
+          content: 'Everything looks approved to me.',
+          structuredOutput: { rawFindings: [] },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      }
+      if (schemaText.includes('"step"')) {
+        // sub-step の phase 3 judge が approved(=1) を選ぶ
+        return {
+          persona: 'judge',
+          status: 'done',
+          content: '{"step": 1}',
+          structuredOutput: { step: 1 },
+          timestamp: new Date('2026-06-13T00:00:03.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'Everything looks fine to me. Fixed where needed.',
+        timestamp: new Date('2026-06-13T00:00:01.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'parallel-phase3-guard-test',
+      maxSteps: 3,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'guarded-review',
+              persona: 'guarded-reviewer',
+              instruction: 'Review with guard.',
+              outputContracts: [{ name: 'guarded-review.md', format: '# Guarded Review' }],
+              rules: [
+                makeRule('approved', 'COMPLETE', { guardCondition: 'findings.open.count == 0' }),
+                makeRule('findings.open.count > 0', 'fix'),
+              ],
+            }),
+          ],
+          rules: [
+            makeRule('findings.open.count > 0', 'fix'),
+            makeRule('all("approved")', 'COMPLETE'),
+          ],
+        }),
+        makeStep({
+          name: 'fix',
+          persona: 'coder',
+          instruction: 'Fix.',
+          rules: [makeRule('true', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    }).run();
+
+    expect(result.status).toBe('completed');
+    // sub-step は approved(guard 不成立) を採用せず、決定的ルール(index 1)へ落ちる
+    expect(result.stepOutputs.get('guarded-review')?.matchedRuleIndex).toBe(1);
+    expect(result.stepOutputs.has('fix')).toBe(true);
+  });
+
   it('parallel review 後に findings manager が raw findings を ledger へ反映してから親 rule を評価する', async () => {
     vi.mocked(runAgent)
       .mockImplementationOnce(async (_persona, instruction, options) => {
@@ -594,6 +1047,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -625,6 +1080,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -833,6 +1290,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -945,6 +1404,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1164,6 +1625,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1507,6 +1970,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Injected raw finding',
@@ -1716,6 +2181,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-current',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'prompt-injection',
                 severity: 'high',
                 title: 'Current issue',
@@ -1812,14 +2279,18 @@ describe('WorkflowEngine structured caller defaults', () => {
   });
 
   it('finding_contract の parallel reviewer は旧 findings キーを raw findings として扱わない', async () => {
-    vi.mocked(runAgent).mockResolvedValueOnce({
-      persona: 'architecture-reviewer',
-      status: 'done',
-      content: 'Architecture issue found.',
-      structuredOutput: {
-        findings: [],
-      },
-      timestamp: new Date('2026-06-13T00:00:01.000Z'),
+    // Phase 1 と是正コールの両方で、旧 findings キーの不正出力を返す
+    vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      return {
+        persona: 'architecture-reviewer',
+        status: 'done',
+        content: 'Architecture issue found.',
+        structuredOutput: {
+          findings: [],
+        },
+        timestamp: new Date('2026-06-13T00:00:01.000Z'),
+      };
     });
 
     const config: WorkflowConfig = {
@@ -1867,11 +2338,14 @@ describe('WorkflowEngine structured caller defaults', () => {
     }).run();
 
     expect(result.status).toBe('aborted');
+    // 是正リトライを1回挟んだうえで、なお不正なら失敗する
     expect(result.lastOutput?.error).toContain(
-      'Step "architecture-review" requires structured_output for provider "claude": $.findings is not allowed by the schema',
+      'structured output remained invalid after one correction',
     );
+    expect(result.lastOutput?.error).toContain('$.findings is not allowed by the schema');
     expect(existsSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw', 'test-report-dir.reviewers.json'))).toBe(false);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    // Phase 1 + 是正コールの2回
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
   it('finding_contract の通常 reviewer step には raw findings schema を注入しない', async () => {
@@ -1890,6 +2364,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawFindings: [
               {
                 rawFindingId: 'raw-normal-1',
+                kind: 'issue',
+                targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Normal step raw finding should not be collected',
@@ -1960,6 +2436,8 @@ describe('WorkflowEngine structured caller defaults', () => {
               rawFindings: [
                 {
                   rawFindingId: 'raw-architecture-1',
+                  kind: 'issue',
+                  targetFindingId: '',
                   familyTag: 'bug',
                   severity: 'high',
                   title: 'Rule evaluation ignores finding state',

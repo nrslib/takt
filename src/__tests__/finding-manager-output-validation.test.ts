@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
+import { parseRawFindings, parseReviewerRawFindings } from '../core/models/finding-schemas.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -101,6 +102,8 @@ describe('validateFindingManagerOutput', () => {
       ok: false,
       errors: [
         'Raw finding id "raw-existing" appears in multiple manager decisions: newFindings[0] and resolvedFindings[0]',
+        'Resolved finding "F-0001" references current raw finding "raw-existing" that is not a resolution_confirmation',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
       ],
     });
   });
@@ -146,6 +149,8 @@ describe('validateFindingManagerOutput', () => {
       ok: false,
       errors: [
         'Raw finding id "raw-existing" appears in multiple manager decisions: resolvedFindings[0] and resolvedFindings[1]',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+        'Resolved finding "F-0002" requires at least one current resolution_confirmation raw finding targeting it',
       ],
     });
   });
@@ -241,7 +246,98 @@ describe('validateFindingManagerOutput', () => {
 
     expect(result).toEqual({
       ok: false,
-      errors: ['Resolved finding "F-0001" references raw finding id "raw-other" that does not belong to the finding'],
+      errors: [
+        'Resolved finding "F-0001" references raw finding id "raw-other" that does not belong to the finding',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+      ],
+    });
+  });
+
+  it('should accept a resolution backed by a current resolution_confirmation raw finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+          title: 'Confirmed fixed',
+          description: 'Verified at src/index.ts:42 that the issue is resolved.',
+        }),
+      ],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'Verified at src/index.ts:42.' }],
+      }),
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('should reject a resolution citing a confirmation that targets a different finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0099',
+          title: 'Confirmed fixed',
+          description: 'Verified elsewhere.',
+        }),
+      ],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'Verified.' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Resolution confirmation "raw-confirm" targets "F-0099" but was cited for "F-0001"',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+      ],
+    });
+  });
+
+  it('should reject a resolution confirmation cited as issue evidence', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+          title: 'Confirmed fixed',
+          description: 'Verified at src/index.ts:42.',
+        }),
+      ],
+      managerOutput: makeManagerOutput({
+        newFindings: [{ rawFindingIds: ['raw-confirm'], title: 'Fake issue', severity: 'high' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Resolution confirmation "raw-confirm" cannot be cited as issue evidence in newFindings[0]',
+      ],
+    });
+  });
+
+  it('should reject a silence-based resolution citing only previous ledger raw findings', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-existing'], evidence: 'No longer reported.' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+      ],
     });
   });
 
@@ -297,5 +393,60 @@ describe('validateFindingManagerOutput', () => {
         'Cannot create a new finding from raw findings with different familyTag values: "bug" and "security" (newFindings[0])',
       ],
     });
+  });
+});
+
+describe('finding-schemas backward compatibility', () => {
+  it('should parse pre-existing raw findings without kind or targetFindingId', () => {
+    const parsed = parseRawFindings([
+      {
+        rawFindingId: 'raw-old',
+        stepName: 'arch-review',
+        reviewer: 'arch-review',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Old entry',
+        description: 'Stored before the kind field existed.',
+      },
+    ]);
+
+    expect(parsed[0]?.kind).toBeUndefined();
+    expect(parsed[0]?.targetFindingId).toBeUndefined();
+  });
+
+  it('should treat empty location and suggestion from structured output as unset', () => {
+    const parsed = parseReviewerRawFindings([
+      {
+        rawFindingId: 'raw-confirm',
+        familyTag: 'bug',
+        severity: 'low',
+        title: 'Confirmed fixed',
+        description: 'Verified at src/index.ts:42.',
+        kind: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        location: '',
+        suggestion: '',
+      },
+    ]);
+
+    expect(parsed[0]?.location).toBeUndefined();
+    expect(parsed[0]?.suggestion).toBeUndefined();
+  });
+
+  it('should treat an empty targetFindingId from structured output as unset', () => {
+    const parsed = parseReviewerRawFindings([
+      {
+        rawFindingId: 'raw-1',
+        familyTag: 'bug',
+        severity: 'low',
+        title: 'Issue entry',
+        description: 'Strict structured output fills every field.',
+        kind: 'issue',
+        targetFindingId: '',
+      },
+    ]);
+
+    expect(parsed[0]?.kind).toBe('issue');
+    expect(parsed[0]?.targetFindingId).toBeUndefined();
   });
 });

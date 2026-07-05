@@ -99,7 +99,31 @@ function validateRawFindingDecisionRefs(
     ...reopenedErrors,
     ...conflictErrors,
     ...validateDuplicateRawFindingDecisionRefs(decisionRefs),
+    ...validateConfirmationRefsOnlyInResolutions(managerOutput, context),
   ];
+}
+
+/**
+ * resolution_confirmation raw findings are resolution evidence only: citing
+ * them as issue evidence in matches / newFindings / reopenedFindings would let
+ * a confirmation masquerade as a problem observation. Conflicts may cite them
+ * (a confirmation contradicting a re-report is a legitimate conflict).
+ */
+function validateConfirmationRefsOnlyInResolutions(
+  managerOutput: FindingManagerOutput,
+  context: ValidationContext,
+): string[] {
+  const issueDecisionRefs = [
+    ...managerOutput.matches.flatMap((match, index) => rawFindingDecisionRefs(`matches[${index}]`, match.rawFindingIds)),
+    ...managerOutput.newFindings.flatMap((finding, index) => rawFindingDecisionRefs(`newFindings[${index}]`, finding.rawFindingIds)),
+    ...managerOutput.reopenedFindings.flatMap((reopened, index) => rawFindingDecisionRefs(`reopenedFindings[${index}]`, reopened.rawFindingIds)),
+  ];
+  return issueDecisionRefs.flatMap((ref) => {
+    const rawFinding = context.currentRawFindingsById.get(ref.rawFindingId);
+    return rawFinding !== undefined && rawFinding.kind === 'resolution_confirmation'
+      ? [`Resolution confirmation "${ref.rawFindingId}" cannot be cited as issue evidence in ${ref.decision}`]
+      : [];
+  });
 }
 
 function collectRawFindingDecisionRefs(managerOutput: FindingManagerOutput): RawFindingDecisionRef[] {
@@ -302,12 +326,22 @@ function validateResolvedFindingRawFindingIds(
   context: ValidationContext,
 ): string[] {
   if (rawFindingIds.length === 0) {
-    return [`Resolved finding "${finding.id}" must reference at least one previous raw finding id`];
+    return [`Resolved finding "${finding.id}" must reference at least one raw finding id`];
   }
   const findingRawFindingIds = new Set(finding.rawFindingIds);
-  return rawFindingIds.flatMap((rawFindingId, index) => {
+  const errors = rawFindingIds.flatMap((rawFindingId, index) => {
     if (rawFindingIds.indexOf(rawFindingId) !== index) {
       return [`Duplicate raw finding id "${rawFindingId}" in resolvedFindings for "${finding.id}"`];
+    }
+    const currentRawFinding = context.currentRawFindingsById.get(rawFindingId);
+    if (currentRawFinding !== undefined) {
+      if (currentRawFinding.kind !== 'resolution_confirmation') {
+        return [`Resolved finding "${finding.id}" references current raw finding "${rawFindingId}" that is not a resolution_confirmation`];
+      }
+      if (currentRawFinding.targetFindingId !== finding.id) {
+        return [`Resolution confirmation "${rawFindingId}" targets "${currentRawFinding.targetFindingId ?? '(none)'}" but was cited for "${finding.id}"`];
+      }
+      return [];
     }
     if (!findingRawFindingIds.has(rawFindingId)) {
       return [`Resolved finding "${finding.id}" references raw finding id "${rawFindingId}" that does not belong to the finding`];
@@ -316,6 +350,19 @@ function validateResolvedFindingRawFindingIds(
       ? []
       : [`Resolved finding "${finding.id}" references previous raw finding "${rawFindingId}" that is not in the ledger`];
   });
+  // 解消は、現在ラウンドで当該 finding を対象に確認された
+  // resolution_confirmation が少なくとも1件あるときだけ許可する。
+  // レビュアーの沈黙（言及なし）や過去の raw だけでは解消させない。
+  const hasCurrentConfirmation = rawFindingIds.some((rawFindingId) => {
+    const raw = context.currentRawFindingsById.get(rawFindingId);
+    return raw !== undefined && raw.kind === 'resolution_confirmation' && raw.targetFindingId === finding.id;
+  });
+  if (!hasCurrentConfirmation) {
+    errors.push(
+      `Resolved finding "${finding.id}" requires at least one current resolution_confirmation raw finding targeting it`,
+    );
+  }
+  return errors;
 }
 
 function validateResolvedConflicts(

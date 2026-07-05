@@ -17,6 +17,7 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -309,7 +310,62 @@ export class ParallelRunner {
           providerUsage: result.providerUsage,
         }));
         if (findingLedgerCopyPath) {
-          subResponse = this.deps.stepExecutor.normalizeStructuredOutput(executableSubStep, subResponse, subRuntime);
+          const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+            executableSubStep,
+            subResponse,
+            subRuntime,
+          );
+          subResponse = normalized.response;
+          if (normalized.invalidDetail !== undefined) {
+            // 弱いモデルは大きな構造化出力で JSON を壊しやすい。1回だけ
+            // 同一セッションで是正を求め、直れば元の応答（レポート本文）に
+            // 構造化出力だけをマージして続行する。
+            log.info('Structured output invalid for parallel sub-step, requesting one correction', {
+              step: subStep.name,
+              detail: normalized.invalidDetail,
+            });
+            const correctionInstruction = [
+              'Your structured output failed schema validation:',
+              normalized.invalidDetail,
+              '',
+              'Re-emit ONLY the corrected structured output matching the schema.',
+              'Do not repeat the report text. Do not add commentary.',
+            ].join('\n');
+            // 是正は JSON 再出力のみ: ツール・編集権限は不要なので絞り、
+            // Phase 1 のイベントコールバックも引き継がない。
+            const correctiveResponse = await executeAgent(executableSubStep.persona, correctionInstruction, {
+              ...agentOptions,
+              permissionMode: 'readonly',
+              allowedTools: [],
+              onPromptResolved: undefined,
+              onStream: undefined,
+              ...(subResponse.sessionId !== undefined ? { sessionId: subResponse.sessionId } : {}),
+            });
+            // 非ネイティブ構造化出力プロバイダでは是正 JSON が content に入る
+            // ため、是正応答をそのまま正規化する（本文の差し替えはマージ時）。
+            const renormalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+              executableSubStep,
+              correctiveResponse,
+              subRuntime,
+            );
+            if (correctiveResponse.status === 'rate_limited' || correctiveResponse.status === 'blocked') {
+              // レート制限・ブロックは専用フロー（メタデータ伝播・バックオフ）
+              // が上位にあるため、error に潰さずそのまま伝える。
+              subResponse = correctiveResponse;
+            } else if (renormalized.invalidDetail !== undefined || renormalized.response.status !== 'done') {
+              subResponse = {
+                ...subResponse,
+                status: 'error',
+                error: `Step "${subStep.name}" structured output remained invalid after one correction: ${renormalized.invalidDetail ?? renormalized.response.error ?? 'correction failed'}`,
+              };
+            } else {
+              subResponse = {
+                ...subResponse,
+                structuredOutput: renormalized.response.structuredOutput,
+                ...(correctiveResponse.sessionId !== undefined ? { sessionId: correctiveResponse.sessionId } : {}),
+              };
+            }
+          }
         }
         if (!didEmitPhaseStart) {
           throw new Error(`Missing prompt parts for phase start: ${subStep.name}:1`);
@@ -407,8 +463,22 @@ export class ParallelRunner {
           });
         }
 
+        // Phase 3 はルール番号を直接採用するため、ガード（findings 条件）を
+        // ここで評価する。不成立なら採用せず、ガード対応済みの通常ルール
+        // 評価へフォールバックする（StepExecutor 側と同じ扱い）。
+        const subPhase3Rule = subPhase3 !== undefined ? subStep.rules?.[subPhase3.ruleIndex] : undefined;
+        const subPhase3GuardFailed = subPhase3Rule?.guardCondition !== undefined
+          && !evaluateWhenExpression(subPhase3Rule.guardCondition, state);
+        if (subPhase3GuardFailed && subPhase3 !== undefined) {
+          log.debug('Phase 3 rule guard failed for sub-step; falling back to rule evaluation', {
+            step: subStep.name,
+            ruleIndex: subPhase3.ruleIndex,
+            guardCondition: subPhase3Rule?.guardCondition,
+          });
+        }
+
         let finalResponse: AgentResponse;
-        if (subPhase3) {
+        if (subPhase3 && !subPhase3GuardFailed) {
           finalResponse = { ...subResponse, matchedRuleIndex: subPhase3.ruleIndex, matchedRuleMethod: subPhase3.method };
         } else {
           const match = await detectMatchedRule(subStep, subResponse.content, '', subRuleCtx);

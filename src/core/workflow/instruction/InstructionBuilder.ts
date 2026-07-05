@@ -247,7 +247,10 @@ export class InstructionBuilder {
     if (this.context.findingContract.rawFindingsJsonSchema) {
       lines.push(
         '',
-        '- Report every issue you observe as structured raw findings.',
+        '- Report every issue you observe as structured raw findings with kind "issue" (empty targetFindingId).',
+        '- Each round, verify the open ledger findings that fall within your review scope.',
+        '- When you have confirmed an open finding is fixed, report it as a raw finding with kind "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.',
+        '- Do not re-report an open finding that is still unfixed; report a new issue only if it regressed or changed.',
         '- Use rawFindingId values that are unique within this response.',
         '- Copy each Observed Findings family_tag value into the structured familyTag field.',
         '- Return structured output matching this raw findings schema:',
