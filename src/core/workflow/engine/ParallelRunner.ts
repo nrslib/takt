@@ -221,6 +221,7 @@ export class ParallelRunner {
                   ledgerCopyPath: findingLedgerCopyPath,
                   ledgerSummary: this.renderFindingLedgerSummary(),
                   reportLedgerSummary: this.renderFindingLedgerReportSummary(),
+                  hasOpenFindings: this.ledgerHasOpenFindings(),
                   rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
                 }
               : undefined,
@@ -652,6 +653,13 @@ export class ParallelRunner {
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
     return this.deps.findingLedgerStore.createRunCopy();
+  }
+
+  private ledgerHasOpenFindings(): boolean {
+    if (!this.deps.findingLedgerStore) {
+      return false;
+    }
+    return this.deps.findingLedgerStore.loadLedger().findings.some((finding) => finding.status === 'open');
   }
 
   private renderFindingLedgerSummary(): string {

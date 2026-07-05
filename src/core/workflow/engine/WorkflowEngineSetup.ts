@@ -149,6 +149,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+      hasOpenFindings: ledger.findings.some((finding) => finding.status === 'open'),
       ...(includeRawFindingsSchema
         ? {
             rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
