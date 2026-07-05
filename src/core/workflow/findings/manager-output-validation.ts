@@ -235,21 +235,34 @@ function validateFindingDecisionRefs(
 ): string[] {
   const decisionRefs = collectFindingDecisionRefs(managerOutput);
   const matchErrors = managerOutput.matches.flatMap((match, index) => (
-    validateFindingDecision(match.findingId, `matches[${index}]`, 'match', 'open', context)
+    validateFindingDecision(match.findingId, `matches[${index}]`, 'match', ['open'], context)
   ));
   const resolvedErrors = managerOutput.resolvedFindings.flatMap((resolved, index) => {
     const decision = `resolvedFindings[${index}]`;
     const finding = context.previousFindingsById.get(resolved.findingId);
     return [
-      ...validateFindingDecision(resolved.findingId, decision, 'resolve', 'open', context),
+      ...validateFindingDecision(resolved.findingId, decision, 'resolve', ['open'], context),
       ...(finding === undefined ? [] : validateResolvedFindingRawFindingIds(finding, resolved.rawFindingIds, context)),
     ];
   });
   const reopenedErrors = managerOutput.reopenedFindings.flatMap((reopened, index) => (
-    validateFindingDecision(reopened.findingId, `reopenedFindings[${index}]`, 'reopen', 'resolved', context)
+    validateFindingDecision(reopened.findingId, `reopenedFindings[${index}]`, 'reopen', ['resolved', 'waived'], context)
   ));
   const conflictErrors = managerOutput.conflicts.flatMap((conflict, index) => (
     validateConflictFindingIds(conflict.findingIds, `conflicts[${index}]`, context)
+  ));
+  const waivedErrors = managerOutput.waivedFindings.flatMap((waived, index) => {
+    const decision = `waivedFindings[${index}]`;
+    const statusErrors = validateFindingDecision(waived.findingId, decision, 'waive', ['open'], context);
+    const finding = context.previousFindingsById.get(waived.findingId);
+    // critical は機械拒否: 免除の裁量を与えない（人間の目に必ず届かせる）
+    const severityErrors = finding !== undefined && finding.severity === 'critical'
+      ? [`Cannot waive finding "${waived.findingId}" because critical findings must stay open in ${decision}`]
+      : [];
+    return [...statusErrors, ...severityErrors];
+  });
+  const disputeErrors = managerOutput.disputeNotes.flatMap((note, index) => (
+    validateFindingDecision(note.findingId, `disputeNotes[${index}]`, 'record a dispute on', ['open'], context)
   ));
 
   return [
@@ -257,6 +270,8 @@ function validateFindingDecisionRefs(
     ...resolvedErrors,
     ...reopenedErrors,
     ...conflictErrors,
+    ...waivedErrors,
+    ...disputeErrors,
     ...validateDuplicateFindingDecisionRefs(decisionRefs),
   ];
 }
@@ -271,6 +286,10 @@ function collectFindingDecisionRefs(managerOutput: FindingManagerOutput): Findin
     ...managerOutput.reopenedFindings.map((reopened, index) => ({
       decision: `reopenedFindings[${index}]`,
       findingId: reopened.findingId,
+    })),
+    ...managerOutput.waivedFindings.map((waived, index) => ({
+      decision: `waivedFindings[${index}]`,
+      findingId: waived.findingId,
     })),
     ...managerOutput.conflicts.flatMap((conflict, index) => (
       Array.from(new Set(conflict.findingIds)).map((findingId) => ({ decision: `conflicts[${index}]`, findingId }))
@@ -293,16 +312,16 @@ function validateFindingDecision(
   findingId: string,
   decision: string,
   action: string,
-  expectedStatus: FindingRecord['status'],
+  expectedStatuses: ReadonlyArray<FindingRecord['status']>,
   context: ValidationContext,
 ): string[] {
   const finding = context.previousFindingsById.get(findingId);
   if (finding === undefined) {
     return [`Unknown finding id "${findingId}" in ${decision}`];
   }
-  return finding.status === expectedStatus
+  return expectedStatuses.includes(finding.status)
     ? []
-    : [`Cannot ${action} finding "${findingId}" because it is not ${expectedStatus}`];
+    : [`Cannot ${action} finding "${findingId}" because it is not ${expectedStatuses.join(' or ')}`];
 }
 
 function validateConflictFindingIds(

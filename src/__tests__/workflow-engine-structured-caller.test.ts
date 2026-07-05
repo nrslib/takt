@@ -126,7 +126,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           resolvedFindings: [],
           reopenedFindings: [],
           conflicts: [],
-          resolvedConflicts: [],
+          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
         },
         timestamp: new Date('2026-06-13T00:00:02.000Z'),
       })
@@ -146,7 +146,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           resolvedFindings: [],
           reopenedFindings: [],
           conflicts: [],
-          resolvedConflicts: [],
+          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
         },
         timestamp: new Date('2026-06-13T00:00:03.000Z'),
       })
@@ -701,7 +701,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [],
+            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -933,7 +933,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [],
+            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1128,7 +1128,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             resolvedFindings: [],
             reopenedFindings: [],
             conflicts: [],
-            resolvedConflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1451,7 +1451,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 description: 'The same raw finding was also placed in conflicts.',
               },
             ],
-            resolvedConflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -1483,7 +1483,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             resolvedFindings: [],
             reopenedFindings: [],
             conflicts: [],
-            resolvedConflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1591,7 +1591,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           description: 'The same raw finding was also placed in conflicts.',
         },
       ],
-      resolvedConflicts: [],
+      resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
     });
     expect(ledgerUpdated).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
@@ -1655,7 +1655,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           resolvedFindings: [],
           reopenedFindings: [],
           conflicts: [],
-          resolvedConflicts: [],
+          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
         },
         timestamp: new Date('2026-06-13T00:00:02.000Z'),
       })
@@ -1675,7 +1675,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           resolvedFindings: [],
           reopenedFindings: [],
           conflicts: [],
-          resolvedConflicts: [],
+          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
         },
         timestamp: new Date('2026-06-13T00:00:03.000Z'),
       });
@@ -1779,7 +1779,7 @@ describe('WorkflowEngine structured caller defaults', () => {
         resolvedFindings: [],
         reopenedFindings: [],
         conflicts: [],
-        resolvedConflicts: [],
+        resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
       },
       {
         matches: [],
@@ -1793,7 +1793,7 @@ describe('WorkflowEngine structured caller defaults', () => {
         resolvedFindings: [],
         reopenedFindings: [],
         conflicts: [],
-        resolvedConflicts: [],
+        resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
       },
     ]);
     expect(validationReport.attempts[1]?.validationErrors).toEqual([
@@ -2022,7 +2022,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             reopenedFindings: [],
             conflicts: [],
-            resolvedConflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -2044,7 +2044,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             resolvedFindings: [],
             reopenedFindings: [],
             conflicts: [],
-            resolvedConflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:04.000Z'),
         };
@@ -2219,7 +2219,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             resolvedFindings: [],
             reopenedFindings: [],
             conflicts: [],
-            resolvedConflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2493,7 +2493,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               resolvedFindings: [],
               reopenedFindings: [],
               conflicts: [],
-              resolvedConflicts: [],
+              resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
             }),
             '```',
           ].join('\n'),

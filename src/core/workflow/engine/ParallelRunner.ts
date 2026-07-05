@@ -160,6 +160,9 @@ export class ParallelRunner {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
     }
     const subSteps = step.parallel;
+    // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
+    // manager に渡すため、サブステップ実行で lastOutput が変わる前に捕捉する。
+    const priorStepResponseText = state.lastOutput?.content;
     const stepIteration = incrementStepIteration(state, step.name);
     log.debug('Running parallel step', {
       step: step.name,
@@ -549,7 +552,7 @@ export class ParallelRunner {
       };
     }
 
-    const findingManagerResult = await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath);
+    const findingManagerResult = await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath, priorStepResponseText);
     if (findingManagerResult?.status === 'invalid_manager_output') {
       const response = this.createFindingManagerInvalidOutputResult({
         step,
@@ -612,6 +615,7 @@ export class ParallelRunner {
     stepIteration: number,
     subResults: ParallelSubStepResult[],
     ledgerCopyPath: string | undefined,
+    priorStepResponseText: string | undefined,
   ): Promise<FindingManagerRunResult | undefined> {
     if (!this.deps.findingContract) {
       return undefined;
@@ -631,6 +635,7 @@ export class ParallelRunner {
       runId: this.deps.getRunId(),
       timestamp: new Date().toISOString(),
       ledgerCopyPath,
+      priorStepResponseText,
     });
     if (result.status === 'updated') {
       this.deps.refreshFindingsState();

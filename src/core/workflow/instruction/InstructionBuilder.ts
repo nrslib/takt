@@ -251,10 +251,20 @@ export class InstructionBuilder {
         '- Each round, verify the open ledger findings that fall within your review scope.',
         '- When you have confirmed an open finding is fixed, report it as a raw finding with kind "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.',
         '- Do not re-report an open finding that is still unfixed; report a new issue only if it regressed or changed.',
+        '- Do not re-report findings listed as waived in the ledger summary. If you observe that a waiver premise no longer holds, report that observation as a new issue citing the waived finding id.',
         '- Use rawFindingId values that are unique within this response.',
         '- Copy each Observed Findings family_tag value into the structured familyTag field.',
         '- Return structured output matching this raw findings schema:',
         renderFencedJsonBlock(this.context.findingContract.rawFindingsJsonSchema),
+      );
+    } else {
+      lines.push(
+        '',
+        '- If an open finding is valid but cannot be fixed (frozen public contract, external constraint, deliberate trade-off), do NOT loop on it. State a dispute claim in your response under a "## Disputed Findings" heading, one entry per finding:',
+        '  - findingId: the ledger finding id',
+        '  - reason: why it cannot be fixed',
+        '  - evidence: file:line references backing the reason',
+        '- The findings manager adjudicates dispute claims; only accepted claims stop blocking the gate. Critical findings can never be waived.',
       );
     }
 

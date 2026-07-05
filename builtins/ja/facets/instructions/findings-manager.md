@@ -11,3 +11,7 @@
 - 解消 finding には対象 finding の既存 rawFindingIds から根拠にした ID を含める
 - 矛盾がある場合は conflicts に記録する
 - 最終 findingId を新規採番しない
+
+## 異議の裁定（dispute/waiver）
+
+coder が「正当だが修正不能」と申告した指摘を裁定してください。承認の条件は、直前ステップ応答に finding ID・理由・file:line 証跡を伴う明示的な申告があり、証跡が台帳と照らして妥当で、severity が critical でないことのすべてです。承認は waivedFindings に理由と証跡付きで記録してください。説得力がなければ open のまま disputeNotes に記録してください。迷ったら open を維持してください。申告のない finding への waive の発明は禁止です。

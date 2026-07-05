@@ -52,6 +52,16 @@ export const FindingLedgerEntrySchema = z.object({
   resolvedAt: nonEmptyString.optional(),
   resolvedEvidence: nonEmptyString.optional(),
   reopenedEvidence: nonEmptyString.optional(),
+  waivers: z.array(z.object({
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+    decidedAt: FindingObservationSchema,
+  }).strict()).optional(),
+  disputes: z.array(z.object({
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+    recordedAt: FindingObservationSchema,
+  }).strict()).optional(),
 }).strict();
 
 export const RawFindingSchema = z.object({
@@ -138,12 +148,22 @@ export const FindingManagerOutputSchema = z.object({
     conflictId: nonEmptyString,
     evidence: nonEmptyString,
   }).strict()),
+  waivedFindings: z.array(z.object({
+    findingId: nonEmptyString,
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+  }).strict()).optional().default([]),
+  disputeNotes: z.array(z.object({
+    findingId: nonEmptyString,
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+  }).strict()).optional().default([]),
 }).strict();
 
 export const FindingManagerOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts'],
+  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes'],
   properties: {
     matches: {
       type: 'array',
@@ -218,6 +238,32 @@ export const FindingManagerOutputJsonSchema = {
         required: ['conflictId', 'evidence'],
         properties: {
           conflictId: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    waivedFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'reason', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          reason: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    disputeNotes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'reason', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          reason: { type: 'string', minLength: 1 },
           evidence: { type: 'string', minLength: 1 },
         },
       },

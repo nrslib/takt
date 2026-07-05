@@ -103,6 +103,9 @@ function assertFindingIdsHaveSingleDecision(managerOutput: FindingManagerOutput)
   for (const reopened of managerOutput.reopenedFindings) {
     markFindingIdDecision(usedFindingDecisions, reopened.findingId, 'reopen');
   }
+  for (const waived of managerOutput.waivedFindings) {
+    markFindingIdDecision(usedFindingDecisions, waived.findingId, 'waive');
+  }
   for (const conflict of managerOutput.conflicts) {
     assertUniqueIds(conflict.findingIds, 'finding id');
     for (const findingId of conflict.findingIds) {
@@ -294,6 +297,8 @@ function withoutResolutionFields(finding: FindingRecord): Omit<FindingRecord, 'r
     title: finding.title,
     rawFindingIds: finding.rawFindingIds,
     ...(finding.location !== undefined ? { location: finding.location } : {}),
+    ...(finding.waivers !== undefined ? { waivers: finding.waivers } : {}),
+    ...(finding.disputes !== undefined ? { disputes: finding.disputes } : {}),
     ...(finding.description !== undefined ? { description: finding.description } : {}),
     ...(finding.suggestion !== undefined ? { suggestion: finding.suggestion } : {}),
     reviewers: finding.reviewers,
@@ -462,7 +467,9 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     assertKnownRawFindings(rawFindingIds, reopened.rawFindingIds);
     markRawFindingIdsUsed(usedRawFindingIds, reopened.rawFindingIds);
     const finding = updatedById.get(reopened.findingId)!;
-    assertFindingStatus(finding, 'resolved', 'reopen');
+    if (finding.status !== 'resolved' && finding.status !== 'waived') {
+      throw new Error(`Cannot reopen finding "${finding.id}" because it is not resolved or waived`);
+    }
     const reopenedRawFindings = getRawFindings(input.rawFindings, reopened.rawFindingIds);
     assertFindingFamilyTagCompatible({
       finding,
@@ -483,6 +490,38 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       reviewers: mergeReviewers(finding.reviewers, reopenedRawFindings),
       lastSeen: observationFromContext(input.context),
       reopenedEvidence: reopened.evidence,
+    });
+  }
+
+  for (const waived of input.managerOutput.waivedFindings) {
+    assertKnownFinding(knownFindingIds, waived.findingId);
+    const finding = updatedById.get(waived.findingId)!;
+    assertFindingStatus(finding, 'open', 'waive');
+    if (finding.severity === 'critical') {
+      throw new Error(`Cannot waive finding "${finding.id}" because critical findings must stay open`);
+    }
+    updatedById.set(waived.findingId, {
+      ...finding,
+      status: 'waived',
+      lifecycle: 'waived',
+      waivers: [
+        ...(finding.waivers ?? []),
+        { reason: waived.reason, evidence: waived.evidence, decidedAt: observationFromContext(input.context) },
+      ],
+      lastSeen: observationFromContext(input.context),
+    });
+  }
+
+  for (const note of input.managerOutput.disputeNotes) {
+    assertKnownFinding(knownFindingIds, note.findingId);
+    const finding = updatedById.get(note.findingId)!;
+    // 却下された異議は記録のみ: status は open のまま（ゲートを塞ぎ続ける）
+    updatedById.set(note.findingId, {
+      ...finding,
+      disputes: [
+        ...(finding.disputes ?? []),
+        { reason: note.reason, evidence: note.evidence, recordedAt: observationFromContext(input.context) },
+      ],
     });
   }
 

@@ -36,6 +36,8 @@ interface RunFindingManagerForParallelStepInput {
   runId: string;
   timestamp: string;
   ledgerCopyPath?: string;
+  /** Response text of the step that ran before the reviewers (usually the coder's fix report, which may contain dispute claims). */
+  priorStepResponseText?: string;
 }
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
@@ -167,6 +169,7 @@ function buildManagerInstruction(input: {
   ledgerCopyPath: string;
   rawFindingsPath: string;
   rawFindings: RawFinding[];
+  priorStepResponseText?: string;
 }): string {
   const managerInputLedger = buildManagerInputLedger(input.previousLedger);
   return loadTemplate('finding_manager_instruction', 'en', {
@@ -176,6 +179,7 @@ function buildManagerInstruction(input: {
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),
     rawFindingsPath: input.rawFindingsPath,
     rawFindings: renderFencedJsonBlock(input.rawFindings),
+    coderResponse: input.priorStepResponseText ?? '(no prior step response)',
   });
 }
 
@@ -315,6 +319,7 @@ export async function runFindingManagerForParallelStep(
     ledgerCopyPath,
     rawFindingsPath,
     rawFindings,
+    priorStepResponseText: input.priorStepResponseText,
   });
   const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
   const {
