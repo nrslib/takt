@@ -63,8 +63,14 @@ try {
     timeout: 10 * 60 * 1000,
   });
 
+  if (result.error) {
+    console.error(`spawn failed: ${result.error.message}`);
+  }
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-  const toolErrors = (output.match(/✗ Tool/g) ?? []).length;
+  // ツール失敗行（✗ <ツール名>:）を数える。ストリーム表示の文言に結合して
+  // いるのは既知の制約: セッションログは現状 step/phase イベントのみで
+  // ツール粒度を持たないため、構造化カウントには takt 側の拡張が要る。
+  const toolErrors = (output.match(/^\s*✗ \S+:/gm) ?? []).length;
   const runCompleted = result.status === 0 && !/aborted/i.test(output);
   // 完了宣言だけの空振りを弾く: 成果物の実在と内容まで確認する
   const artifactPath = join(workDir, 'greet.ts');

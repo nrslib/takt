@@ -23,18 +23,24 @@ describe('InvalidToolArgumentLoopDetector', () => {
     expect(detector.observe('c5', 'edit', SCHEMA_ERROR)).toBeUndefined();
   });
 
-  it('should reset on a non-argument error and on reset()', () => {
+  it('should reset the count on a non-argument error', () => {
     const detector = new InvalidToolArgumentLoopDetector();
 
     detector.observe('c1', 'read', SCHEMA_ERROR);
     detector.observe('c2', 'read', SCHEMA_ERROR);
     detector.observe('c3', 'read', 'file not found');
-    expect(detector.observe('c4', 'read', SCHEMA_ERROR)).toBeUndefined();
 
-    detector.observe('c5', 'read', SCHEMA_ERROR);
-    detector.observe('c6', 'read', SCHEMA_ERROR);
+    expect(detector.observe('c4', 'read', SCHEMA_ERROR)).toBeUndefined();
+  });
+
+  it('should reset the count when reset() is called', () => {
+    const detector = new InvalidToolArgumentLoopDetector();
+
+    detector.observe('c1', 'read', SCHEMA_ERROR);
+    detector.observe('c2', 'read', SCHEMA_ERROR);
     detector.reset();
-    expect(detector.observe('c7', 'read', SCHEMA_ERROR)).toBeUndefined();
+
+    expect(detector.observe('c3', 'read', SCHEMA_ERROR)).toBeUndefined();
   });
 
   it('should ignore duplicate observations for the same call id', () => {
