@@ -1099,14 +1099,27 @@ export class OpenCodeClient {
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
             return rateLimitedResponse;
           }
+          const lowerMessage = message.toLowerCase();
+          // Failures that point at the native json_schema request itself: a
+          // model that never emits the StructuredOutput tool ("did not produce
+          // structured output"), or a gateway/model that rejects the json_schema
+          // response format outright (surfaced as an upstream request error).
+          // These fall back to formatless structured output; generic transient
+          // errors (transport/network) must not, or they would burn the one-shot
+          // fallback budget before a real format failure arrives.
+          const isNativeStructuredOutputFailure =
+            lowerMessage.includes('did not produce structured output')
+            || lowerMessage.includes('upstream request failed');
           if (
             options.outputSchema !== undefined
             && !disableNativeStructuredOutput
-            && message.toLowerCase().includes('did not produce structured output')
+            && isNativeStructuredOutputFailure
           ) {
+            // Fall back to formatless structured output once — hand-written JSON
+            // validated by the downstream correction retry — before giving up.
             disableNativeStructuredOutput = true;
             maxAttempts = Math.max(maxAttempts, attempt + 1);
-            log.info('Native structured output failed; retrying without format', { agentType, attempt });
+            log.info('Native structured output failed; retrying without json_schema format', { agentType, attempt, message });
             await this.waitForRetryDelay(attempt, options.abortSignal);
             continue;
           }
