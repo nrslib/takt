@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { getOpenCodeSessionMessages, getOpenCodeSessionSnapshot, resetSharedServer } from '../../src/infra/opencode/client.js';
 import { OpenCodeProvider } from '../../src/infra/providers/opencode.js';
 
-const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'opencode/big-pickle';
+const MODEL = process.env.TAKT_E2E_MODEL ?? process.env.OPENCODE_E2E_MODEL ?? 'ollama-cloud/qwen3-coder-next';
 describe('OpenCode real E2E conversation', () => {
   afterAll(() => {
     resetSharedServer();
@@ -142,17 +142,22 @@ describe('OpenCode real E2E conversation', () => {
     const secondTurnParts = messages.slice(lastUserIndex + 1).flatMap((message) => message.parts);
     expect(secondTurnParts.length).toBeGreaterThan(0);
     expect(secondTurnParts.filter((part) => part.type === 'tool')).toEqual([]);
-    // セッション権限は 1 ターン目の緩和済みルールセットのまま
+    // OpenCode (>=1.17) rewrites session.permission from the prompt's tools map
+    // on every turn that carries one. After this empty-map turn the snapshot
+    // collapses to all-deny (matching the NO-READ-TOOL result above), so it no
+    // longer retains turn-1's relaxed rules. external_directory denial is not
+    // enforced through this snapshot but through the server-config layer
+    // (client.ts `permission: { external_directory: 'deny' }`); turn 1's
+    // permission_summary above already asserts resolvedPermissions carries
+    // external_directory:deny, and out-of-workspace reads are blocked at the
+    // tool layer regardless of the session snapshot.
     const session = await getOpenCodeSessionSnapshot(MODEL, sessionId, process.cwd());
     if (!session.permission) {
       throw new Error('OpenCode session permission is required for verification');
     }
     const permissions = session.permission as Array<{ permission?: unknown; action?: unknown }>;
-    expect(permissions).toContainEqual(
-      expect.objectContaining({ permission: 'external_directory', action: 'deny' }),
-    );
-    expect(permissions).toContainEqual(
-      expect.objectContaining({ permission: 'edit', action: 'allow' }),
-    );
+    // The empty tools map materialized into the session: nothing stays allowed.
+    expect(permissions.length).toBeGreaterThan(0);
+    expect(permissions.some((rule) => rule.action === 'allow')).toBe(false);
   }, 180_000);
 });
