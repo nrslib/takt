@@ -1,8 +1,8 @@
-name: backend-cqrs-for-localllm
-description: CQRS+ES backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract build discipline for weak models structurally
+name: takt-default-for-local-llm
+description: TAKT development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally (plan -> tests -> implement -> FC review -> final gate -> complete)
 finding_contract:
-  ledger_path: .takt/findings/backend-cqrs-for-localllm.json
-  raw_findings_path: .takt/findings/backend-cqrs-for-localllm/raw
+  ledger_path: .takt/findings/takt-default-for-local-llm.json
+  raw_findings_path: .takt/findings/takt-default-for-local-llm/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -50,8 +50,6 @@ steps:
     edit: false
     persona: planner
     knowledge:
-      - backend
-      - cqrs-es
       - architecture
     provider_options:
       extends: review-readonly
@@ -77,8 +75,7 @@ steps:
       - coding
       - testing
     knowledge:
-      - backend
-      - cqrs-es
+      - takt
       - architecture
       - unit-testing
       - e2e-testing
@@ -111,8 +108,7 @@ steps:
     policy:
       - coding
     knowledge:
-      - backend
-      - cqrs-es
+      - takt
       - architecture
       - implementation-semantics
     provider_options:
@@ -129,23 +125,23 @@ steps:
     tags:
       - review
     parallel:
-      - name: cqrs-es-review
+      - name: arch-review
         tags:
           - review
         edit: false
-        persona: cqrs-es-reviewer
+        persona: architecture-reviewer
         policy:
           - review
         knowledge:
-          - cqrs-es
-        instruction: review-cqrs-es
+          - architecture
+        instruction: review-arch
         rules:
           - condition: approved
           - condition: needs_fix
         output_contracts:
           report:
-            - name: cqrs-es-review.md
-              format: cqrs-es-review-finding-contract
+            - name: architect-review.md
+              format: architecture-review-finding-contract
 
       - name: ai-antipattern-review
         tags:
@@ -246,8 +242,7 @@ steps:
     policy:
       - coding
     knowledge:
-      - backend
-      - cqrs-es
+      - takt
       - architecture
       - implementation-semantics
     provider_options:

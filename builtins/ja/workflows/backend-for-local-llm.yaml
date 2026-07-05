@@ -1,8 +1,8 @@
-name: dual-for-localllm
-description: ローカルLLM向けのフルスタック開発ワークフロー。deep レビュー5並列 + Finding Contract で弱いモデルの規律を構造で作る
+name: backend-for-local-llm
+description: ローカルLLM向けのバックエンド開発ワークフロー。deep レビュー4並列 + Finding Contract で弱いモデルの規律を構造で作る
 finding_contract:
-  ledger_path: .takt/findings/dual-for-localllm.json
-  raw_findings_path: .takt/findings/dual-for-localllm/raw
+  ledger_path: .takt/findings/backend-for-local-llm.json
+  raw_findings_path: .takt/findings/backend-for-local-llm/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -50,8 +50,6 @@ steps:
     edit: false
     persona: planner
     knowledge:
-      - frontend
-      - react
       - backend
       - architecture
     provider_options:
@@ -67,7 +65,7 @@ steps:
     output_contracts:
       report:
         - name: plan.md
-          format: plan-frontend
+          format: plan
 
   - name: write_tests
     tags:
@@ -78,8 +76,6 @@ steps:
       - coding
       - testing
     knowledge:
-      - frontend
-      - react
       - backend
       - architecture
       - unit-testing
@@ -113,8 +109,6 @@ steps:
     policy:
       - coding
     knowledge:
-      - frontend
-      - react
       - backend
       - architecture
       - implementation-semantics
@@ -149,26 +143,6 @@ steps:
           report:
             - name: architect-review.md
               format: architecture-review-finding-contract
-
-      - name: frontend-review
-        tags:
-          - review
-        edit: false
-        persona: frontend-reviewer
-        policy:
-          - review
-        knowledge:
-          - frontend
-          - react
-        pass_previous_response: false
-        instruction: review-frontend
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: frontend-review.md
-              format: frontend-review-finding-contract
 
       - name: ai-antipattern-review
         tags:
@@ -225,9 +199,9 @@ steps:
             - name: implementation-semantics-review.md
               format: implementation-semantics-review-finding-contract
     rules:
-      - condition: all("approved", "approved", "AI特有の問題なし", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: all("approved", "AI特有の問題なし", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
         next: final-gate
-      - condition: any("needs_fix", "needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && findings.conflicts.count == 0
+      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && findings.conflicts.count == 0
         next: fix
       - condition: findings.conflicts.count == 0 && findings.open.count > 0
         next: fix
@@ -269,8 +243,6 @@ steps:
     policy:
       - coding
     knowledge:
-      - frontend
-      - react
       - backend
       - architecture
       - implementation-semantics

@@ -1,8 +1,8 @@
-name: takt-default-for-localllm
-description: TAKT development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally (plan -> tests -> implement -> FC review -> final gate -> complete)
+name: dual-for-local-llm
+description: ローカルLLM向けのフルスタック開発ワークフロー。deep レビュー5並列 + Finding Contract で弱いモデルの規律を構造で作る
 finding_contract:
-  ledger_path: .takt/findings/takt-default-for-localllm.json
-  raw_findings_path: .takt/findings/takt-default-for-localllm/raw
+  ledger_path: .takt/findings/dual-for-local-llm.json
+  raw_findings_path: .takt/findings/dual-for-local-llm/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -25,9 +25,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: converging (findings decreasing, fixes applied)
+        - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: unproductive (same findings repeating)
+        - condition: 非生産的（同じ指摘が繰り返される）
           next: ABORT
   - cycle:
       - reviewers
@@ -38,9 +38,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: converging (findings decreasing, fixes applied)
+        - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: unproductive (same findings repeating)
+        - condition: 非生産的（同じ指摘が繰り返される）
           next: ABORT
 
 steps:
@@ -50,21 +50,24 @@ steps:
     edit: false
     persona: planner
     knowledge:
+      - frontend
+      - react
+      - backend
       - architecture
     provider_options:
       extends: review-readonly
     instruction: plan
     rules:
-      - condition: Task analysis and planning is complete
+      - condition: タスク分析と計画が完了した
         next: write_tests
-      - condition: The user is asking a question (not an implementation task)
+      - condition: ユーザーが質問をしている（実装タスクではない）
         next: COMPLETE
-      - condition: Requirements are unclear and planning cannot proceed
+      - condition: 要件が不明確で計画を立てられない
         next: ABORT
     output_contracts:
       report:
         - name: plan.md
-          format: plan
+          format: plan-frontend
 
   - name: write_tests
     tags:
@@ -75,7 +78,9 @@ steps:
       - coding
       - testing
     knowledge:
-      - takt
+      - frontend
+      - react
+      - backend
       - architecture
       - unit-testing
       - e2e-testing
@@ -85,13 +90,13 @@ steps:
     required_permission_mode: edit
     instruction: write-tests-first
     rules:
-      - condition: Test creation is complete
+      - condition: テスト作成が完了した
         next: implement
-      - condition: Skipping test creation as target is not yet implemented
+      - condition: 実装対象が未実装のためテスト作成をスキップ
         next: implement
-      - condition: Cannot proceed with test creation
+      - condition: テスト作成を進行できない
         next: plan
-      - condition: User input required for clarification
+      - condition: ユーザー入力が必要
         next: write_tests
         requires_user_input: true
         interactive_only: true
@@ -108,7 +113,9 @@ steps:
     policy:
       - coding
     knowledge:
-      - takt
+      - frontend
+      - react
+      - backend
       - architecture
       - implementation-semantics
     provider_options:
@@ -116,9 +123,9 @@ steps:
     required_permission_mode: edit
     instruction: implement
     rules:
-      - condition: Implementation is complete
+      - condition: 実装完了
         next: reviewers
-      - condition: Cannot proceed with implementation (environment issue or missing information)
+      - condition: 実装を進められない（環境問題・情報不足）
         next: ABORT
 
   - name: reviewers
@@ -143,6 +150,26 @@ steps:
             - name: architect-review.md
               format: architecture-review-finding-contract
 
+      - name: frontend-review
+        tags:
+          - review
+        edit: false
+        persona: frontend-reviewer
+        policy:
+          - review
+        knowledge:
+          - frontend
+          - react
+        pass_previous_response: false
+        instruction: review-frontend
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: frontend-review.md
+              format: frontend-review-finding-contract
+
       - name: ai-antipattern-review
         tags:
           - review
@@ -154,8 +181,8 @@ steps:
         pass_previous_response: false
         instruction: ai-antipattern-review
         rules:
-          - condition: No AI-specific issues
-          - condition: AI-specific issues found
+          - condition: AI特有の問題なし
+          - condition: AI特有の問題あり
         output_contracts:
           report:
             - name: ai-antipattern-review.md
@@ -198,13 +225,13 @@ steps:
             - name: implementation-semantics-review.md
               format: implementation-semantics-review-finding-contract
     rules:
-      - condition: all("approved", "No AI-specific issues", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: all("approved", "approved", "AI特有の問題なし", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
         next: final-gate
-      - condition: any("needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && findings.conflicts.count == 0
+      - condition: any("needs_fix", "needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && findings.conflicts.count == 0
         next: fix
       - condition: findings.conflicts.count == 0 && findings.open.count > 0
         next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
+      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
         next: fix
       - condition: findings.conflicts.count > 0
         next: ABORT
@@ -229,7 +256,7 @@ steps:
         next: fix
       - condition: findings.conflicts.count == 0 && findings.open.count > 0
         next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
+      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
         next: fix
       - condition: findings.conflicts.count > 0
         next: ABORT
@@ -242,7 +269,9 @@ steps:
     policy:
       - coding
     knowledge:
-      - takt
+      - frontend
+      - react
+      - backend
       - architecture
       - implementation-semantics
     provider_options:
@@ -250,7 +279,7 @@ steps:
     required_permission_mode: edit
     instruction: fix
     rules:
-      - condition: Fixes are complete
+      - condition: 修正完了
         next: reviewers
-      - condition: Cannot proceed with fixes, or human judgment is required
+      - condition: 修正を進められない、または人間の判断が必要
         next: ABORT

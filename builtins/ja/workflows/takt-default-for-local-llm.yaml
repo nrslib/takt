@@ -1,8 +1,8 @@
-name: takt-default-for-localllm
+name: takt-default-for-local-llm
 description: ローカルLLM向けの TAKT 開発ワークフロー。deep レビュー4並列 + Finding Contract（台帳・解消確認・異議裁定）で弱いモデルの規律を構造で作る（計画 → テスト作成 → 実装 → FCレビュー → 最終ゲート → 完了）
 finding_contract:
-  ledger_path: .takt/findings/takt-default-for-localllm.json
-  raw_findings_path: .takt/findings/takt-default-for-localllm/raw
+  ledger_path: .takt/findings/takt-default-for-local-llm.json
+  raw_findings_path: .takt/findings/takt-default-for-local-llm/raw
   manager:
     persona: findings-manager
     instruction: findings-manager

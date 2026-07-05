@@ -1,8 +1,8 @@
-name: backend-cqrs-for-localllm
-description: ローカルLLM向けの CQRS+ES バックエンド開発ワークフロー。deep レビュー4並列 + Finding Contract で弱いモデルの規律を構造で作る
+name: backend-for-local-llm
+description: Backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract build discipline for weak models structurally
 finding_contract:
-  ledger_path: .takt/findings/backend-cqrs-for-localllm.json
-  raw_findings_path: .takt/findings/backend-cqrs-for-localllm/raw
+  ledger_path: .takt/findings/backend-for-local-llm.json
+  raw_findings_path: .takt/findings/backend-for-local-llm/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -25,9 +25,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: 健全（指摘数が減少、修正が反映されている）
+        - condition: converging (findings decreasing, fixes applied)
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: unproductive (same findings repeating)
           next: ABORT
   - cycle:
       - reviewers
@@ -38,9 +38,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: 健全（指摘数が減少、修正が反映されている）
+        - condition: converging (findings decreasing, fixes applied)
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: unproductive (same findings repeating)
           next: ABORT
 
 steps:
@@ -51,17 +51,16 @@ steps:
     persona: planner
     knowledge:
       - backend
-      - cqrs-es
       - architecture
     provider_options:
       extends: review-readonly
     instruction: plan
     rules:
-      - condition: タスク分析と計画が完了した
+      - condition: Task analysis and planning is complete
         next: write_tests
-      - condition: ユーザーが質問をしている（実装タスクではない）
+      - condition: The user is asking a question (not an implementation task)
         next: COMPLETE
-      - condition: 要件が不明確で計画を立てられない
+      - condition: Requirements are unclear and planning cannot proceed
         next: ABORT
     output_contracts:
       report:
@@ -78,7 +77,6 @@ steps:
       - testing
     knowledge:
       - backend
-      - cqrs-es
       - architecture
       - unit-testing
       - e2e-testing
@@ -88,13 +86,13 @@ steps:
     required_permission_mode: edit
     instruction: write-tests-first
     rules:
-      - condition: テスト作成が完了した
+      - condition: Test creation is complete
         next: implement
-      - condition: 実装対象が未実装のためテスト作成をスキップ
+      - condition: Skipping test creation as target is not yet implemented
         next: implement
-      - condition: テスト作成を進行できない
+      - condition: Cannot proceed with test creation
         next: plan
-      - condition: ユーザー入力が必要
+      - condition: User input required for clarification
         next: write_tests
         requires_user_input: true
         interactive_only: true
@@ -112,7 +110,6 @@ steps:
       - coding
     knowledge:
       - backend
-      - cqrs-es
       - architecture
       - implementation-semantics
     provider_options:
@@ -120,32 +117,32 @@ steps:
     required_permission_mode: edit
     instruction: implement
     rules:
-      - condition: 実装完了
+      - condition: Implementation is complete
         next: reviewers
-      - condition: 実装を進められない（環境問題・情報不足）
+      - condition: Cannot proceed with implementation (environment issue or missing information)
         next: ABORT
 
   - name: reviewers
     tags:
       - review
     parallel:
-      - name: cqrs-es-review
+      - name: arch-review
         tags:
           - review
         edit: false
-        persona: cqrs-es-reviewer
+        persona: architecture-reviewer
         policy:
           - review
         knowledge:
-          - cqrs-es
-        instruction: review-cqrs-es
+          - architecture
+        instruction: review-arch
         rules:
           - condition: approved
           - condition: needs_fix
         output_contracts:
           report:
-            - name: cqrs-es-review.md
-              format: cqrs-es-review-finding-contract
+            - name: architect-review.md
+              format: architecture-review-finding-contract
 
       - name: ai-antipattern-review
         tags:
@@ -158,8 +155,8 @@ steps:
         pass_previous_response: false
         instruction: ai-antipattern-review
         rules:
-          - condition: AI特有の問題なし
-          - condition: AI特有の問題あり
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
         output_contracts:
           report:
             - name: ai-antipattern-review.md
@@ -202,13 +199,13 @@ steps:
             - name: implementation-semantics-review.md
               format: implementation-semantics-review-finding-contract
     rules:
-      - condition: all("approved", "AI特有の問題なし", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: all("approved", "No AI-specific issues", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
         next: final-gate
-      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && findings.conflicts.count == 0
+      - condition: any("needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && findings.conflicts.count == 0
         next: fix
       - condition: findings.conflicts.count == 0 && findings.open.count > 0
         next: fix
-      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
+      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
         next: fix
       - condition: findings.conflicts.count > 0
         next: ABORT
@@ -233,7 +230,7 @@ steps:
         next: fix
       - condition: findings.conflicts.count == 0 && findings.open.count > 0
         next: fix
-      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
+      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
         next: fix
       - condition: findings.conflicts.count > 0
         next: ABORT
@@ -247,7 +244,6 @@ steps:
       - coding
     knowledge:
       - backend
-      - cqrs-es
       - architecture
       - implementation-semantics
     provider_options:
@@ -255,7 +251,7 @@ steps:
     required_permission_mode: edit
     instruction: fix
     rules:
-      - condition: 修正完了
+      - condition: Fixes are complete
         next: reviewers
-      - condition: 修正を進められない、または人間の判断が必要
+      - condition: Cannot proceed with fixes, or human judgment is required
         next: ABORT

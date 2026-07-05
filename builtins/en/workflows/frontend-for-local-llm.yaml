@@ -1,8 +1,8 @@
-name: backend-for-localllm
-description: Backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract build discipline for weak models structurally
+name: frontend-for-local-llm
+description: Frontend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract build discipline for weak models structurally
 finding_contract:
-  ledger_path: .takt/findings/backend-for-localllm.json
-  raw_findings_path: .takt/findings/backend-for-localllm/raw
+  ledger_path: .takt/findings/frontend-for-local-llm.json
+  raw_findings_path: .takt/findings/frontend-for-local-llm/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -50,7 +50,8 @@ steps:
     edit: false
     persona: planner
     knowledge:
-      - backend
+      - frontend
+      - react
       - architecture
     provider_options:
       extends: review-readonly
@@ -65,7 +66,7 @@ steps:
     output_contracts:
       report:
         - name: plan.md
-          format: plan
+          format: plan-frontend
 
   - name: write_tests
     tags:
@@ -76,7 +77,8 @@ steps:
       - coding
       - testing
     knowledge:
-      - backend
+      - frontend
+      - react
       - architecture
       - unit-testing
       - e2e-testing
@@ -109,7 +111,8 @@ steps:
     policy:
       - coding
     knowledge:
-      - backend
+      - frontend
+      - react
       - architecture
       - implementation-semantics
     provider_options:
@@ -126,23 +129,24 @@ steps:
     tags:
       - review
     parallel:
-      - name: arch-review
+      - name: frontend-review
         tags:
           - review
         edit: false
-        persona: architecture-reviewer
+        persona: frontend-reviewer
         policy:
           - review
         knowledge:
-          - architecture
-        instruction: review-arch
+          - frontend
+          - react
+        instruction: review-frontend
         rules:
           - condition: approved
           - condition: needs_fix
         output_contracts:
           report:
-            - name: architect-review.md
-              format: architecture-review-finding-contract
+            - name: frontend-review.md
+              format: frontend-review-finding-contract
 
       - name: ai-antipattern-review
         tags:
@@ -243,7 +247,8 @@ steps:
     policy:
       - coding
     knowledge:
-      - backend
+      - frontend
+      - react
       - architecture
       - implementation-semantics
     provider_options:
