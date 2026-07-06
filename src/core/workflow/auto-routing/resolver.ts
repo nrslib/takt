@@ -1,7 +1,7 @@
 import type { AutoRoutingCandidate, AutoRoutingConfig, AutoRoutingStrategy } from '../../models/config-types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
-import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
+import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 
 export interface AutoRoutingStepMetadata {
@@ -141,7 +141,7 @@ function candidateToProviderInfo(
   const modelResolvedByAuto = currentProviderInfo.modelSource === undefined;
   const resolvedModel = modelResolvedByAuto ? candidate.model : currentProviderInfo.model;
   const resolvedModelSource = currentProviderInfo.modelSource ?? source;
-  validateProviderModelCompatibility(candidate.provider, resolvedModel, {
+  validateProviderModelRequirements(candidate.provider, resolvedModel, {
     modelFieldName: 'Configuration error: auto_routing resolved model',
   });
   return {

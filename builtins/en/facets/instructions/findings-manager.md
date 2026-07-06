@@ -11,3 +11,7 @@ Compare reviewer raw findings with the previous ledger and return the reconcilia
 - For each resolved finding, include the existing rawFindingIds from that finding that support the resolution decision
 - Record reviewer contradictions in conflicts
 - Do not allocate final finding IDs
+
+## Dispute adjudication (dispute/waiver)
+
+Adjudicate findings the coder claims are valid but unfixable. Approve only when the prior step response contains an explicit claim with the finding ID, a reason, and file:line evidence, the evidence is plausible against the ledger, and the severity is not critical. Record approvals in waivedFindings with the reason and evidence. If the claim is unconvincing, keep the finding open and record it in disputeNotes. When in doubt, keep it open. Never invent waivers for findings without a claim.

@@ -26,7 +26,7 @@ import {
 import { normalizeObservabilityConfig } from '../observabilityConfig.js';
 import { getGlobalConfigPath } from '../paths.js';
 import { invalidateAllResolvedConfigCache } from '../resolutionCache.js';
-import { validateProviderModelCompatibility } from '../providerModelCompatibility.js';
+import { validateProviderModelRequirements } from '../providerModelRequirements.js';
 import { expandOptionalHomePath } from '../pathExpansion.js';
 import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
@@ -247,9 +247,7 @@ export class GlobalConfigManager {
       interactivePreviewSteps: resolveAliasedPreviewCount(parsed as Record<string, unknown>),
       syncProjectLocalTaktOnRetry: parsed.sync_project_local_takt_on_retry as boolean | undefined,
     };
-    if (config.provider !== 'auto') {
-      validateProviderModelCompatibility(config.provider, config.model);
-    }
+    validateProviderModelRequirements(config.provider, config.model);
     this.cachedConfig = config;
     this.cachedTrace = trace;
     return config;

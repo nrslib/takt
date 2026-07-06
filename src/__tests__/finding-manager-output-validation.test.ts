@@ -53,11 +53,274 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     reopenedFindings: [],
     conflicts: [],
     resolvedConflicts: [],
+    waivedFindings: [],
+    disputeNotes: [],
     ...overrides,
   };
 }
 
+const CLAIM = '## Disputed Findings\n- findingId: F-0001\n  reason: frozen contract\n  evidence: src/types.ts:94';
+
 describe('validateFindingManagerOutput', () => {
+  it('should accept a waiver backed by a dispute claim in the prior response', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen public contract mandates Record', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('should accept a waiver claimed with a column-zero bare findingId field', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen public contract mandates Record', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        'findingId: F-0001',
+        'reason: frozen contract',
+        'evidence: src/types.ts:94',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('should reject duplicate dispute notes for the same finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        disputeNotes: [
+          { findingId: 'F-0001', reason: 'first note', evidence: 'src/a.ts:1' },
+          { findingId: 'F-0001', reason: 'second note', evidence: 'src/a.ts:2' },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('Duplicate dispute note');
+    }
+  });
+
+  it('should reject a waiver when the prior response contains no claim for the finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: 'All findings fixed.',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when the id appears outside a Disputed Findings block', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: 'F-0001 was fixed in src/types.ts:94. No disputes.',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when the id only appears inside another finding entry', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        '- findingId: F-0002',
+        '  reason: external constraint',
+        '  evidence: src/b.ts:20',
+        '  note: F-0001 was fixed, not disputed.',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when findingId only appears inside another entry note line', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        '- findingId: F-0002',
+        '  reason: external constraint',
+        '  evidence: src/b.ts:20',
+        '  note: findingId: F-0001 was fixed in src/a.ts:1',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when a bare findingId appears indented inside a multi-line note', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        '- findingId: F-0002',
+        '  reason: external constraint',
+        '  evidence: src/b.ts:20',
+        '  note:',
+        '    findingId: F-0001 was fixed in src/a.ts:1',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver without file:line evidence', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'because I said so' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('file:line evidence');
+    }
+  });
+
+  it('should reject a dispute note recorded alongside a state transition', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+        disputeNotes: [{ findingId: 'F-0001', reason: 'also disputed', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('state transition');
+    }
+  });
+
+  it('should reject waiving a critical finding', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.severity = 'critical';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('critical findings must stay open');
+    }
+  });
+
+  it('should reject waiving a finding that is not open', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'resolved';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('should reject a waive combined with another decision for the same finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('multiple manager decisions');
+    }
+  });
+
+  it('should accept reopening a waived finding', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'waived';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'], evidence: 'premise no longer holds' }],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('should record dispute notes only against open findings', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'resolved';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        disputeNotes: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it('should accept a valid manager output before reconciliation', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),

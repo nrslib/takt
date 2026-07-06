@@ -21,6 +21,7 @@ workflow_categories:
       - frontend
       - frontend-mini
       - frontend-maintenance
+      - frontend-for-local-llm
   ⚙️ バックエンド:
     workflows:
       - backend
@@ -28,12 +29,15 @@ workflow_categories:
       - backend-maintenance
       - backend-cqrs
       - backend-cqrs-mini
+      - backend-for-local-llm
+      - backend-cqrs-for-local-llm
   🔧 デュアル:
     workflows:
       - dual
       - dual-mini
       - dual-cqrs
       - dual-cqrs-mini
+      - dual-for-local-llm
   🏗️ インフラストラクチャ:
     workflows:
       - terraform
@@ -63,12 +67,19 @@ workflow_categories:
   🎵 TAKT開発:
     workflows:
       - takt-default
-      - takt-default-with-fc
       - takt-default-refresh-all
       - takt-default-refresh-fast
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
+      - takt-default-for-local-llm
+  🖥️ ローカルLLM:
+    workflows:
+      - takt-default-for-local-llm
+      - frontend-for-local-llm
+      - backend-for-local-llm
+      - backend-cqrs-for-local-llm
+      - dual-for-local-llm
   その他:
     workflows:
       - research

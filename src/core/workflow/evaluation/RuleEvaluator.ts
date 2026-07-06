@@ -18,7 +18,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
-import { isDeferredDeterministicCondition, isDeterministicCondition, isFindingsCondition } from './rule-utils.js';
+import { findImmediateDeterministicMatch, hasUnquotedFindingsReference, isDeferredDeterministicCondition, isDeterministicCondition, isFindingsCondition, unwrapWhenCondition } from './rule-utils.js';
 
 const log = createLogger('rule-evaluator');
 
@@ -99,20 +99,14 @@ export class RuleEvaluator {
     }
 
     const firstNonDeterministicIndex = this.findFirstNonDeterministicRuleIndex();
-    const leadingDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-      0,
-      firstNonDeterministicIndex >= 0 ? firstNonDeterministicIndex : undefined,
-    );
+    const leadingDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, 0, firstNonDeterministicIndex >= 0 ? firstNonDeterministicIndex : (this.step.rules.length));
     if (leadingDeterministicIndex >= 0) {
       return { index: leadingDeterministicIndex, method: 'auto_select' };
     }
 
     const phase3TagIndex = this.resolveTaggedRuleIndex(tagContent, interactiveEnabled);
     if (phase3TagIndex >= 0) {
-      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-        firstNonDeterministicIndex + 1,
-        phase3TagIndex,
-      );
+      const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, phase3TagIndex);
       if (immediateDeterministicIndex >= 0) {
         return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
@@ -121,10 +115,7 @@ export class RuleEvaluator {
 
     const phase1TagIndex = this.resolveTaggedRuleIndex(agentContent, interactiveEnabled);
     if (phase1TagIndex >= 0) {
-      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-        firstNonDeterministicIndex + 1,
-        phase1TagIndex,
-      );
+      const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, phase1TagIndex);
       if (immediateDeterministicIndex >= 0) {
         return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
@@ -133,19 +124,14 @@ export class RuleEvaluator {
 
     const aiRuleIndex = await this.evaluateAiConditions(agentContent);
     if (aiRuleIndex >= 0) {
-      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-        firstNonDeterministicIndex + 1,
-        aiRuleIndex,
-      );
+      const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, aiRuleIndex);
       if (immediateDeterministicIndex >= 0) {
         return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
       return { index: aiRuleIndex, method: 'ai_judge' };
     }
 
-    const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-      firstNonDeterministicIndex + 1,
-    );
+    const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, this.step.rules.length);
     if (immediateDeterministicIndex >= 0) {
       return { index: immediateDeterministicIndex, method: 'auto_select' };
     }
@@ -169,8 +155,8 @@ export class RuleEvaluator {
         return false;
       }
       return isFindingsCondition(rule.condition)
-        || (rule.aggregateGuardCondition !== undefined && isFindingsCondition(rule.aggregateGuardCondition))
-        || (rule.guardCondition !== undefined && isFindingsCondition(rule.guardCondition));
+        || (rule.aggregateGuardCondition !== undefined && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
+        || (rule.guardCondition !== undefined && hasUnquotedFindingsReference(rule.guardCondition));
     }) === true;
   }
 
@@ -189,6 +175,13 @@ export class RuleEvaluator {
     // タグは一致してもガード（findings 条件）が成立しない場合は
     // このステージでは不一致として扱い、後続の検出ステージに委ねる。
     if (rule?.guardCondition !== undefined && !evaluateWhenExpression(rule.guardCondition, this.ctx.state)) {
+      return -1;
+    }
+    // 決定的条件のルールはタグ申告（[STEP:N]）では常に成立させない。
+    // 真であっても採用は段階評価（位置準拠の決定的ステージ）に一任する。
+    // 真なら通す形にすると、モデルのタグ申告が when(true) 等を本来の段階
+    // より早く発火させ、位置意味論を迂回できてしまう。
+    if (rule !== undefined && isDeterministicCondition(rule.condition)) {
       return -1;
     }
 
@@ -215,32 +208,6 @@ export class RuleEvaluator {
     return -1;
   }
 
-  private evaluateImmediateDeterministicConditions(startIndex = 0, endExclusive?: number): number {
-    if (!this.step.rules) return -1;
-
-    const upperBound = endExclusive ?? this.step.rules.length;
-    for (let i = Math.max(startIndex, 0); i < upperBound; i++) {
-      const rule = this.step.rules[i];
-      if (!rule) continue;
-      if (rule.interactiveOnly && this.ctx.interactive !== true) {
-        continue;
-      }
-      if (rule.isAiCondition || rule.isAggregateCondition) {
-        continue;
-      }
-      if (!isDeterministicCondition(rule.condition)) {
-        continue;
-      }
-      if (isDeferredDeterministicCondition(rule.condition)) {
-        continue;
-      }
-      if (evaluateWhenExpression(rule.condition, this.ctx.state)) {
-        return i;
-      }
-    }
-
-    return -1;
-  }
 
   private evaluateDeferredDeterministicConditions(): number {
     if (!this.step.rules) return -1;
@@ -257,7 +224,7 @@ export class RuleEvaluator {
       if (!isDeterministicCondition(rule.condition) || !isDeferredDeterministicCondition(rule.condition)) {
         continue;
       }
-      if (evaluateWhenExpression(rule.condition, this.ctx.state)) {
+      if (evaluateWhenExpression(unwrapWhenCondition(rule.condition), this.ctx.state)) {
         return i;
       }
     }

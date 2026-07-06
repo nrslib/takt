@@ -270,13 +270,13 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalized.findingContract).toBeUndefined();
     });
 
-    it(`${locale} peer-review-with-fc subworkflow should enable Finding Contract`, () => {
-      const workflow = loadBuiltinWorkflow(locale, 'peer-review-with-fc.yaml');
+    it(`${locale} takt-default-for-local-llm should enable Finding Contract`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'takt-default-for-local-llm.yaml');
       const normalized = normalizeBuiltinWorkflow(workflow, locale);
 
       expect(workflow.finding_contract).toEqual({
-        ledger_path: '.takt/findings/peer-review-with-fc.json',
-        raw_findings_path: '.takt/findings/peer-review-with-fc/raw',
+        ledger_path: '.takt/findings/takt-default-for-local-llm.json',
+        raw_findings_path: '.takt/findings/takt-default-for-local-llm/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -284,8 +284,8 @@ describe('builtin takt-default provider_options refs', () => {
         },
       });
       expect(normalized.findingContract).toMatchObject({
-        ledgerPath: '.takt/findings/peer-review-with-fc.json',
-        rawFindingsPath: '.takt/findings/peer-review-with-fc/raw',
+        ledgerPath: '.takt/findings/takt-default-for-local-llm.json',
+        rawFindingsPath: '.takt/findings/takt-default-for-local-llm/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'findings-manager',
@@ -294,28 +294,28 @@ describe('builtin takt-default provider_options refs', () => {
           outputContract: readFileSync(outputContractPath(locale, 'findings-manager'), 'utf-8'),
         },
       });
+      const antipatternOk = locale === 'ja' ? 'AI特有の問題なし' : 'No AI-specific issues';
+      const antipatternNg = locale === 'ja' ? 'AI特有の問題あり' : 'AI-specific issues found';
       const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
       expect(reviewers?.rules?.map((rule) => rule.condition)).toEqual([
-        'all("approved") && findings.open.count == 0 && findings.conflicts.count == 0',
-        'any("needs_fix") && findings.conflicts.count == 0',
-        'findings.conflicts.count == 0 && findings.open.count > 0',
+        `all("approved", "${antipatternOk}", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)`,
+        `any("needs_fix", "${antipatternNg}", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)`,
+        'when(findings.conflicts.count == 0 && findings.open.count > 0)',
         expect.stringContaining('findings.conflicts'),
-        'findings.conflicts.count > 0',
+        'when(findings.conflicts.count > 0)',
       ]);
       expect(reviewers?.rules?.[0]).toMatchObject({
         isAggregateCondition: true,
         aggregateType: 'all',
-        aggregateConditionText: 'approved',
         aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
       });
       expect(reviewers?.rules?.[1]).toMatchObject({
         isAggregateCondition: true,
         aggregateType: 'any',
-        aggregateConditionText: 'needs_fix',
         aggregateGuardCondition: 'findings.conflicts.count == 0',
       });
 
-      const mergeReadiness = normalized.steps.find((step) => step.name === 'merge-readiness-review');
+      const mergeReadiness = normalized.steps.find((step) => step.name === 'final-gate');
       expect(mergeReadiness?.rules).toEqual([
         // タグ && findings の複合は condition（タグ文）+ guardCondition に分解される
         expect.objectContaining({
@@ -329,7 +329,7 @@ describe('builtin takt-default provider_options refs', () => {
           next: 'fix',
         }),
         expect.objectContaining({
-          condition: 'findings.conflicts.count == 0 && findings.open.count > 0',
+          condition: 'when(findings.conflicts.count == 0 && findings.open.count > 0)',
           next: 'fix',
         }),
         expect.objectContaining({
@@ -338,9 +338,8 @@ describe('builtin takt-default provider_options refs', () => {
           isAiCondition: true,
         }),
         expect.objectContaining({
-          condition: 'findings.conflicts.count > 0',
-          next: '',
-          returnValue: 'need_replan',
+          condition: 'when(findings.conflicts.count > 0)',
+          next: 'ABORT',
         }),
       ]);
     });
@@ -367,27 +366,115 @@ describe('builtin takt-default provider_options refs', () => {
       });
     });
 
-    it(`${locale} peer-review-with-fc should use Finding Contract-specific output contracts`, () => {
-      const workflow = loadBuiltinWorkflow(locale, 'peer-review-with-fc.yaml');
+    it(`${locale} every for-local-llm workflow should share the FC gate rule contract`, () => {
+      const family = [
+        'takt-default-for-local-llm',
+        'frontend-for-local-llm',
+        'backend-for-local-llm',
+        'backend-cqrs-for-local-llm',
+        'dual-for-local-llm',
+      ];
+      for (const name of family) {
+        const workflow = loadBuiltinWorkflow(locale, `${name}.yaml`);
+        const normalized = normalizeBuiltinWorkflow(workflow, locale);
+
+        expect(normalized.findingContract, name).toMatchObject({
+          ledgerPath: `.takt/findings/${name}.json`,
+          rawFindingsPath: `.takt/findings/${name}/raw`,
+        });
+
+        const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
+        const reviewerRules = reviewers?.rules ?? [];
+        expect(reviewerRules.map((rule) => rule.next), name).toEqual([
+          'final-gate', 'fix', 'fix', 'fix', 'ABORT',
+        ]);
+        expect(reviewerRules[0], name).toMatchObject({
+          isAggregateCondition: true,
+          aggregateType: 'all',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+        });
+        expect(reviewerRules[4], name).toMatchObject({
+          condition: 'when(findings.conflicts.count > 0)',
+          next: 'ABORT',
+        });
+
+        const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
+        const gateRules = finalGate?.rules ?? [];
+        expect(gateRules.map((rule) => rule.next), name).toEqual([
+          'COMPLETE', 'fix', 'fix', 'fix', 'ABORT',
+        ]);
+        expect(gateRules[0], name).toMatchObject({
+          condition: 'approved',
+          guardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+        });
+      }
+    });
+
+    it(`${locale} every for-local-llm workflow should share the FC gate rule contract`, () => {
+      const family = [
+        'takt-default-for-local-llm',
+        'frontend-for-local-llm',
+        'backend-for-local-llm',
+        'backend-cqrs-for-local-llm',
+        'dual-for-local-llm',
+      ];
+      for (const name of family) {
+        const workflow = loadBuiltinWorkflow(locale, `${name}.yaml`);
+        const normalized = normalizeBuiltinWorkflow(workflow, locale);
+
+        expect(normalized.findingContract, name).toMatchObject({
+          ledgerPath: `.takt/findings/${name}.json`,
+          rawFindingsPath: `.takt/findings/${name}/raw`,
+        });
+
+        const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
+        const reviewerRules = reviewers?.rules ?? [];
+        expect(reviewerRules.map((rule) => rule.next), name).toEqual([
+          'final-gate', 'fix', 'fix', 'fix', 'ABORT',
+        ]);
+        expect(reviewerRules[0], name).toMatchObject({
+          isAggregateCondition: true,
+          aggregateType: 'all',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+        });
+
+        const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
+        const gateRules = finalGate?.rules ?? [];
+        expect(gateRules.map((rule) => rule.next), name).toEqual([
+          'COMPLETE', 'fix', 'fix', 'fix', 'ABORT',
+        ]);
+        expect(gateRules[0], name).toMatchObject({
+          condition: 'approved',
+          guardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+        });
+      }
+    });
+    it(`${locale} takt-default-for-local-llm should use Finding Contract-specific output contracts`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'takt-default-for-local-llm.yaml');
       const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
-      const mergeReadiness = workflow.steps?.find((step) => step.name === 'merge-readiness-review');
+      const finalGate = workflow.steps?.find((step) => step.name === 'final-gate');
       const reviewerFormats = outputFormats(reviewers);
-      const formats = outputFormats([...reviewers, ...(mergeReadiness ? [mergeReadiness] : [])]);
+      const formats = outputFormats([...reviewers, ...(finalGate ? [finalGate] : [])]);
 
+      const expectedReviewerContracts = [
+        'architecture-review',
+        'ai-antipattern-review',
+        'coding-review',
+        'implementation-semantics-review',
+      ];
       expect(reviewerFormats).toEqual(
-        PEER_REVIEW_PARALLEL_OUTPUT_CONTRACTS.map((contract) => `${contract}-finding-contract`),
+        expectedReviewerContracts.map((contract) => `${contract}-finding-contract`),
       );
-      expect(formats).toEqual(PEER_REVIEW_OUTPUT_CONTRACTS.map((contract) => `${contract}-finding-contract`));
+      expect(formats).toEqual(
+        [...expectedReviewerContracts, 'merge-readiness-review'].map((contract) => `${contract}-finding-contract`),
+      );
 
-      for (const contract of PEER_REVIEW_OUTPUT_CONTRACTS) {
+      for (const contract of [...expectedReviewerContracts, 'merge-readiness-review']) {
         const findingContractContent = readFileSync(outputContractPath(locale, `${contract}-finding-contract`), 'utf-8');
-        const legacyContent = readFileSync(outputContractPath(locale, contract), 'utf-8');
 
         expect(findingContractContent).not.toContain('finding_id');
         expect(findingContractContent).not.toContain('persists');
-        expect(findingContractContent).not.toContain('resolved');
         expect(findingContractContent).not.toContain('reopened');
-        expect(legacyContent).toContain('finding_id');
       }
     });
   }

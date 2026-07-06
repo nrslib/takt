@@ -22,6 +22,7 @@ import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
+import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
@@ -517,15 +518,14 @@ export class StepExecutor {
       // Phase 3 の判定はタグ/構造化出力からルール番号を直接採用するため、
       // ここでガード（findings 条件）を評価する。不成立なら採用せず、
       // ガード対応済みの通常ルール評価へフォールバックする。
-      const phase3Rule = step.rules?.[phase3Result.ruleIndex];
-      if (
-        phase3Rule?.guardCondition !== undefined
-        && !evaluateWhenExpression(phase3Rule.guardCondition, state)
-      ) {
+      // 採用判定は共通ヘルパに委譲（先行決定的評価 + ガード/決定的再評価）。
+      const adoption = resolvePhase3Adoption(step.rules, phase3Result, state, this.deps.getInteractive(), evaluateWhenExpression);
+      phase3Result = adoption.result;
+      if (adoption.blocked) {
         log.debug('Phase 3 rule guard failed; falling back to rule evaluation', {
           step: step.name,
           ruleIndex: phase3Result.ruleIndex,
-          guardCondition: phase3Rule.guardCondition,
+          ruleCondition: step.rules?.[phase3Result.ruleIndex]?.condition,
         });
       } else {
         log.debug('Rule matched (Phase 3)', {

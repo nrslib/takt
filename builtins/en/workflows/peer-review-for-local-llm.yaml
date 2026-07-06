@@ -1,12 +1,5 @@
-name: peer-review-with-fc
-description: Experimental Finding Contract peer review. Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop, followed by merge-readiness-review as a maintainability-aware merge quality gate.
-finding_contract:
-  ledger_path: .takt/findings/peer-review-with-fc.json
-  raw_findings_path: .takt/findings/peer-review-with-fc/raw
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
+name: peer-review-for-local-llm
+description: peer-review with an added implementation-semantics reviewer for deeper coverage. Specialist parallel reviewers ⇄ fix loop, followed by a parallel merge-readiness/supervise final gate.
 subworkflow:
   callable: true
   visibility: internal
@@ -19,6 +12,13 @@ subworkflow:
       default:
         - architecture
         - takt
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
+        - implementation-semantics
 workflow_config:
   provider_options:
     codex:
@@ -30,7 +30,7 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
-      - merge-readiness-review
+      - final-gate
       - fix
     threshold: 5
     judge:
@@ -63,7 +63,7 @@ steps:
         output_contracts:
           report:
             - name: architect-review.md
-              format: architecture-review-finding-contract
+              format: architecture-review
       - name: security-review
         tags:
           - review
@@ -80,7 +80,7 @@ steps:
         output_contracts:
           report:
             - name: security-review.md
-              format: security-review-finding-contract
+              format: security-review
       - name: qa-review
         tags:
           - review
@@ -98,7 +98,7 @@ steps:
         output_contracts:
           report:
             - name: qa-review.md
-              format: qa-review-finding-contract
+              format: qa-review
       - name: testing-review
         tags:
           - review
@@ -119,7 +119,7 @@ steps:
         output_contracts:
           report:
             - name: testing-review.md
-              format: testing-review-finding-contract
+              format: testing-review
       - name: coding-review
         tags:
           - review
@@ -138,7 +138,25 @@ steps:
         output_contracts:
           report:
             - name: coding-review.md
-              format: coding-review-finding-contract
+              format: coding-review
+      - name: implementation-semantics-review
+        tags:
+          - review
+        edit: false
+        persona: implementation-semantics-reviewer
+        policy: review
+        knowledge: implementation-semantics
+        pass_previous_response: false
+        provider_options:
+          extends: review-readonly
+        instruction: review-implementation-semantics
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: implementation-semantics-review.md
+              format: implementation-semantics-review
       - name: ai-antipattern-review-2nd
         tags:
           - review
@@ -156,45 +174,27 @@ steps:
         output_contracts:
           report:
             - name: ai-antipattern-review.md
-              format: ai-antipattern-review-finding-contract
+              format: ai-antipattern-review
     rules:
-      - condition: all("approved") && findings.open.count == 0 && findings.conflicts.count == 0
-        next: merge-readiness-review
-      - condition: any("needs_fix") && findings.conflicts.count == 0
+      - condition: all("approved")
+        next: final-gate
+      - condition: any("needs_fix")
         next: fix
-      - condition: findings.conflicts.count == 0 && findings.open.count > 0
-        next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve the conflict. Do not choose it for reviewer disagreement or cases that need human adjudication.")
-        next: fix
-      - condition: findings.conflicts.count > 0
-        return: need_replan
-  - name: merge-readiness-review
-    tags:
-      - review
-      - final-gate
-      - merge-readiness
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    provider_options:
-      extends: review-readonly
-    pass_previous_response: false
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    args:
+      supervise_knowledge:
+        $param: arch_knowledge
     rules:
-      - condition: approved && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: COMPLETE
         next: COMPLETE
-      - condition: needs_fix && findings.conflicts.count == 0
+      - condition: needs_fix
         next: fix
-      - condition: findings.conflicts.count == 0 && findings.open.count > 0
-        next: fix
-      - condition: ai("There are unresolved findings.conflicts. Choose fix only when concrete code changes by the coder can resolve them. Do not choose fix for reviewer judgment conflicts or cases requiring human judgment.")
-        next: fix
-      - condition: findings.conflicts.count > 0
+      - condition: need_replan
         return: need_replan
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review-finding-contract
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding
@@ -204,8 +204,7 @@ steps:
       - coding
       - testing
     knowledge:
-      - takt
-      - architecture
+      $param: fix_knowledge
     provider_options:
       extends: edit
     required_permission_mode: edit

@@ -40,6 +40,20 @@
       "conflictId": "C-012345ABCDEF",
       "evidence": "Evidence that the conflict is adjudicated"
     }
+  ],
+  "waivedFindings": [
+    {
+      "findingId": "F-0003",
+      "reason": "The frozen public contract mandates Record and the hasOwn guard is the complete mitigation",
+      "evidence": "src/types.ts:94, src/domain.ts:82"
+    }
+  ],
+  "disputeNotes": [
+    {
+      "findingId": "F-0004",
+      "reason": "The coder claimed a spec constraint but the evidence does not point at the location; rejected",
+      "evidence": "src/store.ts:10"
+    }
   ]
 }
 ```

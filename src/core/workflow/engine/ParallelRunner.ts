@@ -19,6 +19,7 @@ import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
+import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -41,7 +42,7 @@ import {
   type FindingManagerRunResult,
   runFindingManagerForParallelStep,
 } from '../findings/manager-runner.js';
-import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
@@ -195,6 +196,9 @@ export class ParallelRunner {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
     }
     const subSteps = step.parallel;
+    // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
+    // manager に渡すため、サブステップ実行で lastOutput が変わる前に捕捉する。
+    const priorStepResponseText = state.lastOutput?.content;
     const stepIteration = incrementStepIteration(state, step.name);
     log.debug('Running parallel step', {
       step: step.name,
@@ -289,6 +293,8 @@ export class ParallelRunner {
                   ledgerCopyPath: findingLedgerCopyPath,
                   ledgerSummary: this.renderFindingLedgerSummary(),
                   reportLedgerSummary: this.renderFindingLedgerReportSummary(),
+                  hasOpenFindings: this.ledgerHasOpenFindings(),
+                  hasWaivedFindings: this.ledgerHasWaivedFindings(),
                   rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
                 }
               : undefined,
@@ -509,14 +515,19 @@ export class ParallelRunner {
         // Phase 3 はルール番号を直接採用するため、ガード（findings 条件）を
         // ここで評価する。不成立なら採用せず、ガード対応済みの通常ルール
         // 評価へフォールバックする（StepExecutor 側と同じ扱い）。
-        const subPhase3Rule = subPhase3 !== undefined ? subStep.rules?.[subPhase3.ruleIndex] : undefined;
-        const subPhase3GuardFailed = subPhase3Rule?.guardCondition !== undefined
-          && !evaluateWhenExpression(subPhase3Rule.guardCondition, state);
+        // 採用判定は共通ヘルパに委譲（StepExecutor と同一ロジック）
+        const subAdoption = subPhase3 !== undefined
+          ? resolvePhase3Adoption(subStep.rules, subPhase3, state, this.deps.getInteractive(), evaluateWhenExpression)
+          : undefined;
+        if (subAdoption !== undefined) {
+          subPhase3 = subAdoption.result;
+        }
+        const subPhase3GuardFailed = subAdoption?.blocked === true;
         if (subPhase3GuardFailed && subPhase3 !== undefined) {
           log.debug('Phase 3 rule guard failed for sub-step; falling back to rule evaluation', {
             step: subStep.name,
             ruleIndex: subPhase3.ruleIndex,
-            guardCondition: subPhase3Rule?.guardCondition,
+            ruleCondition: subStep.rules?.[subPhase3.ruleIndex]?.condition,
           });
         }
 
@@ -663,7 +674,7 @@ export class ParallelRunner {
       };
     }
 
-    const findingManagerResult = await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath);
+    const findingManagerResult = await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath, priorStepResponseText);
     if (findingManagerResult?.status === 'invalid_manager_output') {
       const response = this.createFindingManagerInvalidOutputResult({
         step,
@@ -791,6 +802,7 @@ export class ParallelRunner {
     stepIteration: number,
     subResults: ParallelSubStepResult[],
     ledgerCopyPath: string | undefined,
+    priorStepResponseText: string | undefined,
   ): Promise<FindingManagerRunResult | undefined> {
     if (!this.deps.findingContract) {
       return undefined;
@@ -810,6 +822,7 @@ export class ParallelRunner {
       runId: this.deps.getRunId(),
       timestamp: new Date().toISOString(),
       ledgerCopyPath,
+      priorStepResponseText,
     });
     if (result.status === 'updated') {
       this.deps.refreshFindingsState();
@@ -846,6 +859,20 @@ export class ParallelRunner {
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
     return this.deps.findingLedgerStore.createRunCopy();
+  }
+
+  private ledgerHasOpenFindings(): boolean {
+    if (!this.deps.findingLedgerStore) {
+      return false;
+    }
+    return ledgerHasOpenFindings(this.deps.findingLedgerStore.loadLedger());
+  }
+
+  private ledgerHasWaivedFindings(): boolean {
+    if (!this.deps.findingLedgerStore) {
+      return false;
+    }
+    return ledgerHasWaivedFindings(this.deps.findingLedgerStore.loadLedger());
   }
 
   private renderFindingLedgerSummary(): string {

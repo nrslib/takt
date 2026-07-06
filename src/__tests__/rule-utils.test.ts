@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
+import { unwrapWhenCondition,
   hasTagBasedRules,
   hasOnlyOneBranch,
   getAutoSelectedTag,
@@ -14,7 +14,7 @@ import {
   hasUnquotedFindingsReference,
   isDeterministicCondition,
 } from '../core/workflow/evaluation/rule-utils.js';
-import type { OutputContractEntry } from '../core/models/types.js';
+import type { WorkflowRule, OutputContractEntry } from '../core/models/types.js';
 import { makeStep } from './test-helpers.js';
 
 describe('hasTagBasedRules', () => {
@@ -70,17 +70,25 @@ describe('hasTagBasedRules', () => {
   it('should return false when all rules are deterministic when expressions', () => {
     const step = makeStep({
       rules: [
-        { condition: 'structured.plan.action == "noop"', next: 'COMPLETE' },
-        { condition: 'context.route.task.exists == true', next: 'ABORT' },
+        { condition: 'when(structured.plan.action == "noop")', next: 'COMPLETE' },
+        { condition: 'when(context.route.task.exists == true)', next: 'ABORT' },
       ],
     });
     expect(hasTagBasedRules(step)).toBe(false);
   });
 });
 
+describe('unwrapWhenCondition', () => {
+  it('should throw on non-when input (caller contract violation)', () => {
+    expect(() => unwrapWhenCondition('approved')).toThrow('requires a when(...) condition');
+  });
+});
+
 describe('isDeterministicCondition', () => {
   it('should return true for structured when expressions', () => {
-    expect(isDeterministicCondition('structured.plan_followup.action == "noop"')).toBe(true);
+    expect(isDeterministicCondition('when(structured.plan_followup.action == "noop")')).toBe(true);
+    // 裸の式はもう決定的扱いしない（when() 明示構文のみ）
+    expect(isDeterministicCondition('structured.plan_followup.action == "noop"')).toBe(false);
   });
 
   it('should return false for plain tag conditions', () => {
@@ -183,5 +191,29 @@ describe('getReportFiles', () => {
       { name: 'review.md', format: 'review', useJudge: true },
     ];
     expect(getReportFiles(contracts)).toEqual(['00-plan.md', 'review.md']);
+  });
+});
+
+describe('generateStatusRulesComponents interactive default', () => {
+  const rules = [
+    { condition: 'approved', next: 'COMPLETE' },
+    { condition: 'ユーザー入力が必要', next: 'ask', interactiveOnly: true },
+  ] as WorkflowRule[];
+
+  it('should exclude interactive-only rules from the criteria table when interactive is unspecified', async () => {
+    const { generateStatusRulesComponents } = await import('../core/workflow/instruction/status-rules.js');
+
+    const components = generateStatusRulesComponents('gate', rules, 'ja');
+
+    expect(components.criteriaTable).toContain('approved');
+    expect(components.criteriaTable).not.toContain('ユーザー入力が必要');
+  });
+
+  it('should include interactive-only rules in the criteria table when interactive is true', async () => {
+    const { generateStatusRulesComponents } = await import('../core/workflow/instruction/status-rules.js');
+
+    const components = generateStatusRulesComponents('gate', rules, 'ja', { interactive: true });
+
+    expect(components.criteriaTable).toContain('ユーザー入力が必要');
   });
 });

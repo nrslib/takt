@@ -13,6 +13,8 @@
 | 動的キーの辞書に `Map` を使う、または `Object.create(null)` / `Object.hasOwn` で継承経路を遮断している | OK |
 | キーが固定の有限集合（設定オブジェクト等）でプレーンオブジェクトを使う | OK |
 
+遮断済みの `Record` を「`Map` にすべき」と指摘してはならない。`Object.hasOwn` / `Object.create(null)` による遮断は完全な対策であり、その上での `Record` 継続使用は設計不備ではない。とくに公開契約（変更禁止の型定義）が `Record` を定めている場合、内部でできる対策は遮断がすべてである。指摘してよいのは「遮断されていないアクセスが残っている箇所」だけで、その場合も場所を特定して示す。
+
 ```typescript
 // REJECT - "toString" という ID を渡すと、未登録なのに存在扱いになる
 const reservations: Record<string, Reservation> = {};

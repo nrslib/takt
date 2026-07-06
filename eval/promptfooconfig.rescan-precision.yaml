@@ -1,0 +1,32 @@
+# 精度（偽陽性）測定: hasOwn 防御済みの Record を data-structure 指摘しないこと。
+# 実走で観測した非収束（レビュアーが knowledge の OK 行を無視して REJECT し続ける）の再発防止。
+description: 'TAKT facet eval: implementation-semantics precision on guarded Record'
+
+prompts:
+  - file://prompts/rescan-precision.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/inventory-es-guarded
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+  - id: 'exec: bash providers/opencode-review.sh ollama-cloud/gemma4:31b fixtures/inventory-es-guarded'
+    label: gemma4-31b
+
+tests:
+  - description: 'guarded Record must not be flagged as a data-structure finding'
+    vars:
+      task: file://cases/inventory-review-task.md
+      previous_response: file://cases/prev-review-inventory-round2.md
+    assert:
+      - type: javascript
+        metric: precision/no-guarded-record-finding
+        value: |
+          const flagged = /(Record|プレーンオブジェクト|plain object)/i.test(output) &&
+            /(Map にす|Map に変更|Map を使用|should (be|use) a? ?Map|設計不備)/i.test(output) &&
+            !/(遮断されていない|未防御|unguarded)/.test(output);
+          return { pass: !flagged, score: flagged ? 0 : 1, reason: flagged ? 'guarded Record was flagged' : 'ok' };

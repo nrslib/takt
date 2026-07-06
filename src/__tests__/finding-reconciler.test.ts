@@ -43,9 +43,113 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     reopenedFindings: [],
     conflicts: [],
     resolvedConflicts: [],
+    waivedFindings: [],
+    disputeNotes: [],
     ...overrides,
   };
 }
+
+
+function makeLedgerWithOpenFinding(): FindingLedger {
+  return makeLedger({
+    nextId: 2,
+    rawFindings: [makeRawFinding({ rawFindingId: 'raw-1' })],
+    findings: [
+      {
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'new',
+        severity: 'high',
+        title: 'Persisting issue',
+        reviewers: ['coding-reviewer'],
+        rawFindingIds: ['raw-1'],
+        firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+        lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+      },
+    ],
+  });
+}
+
+function makeContext() {
+  return {
+    workflowName: 'peer-review',
+    stepName: 'peer-review',
+    runId: 'run-2',
+    timestamp: '2026-06-13T01:00:00.000Z',
+  };
+}
+
+describe('dispute/waiver transitions', () => {
+  it('should move an open finding to waived with an audit record', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    const result = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen contract mandates Record', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/types.ts:94',
+      context: makeContext(),
+    });
+
+    const finding = result.findings.find((entry) => entry.id === 'F-0001')!;
+    expect(finding.status).toBe('waived');
+    expect(finding.lifecycle).toBe('waived');
+    expect(finding.waivers?.at(-1)).toMatchObject({ reason: 'Frozen contract mandates Record', evidence: 'src/types.ts:94' });
+  });
+
+  it('should keep a disputed finding open and append the dispute record', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    const result = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        disputeNotes: [{ findingId: 'F-0001', reason: 'coder objection rejected', evidence: 'src/a.ts:1' }],
+      }),
+      context: makeContext(),
+    });
+
+    const finding = result.findings.find((entry) => entry.id === 'F-0001')!;
+    expect(finding.status).toBe('open');
+    expect(finding.disputes).toHaveLength(1);
+  });
+
+  it('should reopen a waived finding and keep the waiver history', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    ledger.findings[0] = {
+      ...ledger.findings[0]!,
+      status: 'waived',
+      lifecycle: 'waived',
+      waivers: [{ reason: 'old reason', evidence: 'src/types.ts:94', decidedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' } }],
+    };
+    const result = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-reopen' })],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopen'], evidence: 'premise collapsed' }],
+      }),
+      context: makeContext(),
+    });
+
+    const finding = result.findings.find((entry) => entry.id === 'F-0001')!;
+    expect(finding.status).toBe('open');
+    expect(finding.waivers).toHaveLength(1);
+  });
+
+  it('should refuse to waive a critical finding', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    ledger.findings[0]!.severity = 'critical';
+    expect(() => reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/a.ts:1',
+      context: makeContext(),
+    })).toThrow('critical findings must stay open');
+  });
+});
 
 describe('reconcileFindingLedger', () => {
   it('should assign engine-owned ids to new findings and ignore raw finding ids', () => {

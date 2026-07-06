@@ -14,6 +14,8 @@ interface ValidateFindingManagerOutputInput {
   previousLedger: FindingLedger;
   rawFindings: RawFinding[];
   managerOutput: FindingManagerOutput;
+  /** Prior step response (coder's fix report); required source of dispute claims for waivers. */
+  priorStepResponseText?: string;
 }
 
 interface ValidationContext {
@@ -22,6 +24,7 @@ interface ValidationContext {
   currentRawFindingIds: ReadonlySet<string>;
   currentRawFindingsById: ReadonlyMap<string, RawFinding>;
   previousRawFindingsById: ReadonlyMap<string, RawFinding>;
+  priorStepResponseText?: string;
 }
 
 interface RawFindingDecisionRef {
@@ -37,12 +40,23 @@ interface FindingDecisionRef {
 export function validateFindingManagerOutput(
   input: ValidateFindingManagerOutputInput,
 ): FindingManagerValidationResult {
+  // zod 経路は default([]) で補完されるが、手組みの manager output が渡る
+  // 経路も実在するため、入口で新配列の欠落を正規化する。
+  input = {
+    ...input,
+    managerOutput: {
+      ...input.managerOutput,
+      waivedFindings: input.managerOutput.waivedFindings ?? [],
+      disputeNotes: input.managerOutput.disputeNotes ?? [],
+    },
+  };
   const context: ValidationContext = {
     previousFindingsById: new Map(input.previousLedger.findings.map((finding) => [finding.id, finding])),
     previousConflictsById: new Map(input.previousLedger.conflicts.map((conflict) => [conflict.id, conflict])),
     currentRawFindingIds: new Set(input.rawFindings.map((finding) => finding.rawFindingId)),
     currentRawFindingsById: new Map(input.rawFindings.map((finding) => [finding.rawFindingId, finding])),
     previousRawFindingsById: new Map(input.previousLedger.rawFindings.map((finding) => [finding.rawFindingId, finding])),
+    priorStepResponseText: input.priorStepResponseText,
   };
   const errors = [
     ...validateRawFindingDecisionRefs(input.managerOutput, context),
@@ -51,6 +65,47 @@ export function validateFindingManagerOutput(
   ];
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
+}
+
+
+/** path-like token + 行番号（例: src/types.ts:94）。裸の「word:1」は通さない。 */
+const FILE_LINE_EVIDENCE_PATTERN = /[^\s:]+\.[A-Za-z0-9_]+:\d+/;
+
+/**
+ * 直前ステップ応答から「Disputed Findings」見出し配下のブロックを抜き出し、
+ * findingId 行を単位とする claim entry に分割したうえで、「対象 ID と完全一致
+ * する entry があり、その同一 entry 内に file:line 証跡がある」ことを判定する。
+ * 別 finding の entry 内に対象 ID が付随的に現れただけでは claim と認めない。
+ */
+function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId: string): boolean {
+  if (priorStepResponseText === undefined) {
+    return false;
+  }
+  const lines = priorStepResponseText.split('\n');
+  const headingIndex = lines.findIndex((line) => /^#{1,6}\s.*disputed findings/i.test(line.trim()));
+  if (headingIndex === -1) {
+    return false;
+  }
+  const rest = lines.slice(headingIndex + 1);
+  const nextHeading = rest.findIndex((line) => /^#{1,6}\s/.test(line.trim()));
+  const blockLines = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+
+  // entry 開始と認めるのは「列0の裸の findingId フィールド」か「箇条書き
+  // prefix 付きの findingId フィールド」のみ。インデントだけの裸フィールド
+  // （複数行 note の内側等）や relatedFindingId のような別フィールドは拾わない。
+  const findingIdLinePattern = /^(?:findingId|\s*[-*+]\s+findingId)\s*[:：=]\s*[`"']?([A-Za-z0-9_-]+)/i;
+  const entryStarts = blockLines
+    .map((line, index) => ({ index, match: findingIdLinePattern.exec(line) }))
+    .filter((candidate): candidate is { index: number; match: RegExpExecArray } => candidate.match !== null);
+
+  return entryStarts.some((start, position) => {
+    if (start.match[1] !== findingId) {
+      return false;
+    }
+    const entryEnd = position + 1 < entryStarts.length ? entryStarts[position + 1]!.index : blockLines.length;
+    const entryText = blockLines.slice(start.index, entryEnd).join('\n');
+    return FILE_LINE_EVIDENCE_PATTERN.test(entryText);
+  });
 }
 
 function validateRawFindingDecisionRefs(
@@ -235,28 +290,73 @@ function validateFindingDecisionRefs(
 ): string[] {
   const decisionRefs = collectFindingDecisionRefs(managerOutput);
   const matchErrors = managerOutput.matches.flatMap((match, index) => (
-    validateFindingDecision(match.findingId, `matches[${index}]`, 'match', 'open', context)
+    validateFindingDecision(match.findingId, `matches[${index}]`, 'match', ['open'], context)
   ));
   const resolvedErrors = managerOutput.resolvedFindings.flatMap((resolved, index) => {
     const decision = `resolvedFindings[${index}]`;
     const finding = context.previousFindingsById.get(resolved.findingId);
     return [
-      ...validateFindingDecision(resolved.findingId, decision, 'resolve', 'open', context),
+      ...validateFindingDecision(resolved.findingId, decision, 'resolve', ['open'], context),
       ...(finding === undefined ? [] : validateResolvedFindingRawFindingIds(finding, resolved.rawFindingIds, context)),
     ];
   });
   const reopenedErrors = managerOutput.reopenedFindings.flatMap((reopened, index) => (
-    validateFindingDecision(reopened.findingId, `reopenedFindings[${index}]`, 'reopen', 'resolved', context)
+    validateFindingDecision(reopened.findingId, `reopenedFindings[${index}]`, 'reopen', ['resolved', 'waived'], context)
   ));
   const conflictErrors = managerOutput.conflicts.flatMap((conflict, index) => (
     validateConflictFindingIds(conflict.findingIds, `conflicts[${index}]`, context)
   ));
+  const waivedErrors = managerOutput.waivedFindings.flatMap((waived, index) => {
+    const decision = `waivedFindings[${index}]`;
+    const statusErrors = validateFindingDecision(waived.findingId, decision, 'waive', ['open'], context);
+    const finding = context.previousFindingsById.get(waived.findingId);
+    // critical は機械拒否: 免除の裁量を与えない（人間の目に必ず届かせる）
+    const severityErrors = finding !== undefined && finding.severity === 'critical'
+      ? [`Cannot waive finding "${waived.findingId}" because critical findings must stay open in ${decision}`]
+      : [];
+    // waive は coder の明示的な異議申告が前提: 「Disputed Findings」見出しの
+    // ブロック内に対象 finding ID がある場合だけを申告と認める（ID が修正報告
+    // 等の別文脈に現れただけでは通さない）。
+    const claimErrors = hasDisputeClaimFor(context.priorStepResponseText, waived.findingId)
+      ? []
+      : [`Cannot waive finding "${waived.findingId}" because the prior step response contains no dispute claim for it in ${decision}`];
+    const evidenceErrors = FILE_LINE_EVIDENCE_PATTERN.test(waived.evidence)
+      ? []
+      : [`Waiver evidence for "${waived.findingId}" must cite file:line evidence in ${decision}`];
+    return [...statusErrors, ...severityErrors, ...claimErrors, ...evidenceErrors];
+  });
+  const transitionedIds = new Set([
+    ...managerOutput.waivedFindings.map((waived) => waived.findingId),
+    ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
+    ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
+  ]);
+  // disputeNotes は matches / conflicts との併存を意図的に許す（同ラウンドで
+  // 再観測されつつ異議が却下されるのは正常）。禁止するのは状態遷移との矛盾と、
+  // 同一 finding への重複記録のみ。
+  const seenDisputeIds = new Set<string>();
+  const disputeErrors = managerOutput.disputeNotes.flatMap((note, index) => {
+    const decision = `disputeNotes[${index}]`;
+    const contradictionErrors = transitionedIds.has(note.findingId)
+      ? [`Cannot record a dispute on "${note.findingId}" because it also has a state transition in this output (${decision})`]
+      : [];
+    const duplicateErrors = seenDisputeIds.has(note.findingId)
+      ? [`Duplicate dispute note for finding "${note.findingId}" in ${decision}`]
+      : [];
+    seenDisputeIds.add(note.findingId);
+    return [
+      ...validateFindingDecision(note.findingId, decision, 'record a dispute on', ['open'], context),
+      ...contradictionErrors,
+      ...duplicateErrors,
+    ];
+  });
 
   return [
     ...matchErrors,
     ...resolvedErrors,
     ...reopenedErrors,
     ...conflictErrors,
+    ...waivedErrors,
+    ...disputeErrors,
     ...validateDuplicateFindingDecisionRefs(decisionRefs),
   ];
 }
@@ -271,6 +371,10 @@ function collectFindingDecisionRefs(managerOutput: FindingManagerOutput): Findin
     ...managerOutput.reopenedFindings.map((reopened, index) => ({
       decision: `reopenedFindings[${index}]`,
       findingId: reopened.findingId,
+    })),
+    ...managerOutput.waivedFindings.map((waived, index) => ({
+      decision: `waivedFindings[${index}]`,
+      findingId: waived.findingId,
     })),
     ...managerOutput.conflicts.flatMap((conflict, index) => (
       Array.from(new Set(conflict.findingIds)).map((findingId) => ({ decision: `conflicts[${index}]`, findingId }))
@@ -293,16 +397,16 @@ function validateFindingDecision(
   findingId: string,
   decision: string,
   action: string,
-  expectedStatus: FindingRecord['status'],
+  expectedStatuses: ReadonlyArray<FindingRecord['status']>,
   context: ValidationContext,
 ): string[] {
   const finding = context.previousFindingsById.get(findingId);
   if (finding === undefined) {
     return [`Unknown finding id "${findingId}" in ${decision}`];
   }
-  return finding.status === expectedStatus
+  return expectedStatuses.includes(finding.status)
     ? []
-    : [`Cannot ${action} finding "${findingId}" because it is not ${expectedStatus}`];
+    : [`Cannot ${action} finding "${findingId}" because it is not ${expectedStatuses.join(' or ')}`];
 }
 
 function validateConflictFindingIds(

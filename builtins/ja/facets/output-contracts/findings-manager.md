@@ -40,6 +40,20 @@
       "conflictId": "C-012345ABCDEF",
       "evidence": "調停済みと判断した根拠"
     }
+  ],
+  "waivedFindings": [
+    {
+      "findingId": "F-0003",
+      "reason": "公開契約（変更禁止の型定義）が Record を強制しており、hasOwn による遮断が完全な対策であるため",
+      "evidence": "src/types.ts:94, src/domain.ts:82"
+    }
+  ],
+  "disputeNotes": [
+    {
+      "findingId": "F-0004",
+      "reason": "coder は仕様起因と主張したが、証跡が該当箇所を示していないため不承認",
+      "evidence": "src/store.ts:10"
+    }
   ]
 }
 ```

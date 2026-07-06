@@ -97,8 +97,8 @@ function expectAutoImprovementLoopRouteContext(config: NonNullable<ReturnType<ty
     }),
   ]));
   expect(routeContext?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' }),
-    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true', next: 'plan_from_issue' }),
+    expect.objectContaining({ condition: 'when(context.route_context.selected_pr.exists == true)', next: 'plan_from_existing_pr' }),
+    expect.objectContaining({ condition: 'when(context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true)', next: 'plan_from_issue' }),
   ]));
 }
 
@@ -130,10 +130,10 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
   expect(String(planFromExistingPr?.instruction)).not.toContain('pr_comment_markdown');
   expect(String(planFromExistingPr?.instruction)).not.toContain('- noop');
   expect(planFromExistingPr?.rules).toEqual([
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
-    expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "enqueue_from_pr")', next: 'enqueue_from_pr' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "prepare_merge")', next: 'prepare_merge' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "reject_pr")', next: 'reject_pr' }),
+    expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
   ]);
   expect(planFromExistingPrStructuredOutput?.schemaRef).toBe('pr-followup-task');
   expect(planFromExistingPrStructuredOutput?.schema).toEqual(expect.objectContaining({
@@ -193,8 +193,8 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
     }),
   ]);
   expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
-    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "enqueue_new_task")', next: 'enqueue_from_issue' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
   ]));
   expect((planFromIssueStructuredOutput?.schema.properties?.action as { enum?: string[] } | undefined)?.enum).toEqual([
     'enqueue_new_task',
@@ -239,8 +239,8 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
     ]),
   }));
   expect(planFreshImprovement?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' }),
-    expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
+    expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' }),
+    expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
   ]));
   expect((planFreshImprovementStructuredOutput?.schema.properties?.action as { enum?: string[] } | undefined)?.enum).toEqual([
     'enqueue_new_task',
@@ -488,14 +488,14 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expect(String(planFreshImprovement?.instruction)).toContain('{context:route_context.tracked_issues}');
     expect(String(planFreshImprovement?.instruction)).toContain('{context:route_context.tracked_issues.length}');
     expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
-      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "enqueue_new_task")', next: 'enqueue_from_issue' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
     ]));
     expect(planFreshImprovement?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' }),
-      expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+      expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' }),
+      expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
     ]));
     expect(enqueueFromIssue?.effects).toEqual([
       expect.objectContaining({
@@ -507,14 +507,14 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       }),
     ]);
     expect(planFromExistingPr?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "enqueue_from_pr")', next: 'enqueue_from_pr' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "prepare_merge")', next: 'prepare_merge' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "reject_pr")', next: 'reject_pr' }),
+      expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
     ]));
     expect(planFromExistingPr?.rules).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "comment_on_pr"', next: 'comment_on_existing_pr' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "noop"', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "comment_on_pr")', next: 'comment_on_existing_pr' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "noop")', next: 'wait_before_next_scan' }),
     ]));
     expect(rejectPr?.effects).toEqual([
       expect.objectContaining({
@@ -524,12 +524,12 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     ]);
     expectAutoImprovementLoopDownstreamContract(config!);
     expect(prepareMerge?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' }),
-      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'resolve_conflicts' }),
+      expect.objectContaining({ condition: 'when(effect.prepare_merge.sync_with_root.success == true)', next: 'merge_pr' }),
+      expect.objectContaining({ condition: 'when(effect.prepare_merge.sync_with_root.conflicted == true)', next: 'resolve_conflicts' }),
     ]));
     expect(resolveConflicts?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.success == true', next: 'merge_pr' }),
-      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true', next: 'enqueue_conflict_resolution_task' }),
+      expect.objectContaining({ condition: 'when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true)', next: 'merge_pr' }),
+      expect.objectContaining({ condition: 'when(effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true)', next: 'enqueue_conflict_resolution_task' }),
     ]));
     expect(waitBeforeNextScan?.systemInputs).toEqual([
       expect.objectContaining({
@@ -540,7 +540,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     ]);
     expect(waitBeforeNextScan?.rules).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        condition: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")',
+        condition: 'when(exists(context.wait_before_next_scan.queue.items, item.kind == "running"))',
         next: 'wait_before_next_scan',
       }),
     ]));

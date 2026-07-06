@@ -6,7 +6,9 @@
  */
 
 /** Status of a review finding across iterations */
-export type FindingStatus = 'new' | 'persists' | 'resolved' | 'reopened';
+import type { FindingLifecycle } from '../../core/models/finding-types.js';
+
+export type FindingStatus = FindingLifecycle;
 
 /** Severity level of a review finding */
 export type FindingSeverity = 'error' | 'warning';

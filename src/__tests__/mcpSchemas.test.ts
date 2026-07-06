@@ -26,6 +26,11 @@ function requireSchema(schema: JsonSchemaObject | undefined, name: string): Json
 }
 
 describe('MCP tool input schemas', () => {
+  const requiredTaskOptions = {
+    workflow: 'default',
+    autoPr: false,
+  } as const;
+
   it('Given root tool arguments, When enqueue input is parsed, Then task settings are preserved', () => {
     const parsed = enqueueTaskInputSchema.parse({
       cwd: '/repo',
@@ -60,6 +65,7 @@ describe('MCP tool input schemas', () => {
     const parsed = enqueueTaskInputSchema.parse({
       cwd: '/repo',
       task,
+      ...requiredTaskOptions,
     });
 
     expect(parsed.task).toBe(task);
@@ -72,6 +78,7 @@ describe('MCP tool input schemas', () => {
         text: JSON.stringify({
           cwd: '/repo',
           task: 'Implement MCP support',
+          ...requiredTaskOptions,
         }),
       }],
     })).toThrow(/cwd|task/i);
@@ -81,7 +88,35 @@ describe('MCP tool input schemas', () => {
     expect(() => enqueueTaskInputSchema.parse({
       cwd: 'relative/repo',
       task: 'Implement MCP support',
+      ...requiredTaskOptions,
     })).toThrow(/absolute/i);
+  });
+
+  it('Given enqueue input without workflow or autoPr, When parsing, Then it asks callers to provide both decisions', () => {
+    expect(() => enqueueTaskInputSchema.parse({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+    })).toThrow(/workflow|autoPr/i);
+    expect(() => createIssueAndEnqueueTaskInputSchema.parse({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+    })).toThrow(/workflow|autoPr/i);
+  });
+
+  it.each([
+    ['enqueue', enqueueTaskInputSchema],
+    ['issue enqueue', createIssueAndEnqueueTaskInputSchema],
+  ])('Given %s input missing one task decision, When parsing, Then each decision is required independently', (_name, schema) => {
+    expect(() => schema.parse({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+      autoPr: false,
+    })).toThrow(/workflow/i);
+    expect(() => schema.parse({
+      cwd: '/repo',
+      task: 'Implement MCP support',
+      workflow: 'default',
+    })).toThrow(/autoPr/i);
   });
 
   it.each([
@@ -92,6 +127,7 @@ describe('MCP tool input schemas', () => {
     expect(() => enqueueTaskInputSchema.parse({
       cwd: '/repo',
       task: 'Implement MCP support',
+      ...requiredTaskOptions,
       worktree,
     })).toThrow(/boolean|worktree/i);
   });
@@ -109,6 +145,7 @@ describe('MCP tool input schemas', () => {
     expect(() => enqueueTaskInputSchema.parse({
       cwd: '/repo',
       task: 'Implement MCP support',
+      ...requiredTaskOptions,
       taskContext: { branch },
     })).toThrow(/branch|Invalid/i);
   });
@@ -117,6 +154,7 @@ describe('MCP tool input schemas', () => {
     const parsed = createIssueAndEnqueueTaskInputSchema.parse({
       cwd: '/repo',
       task: 'Implement MCP support',
+      ...requiredTaskOptions,
       labels: ['enhancement', 'mcp'],
     });
 
@@ -128,15 +166,18 @@ describe('MCP tool input schemas', () => {
     expect(() => enqueueTaskInputSchema.parse({
       cwd: '/repo',
       task: 'x'.repeat((128 * 1024) + 1),
+      ...requiredTaskOptions,
     })).toThrow(/too big|maximum|at most/i);
     expect(() => enqueueTaskInputSchema.parse({
       cwd: '/repo',
       task: 'Implement MCP support',
+      autoPr: false,
       workflow: 'w'.repeat(129),
     })).toThrow(/too big|maximum|at most/i);
     expect(() => createIssueAndEnqueueTaskInputSchema.parse({
       cwd: '/repo',
       task: 'Implement MCP support',
+      ...requiredTaskOptions,
       labels: Array.from({ length: 21 }, (_, index) => `label-${index}`),
     })).toThrow(/too big|maximum|at most/i);
     expect(() => runNextTaskInputSchema.parse({
@@ -146,8 +187,8 @@ describe('MCP tool input schemas', () => {
   });
 
   it.each([
-    ['enqueue', enqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support' }],
-    ['issue enqueue', createIssueAndEnqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support' }],
+    ['enqueue', enqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support', ...requiredTaskOptions }],
+    ['issue enqueue', createIssueAndEnqueueTaskInputSchema, { cwd: '/repo', task: 'Implement MCP support', ...requiredTaskOptions }],
     ['run-next', runNextTaskInputSchema, { cwd: '/repo' }],
   ])('Given unsafe PR numbers, When %s input is parsed, Then they are rejected', (_name, schema, baseInput) => {
     for (const prNumber of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
@@ -181,9 +222,9 @@ describe('MCP tool input schemas', () => {
     const runNextProperties = schemaProperties(z.toJSONSchema(runNextTaskInputSchema, { io: 'input' }));
     const taskContextProperties = schemaProperties(requireSchema(enqueueProperties.taskContext, 'taskContext'));
 
-    expect(enqueueProperties.workflow?.description).toBe('Workflow identifier to store on the queued task. Defaults to the TAKT default workflow.');
+    expect(enqueueProperties.workflow?.description).toBe('Workflow identifier to store on the queued task. Ask the user which workflow to use before enqueueing.');
     expect(enqueueProperties.worktree?.description).toBe('Whether the queued task should run in a TAKT-managed worktree.');
-    expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should automatically open a pull request.');
+    expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should automatically open a pull request. Ask the user before enqueueing.');
     expect(issueProperties.labels?.description).toBe('Issue labels to request from the configured issue provider.');
     expect(runNextProperties.provider?.description).toBe('Agent provider override for this task execution.');
     expect(runNextProperties.model?.description).toBe('Model override for this task execution.');

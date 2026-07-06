@@ -12,8 +12,8 @@ import type {
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
-import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
-import { isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
+import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 import { normalizeAutoRoutingConfig, normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
@@ -37,8 +37,8 @@ import { prepareCallableSubworkflowDiscoveryArgs } from './workflowCallableDisco
 
 function ruleReferencesFindings(rule: { condition: string; aggregateGuardCondition?: string; guardCondition?: string }): boolean {
   return isFindingsCondition(rule.condition)
-    || (rule.aggregateGuardCondition !== undefined && isFindingsCondition(rule.aggregateGuardCondition))
-    || (rule.guardCondition !== undefined && isFindingsCondition(rule.guardCondition));
+    || (rule.aggregateGuardCondition !== undefined && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
+    || (rule.guardCondition !== undefined && hasUnquotedFindingsReference(rule.guardCondition));
 }
 
 function normalizeSubworkflowConfig(
@@ -243,7 +243,7 @@ export function normalizeWorkflowConfig(
       judge: monitor.judge,
       triggeringProviderInfo,
     });
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       judgeProviderInfo.provider,
       judgeProviderInfo.model,
       {

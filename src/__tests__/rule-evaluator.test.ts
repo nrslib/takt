@@ -151,7 +151,7 @@ describe('RuleEvaluator', () => {
       const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
-          { condition: 'true', next: 'fallback' },
+          { condition: 'when(true)', next: 'fallback' },
         ],
       });
       const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(0) };
@@ -170,7 +170,7 @@ describe('RuleEvaluator', () => {
       const step = makeStep({
         name: 'route_context',
         rules: [
-          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'when(context.route_context.task.exists == true)', next: 'skip' },
           { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
         ],
       });
@@ -191,7 +191,7 @@ describe('RuleEvaluator', () => {
         name: 'route_context',
         rules: [
           { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
-          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'when(context.route_context.task.exists == true)', next: 'skip' },
         ],
       });
       const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(0) };
@@ -207,7 +207,7 @@ describe('RuleEvaluator', () => {
     it('should prefer ai() conditions over an earlier when:true rule', async () => {
       const step = makeStep({
         rules: [
-          { condition: 'true', next: 'fallback' },
+          { condition: 'when(true)', next: 'fallback' },
           { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
         ],
       });
@@ -226,7 +226,7 @@ describe('RuleEvaluator', () => {
         rules: [
           { condition: 'tag-like-status', next: 'tag-path' },
           { condition: 'needs follow-up', next: 'fix', isAiCondition: true, aiConditionText: 'does it need follow-up?' },
-          { condition: 'true', next: 'fallback' },
+          { condition: 'when(true)', next: 'fallback' },
         ],
       });
       const structuredCaller = { evaluateCondition: vi.fn().mockResolvedValue(1) };
@@ -247,7 +247,7 @@ describe('RuleEvaluator', () => {
         name: 'route_context',
         rules: [
           { condition: 'approved', next: 'implement' },
-          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'when(context.route_context.task.exists == true)', next: 'skip' },
           { condition: 'rejected', next: 'review', isAiCondition: true, aiConditionText: 'is it rejected?' },
         ],
       });
@@ -267,7 +267,7 @@ describe('RuleEvaluator', () => {
       const step = makeStep({
         rules: [
           { condition: 'approved', next: 'implement' },
-          { condition: 'true', next: 'fallback' },
+          { condition: 'when(true)', next: 'fallback' },
         ],
       });
       const detectRuleIndex = vi.fn().mockReturnValue(0);
@@ -282,7 +282,7 @@ describe('RuleEvaluator', () => {
     it('should prefer phase3 tags over an earlier when:true rule', async () => {
       const step = makeStep({
         rules: [
-          { condition: 'true', next: 'fallback' },
+          { condition: 'when(true)', next: 'fallback' },
           { condition: 'approved', next: 'implement' },
         ],
       });
@@ -302,7 +302,7 @@ describe('RuleEvaluator', () => {
         name: 'route_context',
         rules: [
           { condition: 'approved', next: 'implement' },
-          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'when(context.route_context.task.exists == true)', next: 'skip' },
         ],
       });
       const detectRuleIndex = vi.fn().mockReturnValue(0);
@@ -321,7 +321,7 @@ describe('RuleEvaluator', () => {
       const step = makeStep({
         name: 'route_context',
         rules: [
-          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'when(context.route_context.task.exists == true)', next: 'skip' },
           { condition: 'approved', next: 'implement' },
         ],
       });
@@ -342,7 +342,7 @@ describe('RuleEvaluator', () => {
         name: 'route_context',
         rules: [
           { condition: 'approved', next: 'implement', isAiCondition: true, aiConditionText: 'is it approved?' },
-          { condition: 'context.route_context.task.exists == true', next: 'skip' },
+          { condition: 'when(context.route_context.task.exists == true)', next: 'skip' },
           { condition: 'rejected', next: 'review' },
         ],
       });
@@ -374,7 +374,7 @@ describe('RuleEvaluator', () => {
     it('should prefer ai_judge_fallback over an earlier when:true rule', async () => {
       const step = makeStep({
         rules: [
-          { condition: 'true', next: 'fallback' },
+          { condition: 'when(true)', next: 'fallback' },
           { condition: 'approved', next: 'implement' },
           { condition: 'rejected', next: 'review' },
         ],

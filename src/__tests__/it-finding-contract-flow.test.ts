@@ -103,6 +103,8 @@ describe('Finding Contract integration flow', () => {
         reopenedFindings: [],
         conflicts: [],
         resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
       },
       context: {
         workflowName: 'peer-review',

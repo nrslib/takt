@@ -13,6 +13,40 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/index.js';
 
+/**
+ * 自セッションの進捗が止まったまま、サーバ全体のバスに無関係イベントが
+ * 流れ続ける状況を再現するストリーム。旧実装はこれで永遠に延命していた。
+ */
+class ChatterOnlyEventStream implements AsyncIterable<unknown> {
+  private pendingTimer: ReturnType<typeof setTimeout> | undefined;
+  readonly returnSpy = vi.fn(async (): Promise<IteratorResult<unknown, void>> => {
+    if (this.pendingTimer !== undefined) {
+      clearTimeout(this.pendingTimer);
+    }
+    return { done: true, value: undefined };
+  });
+
+  constructor(private readonly chatterIntervalMs: number) {}
+
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+    return {
+      next: async (): Promise<IteratorResult<unknown, void>> => {
+        await new Promise((resolvePromise) => {
+          this.pendingTimer = setTimeout(resolvePromise, this.chatterIntervalMs);
+        });
+        return {
+          done: false,
+          value: {
+            type: 'message.part.updated',
+            properties: { part: { id: 'p-x', type: 'text', text: 'sibling', sessionID: 'other-session' } },
+          },
+        };
+      },
+      return: this.returnSpy,
+    };
+  }
+}
+
 class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   private index = 0;
   private readonly events: unknown[];
@@ -2153,6 +2187,385 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('abort');
+  });
+
+  it('should request native structured output and capture info.structured', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const stream = new MockEventStream([
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            sessionID: 'session-structured',
+            role: 'assistant',
+            structured: { rawFindings: [] },
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-structured' } },
+    ]);
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-structured' } }),
+          promptAsync,
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(promptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        format: { type: 'json_schema', schema, retryCount: 2 },
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('should fall back to the trailing JSON block when structured is not emitted', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'part-1',
+            type: 'text',
+            text: 'report text\n```json\n{"rawFindings": []}\n```',
+          },
+          delta: 'report text\n```json\n{"rawFindings": []}\n```',
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-fallback' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-fallback' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+  });
+
+  it.each([
+    {
+      name: 'broken JSON inside the fence',
+      text: 'report\n```json\n{"rawFindings": [}\n```',
+      expected: undefined,
+    },
+    {
+      name: 'array-rooted fenced JSON',
+      text: 'report\n```json\n[1, 2]\n```',
+      expected: undefined,
+    },
+    {
+      name: 'multiple fenced blocks (last one wins)',
+      text: '```json\n{"first": true}\n```\nmore text\n```json\n{"rawFindings": []}\n```',
+      expected: { rawFindings: [] },
+    },
+  ])('structured fallback edge case: $name', async ({ text, expected }) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'part-1', type: 'text', text },
+          delta: text,
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-edge' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-edge' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    // 抽出に失敗しても done のまま返し、判定は下流（検証 + 是正リトライ）に委ねる
+    expect(result.status).toBe('done');
+    if (expected === undefined) {
+      expect(result.structuredOutput).toBeUndefined();
+    } else {
+      expect(result.structuredOutput).toEqual(expected);
+    }
+  });
+
+  it('should fall back to formatless retry when the model does not produce structured output', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          {
+            type: 'message.updated',
+            properties: {
+              info: {
+                sessionID: 'session-fmt',
+                role: 'assistant',
+                error: { name: 'StructuredOutputError', data: { message: 'Model did not produce structured output' } },
+              },
+            },
+          },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          {
+            type: 'message.part.updated',
+            properties: {
+              part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
+              delta: 'report\n```json\n{"rawFindings": []}\n```'
+            },
+          },
+          { type: 'session.idle', properties: { sessionID: 'session-fmt' } },
+        ]),
+      });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-fmt' } }),
+          promptAsync,
+        },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    // 1回目は format 付き、2回目（フォールバック）は format なし。追加の再試行はしない
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
+    expect(promptAsync.mock.calls[1]?.[0]).not.toHaveProperty('format');
+  });
+
+  it('should still fall back when the format failure lands on the last transient-budget attempt', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    // transient は promptAsync 例外経路（abortCause: prompt）でのみリトライされる
+    const emptyStream = () => new MockEventStream([]);
+    const formatFailureStream = new MockEventStream([
+      {
+        type: 'message.updated',
+        properties: {
+          info: { sessionID: 'session-budget', role: 'assistant', error: { name: 'StructuredOutputError', data: { message: 'Model did not produce structured output' } } },
+        },
+      },
+    ]);
+    const successStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
+          delta: 'report\n```json\n{"rawFindings": []}\n```',
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-budget' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: emptyStream() })
+      .mockResolvedValueOnce({ stream: emptyStream() })
+      .mockResolvedValueOnce({ stream: formatFailureStream })
+      .mockResolvedValueOnce({ stream: successStream });
+    const promptAsync = vi.fn()
+      .mockRejectedValueOnce(new Error('transport error'))
+      .mockRejectedValueOnce(new Error('transport error'))
+      .mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-budget' } }),
+          promptAsync,
+        },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      outputSchema: schema,
+    });
+
+    // transient 2回で基礎予算(3)の最終試行に format 失敗が来ても、別枠でフォールバックできる
+    expect(result.status).toBe('done');
+    expect(result.structuredOutput).toEqual({ rawFindings: [] });
+    expect(promptAsync).toHaveBeenCalledTimes(4);
+    expect(promptAsync.mock.calls[3]?.[0]).not.toHaveProperty('format');
+  });
+
+  it('should not leak sibling-session text into the active session content', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-sibling', type: 'text', text: 'sibling text', sessionID: 'other-session' } },
+      },
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-own', type: 'text', text: 'own text', sessionID: 'session-own' } },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-own' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-own' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('coder', 'do it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toContain('own text');
+    expect(result.content).not.toContain('sibling text');
+  });
+
+  it('should time out a stalled session even while unrelated bus events keep flowing', async () => {
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const chatterStream = new ChatterOnlyEventStream(100);
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+          session: {
+            create: vi.fn().mockResolvedValue({ data: { id: 'session-stalled' } }),
+            promptAsync: vi.fn().mockReturnValue(new Promise(() => { /* 完了しない */ })),
+          },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream: chatterStream }) },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const result = await new OpenCodeClient().call('coder', 'do it', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        interactionTimeoutMs: 500,
+      });
+
+      // 兄弟セッションのイベントでは延命せず、無音タイムアウトが発火して
+      // エラーとして表面化する（永久ハングしない）
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('timed out');
+      // 中断経路でもイテレータの後始末（SSE クローズ）が呼ばれること
+      expect(chatterStream.returnSpy).toHaveBeenCalled();
+    } finally {
+      delete process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+    }
+  }, 20_000);
+
+  it('should not trip the invalid-argument loop across interleaved unavailable errors', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const INVALID = 'The read tool was called with invalid arguments: SchemaError(Expected string)';
+    const UNAVAILABLE = 'unavailable tool: fetch';
+    const toolError = (id: string, tool: string, error: string) => ({
+      type: 'message.part.updated',
+      properties: { part: { id, type: 'tool', tool, callID: id, state: { status: 'error', error } } },
+    });
+    // invalid ×3 → unavailable ×1 → invalid ×1: 修正前は invalid 側が
+    // unavailable を観測できず「連続4回」と誤認して打ち切っていた並び
+    const stream = new MockEventStream([
+      toolError('c1', 'read', INVALID),
+      toolError('c2', 'read', INVALID),
+      toolError('c3', 'read', INVALID),
+      toolError('c4', 'fetch', UNAVAILABLE),
+      toolError('c5', 'read', INVALID),
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-text', type: 'text', text: 'done' }, delta: 'done' },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-mixed' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-mixed' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('coder', 'do it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    // 偽の連続判定で error にならず完走する（unavailable も1回では閾値未満）
+    expect(result.status).toBe('done');
   });
 
   it('should pass the external_directory deny in the server config', async () => {

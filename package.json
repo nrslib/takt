@@ -35,7 +35,7 @@
     "test:e2e:provider:claude": "TAKT_E2E_PROVIDER=claude vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude.json",
     "test:e2e:provider:claude-sdk": "TAKT_E2E_PROVIDER=claude-sdk vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude-sdk.json",
     "test:e2e:provider:codex": "TAKT_E2E_PROVIDER=codex vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/codex.json",
-    "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=${TAKT_E2E_MODEL:-opencode/big-pickle} vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/opencode.json",
+    "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=${TAKT_E2E_MODEL:-ollama-cloud/qwen3-coder-next} vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/opencode.json",
     "test:e2e:provider:cursor": "TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor vitest run --config vitest.config.e2e.cursor.ts --outputFile.json=e2e/results/cursor.json",
     "test:e2e:claude": "npm run test:e2e:provider:claude",
     "test:e2e:codex": "npm run test:e2e:provider:codex",
@@ -43,7 +43,8 @@
     "test:e2e:cursor": "npm run test:e2e:provider:cursor",
     "lint": "eslint src/",
     "check:release": "npm run build && npm run lint && npm run test && npm run test:it && npm run test:e2e:all; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
-    "prepublishOnly": "npm run lint && npm run build && npm run test"
+    "prepublishOnly": "npm run lint && npm run build && npm run test",
+    "canary:coder": "node scripts/canary-coder.mjs"
   },
   "keywords": [
     "ai",

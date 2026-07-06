@@ -11,6 +11,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
+import { parseLastJsonBlock } from '../../agents/structured-caller/shared.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
@@ -37,7 +38,7 @@ import {
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
-import { UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
+import { InvalidToolArgumentLoopDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 
 export type { OpenCodeCallOptions } from './types.js';
@@ -45,6 +46,23 @@ export type { OpenCodeCallOptions } from './types.js';
 const TAKT_AGENT = 'takt';
 const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
+
+/**
+ * イベントが属するセッション ID を取り出す。イベントバスはサーバ全体で
+ * 共有されるため、無音検出のリセットは「自セッションの進捗」だけに
+ * 反応させる必要がある（LSP・ファイルウォッチャ・兄弟セッションの
+ * イベントでリセットすると、生成が死んでいても永遠にハングする）。
+ */
+function extractEventSessionId(event: OpenCodeStreamEvent): string | undefined {
+  const props = event.properties as Record<string, unknown> | undefined;
+  if (!props) return undefined;
+  if (typeof props.sessionID === 'string') return props.sessionID;
+  const part = props.part as { sessionID?: unknown } | undefined;
+  if (part !== undefined && typeof part.sessionID === 'string') return part.sessionID;
+  const info = props.info as { sessionID?: unknown } | undefined;
+  if (info !== undefined && typeof info.sessionID === 'string') return info.sessionID;
+  return undefined;
+}
 
 function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
   if (allowedTools !== undefined && allowedTools.length === 0) {
@@ -61,7 +79,11 @@ function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
 }
 
 const log = createLogger('opencode-sdk');
-const OPENCODE_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+/** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
+function resolveStreamIdleTimeoutMs(): number {
+  const fromEnv = Number(process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
+  return fromEnv > 0 ? fromEnv : 10 * 60 * 1000;
+}
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_RETRY_MAX_ATTEMPTS = 3;
 const OPENCODE_RETRY_BASE_DELAY_MS = 250;
@@ -566,10 +588,19 @@ export class OpenCodeClient {
     prompt: string,
     options: OpenCodeCallOptions,
   ): Promise<AgentResponse> {
-    for (let attempt = 1; attempt <= OPENCODE_RETRY_MAX_ATTEMPTS; attempt++) {
+    // native format（StructuredOutput ツール）をモデルが呼ばない個体が
+    // あるため、その失敗を検出したら format なし（手書き JSON + 下流の
+    // 是正リトライ）へフォールバックする。
+    let disableNativeStructuredOutput = false;
+    // フォールバック（format なし再試行）は transient 再試行の予算とは別枠で
+    // 1回だけ確保する: 先行の transient エラーで予算を使い切っていても、
+    // 最終試行の format 失敗から救済できるようにする。
+    let maxAttempts = OPENCODE_RETRY_MAX_ATTEMPTS;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
-      const timeoutMessage = `OpenCode stream timed out after ${Math.floor(OPENCODE_STREAM_IDLE_TIMEOUT_MS / 60000)} minutes of inactivity`;
+      const streamIdleTimeoutMs = resolveStreamIdleTimeoutMs();
+      const timeoutMessage = `OpenCode stream timed out after ${Math.round(streamIdleTimeoutMs / 60000)} minutes of inactivity`;
       let abortCause: OpenCodeAbortCause | undefined;
       let diagRef: StreamDiagnostics | undefined;
       let release: (() => void) | undefined;
@@ -614,9 +645,10 @@ export class OpenCodeClient {
         }
         idleTimeoutId = setTimeout(() => {
           diagRef?.onIdleTimeoutFired();
+          log.warn(timeoutMessage, { sessionId, model: options.model });
           abortCause = 'timeout';
           streamAbortController.abort();
-        }, OPENCODE_STREAM_IDLE_TIMEOUT_MS);
+        }, streamIdleTimeoutMs);
       };
 
       const onExternalAbort = (): void => {
@@ -731,6 +763,11 @@ export class OpenCodeClient {
           ...(agentName !== undefined ? { agent: agentName } : {}),
           ...(options.variant !== undefined ? { variant: options.variant } : {}),
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
+          // ネイティブ構造化出力: OpenCode がスキーマのキー構造を強制する
+          // （enum 等の値制約までは保証されないため、下流のスキーマ検証は維持）。
+          ...(options.outputSchema !== undefined && !disableNativeStructuredOutput
+            ? { format: { type: 'json_schema' as const, schema: options.outputSchema, retryCount: 2 } }
+            : {}),
           parts: [{ type: 'text' as const, text: prompt }],
         };
         const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];
@@ -748,9 +785,11 @@ export class OpenCodeClient {
 
         let content = '';
         let success = true;
+        let capturedStructuredOutput: Record<string, unknown> | undefined;
         let failureMessage = '';
         const state = createStreamTrackingState();
         const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
+        const invalidArgumentLoopDetector = new InvalidToolArgumentLoopDetector();
         const echoState = { remainingPrompts: buildPromptEchoCandidates(prompt, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
@@ -772,11 +811,43 @@ export class OpenCodeClient {
           textOffsets.set(partId, prevOffset + rawDelta.length);
         };
 
-        for await (const event of stream) {
+        // for-await 単体だと、タイマーが abort してもイベントが来るまで
+        // 待ちから戻らない（SDK が signal を尊重しない場合は永久待機）。
+        // イテレータと abort をレースさせ、タイマー発火で必ず脱出する。
+        const streamIterator = (stream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+        const streamAborted = new Promise<never>((_, reject) => {
+          streamAbortController.signal.addEventListener('abort', () => {
+            reject(new Error(timeoutMessage));
+          }, { once: true });
+        });
+        streamAborted.catch(() => { /* race の敗者側での未処理拒否を防ぐ */ });
+
+        try {
+        while (true) {
           if (streamAbortController.signal.aborted) break;
-          resetIdleTimeout();
+          let iteration: IteratorResult<unknown>;
+          try {
+            iteration = await Promise.race([streamIterator.next(), streamAborted]);
+          } catch (raceError) {
+            if (streamAbortController.signal.aborted) break;
+            throw raceError;
+          }
+          if (iteration.done) break;
+          const event = iteration.value;
 
           const sseEvent = event as OpenCodeStreamEvent;
+          // セッション帰属が判明していて自分でないイベントは処理しない。
+          // サーバプールは同一モデルで共有されるため（並列レビュー等）、
+          // 兄弟セッションの text/tool 更新を通すと content と検出器が
+          // 汚染される。帰属不明のイベントは種別ごとの処理に委ねるが、
+          // 無音検出のリセット（延命）は自セッションのイベントに限る。
+          const eventSessionId = extractEventSessionId(sseEvent);
+          if (eventSessionId !== undefined && eventSessionId !== activeSessionId) {
+            continue;
+          }
+          if (eventSessionId === activeSessionId) {
+            resetIdleTimeout();
+          }
           diag.onFirstEvent(sseEvent.type);
           diag.onEvent(sseEvent.type);
           if (sseEvent.type === 'message.part.updated') {
@@ -796,15 +867,25 @@ export class OpenCodeClient {
 
             if (part.type === 'tool') {
               const toolPart = part as OpenCodeToolPart;
-              const loopError = toolPart.state.status === 'error'
-                ? unavailableToolLoopDetector.observe(
+              let loopError: string | undefined;
+              if (toolPart.state.status === 'error') {
+                // 両検出器に必ず観測させる（?? 短絡だと invalid 側が
+                // unavailable エラーを見逃し、連続性の判定が狂う）
+                const unavailableError = unavailableToolLoopDetector.observe(
                   toolPart.callID || toolPart.id,
                   toolPart.tool,
                   toolPart.state.error,
-                )
-                : undefined;
+                );
+                const invalidArgumentError = invalidArgumentLoopDetector.observe(
+                  toolPart.callID || toolPart.id,
+                  toolPart.tool,
+                  toolPart.state.error,
+                );
+                loopError = unavailableError ?? invalidArgumentError;
+              }
               if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
+                invalidArgumentLoopDetector.reset();
               }
               handlePartUpdated(part, delta, options.onStream, state);
               if (loopError !== undefined) {
@@ -947,11 +1028,15 @@ export class OpenCodeClient {
                 role?: 'assistant' | 'user';
                 time?: { completed?: number };
                 error?: unknown;
+                structured?: unknown;
               };
             };
             const info = messageProps.info;
             const isCurrentAssistantMessage = info?.sessionID === activeSessionId && info?.role === 'assistant';
             if (isCurrentAssistantMessage) {
+              if (info?.structured !== undefined && info.structured !== null && typeof info.structured === 'object' && !Array.isArray(info.structured)) {
+                capturedStructuredOutput = info.structured as Record<string, unknown>;
+              }
               const streamError = extractOpenCodeErrorMessage(info?.error);
               if (streamError) {
                 success = false;
@@ -969,11 +1054,15 @@ export class OpenCodeClient {
                 sessionID?: string;
                 role?: 'assistant' | 'user';
                 error?: unknown;
+                structured?: unknown;
               };
             };
             const info = completedProps.info;
             const isCurrentAssistantMessage = info?.sessionID === activeSessionId && info?.role === 'assistant';
             if (isCurrentAssistantMessage) {
+              if (info?.structured !== undefined && info.structured !== null && typeof info.structured === 'object' && !Array.isArray(info.structured)) {
+                capturedStructuredOutput = info.structured as Record<string, unknown>;
+              }
               const streamError = extractOpenCodeErrorMessage(info?.error);
               if (streamError) {
                 success = false;
@@ -1037,6 +1126,12 @@ export class OpenCodeClient {
             continue;
           }
         }
+        } finally {
+          // for-await が break 時に行っていた後始末（SSE クローズ）を再現する
+          try {
+            await streamIterator.return?.(undefined);
+          } catch { /* クローズ失敗は結果に影響させない */ }
+        }
 
         // The idle watchdog and external aborts cancel the stream. If the
         // iterator ends without throwing, the loop falls through with
@@ -1070,6 +1165,31 @@ export class OpenCodeClient {
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
             return rateLimitedResponse;
           }
+          const lowerMessage = message.toLowerCase();
+          // Failures that point at the native json_schema request itself: a
+          // model that never emits the StructuredOutput tool ("did not produce
+          // structured output"), or a gateway/model that rejects the json_schema
+          // response format outright (surfaced as an upstream request error).
+          // These fall back to formatless structured output; generic transient
+          // errors (transport/network) must not, or they would burn the one-shot
+          // fallback budget before a real format failure arrives.
+          const isNativeStructuredOutputFailure =
+            lowerMessage.includes('did not produce structured output')
+            || lowerMessage.includes('upstream request failed');
+          if (
+            options.outputSchema !== undefined
+            && !disableNativeStructuredOutput
+            && isNativeStructuredOutputFailure
+          ) {
+            // Fall back to formatless structured output once — hand-written JSON
+            // validated by the downstream correction retry — before giving up.
+            disableNativeStructuredOutput = true;
+            maxAttempts = Math.max(maxAttempts, attempt + 1);
+            log.info('Native structured output failed; retrying without json_schema format', { agentType, attempt, message });
+            await this.waitForRetryDelay(attempt, options.abortSignal);
+            continue;
+          }
+
           const retriable = this.isRetriableError(message, streamAbortController.signal.aborted, abortCause);
           if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
             log.info('Retrying OpenCode call after transient failure', { agentType, attempt, message });
@@ -1082,6 +1202,7 @@ export class OpenCodeClient {
             persona: agentType,
             status: 'error',
             content: message,
+            error: message,
             timestamp: new Date(),
             sessionId: activeSessionId,
           };
@@ -1090,12 +1211,33 @@ export class OpenCodeClient {
         const trimmed = content.trim();
         emitResult(options.onStream, true, trimmed, activeSessionId);
 
+        // format 要求時に structured がイベントで捕捉できなかった場合は、
+        // 本文の末尾 JSON をフォールバックとして採取する（検証は下流で行う）。
+        if (capturedStructuredOutput === undefined && options.outputSchema !== undefined) {
+          try {
+            const parsed = parseLastJsonBlock(trimmed);
+            if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+              capturedStructuredOutput = parsed as Record<string, unknown>;
+            } else {
+              log.debug('Structured output fallback found non-object JSON', { agentType });
+            }
+          } catch (fallbackError) {
+            // フォールバック採取の失敗は握りつぶすが、調査用に痕跡は残す
+            // （下流の検証と是正リトライに委ねる）。
+            log.debug('Structured output fallback extraction failed', {
+              agentType,
+              error: getErrorMessage(fallbackError),
+            });
+          }
+        }
+
         return {
           persona: agentType,
           status: 'done',
           content: trimmed,
           timestamp: new Date(),
           sessionId: activeSessionId,
+          ...(capturedStructuredOutput !== undefined ? { structuredOutput: capturedStructuredOutput } : {}),
         };
       } catch (error) {
         const message = getErrorMessage(error);
@@ -1135,6 +1277,7 @@ export class OpenCodeClient {
           persona: agentType,
           status: 'error',
           content: errorMessage,
+          error: errorMessage,
           timestamp: new Date(),
           sessionId,
         };

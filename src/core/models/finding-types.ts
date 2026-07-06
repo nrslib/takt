@@ -1,6 +1,6 @@
 export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
-export const FINDING_STATUSES = ['open', 'resolved'] as const;
-export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened'] as const;
+export const FINDING_STATUSES = ['open', 'resolved', 'waived'] as const;
+export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived'] as const;
 export const FINDING_CONFLICT_STATUSES = ['active', 'resolved'] as const;
 
 export type FindingSeverity = typeof FINDING_SEVERITIES[number];
@@ -28,6 +28,20 @@ export interface FindingObservation {
   timestamp: string;
 }
 
+/** A manager-adjudicated exemption: the finding is valid but cannot be fixed. */
+export interface FindingWaiverRecord {
+  reason: string;
+  evidence: string;
+  decidedAt: FindingObservation;
+}
+
+/** A recorded objection that the manager did NOT accept; the finding stays open. */
+export interface FindingDisputeRecord {
+  reason: string;
+  evidence: string;
+  recordedAt: FindingObservation;
+}
+
 export interface FindingLedgerEntry {
   id: string;
   status: FindingStatus;
@@ -44,6 +58,10 @@ export interface FindingLedgerEntry {
   resolvedAt?: string;
   resolvedEvidence?: string;
   reopenedEvidence?: string;
+  /** Waiver history, newest last. Kept across reopens for audit. */
+  waivers?: FindingWaiverRecord[];
+  /** Rejected or pending objections, newest last. Kept for audit. */
+  disputes?: FindingDisputeRecord[];
 }
 
 export type FindingRecord = FindingLedgerEntry;
@@ -112,6 +130,18 @@ export interface FindingManagerResolvedConflict {
   evidence: string;
 }
 
+export interface FindingManagerWaivedFinding {
+  findingId: string;
+  reason: string;
+  evidence: string;
+}
+
+export interface FindingManagerDisputeNote {
+  findingId: string;
+  reason: string;
+  evidence: string;
+}
+
 export interface FindingLedgerConflict {
   id: string;
   status: FindingConflictStatus;
@@ -131,6 +161,8 @@ export interface FindingManagerOutput {
   reopenedFindings: FindingManagerReopenedFinding[];
   conflicts: FindingManagerConflict[];
   resolvedConflicts: FindingManagerResolvedConflict[];
+  waivedFindings: FindingManagerWaivedFinding[];
+  disputeNotes: FindingManagerDisputeNote[];
 }
 
 export interface FindingReconcileContext {
@@ -155,6 +187,9 @@ export interface FindingsRuleContext {
     }>;
   };
   resolved: {
+    count: number;
+  };
+  waived: {
     count: number;
   };
   conflicts: {

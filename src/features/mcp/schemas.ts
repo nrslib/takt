@@ -20,8 +20,7 @@ const taskContentSchema = z.string().max(MCP_TASK_MAX_LENGTH).refine((value) => 
   message: 'task is required',
 }).describe('Task body to save as a pending TAKT task. Boundary whitespace is preserved.');
 const workflowSchema = z.string().trim().min(1).max(MCP_WORKFLOW_MAX_LENGTH)
-  .optional()
-  .describe('Workflow identifier to store on the queued task. Defaults to the TAKT default workflow.');
+  .describe('Workflow identifier to store on the queued task. Ask the user which workflow to use before enqueueing.');
 const worktreeSchema = z.boolean()
   .optional()
   .describe('Whether the queued task should run in a TAKT-managed worktree.');
@@ -46,8 +45,7 @@ const taskSaveOptionsSchema = z.object({
   workflow: workflowSchema,
   worktree: worktreeSchema,
   autoPr: z.boolean()
-    .optional()
-    .describe('Whether successful worktree execution should automatically open a pull request.'),
+    .describe('Whether successful worktree execution should automatically open a pull request. Ask the user before enqueueing.'),
   taskContext: taskContextSchema,
 }).strict();
 

@@ -2,9 +2,9 @@ import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule }
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
-import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
+import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
-import { isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
+import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
 import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
@@ -14,10 +14,10 @@ function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   return isFindingsCondition(rule.condition)
     || ('aggregateGuardCondition' in rule
       && rule.aggregateGuardCondition !== undefined
-      && isFindingsCondition(rule.aggregateGuardCondition))
+      && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
     || ('guardCondition' in rule
       && rule.guardCondition !== undefined
-      && isFindingsCondition(rule.guardCondition));
+      && hasUnquotedFindingsReference(rule.guardCondition));
 }
 
 function validateFindingsRuleContract(
@@ -63,7 +63,7 @@ function validateAgentStepProviderModel(
     providerRouting: options.providerRouting,
     personaProviders: options.personaProviders,
   });
-  validateProviderModelCompatibility(
+  validateProviderModelRequirements(
     providerInfo.provider,
     providerInfo.model,
     {
@@ -85,7 +85,7 @@ function validatePromotionProviderModels(
       : promotion.providerSpecified
         ? undefined
         : baseProviderInfo.model;
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       provider,
       model,
       {
@@ -235,7 +235,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       judge: monitor.judge,
       triggeringProviderInfo,
     });
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       judgeProviderInfo.provider,
       judgeProviderInfo.model,
       {

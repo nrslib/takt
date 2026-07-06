@@ -24,6 +24,14 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         severity: finding.severity,
         title: finding.title,
       })),
+    waived: ledger.findings
+      .filter((finding) => finding.status === 'waived')
+      .map((finding) => ({
+        id: finding.id,
+        severity: finding.severity,
+        title: finding.title,
+        waiver: finding.waivers?.at(-1),
+      })),
     conflicts: ledger.conflicts.map((conflict) => ({
       id: conflict.id,
       status: conflict.status,
@@ -42,8 +50,26 @@ export function renderFindingLedgerReportSummary(ledger: FindingLedger): string 
     resolvedFindingIds: ledger.findings
       .filter((finding) => finding.status === 'resolved')
       .map((finding) => finding.id),
+    waivedFindings: ledger.findings
+      .filter((finding) => finding.status === 'waived')
+      .map((finding) => ({
+        id: finding.id,
+        title: finding.title,
+        reason: finding.waivers?.at(-1)?.reason,
+        evidence: finding.waivers?.at(-1)?.evidence,
+      })),
     conflictIds: ledger.conflicts.map((conflict) => conflict.id),
   }, null, 2);
+}
+
+/** 台帳に open な指摘が存在するか（異議申告ガイドの注入判定に使う）。 */
+export function ledgerHasOpenFindings(ledger: FindingLedger): boolean {
+  return ledger.findings.some((finding) => finding.status === 'open');
+}
+
+/** 台帳に waived な指摘が存在するか（waived 除外指示の注入判定に使う）。 */
+export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
+  return ledger.findings.some((finding) => finding.status === 'waived');
 }
 
 export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleContext {
@@ -72,6 +98,9 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
     },
     resolved: {
       count: ledger.findings.filter((finding) => finding.status === 'resolved').length,
+    },
+    waived: {
+      count: ledger.findings.filter((finding) => finding.status === 'waived').length,
     },
     conflicts: {
       count: activeConflicts.length,

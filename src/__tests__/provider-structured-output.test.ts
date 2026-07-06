@@ -321,24 +321,23 @@ describe('OpenCodeProvider — structured output', () => {
     vi.clearAllMocks();
   });
 
-  it('supportsStructuredOutput is false', () => {
+  it('supportsStructuredOutput is true', () => {
     const provider = new OpenCodeProvider() as { supportsStructuredOutput?: boolean };
-    expect(provider.supportsStructuredOutput).toBe(false);
+    expect(provider.supportsStructuredOutput).toBe(true);
   });
 
-  it('outputSchema を callOpenCode に渡さない', async () => {
+  it('outputSchema を callOpenCode に渡す', async () => {
     mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
 
     const agent = new OpenCodeProvider().setup({ name: 'coder' });
-    const result = await agent.call('prompt', {
+    await agent.call('prompt', {
       cwd: '/tmp',
       model: 'openai/gpt-4',
       outputSchema: SCHEMA,
     });
 
     const opts = mockCallOpenCode.mock.calls[0]?.[2];
-    expect(opts).not.toHaveProperty('outputSchema');
-    expect(result.structuredOutput).toBeUndefined();
+    expect(opts).toHaveProperty('outputSchema', SCHEMA);
   });
 
   it('provider_options.opencode.variant を callOpenCode に渡す', async () => {
@@ -363,19 +362,18 @@ describe('OpenCodeProvider — structured output', () => {
     });
   });
 
-  it('systemPrompt 指定時も outputSchema を callOpenCodeCustom に渡さない', async () => {
+  it('systemPrompt 指定時も outputSchema を callOpenCodeCustom に渡す', async () => {
     mockCallOpenCodeCustom.mockResolvedValue(doneResponse('judge'));
 
     const agent = new OpenCodeProvider().setup({ name: 'judge', systemPrompt: 'sys' });
-    const result = await agent.call('prompt', {
+    await agent.call('prompt', {
       cwd: '/tmp',
       model: 'openai/gpt-4',
       outputSchema: SCHEMA,
     });
 
     const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
-    expect(opts).not.toHaveProperty('outputSchema');
-    expect(result.structuredOutput).toBeUndefined();
+    expect(opts).toHaveProperty('outputSchema', SCHEMA);
   });
 
   it('structuredOutput がない場合は undefined', async () => {
