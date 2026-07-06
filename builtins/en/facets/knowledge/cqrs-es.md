@@ -101,6 +101,19 @@ data class NoteCreatedEvent(
 )
 ```
 
+### Existing Lifecycle Priority
+
+When integrating a new input flow into an existing Aggregate, prefer the existing normal lifecycle. Do not add input-source-specific commands, wrappers, services, or deletion paths merely because the input source differs.
+
+| Criteria | Judgment |
+|----------|----------|
+| The existing Aggregate's normal command / event can represent the same fact | Use the existing lifecycle |
+| An input-source-specific wrapper only thinly delegates to a normal command | REJECT |
+| An input-source-specific command adds stricter required fields than the normal lifecycle | REJECT |
+| Existing Aggregate deletion or update events can trigger derived processing | Separate into EventHandler |
+| Display or search fields needed only by a specialized flow | Keep them in the Read Model |
+| State transitions or invariants truly differ by input source | Consider a separate Aggregate / bounded context |
+
 Good Aggregate:
 ```kotlin
 // Only fields necessary for decisions
@@ -336,6 +349,19 @@ when (eventType) {
 
 Whether to keep old event types in application code depends on the framework and operational policy. In general, it is better not to treat old types as normal domain events. Instead, test the old serialized type and payload as input contracts for the upcaster, keeping the current model clean.
 
+### Migration Scope Decomposition
+
+CQRS+ES migration must distinguish DB schema migration, data migration, event upcasters, Read Model rebuilds, and API compatibility work. Do not treat "migrate / do not migrate" as a single decision.
+
+| Criteria | Judgment |
+|----------|----------|
+| The user says migration is unnecessary, but the migration type is not decomposed | REJECT |
+| DB schema migration or data migration is added while the scope is unclear | REJECT |
+| An upcaster is added even though no persisted old events exist | REJECT |
+| Data migration is created even though the Read Model can be rebuilt from events | REJECT. Check whether rebuild is enough |
+| Add an upcaster only when event payload compatibility is required | OK |
+| Treat API compatibility and event compatibility as separate decisions | OK |
+
 ## Command Handlers
 
 | Criteria | Judgment |
@@ -376,10 +402,35 @@ Validation inside an Aggregate must be limited to state that can be reproduced s
 | HTTP/API input shape is valid | API layer |
 | Interpreting formats of external identifiers such as object keys, URLs, paths | UseCase layer or boundary policy/verifier |
 | External identifier belongs to the current user/tenant | UseCase layer or boundary policy/verifier |
-| Read Model or other Aggregate state checks | UseCase layer |
+| Checking another Aggregate's Read Model or external facts | UseCase layer |
+| State-transition decisions based on the same Aggregate's current state | Aggregate |
 | Entity exists in an external service | Application-layer external-service integration |
 
 Example: in an upload-completion command, the Aggregate decides whether the session owner matches the executor and whether the current state allows completion. The string shape of the object key and whether that key belongs to the current user/tenant area are verified in the UseCase layer before the command is sent.
+
+### Command Intent and Pre-querying
+
+A Command represents what the user or external process intends to do, not which command should be selected after reading the current state. Decisions such as Add / Update / Delete / Noop based on current state should be pushed into the restored Aggregate, not decided from the same Aggregate's Read Model.
+
+| Criteria | Judgment |
+|----------|----------|
+| Check existence or scope of other Aggregates or external facts, then pass resolved facts to the command | OK |
+| Read the same Aggregate's Read Model to choose the command type | REJECT |
+| The UseCase decides "update if it exists, add if it does not" from Query results | REJECT. Send an intent command such as Set / Attach / Upsert to the Aggregate |
+| Aggregate or AggregateAdapter decides existence and transition validity from restored state | OK |
+| EventHandler or UseCase suppresses duplicate commands with a pre-query even though the Aggregate could ignore them idempotently | REJECT. Protect with Aggregate state transitions |
+
+```kotlin
+// NG - Query result chooses the command type
+if (readService.exists(orderId)) {
+    commandGateway.send(UpdateOrderCommand(orderId, value))
+} else {
+    commandGateway.send(AddOrderCommand(orderId, value))
+}
+
+// OK - Send an intent command; the Aggregate decides from restored state
+commandGateway.send(SetOrderValueCommand(orderId, value))
+```
 
 ```kotlin
 // API layer: structural validation
@@ -429,7 +480,7 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 
 ## UseCase Layer: Orchestration
 
-Place a UseCase layer between Controller and CommandGateway. Before command dispatch, it validates by referring to Read Models from multiple Aggregates and performs necessary preprocessing.
+Place a UseCase layer between Controller and CommandGateway. The UseCase layer gathers facts that must be resolved at the boundary and normally sends one intent command. Subsequent state changes are driven by EventHandlers for committed events.
 
 ```
 Controller -> UseCase -> CommandGateway -> Aggregate
@@ -438,9 +489,9 @@ Controller -> UseCase -> CommandGateway -> Aggregate
 ```
 
 Cases that need a UseCase:
-- Checking another Aggregate's state from a Read Model before command dispatch
+- Checking another Aggregate's Read Model or external facts before command dispatch
 - Running multiple validations sequentially
-- Waiting for eventual consistency after command dispatch, using reactive polling
+- Waiting for eventual consistency after command dispatch only for a synchronous API contract
 
 Cases that do not need a UseCase:
 - A simple operation where the Controller sends one command and is done
@@ -452,9 +503,36 @@ Cases that do not need a UseCase:
 | Controller directly references Repository for validation | Separate into UseCase layer |
 | UseCase depends on HTTP request/response | REJECT. UseCase must be protocol-independent |
 | UseCase directly changes Aggregate internal state | REJECT. Use CommandGateway |
-| UseCase waits for results with Subscription Query whose delivery is guaranteed by Axon Server or similar | OK |
-| UseCase waits for results with Subscription Query whose delivery guarantee is unknown | REJECT. Use reactive polling |
+| UseCase sends multiple commands sequentially for the same state transition | REJECT. Separate into EventHandlers for committed events |
+| UseCase queries the same Aggregate's state to choose the command type | REJECT. Push the decision into the Aggregate |
+| UseCase validates another Aggregate or external facts and passes resolved facts to one command | OK |
+| EventHandler receives a committed event and sends a command to another Aggregate | OK |
+| processStore / ProcessStore / operationProcess / completeStep stores projection completion or procedural progress | REJECT. Model it with Projection and EventHandlers |
+| There is an explicit long-running business process, retry, compensation, or user-visible progress | Consider Saga / Process Manager |
 | UseCase only thinly delegates to another query layer or command dispatch | Consider removing |
+
+## Event-driven Chaining
+
+In CQRS+ES, chains of state changes start from committed events. Application Services, UseCases, and Controllers must not synchronously control the order of multiple Aggregate changes by sending commands sequentially for the same state transition.
+
+Basic shape:
+```
+UseCase -> Command -> Aggregate -> Event
+                              |
+                         EventHandler -> Command -> another Aggregate
+                              |
+                         Projection -> Read Model
+```
+
+| Criteria | Judgment |
+|----------|----------|
+| UseCase sends command B immediately after command A for the same state transition | REJECT. Let an EventHandler receive A's event and send B |
+| Another command is sent after `sendAndWait` returns to create consistency | REJECT. Separate into event chaining |
+| A normal event from an existing Aggregate becomes the trigger for derived processing | OK |
+| EventHandler receives a committed event and sends an idempotent command to another Aggregate | OK |
+| Projection update and next-command dispatch are mixed in the same handler | REJECT. Separate Projection from EventHandler |
+| There is contention, compensation, long-running retry, or user-visible progress | Consider Saga / Process Manager |
+| processStore is created only to remember intermediate progress | REJECT. Split responsibilities into Aggregate events, Projections, or Saga |
 
 ## Projection Design
 
@@ -541,20 +619,22 @@ The Query side operates as an event-driven PubSub model. Projections update Read
 
 Event delivery should be PubSub, through a message broker, to all instances. Do not rely on mechanisms that deliver only to the same instance unless delivery guarantees are confirmed.
 
-- **Subscription Query** (for example Axon's `subscriptionQuery()`): a mechanism that returns change notifications for query results to the subscriber. It can be used when delivery to subscribers is guaranteed by a configuration such as Axon Server. If the destination is not guaranteed in distributed deployment or with third-party event-store plugins, use reactive polling to wait for Read Model updates when a synchronous response is required.
+- **Subscription Query** (for example Axon's `subscriptionQuery()`): a mechanism that returns change notifications for query results to the subscriber. Use it only when it is already adopted as infrastructure and delivery to subscribers is guaranteed. In systems based on tracking processors or trackers, do not introduce subscription query only for a feature implementation.
 - **Subscribing event processor** (for example Axon's `SubscribingEventProcessor`): depends on direct subscription from the local event bus, so only the instance that published the event receives it. In distributed environments, projections on other instances are not updated. Configure PubSub delivery to all instances.
 
 | Criteria | Judgment |
 |----------|----------|
-| Use of Subscription Query with confirmed delivery guarantee, such as Axon Server `subscriptionQuery()` | OK |
-| Use of Subscription Query with unknown delivery guarantee, such as Axon `subscriptionQuery()` | REJECT. Use reactive polling |
+| Use of Subscription Query already adopted as infrastructure with confirmed delivery guarantee, such as Axon Server `subscriptionQuery()` | OK |
+| Introducing Subscription Query only for a feature implementation | REJECT. Use the existing tracker / Read Model polling |
+| Use of Subscription Query with unknown delivery guarantee, such as Axon `subscriptionQuery()` | REJECT. Use the existing tracker / Read Model polling |
 | Use of Subscribing event processor, such as Axon `SubscribingEventProcessor` | REJECT. Local delivery only; other instances are not updated in distributed environments |
 | Controller directly references Repository | REJECT. Go through UseCase layer |
 | Query side references Command Model | REJECT |
 | QueryHandler dispatches commands | REJECT |
 | Query-side service or handler saves, deletes, or calls external APIs | REJECT |
 | Command and Query are mixed in the same service | REJECT. Separate responsibilities and naming |
-| Query side performs existence/scope checks and the caller dispatches a command | OK |
+| Query side or ReadService reads Query results to choose the command type for the same Aggregate | REJECT |
+| Query side checks existence/scope of another Aggregate or external facts, and the caller dispatches one command | OK |
 
 ### QueryHandler and ApplicationService Naming
 
@@ -633,18 +713,22 @@ Design asynchronous completion callbacks assuming duplicates, delays, and orderi
 
 ## Eventual Consistency
 
-When a synchronous response is required after command dispatch, and no event notification can be guaranteed to reach the waiting process, wait for Projection updates with reactive polling.
+Wait for Projection updates after command dispatch only when there is an explicit synchronous contract to return the updated Read Model in the same API response. If the client can keep the input values or generated ID, the server should not wait; Read Model convergence is handled through normal read APIs.
 
 | Criteria | Judgment |
 |----------|----------|
+| No explicit contract to return the updated Read Model in the same response | Do not wait |
+| The client or caller can keep the command input or generated ID | Do not wait |
 | There is infrastructure guaranteeing Projection update notification delivery to the waiting process | OK. Notification-driven waiting is acceptable |
-| Configuration such as Axon Server Subscription Query confirms update notifications reach subscribers | OK |
+| Existing infrastructure such as Subscription Query confirms update notifications reach subscribers | OK |
 | Kafka or similar guarantees destination, redelivery, and missing-message handling operationally | OK |
-| Subscription Query or event notification destination assumes single process/single instance, or guarantee is unknown | REJECT. Use reactive polling |
+| Subscription Query or event notification destination assumes single process/single instance, or guarantee is unknown | REJECT. Use the existing tracker / Read Model polling |
 | `Thread.sleep` or equivalent blocks request threads while waiting for Projection updates | REJECT. Causes thread starvation under high concurrency |
+| `delayedExecutor` / `CompletableFuture` is used to implement custom Projection-wait retry | REJECT. Use a reactive HTTP stack or the existing tracker |
+| processStore / ProcessStore / materialStore / completeStep manages Projection update progress | REJECT. Projections should update idempotently from events |
 | Updated state must be returned in the same HTTP response | Wait non-blockingly on a reactive HTTP stack |
 | Same response does not need to wait | `202 Accepted` plus frontend long polling, normal polling, SSE, or WebSocket |
-| UI expects immediate update | Frontend polling, SSE, WebSocket, or server-side reactive waiting |
+| UI expects immediate update | Frontend polling, SSE, or WebSocket. Server-side waiting only for a synchronous API contract |
 | Consistency delay exceeds acceptable range | Reconsider architecture |
 | Compensation transaction is undefined | Require failure-scenario review |
 
