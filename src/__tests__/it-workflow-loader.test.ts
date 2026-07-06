@@ -540,7 +540,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     ]);
     expect(waitBeforeNextScan?.rules).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        condition: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")',
+        condition: 'when(exists(context.wait_before_next_scan.queue.items, item.kind == "running"))',
         next: 'wait_before_next_scan',
       }),
     ]));
