@@ -18,13 +18,22 @@ import { resetDebugLogger, setVerboseConsole } from '../shared/utils/index.js';
  * 流れ続ける状況を再現するストリーム。旧実装はこれで永遠に延命していた。
  */
 class ChatterOnlyEventStream implements AsyncIterable<unknown> {
+  private pendingTimer: ReturnType<typeof setTimeout> | undefined;
+  readonly returnSpy = vi.fn(async (): Promise<IteratorResult<unknown, void>> => {
+    if (this.pendingTimer !== undefined) {
+      clearTimeout(this.pendingTimer);
+    }
+    return { done: true, value: undefined };
+  });
+
   constructor(private readonly chatterIntervalMs: number) {}
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
-    const interval = this.chatterIntervalMs;
     return {
-      async next(): Promise<IteratorResult<unknown, void>> {
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, interval));
+      next: async (): Promise<IteratorResult<unknown, void>> => {
+        await new Promise((resolvePromise) => {
+          this.pendingTimer = setTimeout(resolvePromise, this.chatterIntervalMs);
+        });
         return {
           done: false,
           value: {
@@ -33,6 +42,7 @@ class ChatterOnlyEventStream implements AsyncIterable<unknown> {
           },
         };
       },
+      return: this.returnSpy,
     };
   }
 }
@@ -2483,6 +2493,7 @@ describe('OpenCodeClient stream cleanup', () => {
     process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';
     try {
       const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const chatterStream = new ChatterOnlyEventStream(100);
       createOpencodeMock.mockResolvedValue({
         client: {
           instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
@@ -2490,7 +2501,7 @@ describe('OpenCodeClient stream cleanup', () => {
             create: vi.fn().mockResolvedValue({ data: { id: 'session-stalled' } }),
             promptAsync: vi.fn().mockReturnValue(new Promise(() => { /* 完了しない */ })),
           },
-          event: { subscribe: vi.fn().mockResolvedValue({ stream: new ChatterOnlyEventStream(100) }) },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream: chatterStream }) },
           permission: { reply: vi.fn() },
         },
         server: { close: vi.fn() },
@@ -2506,6 +2517,8 @@ describe('OpenCodeClient stream cleanup', () => {
       // エラーとして表面化する（永久ハングしない）
       expect(result.status).toBe('error');
       expect(result.error).toContain('timed out');
+      // 中断経路でもイテレータの後始末（SSE クローズ）が呼ばれること
+      expect(chatterStream.returnSpy).toHaveBeenCalled();
     } finally {
       delete process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
     }
