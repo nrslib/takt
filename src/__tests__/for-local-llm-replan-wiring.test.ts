@@ -43,7 +43,7 @@ const DEV_WORKFLOWS = [
 ] as const;
 
 describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) => {
-  it.each(DEV_WORKFLOWS)('%s: fix dead ends route to plan, judges prefer replan over abort', (name) => {
+  it.each(DEV_WORKFLOWS)('should route fix dead ends to plan and keep abort as the last resort when %s is loaded', (name) => {
     languageState.value = lang;
     const workflow = loadWorkflow(name, process.cwd());
     expect(workflow).toBeDefined();
