@@ -96,7 +96,6 @@ describe('loadGlobalConfig', () => {
       'utf-8',
     );
 
-    expect(() => loadGlobalConfig()).not.toThrow();
     const config = loadGlobalConfig();
     expect(config.pipeline).toEqual({ defaultBranchPrefix: 'global/' });
     expect(config.personaProviders).toEqual({ coder: { provider: 'codex' } });
@@ -303,7 +302,11 @@ describe('loadGlobalConfig', () => {
       'utf-8',
     );
 
-    expect(() => loadGlobalConfig()).not.toThrow();
+    const config = loadGlobalConfig();
+    expect(config.taktProviders?.assistant).toMatchObject({
+      provider: 'codex',
+      model: 'opus',
+    });
   });
 
   it('should fail fast on save when takt_providers is set without assistant', () => {
@@ -330,7 +333,13 @@ describe('loadGlobalConfig', () => {
       },
     };
 
-    expect(() => saveGlobalConfig(config)).not.toThrow();
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.taktProviders?.assistant).toMatchObject({
+      provider: 'codex',
+      model: 'opus',
+    });
   });
 
   it('should fail fast on save when takt_providers.assistant is empty object', () => {
@@ -1032,7 +1041,11 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).not.toThrow();
+      const config = loadGlobalConfig();
+      expect(config.personaProviders?.coder).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should fail fast when persona provider block includes provider options', () => {
@@ -1353,7 +1366,8 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).not.toThrow();
+      const config = loadGlobalConfig();
+      expect(config).toMatchObject({ provider: 'codex', model: 'opus' });
     });
 
     it('should allow provider codex with model sonnet', () => {
@@ -1365,7 +1379,8 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).not.toThrow();
+      const config = loadGlobalConfig();
+      expect(config).toMatchObject({ provider: 'codex', model: 'sonnet' });
     });
 
     it('should allow provider codex with model haiku', () => {
@@ -1377,7 +1392,8 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).not.toThrow();
+      const config = loadGlobalConfig();
+      expect(config).toMatchObject({ provider: 'codex', model: 'haiku' });
     });
 
     it('should not throw when provider is codex with a model', () => {

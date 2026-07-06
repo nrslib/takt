@@ -94,7 +94,7 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
     ).not.toThrow();
   });
 
-  it('should allow claude xhigh for any model and leave model support to the provider', () => {
+  it('should allow xhigh for Claude tool providers without model-specific checks', () => {
     expect(() =>
       assertExecProviderEffort('claude', 'xhigh', 'test'),
     ).not.toThrow();

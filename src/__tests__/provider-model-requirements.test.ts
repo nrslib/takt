@@ -10,4 +10,12 @@ describe('validateProviderModelRequirements', () => {
   it('Given opencode provider and bare model, When validate, Then provider/model validation fails', () => {
     expect(() => validateProviderModelRequirements('opencode', 'big-pickle')).toThrow(/provider\/model/);
   });
+
+  it('Given opencode provider without model, When validate, Then model requirement fails', () => {
+    expect(() => validateProviderModelRequirements('opencode', undefined)).toThrow(/requires model/);
+  });
+
+  it('Given opencode provider with provider/model format, When validate, Then no throw', () => {
+    expect(() => validateProviderModelRequirements('opencode', 'opencode/big-pickle')).not.toThrow();
+  });
 });

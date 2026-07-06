@@ -223,7 +223,11 @@ describe('projectConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).not.toThrow();
+      const config = loadProjectConfig(testDir);
+      expect(config.rateLimitFallback?.switchChain[0]).toMatchObject({
+        provider: 'codex',
+        model: 'sonnet',
+      });
     });
 
     it('should preserve empty quality_gates array in save/load cycle', () => {
@@ -953,7 +957,11 @@ unexpected_overrides:
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).not.toThrow();
+      const config = loadProjectConfig(testDir);
+      expect(config.taktProviders?.assistant).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw when persona_providers entry has invalid provider', () => {
@@ -1000,7 +1008,11 @@ unexpected_overrides:
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).not.toThrow();
+      const config = loadProjectConfig(testDir);
+      expect(config.personaProviders?.coder).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw when persona_providers entry has opencode provider without model', () => {
@@ -1054,7 +1066,12 @@ unexpected_overrides:
         },
       } as unknown as ProjectLocalConfig;
 
-      expect(() => saveProjectConfig(testDir, invalidConfig)).not.toThrow();
+      saveProjectConfig(testDir, invalidConfig);
+      const config = loadProjectConfig(testDir);
+      expect(config.taktProviders?.assistant).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw on save when takt_providers.assistant is empty object', () => {
