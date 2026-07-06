@@ -14,7 +14,7 @@ import { unwrapWhenCondition,
   hasUnquotedFindingsReference,
   isDeterministicCondition,
 } from '../core/workflow/evaluation/rule-utils.js';
-import type { OutputContractEntry } from '../core/models/types.js';
+import type { WorkflowRule, OutputContractEntry } from '../core/models/types.js';
 import { makeStep } from './test-helpers.js';
 
 describe('hasTagBasedRules', () => {
@@ -191,5 +191,21 @@ describe('getReportFiles', () => {
       { name: 'review.md', format: 'review', useJudge: true },
     ];
     expect(getReportFiles(contracts)).toEqual(['00-plan.md', 'review.md']);
+  });
+});
+
+describe('generateStatusRulesComponents interactive default', () => {
+  it('should exclude interactive-only rules when interactive is unspecified', async () => {
+    const { generateStatusRulesComponents } = await import('../core/workflow/instruction/status-rules.js');
+    const rules = [
+      { condition: 'approved', next: 'COMPLETE' },
+      { condition: 'ユーザー入力が必要', next: 'ask', interactiveOnly: true },
+    ] as WorkflowRule[];
+
+    const withoutOption = generateStatusRulesComponents('gate', rules, 'ja');
+    expect(JSON.stringify(withoutOption)).not.toContain('ユーザー入力が必要');
+
+    const interactive = generateStatusRulesComponents('gate', rules, 'ja', { interactive: true });
+    expect(JSON.stringify(interactive)).toContain('ユーザー入力が必要');
   });
 });

@@ -2419,6 +2419,50 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync.mock.calls[3]?.[0]).not.toHaveProperty('format');
   });
 
+  it('should not trip the invalid-argument loop across interleaved unavailable errors', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const INVALID = 'The read tool was called with invalid arguments: SchemaError(Expected string)';
+    const UNAVAILABLE = 'unavailable tool: fetch';
+    const toolError = (id, tool, error) => ({
+      type: 'message.part.updated',
+      properties: { part: { id, type: 'tool', tool, callID: id, state: { status: 'error', error } } },
+    });
+    // invalid ×3 → unavailable ×1 → invalid ×1: 修正前は invalid 側が
+    // unavailable を観測できず「連続4回」と誤認して打ち切っていた並び
+    const stream = new MockEventStream([
+      toolError('c1', 'read', INVALID),
+      toolError('c2', 'read', INVALID),
+      toolError('c3', 'read', INVALID),
+      toolError('c4', 'fetch', UNAVAILABLE),
+      toolError('c5', 'read', INVALID),
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-text', type: 'text', text: 'done' }, delta: 'done' },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-mixed' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-mixed' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('coder', 'do it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    // 偽の連続判定で error にならず完走する（unavailable も1回では閾値未満）
+    expect(result.status).toBe('done');
+  });
+
   it('should pass the external_directory deny in the server config', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
