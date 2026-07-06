@@ -1,11 +1,12 @@
 import type { WorkflowState } from '../../models/types.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
-import { splitTopLevelClauses } from '../../models/workflow-condition-expression.js';
+import { splitTopLevelClausesOrThrow } from '../../models/workflow-condition-expression.js';
 
 export function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
   // トークナイズは models の唯一実装に委譲（parse/normalize と同一契約）。
-  // 評価側は従来どおり空節を除いて評価する。
-  return splitTopLevelClauses(expression, separator).filter((part) => part.length > 0);
+  // 空節は黙殺しない: when(a && && b) は不正な式として即座に失敗させる
+  // （不正オペランドを throw する評価器の既存の厳格性と同じ扱い）。
+  return splitTopLevelClausesOrThrow(expression, separator, 'when expression');
 }
 
 function findOperator(expression: string): string | undefined {

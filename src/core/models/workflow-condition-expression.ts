@@ -330,15 +330,23 @@ export function splitTopLevelAndClauses(expression: string): string[] {
   return splitTopLevelClauses(expression, '&&');
 }
 
-function splitGuardClauses(expression: string): string[] {
-  // 空節（"a && && b" 等の壊れた設定）は黙って捨てず fail-fast する
-  const clauses = splitTopLevelAndClauses(expression);
+/** 分割して空節があれば fail-fast する（subject はエラー文の主語）。 */
+export function splitTopLevelClausesOrThrow(
+  expression: string,
+  separator: '||' | '&&',
+  subject: string,
+): string[] {
+  const clauses = splitTopLevelClauses(expression, separator);
   for (const clause of clauses) {
     if (clause.length === 0) {
-      throw new Error(`Configuration error: aggregate guard "${expression}" contains an empty clause`);
+      throw new Error(`Configuration error: ${subject} "${expression}" contains an empty clause`);
     }
   }
   return clauses;
+}
+
+function splitGuardClauses(expression: string): string[] {
+  return splitTopLevelClausesOrThrow(expression, '&&', 'aggregate guard');
 }
 
 

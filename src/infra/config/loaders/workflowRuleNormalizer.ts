@@ -1,5 +1,5 @@
 import type { WorkflowRule } from '../../../core/models/index.js';
-import { splitTopLevelAndClauses } from '../../../core/models/workflow-condition-expression.js';
+import { splitTopLevelClausesOrThrow } from '../../../core/models/workflow-condition-expression.js';
 import {
   parseAggregateConditionArgs,
   parseAggregateConditionExpression,
@@ -18,12 +18,9 @@ export function splitTagFindingsCondition(condition: string): { tagText: string;
   // 文字列リテラル・括弧内の && では分割しない（exists(...) 等を壊さない）。
   // splitTopLevel は空 clause を除去するため、壊れた設定（"a && && b" 等）の
   // fail-fast 用に空 clause を保持する分割をここで行う。
-  const clauses = splitTopLevelAndClauses(condition);
-  if (clauses.length >= 2 && clauses.some((clause) => clause.length === 0)) {
-    // "a && && b" のような壊れた条件は、どの解釈でも設定ミス。散文タグに
-    // 流して黙殺せず fail-fast する（集約ガード側と同じ契約）。
-    throw new Error(`Configuration error: rule condition "${condition}" contains an empty clause`);
-  }
+  // "a && && b" のような壊れた条件は、どの解釈でも設定ミス。散文タグに
+  // 流して黙殺せず fail-fast する（集約ガード・評価器と同じ契約）。
+  const clauses = splitTopLevelClausesOrThrow(condition, '&&', 'rule condition');
   if (clauses.length < 2) {
     return undefined;
   }
