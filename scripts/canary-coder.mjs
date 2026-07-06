@@ -10,9 +10,10 @@
  * builtins/{lang}/facets/instructions を変更したときの推奨手順。
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
@@ -72,17 +73,22 @@ try {
   // ツール粒度を持たないため、構造化カウントには takt 側の拡張が要る。
   const toolErrors = (output.match(/^\s*✗ \S+:/gm) ?? []).length;
   const runCompleted = result.status === 0 && !/aborted/i.test(output);
-  // 完了宣言だけの空振りを弾く: 成果物の実在と内容まで確認する
+  // 完了宣言だけの空振りを弾く: 成果物は形ではなく挙動で検証する。
+  // 生成された TS を Node の型ストリップで import 実行し、要求仕様どおりの
+  // 戻り値かを直接確認する（正規表現による形の検査はバイパス可能だった）。
   const artifactPath = join(workDir, 'greet.ts');
   let artifactOk = false;
   if (existsSync(artifactPath)) {
-    const source = readFileSync(artifactPath, 'utf-8');
-    // 形だけの export では通さない: 要求仕様（"Hello, <name>!" の生成）まで確認する
-    // テンプレートリテラル形（`Hello, ${name}!`）または連結形（"Hello, " + name + "!"）
-    // のどちらでも、末尾の "!" まで含めて挙動を確認する
-    artifactOk = /export\s+(function\s+greet|const\s+greet)/.test(source)
-      && (/Hello,\s*\$\{[^}]*\}!/.test(source)
-        || (source.includes('Hello,') && /['"\`]!['"\`]|!['"\`]\s*;/.test(source)));
+    const probe = spawnSync('node', [
+      '--experimental-strip-types',
+      '--input-type=module',
+      '-e',
+      `import { greet } from '${pathToFileURL(artifactPath).href}'; process.exit(greet('Takt') === 'Hello, Takt!' ? 0 : 1);`,
+    ], { encoding: 'utf-8', timeout: 30_000 });
+    artifactOk = probe.status === 0;
+    if (!artifactOk && probe.stderr) {
+      console.error(`artifact probe failed: ${probe.stderr.split('\n')[0]}`);
+    }
   }
 
   console.log(output.split('\n').slice(-15).join('\n'));
