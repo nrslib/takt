@@ -2524,6 +2524,55 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   }, 20_000);
 
+  it('should stop a degenerate loop that rotates tool names via the error budget', async () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const tools = ['read', 'write', 'glob', 'grep', 'list', 'edit'];
+      const events = tools.map((tool, i) => ({
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: `c${i}`,
+            type: 'tool',
+            tool,
+            callID: `c${i}`,
+            sessionID: 'session-degenerate',
+            state: { status: 'error', error: `The ${tool} tool was called with invalid arguments: SchemaError(x)` },
+          },
+        },
+      }));
+      const stream = new MockEventStream([
+        ...events,
+        { type: 'session.idle', properties: { sessionID: 'session-degenerate' } },
+      ]);
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+          session: {
+            create: vi.fn().mockResolvedValue({ data: { id: 'session-degenerate' } }),
+            promptAsync: vi.fn().mockResolvedValue(undefined),
+          },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const result = await new OpenCodeClient().call('coder', 'do it', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        interactionTimeoutMs: 500,
+      });
+
+      // ツール名が毎回違うため連続性の検出器は発火しないが、総量予算が止める
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('tool error budget exceeded');
+    } finally {
+      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
+    }
+  });
+
   it('should not trip the invalid-argument loop across interleaved unavailable errors', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const INVALID = 'The read tool was called with invalid arguments: SchemaError(Expected string)';
