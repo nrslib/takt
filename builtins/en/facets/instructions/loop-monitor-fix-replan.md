@@ -6,6 +6,10 @@ Your job is to judge whether replanning is moving the blocker toward resolution 
 If a Finding Contract ledger summary / `findings-ledger.json` exists, treat the consolidated ledger as the
 primary source; otherwise inspect the latest plan and review reports in the Report Directory.
 
+**Check first:**
+This monitor fires on the step-name sequence alone, so it can trigger right after a fix that ended
+normally with fixes complete. That is not a dead end - choose the normal transition back to review.
+
 **Criteria:**
 - Does the latest plan show a new decomposition or a different approach to the previously stated blocker?
   - Plans that are substantively identical each round → unproductive (same wall, same run-up)

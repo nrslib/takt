@@ -28,6 +28,8 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-fix-replan
       rules:
+        - condition: 直近の fix は修正完了で終わっている（行き詰まりではない）
+          next: reviewers
         - condition: 健全（再計画のたびに blocker が解消へ向かっている）
           next: plan
         - condition: 非生産的（同じ行き詰まりが繰り返されている）
