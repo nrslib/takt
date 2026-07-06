@@ -79,6 +79,7 @@ steps:
   - name: write_tests
     tags:
       - coding
+      - test-planning
     edit: true
     persona: coder
     policy:
