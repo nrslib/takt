@@ -297,7 +297,8 @@ export function parseAggregateConditionExpression(value: string): AggregateCondi
  * 連結は単一の when 条件ではない）。
  */
 
-function splitGuardClauses(expression: string): string[] {
+/** 括弧・引用符を尊重して && でトップレベル分割する（空節は保持、各節 trim）。 */
+export function splitTopLevelAndClauses(expression: string): string[] {
   const parts: string[] = [];
   let inString = false;
   let depth = 0;
@@ -317,8 +318,13 @@ function splitGuardClauses(expression: string): string[] {
     }
   }
   parts.push(expression.slice(start).trim());
-  return parts.filter((part) => part.length > 0);
+  return parts;
 }
+
+function splitGuardClauses(expression: string): string[] {
+  return splitTopLevelAndClauses(expression).filter((part) => part.length > 0);
+}
+
 
 export function isWhenConditionExpression(value: string): boolean {
   const trimmed = value.trim();
@@ -329,11 +335,11 @@ export function isWhenConditionExpression(value: string): boolean {
   return closing === trimmed.length - 1;
 }
 
-/** when(<式>) の内側を取り出す。when 形式でなければ trim のみ。 */
+/** when(<式>) の内側を取り出す。when 形式以外の入力は呼び出し側の契約違反として即座に失敗させる。 */
 export function unwrapWhenConditionExpression(value: string): string {
   const trimmed = value.trim();
   if (!isWhenConditionExpression(trimmed)) {
-    return trimmed;
+    throw new Error(`unwrapWhenConditionExpression requires a when(...) condition, got "${value}"`);
   }
   return trimmed.slice('when('.length, -1).trim();
 }

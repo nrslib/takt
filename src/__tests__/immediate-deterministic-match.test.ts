@@ -25,11 +25,11 @@ describe('findImmediateDeterministicMatch', () => {
   ];
 
   it('should return the deterministic rule index when its condition holds', () => {
-    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false)).toBe(2);
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, rules.length)).toBe(2);
   });
 
   it('should return -1 when no deterministic condition holds', () => {
-    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 0), false)).toBe(-1);
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 0), false, rules.length)).toBe(-1);
   });
 
   it('should not scan past endExclusive (positional first-match alignment)', () => {
@@ -41,6 +41,6 @@ describe('findImmediateDeterministicMatch', () => {
 
   it('should skip deferred true and non-deterministic rules', () => {
     const mixed = [rule('approved'), rule('when(true)', { next: 'fix' })];
-    expect(findImmediateDeterministicMatch(mixed, stateWithFindings(0, 0), false)).toBe(-1);
+    expect(findImmediateDeterministicMatch(mixed, stateWithFindings(0, 0), false, mixed.length)).toBe(-1);
   });
 });

@@ -122,10 +122,10 @@ export function findImmediateDeterministicMatch(
   rules: readonly WorkflowRule[] | undefined,
   state: WorkflowState,
   interactive: boolean | undefined,
-  endExclusive?: number,
+  endExclusive: number,
 ): number {
   if (!rules) return -1;
-  const upperBound = endExclusive ?? rules.length;
+  const upperBound = Math.min(endExclusive, rules.length);
   for (let i = 0; i < upperBound; i++) {
     const rule = rules[i];
     if (!rule) continue;

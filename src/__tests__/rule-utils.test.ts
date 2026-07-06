@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
+import { unwrapWhenCondition,
   hasTagBasedRules,
   hasOnlyOneBranch,
   getAutoSelectedTag,
@@ -75,6 +75,12 @@ describe('hasTagBasedRules', () => {
       ],
     });
     expect(hasTagBasedRules(step)).toBe(false);
+  });
+});
+
+describe('unwrapWhenCondition', () => {
+  it('should throw on non-when input (caller contract violation)', () => {
+    expect(() => unwrapWhenCondition('approved')).toThrow('requires a when(...) condition');
   });
 });
 
