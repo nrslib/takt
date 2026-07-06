@@ -6,7 +6,32 @@
  * - 再計画サイクル監視の judge は「fix 完了 → reviewers」を最優先に持つ
  * - 旧 reviewers/fix 監視の judge も ABORT の前に plan の選択肢を持つ
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const languageState = vi.hoisted(() => ({ value: 'en' as 'en' | 'ja' }));
+
+vi.mock('../infra/config/global/globalConfig.js', () => ({
+  loadGlobalConfig: vi.fn().mockReturnValue({}),
+}));
+
+vi.mock('../infra/config/resolveConfigValue.js', () => ({
+  resolveConfigValue: vi.fn((_cwd: string, key: string) => {
+    if (key === 'language') return languageState.value;
+    if (key === 'enableBuiltinWorkflows') return true;
+    if (key === 'disabledBuiltins') return [];
+    return undefined;
+  }),
+  resolveConfigValues: vi.fn((_cwd: string, keys: readonly string[]) => {
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (key === 'language') result[key] = languageState.value;
+      if (key === 'enableBuiltinWorkflows') result[key] = true;
+      if (key === 'disabledBuiltins') result[key] = [];
+    }
+    return result;
+  }),
+}));
+
 import { loadWorkflow } from '../infra/config/loaders/workflowLoader.js';
 
 const DEV_WORKFLOWS = [
@@ -19,13 +44,19 @@ const DEV_WORKFLOWS = [
 
 describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) => {
   it.each(DEV_WORKFLOWS)('%s: fix dead ends route to plan, judges prefer replan over abort', (name) => {
-    const workflow = loadWorkflow(name, process.cwd(), { language: lang });
+    languageState.value = lang;
+    const workflow = loadWorkflow(name, process.cwd());
     expect(workflow).toBeDefined();
 
     const fix = workflow!.steps.find((step) => step.name === 'fix');
     expect(fix).toBeDefined();
+    // 言語切替が実際に効いている証明: 条件文言が言語ごとに異なる
+    const planRule = (fix!.rules ?? []).find((rule) => rule.next === 'plan');
+    expect(planRule).toBeDefined();
+    expect(planRule!.condition).toBe(lang === 'ja'
+      ? '修正を進められない、または人間の判断が必要'
+      : 'Cannot proceed with fixes, or human judgment is required');
     const fixNexts = (fix!.rules ?? []).map((rule) => rule.next);
-    expect(fixNexts).toContain('plan');
     expect(fixNexts).not.toContain('ABORT');
 
     const monitors = workflow!.loopMonitors ?? [];
