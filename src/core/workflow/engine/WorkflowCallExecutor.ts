@@ -270,6 +270,7 @@ export class WorkflowCallExecutor {
         childAutoStrategyOverride,
       ),
       autoStrategyOverride: childAutoStrategyOverride,
+      // Child workflows need router prompts scoped to the child workflow name and run namespace.
       autoRoutingAiRouter: undefined,
       onSessionUpdate: executeOptions.syncParentState
         ? options.onSessionUpdate

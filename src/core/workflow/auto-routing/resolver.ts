@@ -56,6 +56,7 @@ const STRATEGY_COST_TIER: Record<AutoRoutingStrategy, AutoRoutingCandidate['cost
 };
 
 const AI_ROUTER_FAILURE_WARNING = 'Auto routing AI router failed; falling back to strategy default';
+const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
 
 export function validateAutoRoutingStrategyDefaultCandidate(autoRouting: AutoRoutingConfig): void {
   const requiredTier = STRATEGY_COST_TIER[autoRouting.strategy];
@@ -132,6 +133,25 @@ function collectProviderOptionsSources(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function validateAutoRoutingResolvedProviderModel(
+  provider: AutoRoutingCandidate['provider'],
+  model: string | undefined,
+): void {
+  validateProviderModelRequirements(provider, model, {
+    modelFieldName: 'Configuration error: auto_routing resolved model',
+  });
+
+  if (!model) {
+    return;
+  }
+  if ((provider === 'codex' || provider === 'opencode') && CLAUDE_MODEL_ALIASES.has(model)) {
+    throw new Error(
+      `Configuration error: auto_routing resolved model '${model}' is a Claude model alias but provider is '${provider}'. ` +
+      `Either choose a Claude provider or specify a ${provider}-compatible model.`,
+    );
+  }
+}
+
 function candidateToProviderInfo(
   candidate: AutoRoutingCandidate,
   source: ProviderResolutionSource,
@@ -141,9 +161,7 @@ function candidateToProviderInfo(
   const modelResolvedByAuto = currentProviderInfo.modelSource === undefined;
   const resolvedModel = modelResolvedByAuto ? candidate.model : currentProviderInfo.model;
   const resolvedModelSource = currentProviderInfo.modelSource ?? source;
-  validateProviderModelRequirements(candidate.provider, resolvedModel, {
-    modelFieldName: 'Configuration error: auto_routing resolved model',
-  });
+  validateAutoRoutingResolvedProviderModel(candidate.provider, resolvedModel);
   return {
     provider: candidate.provider,
     model: resolvedModel,
