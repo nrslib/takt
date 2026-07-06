@@ -516,7 +516,8 @@ UseCaseが不要なケース:
 CQRS+ES では、状態変更の連鎖は確定済みイベントを起点に進める。Application Service / UseCase / Controller が同じ状態遷移のために command を直列に投げて、複数 Aggregate の変更順序を同期制御しない。
 
 基本形:
-```
+
+```text
 UseCase → Command → Aggregate → Event
                               ↓
                          EventHandler → Command → 別Aggregate

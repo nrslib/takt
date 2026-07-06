@@ -5,7 +5,7 @@
 1. Knowledge と Policy の Source Path を Read ツールで開き、全文を取得する
 2. それぞれの `##` セクションをすべて列挙する（取捨選択しない）
 3. 列挙した各セクションの判定基準を変更差分と照合し、該当する問題を検出する
-4. `sendAndWait` / `commandGateway.send` / `QueryGateway` / `ReadService` / `processStore` / `operationProcess` / `completeStep` / `materialStore` / `waitForProjection` / `delayedExecutor` / `subscriptionQuery` / `CompletableFuture` を検索し、CQRS+ES の責務として必要か確認する
+4. `sendAndWait` / `commandGateway.send` / `QueryGateway` / `QueryBus` / `QueryHandler` / `ReadService` / `processStore` / `operationProcess` / `completeStep` / `materialStore` / `waitForProjection` / `delayedExecutor` / `subscriptionQuery` / `CompletableFuture` を検索し、CQRS+ES の責務として必要か確認する
 5. 変更された Aggregate について、`source` / `input` / `origin` / `channel` / `type` / `kind` などの由来メタデータが state に復元されていないか確認する
 6. 由来メタデータが `if` / `require` に使われている場合、その検証が Aggregate 全体の不変条件か、特定入力元だけのフロー制約かを判定する
 7. 既存 Aggregate に新フローを統合する変更では、既存の通常ライフサイクルで許可されていた状態を新フロー都合で禁止していないか確認する

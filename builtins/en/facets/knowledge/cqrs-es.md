@@ -516,7 +516,8 @@ Cases that do not need a UseCase:
 In CQRS+ES, chains of state changes start from committed events. Application Services, UseCases, and Controllers must not synchronously control the order of multiple Aggregate changes by sending commands sequentially for the same state transition.
 
 Basic shape:
-```
+
+```text
 UseCase -> Command -> Aggregate -> Event
                               |
                          EventHandler -> Command -> another Aggregate
