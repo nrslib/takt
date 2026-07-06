@@ -18,6 +18,21 @@ workflow_config:
 
 loop_monitors:
   - cycle:
+      - plan
+      - write_tests
+      - implement
+      - reviewers
+      - fix
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: Healthy (each replan moves the blocker toward resolution)
+          next: plan
+        - condition: Unproductive (the same dead end repeats)
+          next: ABORT
+  - cycle:
       - reviewers
       - fix
     threshold: 3
@@ -258,4 +273,9 @@ steps:
       - condition: Fixes are complete
         next: reviewers
       - condition: Cannot proceed with fixes, or human judgment is required
-        next: ABORT
+        next: plan
+        appendix: |
+          The fix attempt is stuck. Read the rejection details and the stated
+          blocker, decompose the work again, and replan. Declare planning
+          impossible only if human judgment is genuinely required, with the
+          reasons stated explicitly.
