@@ -29,7 +29,7 @@ describe('workflow step normalizer helpers', () => {
 
   it('normalizes aggregate rules with deterministic guards', () => {
     const normalized = normalizeRule({
-      condition: 'any("needs_fix") && findings.conflicts.count == 0',
+      condition: 'any("needs_fix") && when(findings.conflicts.count == 0)',
       next: 'fix',
     });
 
@@ -53,7 +53,7 @@ describe('workflow step normalizer helpers', () => {
   it('normalizes aggregate arguments with escaped quotes through the rule helper', () => {
     const targetCondition = String.raw`condition == "test\"inner"`;
     const normalized = normalizeRule({
-      condition: String.raw`all("condition == \"test\\\"inner\"") && findings.open.count == 0`,
+      condition: String.raw`all("condition == \"test\\\"inner\"") && when(findings.open.count == 0)`,
       next: 'COMPLETE',
     });
 
@@ -65,7 +65,7 @@ describe('workflow step normalizer helpers', () => {
   it('normalizes unquoted aggregate condition expressions as matched rule text', () => {
     const targetCondition = String.raw`condition == "test\"inner"`;
     const normalized = normalizeRule({
-      condition: String.raw`all(condition == "test\"inner") && findings.open.count == 0`,
+      condition: String.raw`all(condition == "test\"inner") && when(findings.open.count == 0)`,
       next: 'COMPLETE',
     });
 
@@ -77,7 +77,7 @@ describe('workflow step normalizer helpers', () => {
 
   it('normalizes aggregate arguments when an even backslash run closes the quote', () => {
     const normalized = normalizeRule({
-      condition: String.raw`any("path ends with \\") && findings.conflicts.count == 0`,
+      condition: String.raw`any("path ends with \\") && when(findings.conflicts.count == 0)`,
       next: 'fix',
     });
 
@@ -228,7 +228,7 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
 
   it('should keep aggregate guard splitting on the aggregate path', () => {
     const normalized = normalizeRule({
-      condition: 'all("approved") && findings.open.count == 0',
+      condition: 'all("approved") && when(findings.open.count == 0)',
       next: 'COMPLETE',
     });
 

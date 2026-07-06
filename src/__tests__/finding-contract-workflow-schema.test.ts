@@ -221,7 +221,7 @@ describe('workflow finding_contract schema', () => {
                 rules: [{ condition: 'approved' }],
               },
             ],
-            rules: [{ condition: 'all("approved") && findings.open.count == 0', next: 'COMPLETE' }],
+            rules: [{ condition: 'all("approved") && when(findings.open.count == 0)', next: 'COMPLETE' }],
           },
         ],
       }, '/tmp/project'),
@@ -294,7 +294,7 @@ describe('workflow finding_contract schema', () => {
               rules: [{ condition: 'approved' }],
             },
           ],
-          rules: [{ condition: 'all("approved") && findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'all("approved") && when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
