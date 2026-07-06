@@ -138,3 +138,52 @@ export function findImmediateDeterministicMatch(
   return -1;
 }
 
+export interface Phase3AdoptionInput {
+  ruleIndex: number;
+  method: string;
+}
+
+export interface Phase3AdoptionResult<T extends Phase3AdoptionInput> {
+  /** 先行する決定的ルールで置き換えた（または元のままの）判定結果 */
+  result: T;
+  /** ガード不成立等で採用せず、通常のルール評価へフォールバックすべきか */
+  blocked: boolean;
+}
+
+/**
+ * Phase 3 判定結果の採用判定（StepExecutor / ParallelRunner 共通）。
+ * 1) エンジン所有の即時決定的条件を先行評価し、成立していればそちらを採用
+ * 2) 採用対象ルールのガード、または自身が決定的条件の場合は実状態で再評価し、
+ *    不成立なら採用せずフォールバック
+ */
+export function resolvePhase3Adoption<T extends Phase3AdoptionInput>(
+  rules: readonly WorkflowRule[] | undefined,
+  phase3Result: T,
+  state: WorkflowState,
+  interactive: boolean | undefined,
+  evaluate: (expression: string, state: WorkflowState) => boolean,
+): Phase3AdoptionResult<T> {
+  let result = phase3Result;
+  const preemptIndex = findImmediateDeterministicMatch(rules, state, interactive);
+  if (preemptIndex !== -1) {
+    result = { ...result, ruleIndex: preemptIndex, method: 'auto_select' };
+  }
+  const rule = rules?.[result.ruleIndex];
+  const blocked = (rule?.guardCondition !== undefined && !evaluate(rule.guardCondition, state))
+    || (rule !== undefined
+      && isDeterministicCondition(rule.condition)
+      && !evaluate(unwrapWhenCondition(rule.condition), state));
+  return { result, blocked };
+}
+
+/**
+ * 判定（Phase 3 / タグ / 構造化）でモデルが選択してよいルールか。
+ * interactiveOnly の対話外ルールと、エンジンが実状態から評価する
+ * 決定的条件（when(...)）は選択対象にしない。
+ */
+export function isJudgeableRule(rule: WorkflowRule | undefined, interactive: boolean): boolean {
+  if (rule === undefined) return false;
+  if (rule.interactiveOnly && !interactive) return false;
+  return !isDeterministicCondition(rule.condition);
+}
+

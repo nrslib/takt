@@ -140,7 +140,7 @@ function loadBuiltinAutoImprovementLoopForIssueExecution(projectDir: string) {
           ...step,
           delayBeforeMs: 0,
           rules: [
-            { condition: 'true', next: 'COMPLETE' },
+            { condition: 'when(true)', next: 'COMPLETE' },
           ],
         };
       }
@@ -166,7 +166,7 @@ function loadBuiltinAutoImprovementLoopForPrExecution(projectDir: string) {
           ...step,
           delayBeforeMs: 0,
           rules: [
-            { condition: 'true', next: 'COMPLETE' },
+            { condition: 'when(true)', next: 'COMPLETE' },
           ],
         };
       }
@@ -2540,7 +2540,7 @@ describe('system workflow execution integration', () => {
         step.name === 'route_context'
           ? {
               ...step,
-              rules: [{ condition: 'true', next: 'plan_fresh_improvement' }],
+              rules: [{ condition: 'when(true)', next: 'plan_fresh_improvement' }],
             }
           : step
       )),
@@ -2601,7 +2601,7 @@ describe('system workflow execution integration', () => {
         step.name === 'route_context'
           ? {
               ...step,
-              rules: [{ condition: 'true', next: 'plan_fresh_improvement' }],
+              rules: [{ condition: 'when(true)', next: 'plan_fresh_improvement' }],
             }
           : step
       )),

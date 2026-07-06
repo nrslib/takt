@@ -1,16 +1,11 @@
 import type { WorkflowRule } from '../core/models/types.js';
-import { isDeterministicCondition } from '../core/workflow/evaluation/rule-utils.js';
+import { isJudgeableRule } from '../core/workflow/evaluation/rule-utils.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 
 export function isValidRuleIndex(index: number, rules: WorkflowRule[], interactive: boolean): boolean {
   if (index < 0 || index >= rules.length) return false;
-  const rule = rules[index];
-  if (rule === undefined) return false;
-  if (rule.interactiveOnly && !interactive) return false;
-  // 決定的条件（findings.* 等）はエンジンが実状態から評価するもので、
-  // モデルの申告で成立させてはならない（偽の conflict 宣言でゲートを
-  // 落とせてしまう）。判定の選択対象から機械的に除外する。
-  return !isDeterministicCondition(rule.condition);
+  // 決定的条件の除外を含む選択可否は共通述語に集約（表示側と同一判定）
+  return isJudgeableRule(rules[index], interactive);
 }
 
 export function buildJudgeConditions(
@@ -20,8 +15,7 @@ export function buildJudgeConditions(
 ): Array<{ index: number; text: string }> {
   return rules
     .map((rule, index) => ({ rule, index }))
-    .filter(({ rule }) => interactive || !rule.interactiveOnly)
-    .filter(({ rule }) => !isDeterministicCondition(rule.condition))
+    .filter(({ rule }) => isJudgeableRule(rule, interactive))
     .map(({ index, rule }) => ({ index: indexes?.[index] ?? index, text: rule.condition }));
 }
 

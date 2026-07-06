@@ -187,12 +187,13 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
   });
 
   it('should not split compounds whose left side is itself a deterministic condition', () => {
+    // 状態式だけの複合は単一の when() に書く（when(A) && when(B) の連結ではなく）
     const normalized = normalizeRule({
-      condition: 'structured.status == "approved" && findings.open.count == 0',
+      condition: 'when(structured.status == "approved" && findings.open.count == 0)',
       next: 'COMPLETE',
     });
 
-    expect(normalized.condition).toBe('structured.status == "approved" && findings.open.count == 0');
+    expect(normalized.condition).toBe('when(structured.status == "approved" && findings.open.count == 0)');
     expect(normalized.guardCondition).toBeUndefined();
   });
 
