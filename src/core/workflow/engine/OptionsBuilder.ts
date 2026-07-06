@@ -185,7 +185,11 @@ export class OptionsBuilder {
       resolvedModel,
       permissionResolution: {
         stepName: step.name,
-        requiredPermissionMode: step.requiredPermissionMode,
+        // edit: true はステップが編集する宣言。プロファイル解決の結果が
+        // readonly でも、下限として edit を要求する（書けないのに書けと
+        // 指示される構成矛盾を防ぐ）。
+        requiredPermissionMode: step.requiredPermissionMode
+          ?? (step.edit === true ? 'edit' : undefined),
         providerProfiles: this.engineOptions.providerProfiles,
       },
       providerOptions,

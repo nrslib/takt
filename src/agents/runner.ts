@@ -158,8 +158,13 @@ export class AgentRunner {
         provider: resolvedProvider,
         projectProviderProfiles: options.permissionResolution.providerProfiles
           ?? localConfig.providerProfiles,
-        globalProviderProfiles: globalConfig.providerProfiles
-          ?? DEFAULT_PROVIDER_PERMISSION_PROFILES,
+        // ユーザー定義はデフォルト表へのプロバイダ単位の上書き。?? で丸ごと
+        // 置き換えると、書かれていないプロバイダの既定権限が黙って消え、
+        // edit: true のステップが readonly ツールで走る（実障害）。
+        globalProviderProfiles: {
+          ...DEFAULT_PROVIDER_PERMISSION_PROFILES,
+          ...(globalConfig.providerProfiles ?? {}),
+        },
       });
     }
     return options.permissionMode;
