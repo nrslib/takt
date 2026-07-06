@@ -44,7 +44,9 @@ loop_monitors:
       rules:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: 非生産的だが、計画の立て直しで打開できる見込みがある
+          next: plan
+        - condition: 非生産的で、再計画でも打開できる見込みがない
           next: ABORT
   - cycle:
       - reviewers
@@ -57,7 +59,9 @@ loop_monitors:
       rules:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: 非生産的だが、計画の立て直しで打開できる見込みがある
+          next: plan
+        - condition: 非生産的で、再計画でも打開できる見込みがない
           next: ABORT
 
 steps:

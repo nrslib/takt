@@ -44,7 +44,9 @@ loop_monitors:
       rules:
         - condition: converging (findings decreasing, fixes applied)
           next: reviewers
-        - condition: unproductive (same findings repeating)
+        - condition: unproductive, but replanning could break the deadlock
+          next: plan
+        - condition: unproductive, and replanning is unlikely to help
           next: ABORT
   - cycle:
       - reviewers
@@ -57,7 +59,9 @@ loop_monitors:
       rules:
         - condition: converging (findings decreasing, fixes applied)
           next: reviewers
-        - condition: unproductive (same findings repeating)
+        - condition: unproductive, but replanning could break the deadlock
+          next: plan
+        - condition: unproductive, and replanning is unlikely to help
           next: ABORT
 
 steps:
