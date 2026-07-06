@@ -270,14 +270,20 @@ export function parseAggregateConditionExpression(value: string): AggregateCondi
     return undefined;
   }
   // ガードは when(式) の列として書かれる。内側の式に unwrap して保持し、
-  // 評価側（evaluateWhenExpression）は素の式だけを扱う。
-  const guardCondition = guardText === undefined
-    ? undefined
-    : guardText
-      .split('&&')
-      .length >= 1
-      ? splitGuardClauses(guardText).map(unwrapWhenConditionExpression).join(' && ')
-      : guardText;
+  // 評価側（evaluateWhenExpression）は素の式だけを扱う。裸の式は認めない
+  // （集約条件のガードに散文はあり得ないため、明示エラーで移行させる）。
+  let guardCondition: string | undefined;
+  if (guardText !== undefined) {
+    const clauses = splitGuardClauses(guardText);
+    for (const clause of clauses) {
+      if (!isWhenConditionExpression(clause)) {
+        throw new Error(
+          `Configuration error: aggregate guard clause "${clause}" must be wrapped in when(...), e.g. when(${clause})`,
+        );
+      }
+    }
+    guardCondition = clauses.map(unwrapWhenConditionExpression).join(' && ');
+  }
 
   return {
     type: match[1] as AggregateConditionExpression['type'],

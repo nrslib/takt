@@ -4,7 +4,7 @@ import {
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../../../core/models/workflow-condition-expression.js';
-import { isDeterministicCondition, isFindingsCondition, unwrapWhenCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { isDeterministicCondition, unwrapWhenCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 
 function splitTopLevelPreservingEmpties(expression: string, separator: '&&'): string[] {
   const parts: string[] = [];
@@ -58,10 +58,10 @@ export function splitTagFindingsCondition(condition: string): { tagText: string;
   if (isDeterministicCondition(tagText)) {
     return undefined;
   }
-  // ガード側は「全節が findings 条件」のときだけ分解する。1節でも散文が
+  // ガード側は「全節が when() 決定的条件」のときだけ分解する。1節でも散文が
   // 混ざる場合（例: 日本語タグ文が && を含む）は分解せず、従来どおり
   // 条件全体をタグ文として扱う。
-  if (!guardClauses.every((clause) => isFindingsCondition(clause))) {
+  if (!guardClauses.every((clause) => isDeterministicCondition(clause))) {
     return undefined;
   }
   // ガードは when() の内側に unwrap して保存する（評価側は素の式だけを扱う）
