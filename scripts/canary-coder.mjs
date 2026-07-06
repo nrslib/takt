@@ -78,8 +78,11 @@ try {
   if (existsSync(artifactPath)) {
     const source = readFileSync(artifactPath, 'utf-8');
     // 形だけの export では通さない: 要求仕様（"Hello, <name>!" の生成）まで確認する
+    // テンプレートリテラル形（`Hello, ${name}!`）または連結形（"Hello, " + name + "!"）
+    // のどちらでも、末尾の "!" まで含めて挙動を確認する
     artifactOk = /export\s+(function\s+greet|const\s+greet)/.test(source)
-      && /Hello,\s*\$\{[^}]*\}!|Hello,\s*['"] ?\+/.test(source);
+      && (/Hello,\s*\$\{[^}]*\}!/.test(source)
+        || (source.includes('Hello,') && /['"\`]!['"\`]|!['"\`]\s*;/.test(source)));
   }
 
   console.log(output.split('\n').slice(-15).join('\n'));
