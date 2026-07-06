@@ -1,15 +1,13 @@
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
 
-const CLAUDE_MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
-
-type ProviderModelCompatibilityOptions = {
+type ProviderModelRequirementsOptions = {
   modelFieldName?: string;
 };
 
-export function validateProviderModelCompatibility(
+export function validateProviderModelRequirements(
   provider: string | undefined,
   model: string | undefined,
-  options: ProviderModelCompatibilityOptions = {},
+  options: ProviderModelRequirementsOptions = {},
 ): void {
   const { modelFieldName = 'Configuration error: model' } = options;
 
@@ -22,13 +20,6 @@ export function validateProviderModelCompatibility(
   }
 
   if (!model) return;
-
-  if ((provider === 'codex' || provider === 'opencode') && CLAUDE_MODEL_ALIASES.has(model)) {
-    throw new Error(
-      `Configuration error: model '${model}' is a Claude model alias but provider is '${provider}'. ` +
-      `Either change the provider to 'claude-sdk' (or headless 'claude') or specify a ${provider}-compatible model.`
-    );
-  }
 
   if (provider === 'opencode') {
     parseProviderModel(model, modelFieldName);

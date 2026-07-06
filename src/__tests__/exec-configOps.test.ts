@@ -85,7 +85,7 @@ describe('applyExecOverrides', () => {
     expect(result.reviews[0]!.model).toBe('haiku');
   });
 
-  it('should clear stale effort when a model override is incompatible with it', () => {
+  it('should keep effort when only a Claude model override changes', () => {
     const baseConfig = createTestConfig();
     const config: ExecConfig = {
       ...baseConfig,
@@ -110,12 +110,12 @@ describe('applyExecOverrides', () => {
 
     const result = applyExecOverrides(config, { model: 'claude-sonnet-4-5-20250929' }, DEFAULT_PROVIDER_MODEL);
 
-    expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
-    expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
-    expect(result.reviews[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: 'xhigh' });
+    expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: 'xhigh' });
+    expect(result.reviews[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: 'xhigh' });
   });
 
-  it('should clear stale inherited effort when a model override relies on the configured provider', () => {
+  it('should keep inherited effort when a model override relies on the configured provider', () => {
     const baseConfig = createTestConfig();
     const config: ExecConfig = {
       ...baseConfig,
@@ -143,12 +143,12 @@ describe('applyExecOverrides', () => {
       model: 'claude-opus-4-7',
     });
 
-    expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
-    expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
-    expect(result.reviews[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: undefined });
+    expect(result.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: 'xhigh' });
+    expect(result.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: 'xhigh' });
+    expect(result.reviews[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929', effort: 'xhigh' });
   });
 
-  it('should clear stale inherited effort when no provider or model override is provided', () => {
+  it('should keep inherited effort when no provider or model override is provided', () => {
     const baseConfig = createTestConfig();
     const config: ExecConfig = {
       ...baseConfig,
@@ -176,9 +176,9 @@ describe('applyExecOverrides', () => {
       model: 'claude-sonnet-4-5-20250929',
     });
 
-    expect(result.session).toMatchObject({ effort: undefined });
-    expect(result.workers[0]).toMatchObject({ effort: undefined });
-    expect(result.reviews[0]).toMatchObject({ effort: undefined });
+    expect(result.session).toMatchObject({ effort: 'xhigh' });
+    expect(result.workers[0]).toMatchObject({ effort: 'xhigh' });
+    expect(result.reviews[0]).toMatchObject({ effort: 'xhigh' });
   });
 
   it('should re-resolve effort when provider changes', () => {
@@ -235,11 +235,12 @@ describe('applyExecOverrides', () => {
     expect(workerDetails).not.toContain('opencode/opencode/big-pickle');
   });
 
-  it('should reject explicit Claude model aliases for codex overrides', () => {
+  it('should allow explicit codex model names and leave support to the provider', () => {
     const config = createTestConfig();
 
-    expect(() => applyExecOverrides(config, { provider: 'codex', model: 'opus' }, DEFAULT_PROVIDER_MODEL))
-      .toThrow(/Claude model alias/);
+    const result = applyExecOverrides(config, { provider: 'codex', model: 'opus' }, DEFAULT_PROVIDER_MODEL);
+
+    expect(result.session).toMatchObject({ provider: 'codex', model: 'opus' });
   });
 
   it('should reject explicit bare opencode model overrides', () => {

@@ -700,18 +700,6 @@ describe('exec preset store', () => {
         /exec\.session\.provider: unsupported provider/,
       ],
       [
-        'bad-session-model',
-        buildPresetYaml('bad-session-model', {
-          session: [
-            'session:',
-            '  provider: codex',
-            '  model: opus',
-            '  effort: high',
-          ],
-        }),
-        /exec\.session\.model.*Claude model alias/,
-      ],
-      [
         'bad-effort',
         buildPresetYaml('bad-effort', {
           session: [

@@ -2,7 +2,7 @@ import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule }
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
-import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
+import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
 
@@ -62,7 +62,7 @@ function validateAgentStepProviderModel(
     providerRouting: options.providerRouting,
     personaProviders: options.personaProviders,
   });
-  validateProviderModelCompatibility(
+  validateProviderModelRequirements(
     providerInfo.provider,
     providerInfo.model,
     {
@@ -84,7 +84,7 @@ function validatePromotionProviderModels(
       : promotion.providerSpecified
         ? undefined
         : baseProviderInfo.model;
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       provider,
       model,
       {
@@ -200,7 +200,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       judge: monitor.judge,
       triggeringProviderInfo,
     });
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       judgeProviderInfo.provider,
       judgeProviderInfo.model,
       {

@@ -240,7 +240,7 @@ async function editSessionConfig(
       current = { ...current, effort: await selectEffort(current.provider, current.effort, lang) };
       raw = { ...raw, effort: current.effort };
     }
-    assertExecProviderEffort(current.provider, current.model, current.effort, 'exec.session.effort');
+    assertExecProviderEffort(current.provider, current.effort, 'exec.session.effort');
     if (!shouldKeepSetupMenuOpen()) {
       return raw;
     }
@@ -351,7 +351,7 @@ async function editActor(
       raw = { ...raw, policy };
       current = { ...current, policy };
     }
-    assertExecProviderEffort(current.provider, current.model, current.effort, `exec.${current.name}.effort`);
+    assertExecProviderEffort(current.provider, current.effort, `exec.${current.name}.effort`);
     if (!shouldKeepSetupMenuOpen()) {
       return raw;
     }

@@ -25,11 +25,11 @@ describe('assertExecProviderEffort and providerSupportsExecEffort consistency', 
       const supported = providerSupportsExecEffort(provider, effort);
       if (supported) {
         expect(() =>
-          assertExecProviderEffort(provider, 'test-model', effort, 'test'),
+          assertExecProviderEffort(provider, effort, 'test'),
         ).not.toThrow();
       } else {
         expect(() =>
-          assertExecProviderEffort(provider, 'test-model', effort, 'test'),
+          assertExecProviderEffort(provider, effort, 'test'),
         ).toThrow(`does not support effort "${effort}"`);
       }
     },
@@ -39,7 +39,7 @@ describe('assertExecProviderEffort and providerSupportsExecEffort consistency', 
     'should accept effort returned by getSupportedExecEfforts for %s/%s',
     (provider, effort) => {
       expect(() =>
-        assertExecProviderEffort(provider, 'test-model', effort, 'test'),
+        assertExecProviderEffort(provider, effort, 'test'),
       ).not.toThrow();
     },
   );
@@ -48,7 +48,7 @@ describe('assertExecProviderEffort and providerSupportsExecEffort consistency', 
     'should reject effort omitted from getSupportedExecEfforts for %s/%s',
     (provider, effort) => {
       expect(() =>
-        assertExecProviderEffort(provider, 'test-model', effort, 'test'),
+        assertExecProviderEffort(provider, effort, 'test'),
       ).toThrow(`does not support effort`);
     },
   );
@@ -58,55 +58,61 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
   it('should pass validation for claude provider with valid effort — no redundant check needed', () => {
     const effort: ExecEffort = 'high';
     expect(() =>
-      assertExecProviderEffort('claude', 'opus', effort, 'test'),
+      assertExecProviderEffort('claude', effort, 'test'),
     ).not.toThrow();
   });
 
   it('should pass validation for codex provider with valid effort — no redundant check needed', () => {
     const effort: ExecEffort = 'high';
     expect(() =>
-      assertExecProviderEffort('codex', 'o3', effort, 'test'),
+      assertExecProviderEffort('codex', effort, 'test'),
     ).not.toThrow();
   });
 
   it('should pass validation for copilot provider with valid effort — no redundant check needed', () => {
     const effort: ExecEffort = 'low';
     expect(() =>
-      assertExecProviderEffort('copilot', 'gpt-4', effort, 'test'),
+      assertExecProviderEffort('copilot', effort, 'test'),
     ).not.toThrow();
   });
 
   it('should reject provider with unsupported effort before any downstream code runs', () => {
     expect(() =>
-      assertExecProviderEffort('codex', 'o3', 'max', 'test'),
+      assertExecProviderEffort('codex', 'max', 'test'),
     ).toThrow('does not support effort "max"');
   });
 
   it('should allow codex provider when effort is undefined', () => {
     expect(() =>
-      assertExecProviderEffort('codex', 'o3', undefined, 'test'),
+      assertExecProviderEffort('codex', undefined, 'test'),
     ).not.toThrow();
   });
 
   it('should allow copilot provider when effort is undefined', () => {
     expect(() =>
-      assertExecProviderEffort('copilot', 'gpt-4', undefined, 'test'),
+      assertExecProviderEffort('copilot', undefined, 'test'),
     ).not.toThrow();
   });
 
-  it('should reject claude provider with incompatible model-effort combination', () => {
+  it('should allow xhigh for Claude tool providers without model-specific checks', () => {
     expect(() =>
-      assertExecProviderEffort('claude', 'claude-sonnet-4-5-20250929', 'xhigh', 'test'),
-    ).toThrow("'xhigh' is not supported by model");
+      assertExecProviderEffort('claude', 'xhigh', 'test'),
+    ).not.toThrow();
+    expect(() =>
+      assertExecProviderEffort('claude-sdk', 'xhigh', 'test'),
+    ).not.toThrow();
+    expect(() =>
+      assertExecProviderEffort('claude-terminal', 'xhigh', 'test'),
+    ).not.toThrow();
   });
 });
 
 describe('assertExecProviderModel', () => {
-  it('should reject Claude model aliases for codex and opencode providers', () => {
+  it('should allow arbitrary codex model names and leave support to the provider', () => {
     expect(() => assertExecProviderModel('codex', 'sonnet', 'exec.session.model'))
-      .toThrow(/Claude model alias/);
-    expect(() => assertExecProviderModel('opencode', 'opus', 'exec.session.model'))
-      .toThrow(/Claude model alias/);
+      .not.toThrow();
+    expect(() => assertExecProviderModel('codex', 'opus', 'exec.session.model'))
+      .not.toThrow();
   });
 
   it('should reject bare opencode models before workflow execution', () => {
@@ -122,7 +128,7 @@ describe('assertExecProviderModel', () => {
     },
   );
 
-  it('should accept provider-compatible exec models', () => {
+  it('should accept structurally valid exec models', () => {
     expect(() => assertExecProviderModel('codex', 'gpt-5', 'exec.session.model')).not.toThrow();
     expect(() => assertExecProviderModel('opencode', 'opencode/big-pickle', 'exec.session.model')).not.toThrow();
   });
