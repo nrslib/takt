@@ -10,7 +10,7 @@
  * builtins/{lang}/facets/instructions を変更したときの推奨手順。
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -74,20 +74,24 @@ try {
   const toolErrors = (output.match(/^\s*✗ \S+:/gm) ?? []).length;
   const runCompleted = result.status === 0 && !/aborted/i.test(output);
   // 完了宣言だけの空振りを弾く: 成果物は形ではなく挙動で検証する。
-  // 生成された TS を Node の型ストリップで import 実行し、要求仕様どおりの
-  // 戻り値かを直接確認する（正規表現による形の検査はバイパス可能だった）。
+  // リポジトリの typescript devDep でトランスパイルして import 実行し、
+  // 要求仕様どおりの戻り値かを直接確認する（正規表現による形の検査は
+  // バイパス可能だった。Node の型ストリップは engines 下限の Node 20 に
+  // 存在しないため使わない）。
   const artifactPath = join(workDir, 'greet.ts');
   let artifactOk = false;
   if (existsSync(artifactPath)) {
-    const probe = spawnSync('node', [
-      '--experimental-strip-types',
-      '--input-type=module',
-      '-e',
-      `import { greet } from '${pathToFileURL(artifactPath).href}'; process.exit(greet('Takt') === 'Hello, Takt!' ? 0 : 1);`,
-    ], { encoding: 'utf-8', timeout: 30_000 });
-    artifactOk = probe.status === 0;
-    if (!artifactOk && probe.stderr) {
-      console.error(`artifact probe failed: ${probe.stderr.split('\n')[0]}`);
+    const { default: ts } = await import('typescript');
+    const transpiled = ts.transpileModule(readFileSync(artifactPath, 'utf-8'), {
+      compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const probePath = join(workDir, 'greet.probe.mjs');
+    writeFileSync(probePath, transpiled);
+    try {
+      const { greet } = await import(pathToFileURL(probePath).href);
+      artifactOk = typeof greet === 'function' && greet('Takt') === 'Hello, Takt!';
+    } catch (error) {
+      console.error(`artifact probe failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
