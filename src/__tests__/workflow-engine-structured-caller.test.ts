@@ -680,7 +680,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.stepOutputs.has('fix')).toBe(true);
   });
 
-  it('真に成立している決定的ルールは phase 3 の approved 判定より先行して採用される', async () => {
+  it('判定より前に位置する真に成立した決定的ルールが approved 判定より先行して採用される', async () => {
     const initialLedger = {
       version: 1,
       workflowName: 'phase3-preempt-test',
@@ -705,12 +705,12 @@ describe('WorkflowEngine structured caller defaults', () => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
       if (schemaText.includes('"step"')) {
-        // 判定は approved(=1) を主張する
+        // 判定は approved(=2) を主張する
         return {
           persona: 'judge',
           status: 'done',
-          content: '{"step": 1}',
-          structuredOutput: { step: 1 },
+          content: '{"step": 2}',
+          structuredOutput: { step: 2 },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
       }
@@ -742,9 +742,10 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'Judge merge readiness.',
           outputContracts: [{ name: 'merge-readiness-review.md', format: '# Merge Readiness Review' }],
           rules: [
+            // 位置準拠: 判定より前にある決定的ルールだけが先行採用される
+            makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
             makeRule('approved', 'COMPLETE'),
             makeRule('needs_fix', 'fix'),
-            makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
           ],
         }),
         makeStep({

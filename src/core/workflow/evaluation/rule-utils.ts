@@ -122,9 +122,11 @@ export function findImmediateDeterministicMatch(
   rules: readonly WorkflowRule[] | undefined,
   state: WorkflowState,
   interactive: boolean | undefined,
+  endExclusive?: number,
 ): number {
   if (!rules) return -1;
-  for (let i = 0; i < rules.length; i++) {
+  const upperBound = endExclusive ?? rules.length;
+  for (let i = 0; i < upperBound; i++) {
     const rule = rules[i];
     if (!rule) continue;
     if (rule.interactiveOnly && interactive !== true) continue;
@@ -164,7 +166,10 @@ export function resolvePhase3Adoption<T extends Phase3AdoptionInput>(
   evaluate: (expression: string, state: WorkflowState) => boolean,
 ): Phase3AdoptionResult<T> {
   let result = phase3Result;
-  const preemptIndex = findImmediateDeterministicMatch(rules, state, interactive);
+  // 先行採用は RuleEvaluator の位置準拠と同界: 判定が選んだルールより前に
+  // ある決定的ルールだけが先行する（後ろのルールは first-match-wins に従い
+  // 採用済みタグを覆さない。後段の防御はガード条件が担う）。
+  const preemptIndex = findImmediateDeterministicMatch(rules, state, interactive, phase3Result.ruleIndex);
   if (preemptIndex !== -1) {
     result = { ...result, ruleIndex: preemptIndex, method: 'auto_select' };
   }

@@ -32,6 +32,13 @@ describe('findImmediateDeterministicMatch', () => {
     expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 0), false)).toBe(-1);
   });
 
+  it('should not scan past endExclusive (positional first-match alignment)', () => {
+    // 判定が index 0 (approved) を選んだ場合、後方の決定的ルールは先行しない
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, 0)).toBe(-1);
+    // 判定 index が決定的ルールより後なら先行する
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, 3)).toBe(2);
+  });
+
   it('should skip deferred true and non-deterministic rules', () => {
     const mixed = [rule('approved'), rule('when(true)', { next: 'fix' })];
     expect(findImmediateDeterministicMatch(mixed, stateWithFindings(0, 0), false)).toBe(-1);
