@@ -271,10 +271,10 @@ export class InstructionBuilder {
       // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。
       lines.push(
         '',
-        '- If an open finding is valid but cannot be fixed (frozen public contract, external constraint, deliberate trade-off), do NOT loop on it. State a dispute claim in your response under a "## Disputed Findings" heading, one entry per finding:',
+        '- Before re-fixing an open finding you already addressed, check it against the current code. If the finding no longer matches reality (already fixed, or it cites structures that no longer exist), or it is valid but cannot be fixed (frozen public contract, external constraint, deliberate trade-off), do NOT loop on it. State a dispute claim in your response under a "## Disputed Findings" heading, one entry per finding:',
         '  - findingId: the ledger finding id',
-        '  - reason: why it cannot be fixed',
-        '  - evidence: file:line references backing the reason',
+        '  - reason: why the finding is stale or cannot be fixed',
+        '  - evidence: file:line references from the current code backing the reason',
         '- The findings manager adjudicates dispute claims; only accepted claims stop blocking the gate. Critical findings can never be waived.',
       );
     }
