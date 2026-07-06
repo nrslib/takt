@@ -99,7 +99,7 @@ export class RuleEvaluator {
     }
 
     const firstNonDeterministicIndex = this.findFirstNonDeterministicRuleIndex();
-    const leadingDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, 0, firstNonDeterministicIndex >= 0 ? firstNonDeterministicIndex : (this.step.rules?.length ?? 0));
+    const leadingDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, 0, firstNonDeterministicIndex >= 0 ? firstNonDeterministicIndex : (this.step.rules.length));
     if (leadingDeterministicIndex >= 0) {
       return { index: leadingDeterministicIndex, method: 'auto_select' };
     }
@@ -131,7 +131,7 @@ export class RuleEvaluator {
       return { index: aiRuleIndex, method: 'ai_judge' };
     }
 
-    const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, this.step.rules?.length ?? 0);
+    const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, this.step.rules.length);
     if (immediateDeterministicIndex >= 0) {
       return { index: immediateDeterministicIndex, method: 'auto_select' };
     }

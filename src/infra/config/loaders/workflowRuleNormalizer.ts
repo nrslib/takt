@@ -19,7 +19,12 @@ export function splitTagFindingsCondition(condition: string): { tagText: string;
   // splitTopLevel は空 clause を除去するため、壊れた設定（"a && && b" 等）の
   // fail-fast 用に空 clause を保持する分割をここで行う。
   const clauses = splitTopLevelAndClauses(condition);
-  if (clauses.length < 2 || clauses.some((clause) => clause.length === 0)) {
+  if (clauses.length >= 2 && clauses.some((clause) => clause.length === 0)) {
+    // "a && && b" のような壊れた条件は、どの解釈でも設定ミス。散文タグに
+    // 流して黙殺せず fail-fast する（集約ガード側と同じ契約）。
+    throw new Error(`Configuration error: rule condition "${condition}" contains an empty clause`);
+  }
+  if (clauses.length < 2) {
     return undefined;
   }
   const [tagText, ...guardClauses] = clauses;

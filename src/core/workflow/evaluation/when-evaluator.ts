@@ -1,33 +1,11 @@
 import type { WorkflowState } from '../../models/types.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
+import { splitTopLevelClauses } from '../../models/workflow-condition-expression.js';
 
 export function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
-  const parts: string[] = [];
-  let inString = false;
-  let depth = 0;
-  let start = 0;
-  for (let index = 0; index < expression.length - 1; index++) {
-    const current = expression[index];
-    if (current === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (!inString && current === '(') {
-      depth++;
-      continue;
-    }
-    if (!inString && current === ')') {
-      depth--;
-      continue;
-    }
-    if (!inString && depth === 0 && expression.slice(index, index + 2) === separator) {
-      parts.push(expression.slice(start, index).trim());
-      start = index + 2;
-      index++;
-    }
-  }
-  parts.push(expression.slice(start).trim());
-  return parts.filter((part) => part.length > 0);
+  // トークナイズは models の唯一実装に委譲（parse/normalize と同一契約）。
+  // 評価側は従来どおり空節を除いて評価する。
+  return splitTopLevelClauses(expression, separator).filter((part) => part.length > 0);
 }
 
 function findOperator(expression: string): string | undefined {

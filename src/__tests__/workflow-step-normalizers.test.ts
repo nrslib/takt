@@ -197,14 +197,11 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
     expect(normalized.guardCondition).toBeUndefined();
   });
 
-  it('should not split malformed compounds with empty clauses', () => {
-    const normalized = normalizeRule({
-      condition: 'approved && && findings.open.count == 0',
+  it('should fail fast on malformed compounds with empty clauses', () => {
+    expect(() => normalizeRule({
+      condition: 'approved && && when(findings.open.count == 0)',
       next: 'COMPLETE',
-    });
-
-    expect(normalized.condition).toBe('approved && && findings.open.count == 0');
-    expect(normalized.guardCondition).toBeUndefined();
+    })).toThrow('contains an empty clause');
   });
 
   it('should not split prose tags containing && when any clause is not a findings condition', () => {
