@@ -111,14 +111,12 @@ function parseLiteral(raw: string, state: WorkflowState, item?: unknown): unknow
 function evaluateExistsPredicate(predicate: string, item: unknown, state: WorkflowState): boolean {
   return splitTopLevel(predicate, '&&').every((clause) => {
     const operatorMatch = findOperator(clause);
-  const operator = operatorMatch?.operator;
-    if (operator !== '==') {
+    if (operatorMatch?.operator !== '==') {
       throw new Error(`exists() only supports "==" and "&&": "${predicate}"`);
     }
 
-    const operatorIndex = clause.indexOf(operator);
-    const leftRaw = clause.slice(0, operatorIndex);
-    const rightRaw = clause.slice(operatorIndex + operator.length);
+    const leftRaw = clause.slice(0, operatorMatch.index);
+    const rightRaw = clause.slice(operatorMatch.index + operatorMatch.operator.length);
     if (leftRaw.trim().length === 0 || rightRaw.trim().length === 0) {
       throw new Error(`Invalid exists() clause "${clause}"`);
     }
