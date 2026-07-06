@@ -456,6 +456,8 @@ describe('all()/any() aggregate condition expression parsing', () => {
   it('should match aggregate condition with deterministic guard', () => {
     expect(() => parseAggregateConditionExpression('all("approved") && findings.open.count == 0'))
       .toThrow('must be wrapped in when(...)');
+    expect(() => parseAggregateConditionExpression('all("approved") && && when(findings.open.count == 0)'))
+      .toThrow('contains an empty clause');
     expect(parseAggregateConditionExpression('all("approved") && when(findings.open.count == 0)')).toEqual({
       type: 'all',
       argsText: '"approved"',

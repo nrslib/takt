@@ -25,22 +25,22 @@ describe('findImmediateDeterministicMatch', () => {
   ];
 
   it('should return the deterministic rule index when its condition holds', () => {
-    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, rules.length)).toBe(2);
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, 0, rules.length)).toBe(2);
   });
 
   it('should return -1 when no deterministic condition holds', () => {
-    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 0), false, rules.length)).toBe(-1);
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 0), false, 0, rules.length)).toBe(-1);
   });
 
   it('should not scan past endExclusive (positional first-match alignment)', () => {
     // 判定が index 0 (approved) を選んだ場合、後方の決定的ルールは先行しない
-    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, 0)).toBe(-1);
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, 0, 0)).toBe(-1);
     // 判定 index が決定的ルールより後なら先行する
-    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, 3)).toBe(2);
+    expect(findImmediateDeterministicMatch(rules, stateWithFindings(0, 1), false, 0, 3)).toBe(2);
   });
 
   it('should skip deferred true and non-deterministic rules', () => {
     const mixed = [rule('approved'), rule('when(true)', { next: 'fix' })];
-    expect(findImmediateDeterministicMatch(mixed, stateWithFindings(0, 0), false, mixed.length)).toBe(-1);
+    expect(findImmediateDeterministicMatch(mixed, stateWithFindings(0, 0), false, 0, mixed.length)).toBe(-1);
   });
 });

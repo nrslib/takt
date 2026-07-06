@@ -18,7 +18,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
-import { hasUnquotedFindingsReference, isDeferredDeterministicCondition, isDeterministicCondition, isFindingsCondition, unwrapWhenCondition } from './rule-utils.js';
+import { findImmediateDeterministicMatch, hasUnquotedFindingsReference, isDeferredDeterministicCondition, isDeterministicCondition, isFindingsCondition, unwrapWhenCondition } from './rule-utils.js';
 
 const log = createLogger('rule-evaluator');
 
@@ -99,20 +99,14 @@ export class RuleEvaluator {
     }
 
     const firstNonDeterministicIndex = this.findFirstNonDeterministicRuleIndex();
-    const leadingDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-      0,
-      firstNonDeterministicIndex >= 0 ? firstNonDeterministicIndex : undefined,
-    );
+    const leadingDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, 0, firstNonDeterministicIndex >= 0 ? firstNonDeterministicIndex : (this.step.rules?.length ?? 0));
     if (leadingDeterministicIndex >= 0) {
       return { index: leadingDeterministicIndex, method: 'auto_select' };
     }
 
     const phase3TagIndex = this.resolveTaggedRuleIndex(tagContent, interactiveEnabled);
     if (phase3TagIndex >= 0) {
-      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-        firstNonDeterministicIndex + 1,
-        phase3TagIndex,
-      );
+      const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, phase3TagIndex);
       if (immediateDeterministicIndex >= 0) {
         return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
@@ -121,10 +115,7 @@ export class RuleEvaluator {
 
     const phase1TagIndex = this.resolveTaggedRuleIndex(agentContent, interactiveEnabled);
     if (phase1TagIndex >= 0) {
-      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-        firstNonDeterministicIndex + 1,
-        phase1TagIndex,
-      );
+      const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, phase1TagIndex);
       if (immediateDeterministicIndex >= 0) {
         return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
@@ -133,19 +124,14 @@ export class RuleEvaluator {
 
     const aiRuleIndex = await this.evaluateAiConditions(agentContent);
     if (aiRuleIndex >= 0) {
-      const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-        firstNonDeterministicIndex + 1,
-        aiRuleIndex,
-      );
+      const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, aiRuleIndex);
       if (immediateDeterministicIndex >= 0) {
         return { index: immediateDeterministicIndex, method: 'auto_select' };
       }
       return { index: aiRuleIndex, method: 'ai_judge' };
     }
 
-    const immediateDeterministicIndex = this.evaluateImmediateDeterministicConditions(
-      firstNonDeterministicIndex + 1,
-    );
+    const immediateDeterministicIndex = findImmediateDeterministicMatch(this.step.rules, this.ctx.state, this.ctx.interactive, firstNonDeterministicIndex + 1, this.step.rules?.length ?? 0);
     if (immediateDeterministicIndex >= 0) {
       return { index: immediateDeterministicIndex, method: 'auto_select' };
     }
@@ -220,32 +206,6 @@ export class RuleEvaluator {
     return -1;
   }
 
-  private evaluateImmediateDeterministicConditions(startIndex = 0, endExclusive?: number): number {
-    if (!this.step.rules) return -1;
-
-    const upperBound = endExclusive ?? this.step.rules.length;
-    for (let i = Math.max(startIndex, 0); i < upperBound; i++) {
-      const rule = this.step.rules[i];
-      if (!rule) continue;
-      if (rule.interactiveOnly && this.ctx.interactive !== true) {
-        continue;
-      }
-      if (rule.isAiCondition || rule.isAggregateCondition) {
-        continue;
-      }
-      if (!isDeterministicCondition(rule.condition)) {
-        continue;
-      }
-      if (isDeferredDeterministicCondition(rule.condition)) {
-        continue;
-      }
-      if (evaluateWhenExpression(unwrapWhenCondition(rule.condition), this.ctx.state)) {
-        return i;
-      }
-    }
-
-    return -1;
-  }
 
   private evaluateDeferredDeterministicConditions(): number {
     if (!this.step.rules) return -1;

@@ -322,7 +322,14 @@ export function splitTopLevelAndClauses(expression: string): string[] {
 }
 
 function splitGuardClauses(expression: string): string[] {
-  return splitTopLevelAndClauses(expression).filter((part) => part.length > 0);
+  // 空節（"a && && b" 等の壊れた設定）は黙って捨てず fail-fast する
+  const clauses = splitTopLevelAndClauses(expression);
+  for (const clause of clauses) {
+    if (clause.length === 0) {
+      throw new Error(`Configuration error: aggregate guard "${expression}" contains an empty clause`);
+    }
+  }
+  return clauses;
 }
 
 
