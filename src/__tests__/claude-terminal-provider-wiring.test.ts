@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 
 const {
   mockCallClaudeTerminal,
@@ -154,7 +153,14 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'sandbox')).toBe(false);
   });
 
-  it('Given incompatible claude effort, When call is invoked, Then provider error is returned before terminal client call', async () => {
+  it('Given claude xhigh effort on any model, When call is invoked, Then effort is passed to terminal client', async () => {
+    mockCallClaudeTerminal.mockResolvedValueOnce({
+      persona: 'coder',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+      sessionId: 'session-123',
+    });
     const provider = new ClaudeTerminalProvider();
     const agent = provider.setup({ name: 'coder' });
 
@@ -169,19 +175,11 @@ describe('ClaudeTerminalProvider wiring', () => {
       } as never,
     });
 
-    expect(mockCallClaudeTerminal).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      persona: 'coder',
-      status: 'error',
-      sessionId: 'session-123',
-      failureCategory: 'provider_error',
-      providerUsage: {
-        usageMissing: true,
-        reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
-      },
-    });
-    expect(result.error).toContain('Claude terminal provider failed:');
-    expect(result.error).toContain("provider_options.claude.effort 'xhigh' is not supported");
+    expect(result.status).toBe('done');
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('coder', 'implement this', expect.objectContaining({
+      model: 'claude-sonnet-4-5',
+      effort: 'xhigh',
+    }));
   });
 
   it('Given terminal client rejects, When call is invoked, Then provider error response is returned', async () => {

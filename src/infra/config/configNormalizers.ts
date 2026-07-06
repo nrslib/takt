@@ -17,7 +17,7 @@ import type {
   TaktProviderConfigEntry,
   TaktProvidersConfig,
 } from '../../core/models/config-types.js';
-import { validateProviderModelCompatibility } from './providerModelCompatibility.js';
+import { validateProviderModelRequirements } from './providerModelRequirements.js';
 import {
   normalizeConfigProviderReferenceDetailed,
   type ConfigProviderReference,
@@ -106,7 +106,7 @@ export function normalizeRateLimitFallback(
   const switchChain = raw.switch_chain ?? [];
   return {
     switchChain: switchChain.map((entry, index) => {
-      validateProviderModelCompatibility(entry.provider, entry.model, {
+      validateProviderModelRequirements(entry.provider, entry.model, {
         modelFieldName: `Configuration error: rate_limit_fallback.switch_chain[${index}].model`,
       });
       return {
@@ -301,7 +301,7 @@ function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
       || normalizedEntry.provider !== 'opencode'
       || normalizedEntry.model !== undefined
     ) {
-      validateProviderModelCompatibility(
+      validateProviderModelRequirements(
         normalizedEntry.provider,
         normalizedEntry.model,
         {
@@ -453,7 +453,7 @@ export function normalizeTaktAssistantProvider(
   if (provider === undefined && model === undefined) {
     throw new Error("Configuration error: 'takt_providers.assistant' must include provider or model.");
   }
-  validateProviderModelCompatibility(
+  validateProviderModelRequirements(
     provider,
     model,
     {

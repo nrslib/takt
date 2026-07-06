@@ -12,7 +12,7 @@ import type {
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
-import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
+import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
 import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 
 function ruleReferencesFindings(rule: { condition: string; aggregateGuardCondition?: string; guardCondition?: string }): boolean {
@@ -243,7 +243,7 @@ export function normalizeWorkflowConfig(
       judge: monitor.judge,
       triggeringProviderInfo,
     });
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       judgeProviderInfo.provider,
       judgeProviderInfo.model,
       {
