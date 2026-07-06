@@ -836,9 +836,16 @@ export class OpenCodeClient {
           const event = iteration.value;
 
           const sseEvent = event as OpenCodeStreamEvent;
-          // 無音検出のリセットは自セッションのイベントだけ。サーバ全体の
-          // バスに流れる無関係イベントでは延命しない。
-          if (extractEventSessionId(sseEvent) === activeSessionId) {
+          // セッション帰属が判明していて自分でないイベントは処理しない。
+          // サーバプールは同一モデルで共有されるため（並列レビュー等）、
+          // 兄弟セッションの text/tool 更新を通すと content と検出器が
+          // 汚染される。帰属不明のイベントは種別ごとの処理に委ねるが、
+          // 無音検出のリセット（延命）は自セッションのイベントに限る。
+          const eventSessionId = extractEventSessionId(sseEvent);
+          if (eventSessionId !== undefined && eventSessionId !== activeSessionId) {
+            continue;
+          }
+          if (eventSessionId === activeSessionId) {
             resetIdleTimeout();
           }
           diag.onFirstEvent(sseEvent.type);

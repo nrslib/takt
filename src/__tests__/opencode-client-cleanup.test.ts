@@ -2443,6 +2443,42 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync.mock.calls[3]?.[0]).not.toHaveProperty('format');
   });
 
+  it('should not leak sibling-session text into the active session content', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-sibling', type: 'text', text: 'sibling text', sessionID: 'other-session' } },
+      },
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-own', type: 'text', text: 'own text', sessionID: 'session-own' } },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-own' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-own' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('coder', 'do it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toContain('own text');
+    expect(result.content).not.toContain('sibling text');
+  });
+
   it('should time out a stalled session even while unrelated bus events keep flowing', async () => {
     process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';
     try {
