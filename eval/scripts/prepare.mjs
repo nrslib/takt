@@ -45,9 +45,9 @@ const TARGETS = [
   // スナップショット（Source Path）を inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
-  { id: 'rescan-semantics', workflow: 'deep-peer-review', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es' },
+  { id: 'rescan-semantics', workflow: 'peer-review-for-local-llm', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es' },
   // 精度（偽陽性）測定: hasOwn 防御済み Record を指摘しないこと
-  { id: 'rescan-precision', workflow: 'deep-peer-review', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es-guarded' },
+  { id: 'rescan-precision', workflow: 'peer-review-for-local-llm', step: 'implementation-semantics-review', fixture: 'eval/fixtures/inventory-es-guarded' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
 ];

@@ -1,5 +1,5 @@
 name: backend-cqrs-for-local-llm
-description: CQRS+ES backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract build discipline for weak models structurally
+description: CQRS+ES backend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract build discipline for weak models structurally
 finding_contract:
   ledger_path: .takt/findings/backend-cqrs-for-local-llm.json
   raw_findings_path: .takt/findings/backend-cqrs-for-local-llm/raw

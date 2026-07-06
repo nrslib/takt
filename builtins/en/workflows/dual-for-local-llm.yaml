@@ -1,5 +1,5 @@
 name: dual-for-local-llm
-description: Full-stack development workflow for local LLMs. Five parallel deep reviewers plus the Finding Contract build discipline for weak models structurally
+description: Full-stack development workflow for local LLMs. Five parallel specialist reviewers plus the Finding Contract build discipline for weak models structurally
 finding_contract:
   ledger_path: .takt/findings/dual-for-local-llm.json
   raw_findings_path: .takt/findings/dual-for-local-llm/raw

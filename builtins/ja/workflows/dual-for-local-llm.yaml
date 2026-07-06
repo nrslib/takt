@@ -1,5 +1,5 @@
 name: dual-for-local-llm
-description: ローカルLLM向けのフルスタック開発ワークフロー。deep レビュー5並列 + Finding Contract で弱いモデルの規律を構造で作る
+description: ローカルLLM向けのフルスタック開発ワークフロー。観点別レビュー5並列 + Finding Contract で弱いモデルの規律を構造で作る
 finding_contract:
   ledger_path: .takt/findings/dual-for-local-llm.json
   raw_findings_path: .takt/findings/dual-for-local-llm/raw

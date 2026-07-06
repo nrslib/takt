@@ -6,7 +6,7 @@
 # ローカルモデルは opencode CLI 経由（実プロバイダ認証が必要）。
 # 実行: npm run eval:prompts -- rescan-coding
 
-description: 'TAKT facet eval: deep-peer-review / implementation-semantics-review round-2 re-scan'
+description: 'TAKT facet eval: peer-review-for-local-llm / implementation-semantics-review round-2 re-scan'
 
 prompts:
   - file://prompts/rescan-semantics.phase1.md

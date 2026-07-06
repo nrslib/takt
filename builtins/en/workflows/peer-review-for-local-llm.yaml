@@ -1,5 +1,5 @@
-name: deep-peer-review
-description: peer-review に実装意味論レビュアーを加えた深いレビュー編成。専門並列レビュー ⇄ 修正ループの後、merge-readiness-review と supervise の並列最終ゲートを実行する。
+name: peer-review-for-local-llm
+description: peer-review with an added implementation-semantics reviewer for deeper coverage. Specialist parallel reviewers ⇄ fix loop, followed by a parallel merge-readiness/supervise final gate.
 subworkflow:
   callable: true
   visibility: internal
@@ -37,9 +37,9 @@ loop_monitors:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: 健全（指摘数が減少、修正が反映されている）
+        - condition: Healthy (findings decreasing, fixes applied)
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: Unproductive (same findings repeating)
           next: COMPLETE
 steps:
   - name: reviewers
@@ -210,8 +210,8 @@ steps:
     required_permission_mode: edit
     pass_previous_response: false
     rules:
-      - condition: 修正完了
+      - condition: Fix complete
         next: reviewers
-      - condition: 判断できない、情報不足
+      - condition: Cannot proceed, insufficient info
         return: need_replan
     instruction: fix

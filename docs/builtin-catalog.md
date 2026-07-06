@@ -65,12 +65,12 @@ Organized by category.
 | | `takt-default-refresh-fast` | Refresh-optimized variant of the TAKT development workflow. Keeps reasoning effort and loop rules unchanged, and adds `session: refresh` only to context-heavy steps such as `write_tests`, `ai-antipattern-review-1st`, reviewer steps, and `fix`. |
 | | `takt-default-team-leader` | TAKT development workflow with team leader: plan → write tests → team-leader draft → peer-review (specialists + merge-readiness + fix) → supervise → complete. |
 | | `review-fix-takt-default` | TAKT development code review + fix loop: gather → plan → tests → draft → peer-review (specialists + merge-readiness + fix) → supervise. |
-| | `deep-peer-review` | peer-review with an added implementation-semantics reviewer for deeper coverage. Specialist parallel reviewers ⇄ fix loop, followed by the parallel merge-readiness/supervise final gate. |
-| 🖥️ Local LLM | `takt-default-for-local-llm` | TAKT development workflow for local LLMs. Four parallel deep reviewers (architecture / AI anti-pattern / coding / implementation semantics) plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally. |
-| | `frontend-for-local-llm` | Frontend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
-| | `backend-for-local-llm` | Backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
-| | `backend-cqrs-for-local-llm` | CQRS+ES backend development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract. |
-| | `dual-for-local-llm` | Full-stack development workflow for local LLMs. Five parallel deep reviewers plus the Finding Contract. |
+| | `peer-review-for-local-llm` | peer-review with an added implementation-semantics reviewer, aligned with the for-local-llm lineage. Specialist parallel reviewers ⇄ fix loop, followed by the parallel merge-readiness/supervise final gate. |
+| 🖥️ Local LLM | `takt-default-for-local-llm` | TAKT development workflow for local LLMs. Four parallel specialist reviewers (architecture / AI anti-pattern / coding / implementation semantics) plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally. |
+| | `frontend-for-local-llm` | Frontend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |
+| | `backend-for-local-llm` | Backend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |
+| | `backend-cqrs-for-local-llm` | CQRS+ES backend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |
+| | `dual-for-local-llm` | Full-stack development workflow for local LLMs. Five parallel specialist reviewers plus the Finding Contract. |
 | Others | `research` | Research workflow: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research workflow: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |

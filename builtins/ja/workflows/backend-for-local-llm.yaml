@@ -1,5 +1,5 @@
 name: backend-for-local-llm
-description: ローカルLLM向けのバックエンド開発ワークフロー。deep レビュー4並列 + Finding Contract で弱いモデルの規律を構造で作る
+description: ローカルLLM向けのバックエンド開発ワークフロー。観点別レビュー4並列 + Finding Contract で弱いモデルの規律を構造で作る
 finding_contract:
   ledger_path: .takt/findings/backend-for-local-llm.json
   raw_findings_path: .takt/findings/backend-for-local-llm/raw

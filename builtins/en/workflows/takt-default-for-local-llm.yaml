@@ -1,5 +1,5 @@
 name: takt-default-for-local-llm
-description: TAKT development workflow for local LLMs. Four parallel deep reviewers plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally (plan -> tests -> implement -> FC review -> final gate -> complete)
+description: TAKT development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally (plan -> tests -> implement -> FC review -> final gate -> complete)
 finding_contract:
   ledger_path: .takt/findings/takt-default-for-local-llm.json
   raw_findings_path: .takt/findings/takt-default-for-local-llm/raw
