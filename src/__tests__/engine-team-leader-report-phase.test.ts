@@ -113,7 +113,7 @@ function createConfig(): WorkflowConfig {
           },
         ],
         rules: [
-          makeRule('true', 'COMPLETE'),
+          makeRule('when(true)', 'COMPLETE'),
         ],
       },
     ],

@@ -298,11 +298,11 @@ describe('builtin takt-default provider_options refs', () => {
       const antipatternNg = locale === 'ja' ? 'AI特有の問題あり' : 'AI-specific issues found';
       const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
       expect(reviewers?.rules?.map((rule) => rule.condition)).toEqual([
-        `all("approved", "${antipatternOk}", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0`,
-        `any("needs_fix", "${antipatternNg}", "needs_fix", "needs_fix") && findings.conflicts.count == 0`,
-        'findings.conflicts.count == 0 && findings.open.count > 0',
+        `all("approved", "${antipatternOk}", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)`,
+        `any("needs_fix", "${antipatternNg}", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)`,
+        'when(findings.conflicts.count == 0 && findings.open.count > 0)',
         expect.stringContaining('findings.conflicts'),
-        'findings.conflicts.count > 0',
+        'when(findings.conflicts.count > 0)',
       ]);
       expect(reviewers?.rules?.[0]).toMatchObject({
         isAggregateCondition: true,
@@ -329,7 +329,7 @@ describe('builtin takt-default provider_options refs', () => {
           next: 'fix',
         }),
         expect.objectContaining({
-          condition: 'findings.conflicts.count == 0 && findings.open.count > 0',
+          condition: 'when(findings.conflicts.count == 0 && findings.open.count > 0)',
           next: 'fix',
         }),
         expect.objectContaining({
@@ -338,7 +338,7 @@ describe('builtin takt-default provider_options refs', () => {
           isAiCondition: true,
         }),
         expect.objectContaining({
-          condition: 'findings.conflicts.count > 0',
+          condition: 'when(findings.conflicts.count > 0)',
           next: 'ABORT',
         }),
       ]);
@@ -394,7 +394,7 @@ describe('builtin takt-default provider_options refs', () => {
           aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
         });
         expect(reviewerRules[4], name).toMatchObject({
-          condition: 'findings.conflicts.count > 0',
+          condition: 'when(findings.conflicts.count > 0)',
           next: 'ABORT',
         });
 

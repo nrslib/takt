@@ -4,16 +4,24 @@
 
 import type { WorkflowState, WorkflowStep, WorkflowRule, OutputContractEntry } from '../../models/types.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
-import { isEscapedQuote } from '../../models/workflow-condition-expression.js';
+import { isEscapedQuote, isWhenConditionExpression, unwrapWhenConditionExpression } from '../../models/workflow-condition-expression.js';
 
-const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect|findings)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
+// 決定的条件は when(<式>) の明示構文で宣言する（ai()/all()/any() と同形）。
+// 裸の式をヒューリスティックで拾う旧方式は廃止: 比較演算子を含む散文が
+// 誤って式扱いされる事故と、判定モデルによる「申告」の混入を構文で断つ。
+
 
 export function isDeterministicCondition(condition: string): boolean {
-  return DETERMINISTIC_CONDITION_PATTERN.test(condition.trim());
+  return isWhenConditionExpression(condition);
+}
+
+/** when(<式>) の内側の式を取り出す。when 形式でなければそのまま返す。 */
+export function unwrapWhenCondition(condition: string): string {
+  return unwrapWhenConditionExpression(condition);
 }
 
 export function isDeferredDeterministicCondition(condition: string): boolean {
-  return condition.trim() === 'true';
+  return isDeterministicCondition(condition) && unwrapWhenCondition(condition) === 'true';
 }
 
 function isReferenceBoundary(char: string | undefined): boolean {
@@ -42,7 +50,7 @@ export function hasUnquotedFindingsReference(condition: string): boolean {
 }
 
 export function isFindingsCondition(condition: string): boolean {
-  return isDeterministicCondition(condition) && hasUnquotedFindingsReference(condition);
+  return isDeterministicCondition(condition) && hasUnquotedFindingsReference(unwrapWhenCondition(condition));
 }
 
 export function isNonAiReturnValueRule(rule: WorkflowRule, returnValue: string): boolean {
@@ -123,7 +131,7 @@ export function findImmediateDeterministicMatch(
     if (rule.isAiCondition || rule.isAggregateCondition) continue;
     if (!isDeterministicCondition(rule.condition)) continue;
     if (isDeferredDeterministicCondition(rule.condition)) continue;
-    if (evaluateWhenExpression(rule.condition, state)) {
+    if (evaluateWhenExpression(unwrapWhenCondition(rule.condition), state)) {
       return i;
     }
   }

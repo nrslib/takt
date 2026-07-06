@@ -4,7 +4,7 @@ import {
   parseAggregateConditionExpression,
   parseAiConditionExpression,
 } from '../../../core/models/workflow-condition-expression.js';
-import { isDeterministicCondition, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { isDeterministicCondition, isFindingsCondition, unwrapWhenCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 
 function splitTopLevelPreservingEmpties(expression: string, separator: '&&'): string[] {
   const parts: string[] = [];
@@ -64,7 +64,8 @@ export function splitTagFindingsCondition(condition: string): { tagText: string;
   if (!guardClauses.every((clause) => isFindingsCondition(clause))) {
     return undefined;
   }
-  return { tagText, guard: guardClauses.join(' && ') };
+  // ガードは when() の内側に unwrap して保存する（評価側は素の式だけを扱う）
+  return { tagText, guard: guardClauses.map(unwrapWhenCondition).join(' && ') };
 }
 
 export function normalizeRule(rule: {
@@ -76,7 +77,9 @@ export function normalizeRule(rule: {
   requires_user_input?: boolean;
   interactive_only?: boolean;
 }): WorkflowRule {
-  const condition = rule.condition ?? rule.when;
+  // `when:` キーは決定的条件の宣言形: when(<式>) に包んで扱う。
+  // 裸の式を condition: に書いた場合は通常のタグ条件（散文）として扱う。
+  const condition = rule.condition ?? (rule.when !== undefined ? `when(${rule.when})` : undefined);
   if (!condition) {
     throw new Error('Workflow rule requires condition or when');
   }

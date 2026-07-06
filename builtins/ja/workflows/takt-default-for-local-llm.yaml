@@ -198,15 +198,15 @@ steps:
             - name: implementation-semantics-review.md
               format: implementation-semantics-review-finding-contract
     rules:
-      - condition: all("approved", "AI特有の問題なし", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: all("approved", "AI特有の問題なし", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
-      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && findings.conflicts.count == 0
+      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
         next: fix
-      - condition: findings.conflicts.count == 0 && findings.open.count > 0
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
       - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
         next: fix
-      - condition: findings.conflicts.count > 0
+      - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
   - name: final-gate
@@ -223,15 +223,15 @@ steps:
         - name: merge-readiness-review.md
           format: merge-readiness-review-finding-contract
     rules:
-      - condition: approved && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
-      - condition: needs_fix && findings.conflicts.count == 0
+      - condition: needs_fix && when(findings.conflicts.count == 0)
         next: fix
-      - condition: findings.conflicts.count == 0 && findings.open.count > 0
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
       - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
         next: fix
-      - condition: findings.conflicts.count > 0
+      - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
   - name: fix

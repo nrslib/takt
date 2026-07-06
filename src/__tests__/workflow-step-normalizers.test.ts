@@ -157,7 +157,7 @@ describe('workflow step normalizer helpers', () => {
 
 describe('normalizeRule tag-and-findings compound conditions', () => {
   it('should split a tag condition with a findings guard', () => {
-    const normalized = normalizeRule({ condition: 'approved && findings.open.count == 0', next: 'COMPLETE' });
+    const normalized = normalizeRule({ condition: 'approved && when(findings.open.count == 0)', next: 'COMPLETE' });
 
     expect(normalized.condition).toBe('approved');
     expect(normalized.guardCondition).toBe('findings.open.count == 0');
@@ -166,7 +166,7 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
 
   it('should join multiple findings clauses into one guard', () => {
     const normalized = normalizeRule({
-      condition: 'approved && findings.open.count == 0 && findings.conflicts.count == 0',
+      condition: 'approved && when(findings.open.count == 0) && when(findings.conflicts.count == 0)',
       next: 'COMPLETE',
     });
 
@@ -218,7 +218,7 @@ describe('normalizeRule tag-and-findings compound conditions', () => {
 
   it('should split guards containing top-level-protected && inside exists()', () => {
     const normalized = normalizeRule({
-      condition: 'approved && exists(findings.open.items, item.severity == "high" && item.id == "F-0001")',
+      condition: 'approved && when(exists(findings.open.items, item.severity == "high" && item.id == "F-0001"))',
       next: 'fix',
     });
 
@@ -248,7 +248,7 @@ describe('guarded compound rejection on unsupported paths', () => {
           threshold: 3,
           judge: {
             rules: [
-              { condition: '健全 && findings.open.count == 0', next: 'review' },
+              { condition: '健全 && when(findings.open.count == 0)', next: 'review' },
             ],
           },
         },

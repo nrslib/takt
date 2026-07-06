@@ -10,8 +10,8 @@ describe('deterministic conditions are not model-selectable', () => {
   const rules = [
     rule('approved'),
     rule('needs_fix'),
-    rule('findings.open.count > 0'),
-    rule('findings.conflicts.count > 0'),
+    rule('when(findings.open.count > 0)'),
+    rule('when(findings.conflicts.count > 0)'),
   ];
 
   it('should reject a judged index that points at a deterministic rule', () => {

@@ -70,8 +70,8 @@ describe('hasTagBasedRules', () => {
   it('should return false when all rules are deterministic when expressions', () => {
     const step = makeStep({
       rules: [
-        { condition: 'structured.plan.action == "noop"', next: 'COMPLETE' },
-        { condition: 'context.route.task.exists == true', next: 'ABORT' },
+        { condition: 'when(structured.plan.action == "noop")', next: 'COMPLETE' },
+        { condition: 'when(context.route.task.exists == true)', next: 'ABORT' },
       ],
     });
     expect(hasTagBasedRules(step)).toBe(false);
@@ -80,7 +80,9 @@ describe('hasTagBasedRules', () => {
 
 describe('isDeterministicCondition', () => {
   it('should return true for structured when expressions', () => {
-    expect(isDeterministicCondition('structured.plan_followup.action == "noop"')).toBe(true);
+    expect(isDeterministicCondition('when(structured.plan_followup.action == "noop")')).toBe(true);
+    // 裸の式はもう決定的扱いしない（when() 明示構文のみ）
+    expect(isDeterministicCondition('structured.plan_followup.action == "noop"')).toBe(false);
   });
 
   it('should return false for plain tag conditions', () => {

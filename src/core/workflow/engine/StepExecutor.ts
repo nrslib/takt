@@ -22,7 +22,7 @@ import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
-import { findImmediateDeterministicMatch, isDeterministicCondition } from '../evaluation/rule-utils.js';
+import { findImmediateDeterministicMatch, isDeterministicCondition, unwrapWhenCondition } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
@@ -539,7 +539,7 @@ export class StepExecutor {
         // 申告では成立させず、実状態で再評価する。
         || (phase3Rule !== undefined
           && isDeterministicCondition(phase3Rule.condition)
-          && !evaluateWhenExpression(phase3Rule.condition, state))
+          && !evaluateWhenExpression(unwrapWhenCondition(phase3Rule.condition), state))
       ) {
         log.debug('Phase 3 rule guard failed; falling back to rule evaluation', {
           step: step.name,

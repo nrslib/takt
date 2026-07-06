@@ -198,15 +198,15 @@ steps:
             - name: implementation-semantics-review.md
               format: implementation-semantics-review-finding-contract
     rules:
-      - condition: all("approved", "No AI-specific issues", "approved", "approved") && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: all("approved", "No AI-specific issues", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
-      - condition: any("needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && findings.conflicts.count == 0
+      - condition: any("needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
         next: fix
-      - condition: findings.conflicts.count == 0 && findings.open.count > 0
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
       - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
         next: fix
-      - condition: findings.conflicts.count > 0
+      - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
   - name: final-gate
@@ -223,15 +223,15 @@ steps:
         - name: merge-readiness-review.md
           format: merge-readiness-review-finding-contract
     rules:
-      - condition: approved && findings.open.count == 0 && findings.conflicts.count == 0
+      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
-      - condition: needs_fix && findings.conflicts.count == 0
+      - condition: needs_fix && when(findings.conflicts.count == 0)
         next: fix
-      - condition: findings.conflicts.count == 0 && findings.open.count > 0
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
       - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
         next: fix
-      - condition: findings.conflicts.count > 0
+      - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
   - name: fix

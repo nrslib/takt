@@ -13,12 +13,12 @@ import type {
 } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
-import { isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 
 function ruleReferencesFindings(rule: { condition: string; aggregateGuardCondition?: string; guardCondition?: string }): boolean {
   return isFindingsCondition(rule.condition)
-    || (rule.aggregateGuardCondition !== undefined && isFindingsCondition(rule.aggregateGuardCondition))
-    || (rule.guardCondition !== undefined && isFindingsCondition(rule.guardCondition));
+    || (rule.aggregateGuardCondition !== undefined && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
+    || (rule.guardCondition !== undefined && hasUnquotedFindingsReference(rule.guardCondition));
 }
 import { normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';

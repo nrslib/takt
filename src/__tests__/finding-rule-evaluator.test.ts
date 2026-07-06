@@ -69,8 +69,10 @@ function makeContext(state: WorkflowState): RuleEvaluatorContext {
 
 describe('RuleEvaluator findings conditions', () => {
   it('should classify findings references as deterministic conditions', () => {
-    expect(isDeterministicCondition('findings.open.count == 0')).toBe(true);
-    expect(isDeterministicCondition('findings.open.bySeverity.high > 0')).toBe(true);
+    expect(isDeterministicCondition('when(findings.open.count == 0)')).toBe(true);
+    expect(isDeterministicCondition('when(findings.open.bySeverity.high > 0)')).toBe(true);
+    // when() で包まない裸の式は決定的扱いしない（散文タグとして扱う）
+    expect(isDeterministicCondition('findings.open.count == 0')).toBe(false);
   });
 
   it('should evaluate finding count and severity without AI judge', async () => {
@@ -89,8 +91,8 @@ describe('RuleEvaluator findings conditions', () => {
     const step = makeStep({
       name: 'peer-review',
       rules: [
-        { condition: 'findings.open.count == 0', next: 'COMPLETE' },
-        { condition: 'findings.open.bySeverity.high > 0', next: 'fix' },
+        { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
+        { condition: 'when(findings.open.bySeverity.high > 0)', next: 'fix' },
       ],
     });
     const ctx = makeContext(state);
@@ -114,7 +116,7 @@ describe('RuleEvaluator findings conditions', () => {
     const step = makeStep({
       name: 'peer-review',
       rules: [
-        { condition: 'exists(findings.open.items, item.severity == "high" && item.id == "F-0001")', next: 'fix' },
+        { condition: 'when(exists(findings.open.items, item.severity == "high" && item.id == "F-0001"))', next: 'fix' },
       ],
     });
 
@@ -148,13 +150,13 @@ describe('RuleEvaluator findings conditions', () => {
     const step = makeStep({
       name: 'peer-review',
       rules: [
-        { condition: 'findings.open.count == 0 && findings.conflicts.count == 0', next: 'COMPLETE' },
-        { condition: 'findings.conflicts.count == 0 && findings.open.count > 0', next: 'fix' },
+        { condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0)', next: 'COMPLETE' },
+        { condition: 'when(findings.conflicts.count == 0 && findings.open.count > 0)', next: 'fix' },
         makeRule('ai("adjudicate active findings conflicts")', 'fix', {
           isAiCondition: true,
           aiConditionText: 'adjudicate active findings conflicts',
         }),
-        { condition: 'findings.conflicts.count > 0', return: 'need_replan' },
+        { condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' },
       ],
     });
     const ctx = makeContext(state);
@@ -223,7 +225,7 @@ describe('RuleEvaluator findings conditions', () => {
   it('should fail fast when findings state is absent for a findings rule', async () => {
     const step = makeStep({
       name: 'peer-review',
-      rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
     });
 
     await expect(new RuleEvaluator(step, makeContext(makeState())).evaluate('', '')).rejects.toThrow(
@@ -320,7 +322,7 @@ describe('RuleEvaluator guarded tag rules', () => {
       name: 'final-gate',
       rules: [
         { condition: 'approved', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
-        { condition: 'findings.open.count > 0', next: 'fix' },
+        { condition: 'when(findings.open.count > 0)', next: 'fix' },
       ],
     });
     const ctx = makeContext(state);

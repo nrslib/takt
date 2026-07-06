@@ -21,7 +21,7 @@ describe('findImmediateDeterministicMatch', () => {
   const rules = [
     rule('approved'),
     rule('needs_fix', { next: 'fix' }),
-    rule('findings.conflicts.count > 0', { next: 'ABORT' }),
+    rule('when(findings.conflicts.count > 0)', { next: 'ABORT' }),
   ];
 
   it('should return the deterministic rule index when its condition holds', () => {
@@ -33,7 +33,7 @@ describe('findImmediateDeterministicMatch', () => {
   });
 
   it('should skip deferred true and non-deterministic rules', () => {
-    const mixed = [rule('approved'), rule('true', { next: 'fix' })];
+    const mixed = [rule('approved'), rule('when(true)', { next: 'fix' })];
     expect(findImmediateDeterministicMatch(mixed, stateWithFindings(0, 0), false)).toBe(-1);
   });
 });

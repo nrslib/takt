@@ -4,7 +4,7 @@ import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
-import { isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
+import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -13,10 +13,10 @@ function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   return isFindingsCondition(rule.condition)
     || ('aggregateGuardCondition' in rule
       && rule.aggregateGuardCondition !== undefined
-      && isFindingsCondition(rule.aggregateGuardCondition))
+      && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
     || ('guardCondition' in rule
       && rule.guardCondition !== undefined
-      && isFindingsCondition(rule.guardCondition));
+      && hasUnquotedFindingsReference(rule.guardCondition));
 }
 
 function validateFindingsRuleContract(

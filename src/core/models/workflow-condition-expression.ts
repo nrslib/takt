@@ -265,16 +265,71 @@ export function parseAggregateConditionExpression(value: string): AggregateCondi
   if (remainder.length > 0 && !remainder.startsWith('&&')) {
     return undefined;
   }
-  const guardCondition = remainder.length > 0 ? remainder.slice(2).trim() : undefined;
-  if (guardCondition === '') {
+  const guardText = remainder.length > 0 ? remainder.slice(2).trim() : undefined;
+  if (guardText === '') {
     return undefined;
   }
+  // ガードは when(式) の列として書かれる。内側の式に unwrap して保持し、
+  // 評価側（evaluateWhenExpression）は素の式だけを扱う。
+  const guardCondition = guardText === undefined
+    ? undefined
+    : guardText
+      .split('&&')
+      .length >= 1
+      ? splitGuardClauses(guardText).map(unwrapWhenConditionExpression).join(' && ')
+      : guardText;
 
   return {
     type: match[1] as AggregateConditionExpression['type'],
     argsText,
     ...(guardCondition !== undefined ? { guardCondition } : {}),
   };
+}
+
+/**
+ * when(<式>) 形式か（括弧バランスで判定。when(A) && when(B) のような
+ * 連結は単一の when 条件ではない）。
+ */
+
+function splitGuardClauses(expression: string): string[] {
+  const parts: string[] = [];
+  let inString = false;
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < expression.length - 1; index++) {
+    const current = expression[index];
+    if (current === '"' && !isEscapedQuote(expression, index)) {
+      inString = !inString;
+      continue;
+    }
+    if (!inString && current === '(') { depth++; continue; }
+    if (!inString && current === ')') { depth--; continue; }
+    if (!inString && depth === 0 && expression.slice(index, index + 2) === '&&') {
+      parts.push(expression.slice(start, index).trim());
+      start = index + 2;
+      index++;
+    }
+  }
+  parts.push(expression.slice(start).trim());
+  return parts.filter((part) => part.length > 0);
+}
+
+export function isWhenConditionExpression(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('when(') || !trimmed.endsWith(')')) {
+    return false;
+  }
+  const closing = findClosingParen(trimmed, 'when('.length - 1);
+  return closing === trimmed.length - 1;
+}
+
+/** when(<式>) の内側を取り出す。when 形式でなければ trim のみ。 */
+export function unwrapWhenConditionExpression(value: string): string {
+  const trimmed = value.trim();
+  if (!isWhenConditionExpression(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.slice('when('.length, -1).trim();
 }
 
 export function isAggregateConditionExpression(value: string): boolean {
