@@ -2524,6 +2524,46 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   }, 20_000);
 
+  it('should stop a degenerate text-fragment loop via the message cycle budget', async () => {
+    process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const cycles = Array.from({ length: 6 }, (_, i) => ({
+        type: 'message.updated',
+        properties: {
+          info: { sessionID: 'session-spin', role: 'assistant', time: { completed: 1000 + i } },
+        },
+      }));
+      const stream = new MockEventStream([
+        ...cycles,
+        { type: 'session.idle', properties: { sessionID: 'session-spin' } },
+      ]);
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+          session: {
+            create: vi.fn().mockResolvedValue({ data: { id: 'session-spin' } }),
+            promptAsync: vi.fn().mockResolvedValue(undefined),
+          },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const result = await new OpenCodeClient().call('coder', 'do it', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        interactionTimeoutMs: 500,
+      });
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('message cycle budget exceeded');
+    } finally {
+      delete process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET;
+    }
+  });
+
   it('should stop a degenerate loop that rotates tool names via the error budget', async () => {
     process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
     try {

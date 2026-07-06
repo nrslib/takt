@@ -80,6 +80,12 @@ function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
 
 const log = createLogger('opencode-sdk');
 /** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
+function resolveMessageCycleBudget(): number {
+  const fromEnv = Number(process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET);
+  return fromEnv > 0 ? fromEnv : 120;
+}
+
+/** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
 function resolveStreamIdleTimeoutMs(): number {
   const fromEnv = Number(process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
   return fromEnv > 0 ? fromEnv : 10 * 60 * 1000;
@@ -823,6 +829,13 @@ export class OpenCodeClient {
         });
         streamAborted.catch(() => { /* race の敗者側での未処理拒否を防ぐ */ });
 
+        // 劣化した生成は「ごく短いアシスタント応答サイクル」を数百回繰り返す
+        // （実測: 524〜1211 ループ）。テキスト断片だけの空転はツールエラー
+        // 予算にも無音検出にも掛からないため、応答サイクル数で打ち切る。
+        // 健全なステップはツール往復込みでも数十サイクルに収まる。
+        let assistantMessageCycles = 0;
+        const messageCycleBudget = resolveMessageCycleBudget();
+
         try {
         while (true) {
           if (streamAbortController.signal.aborted) break;
@@ -1049,6 +1062,15 @@ export class OpenCodeClient {
                 failureMessage = streamError;
                 diag.onStreamError('message.updated', streamError);
                 break;
+              }
+              if (info?.time?.completed !== undefined) {
+                assistantMessageCycles += 1;
+                if (assistantMessageCycles >= messageCycleBudget) {
+                  success = false;
+                  failureMessage = `OpenCode assistant message cycle budget exceeded (${assistantMessageCycles} cycles in one call)`;
+                  diag.onStreamError('message.updated', failureMessage);
+                  break;
+                }
               }
             }
             continue;
