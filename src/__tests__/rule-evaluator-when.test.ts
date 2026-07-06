@@ -303,3 +303,12 @@ describe('RuleEvaluator with when conditions', () => {
     );
   });
 });
+
+describe('operators inside string literals', () => {
+  it('should not split on operators that appear inside quoted strings', () => {
+    const state = makeState() as WorkflowState & { structuredOutputs: Map<string, unknown> };
+    state.structuredOutputs.set('plan', { note: 'a == b' });
+
+    expect(evaluateWhenExpression('structured.plan.note == "a == b"', state)).toBe(true);
+  });
+});

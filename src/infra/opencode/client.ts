@@ -812,17 +812,22 @@ export class OpenCodeClient {
 
             if (part.type === 'tool') {
               const toolPart = part as OpenCodeToolPart;
-              const loopError = toolPart.state.status === 'error'
-                ? unavailableToolLoopDetector.observe(
+              let loopError: string | undefined;
+              if (toolPart.state.status === 'error') {
+                // 両検出器に必ず観測させる（?? 短絡だと invalid 側が
+                // unavailable エラーを見逃し、連続性の判定が狂う）
+                const unavailableError = unavailableToolLoopDetector.observe(
                   toolPart.callID || toolPart.id,
                   toolPart.tool,
                   toolPart.state.error,
-                ) ?? invalidArgumentLoopDetector.observe(
+                );
+                const invalidArgumentError = invalidArgumentLoopDetector.observe(
                   toolPart.callID || toolPart.id,
                   toolPart.tool,
                   toolPart.state.error,
-                )
-                : undefined;
+                );
+                loopError = unavailableError ?? invalidArgumentError;
+              }
               if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
                 invalidArgumentLoopDetector.reset();

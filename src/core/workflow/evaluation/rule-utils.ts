@@ -175,10 +175,13 @@ export function resolvePhase3Adoption<T extends Phase3AdoptionInput>(
     result = { ...result, ruleIndex: preemptIndex, method: 'auto_select' };
   }
   const rule = rules?.[result.ruleIndex];
+  // 判定が決定的ルールを指した場合は真偽を問わず採用しない（選択候補から
+  // 除外済みだが、返ってきても位置準拠の段階評価へフォールバックさせる）。
+  // 先行採用（preempt）だけがエンジン側の正規経路。
   const blocked = (rule?.guardCondition !== undefined && !evaluate(rule.guardCondition, state))
     || (rule !== undefined
-      && isDeterministicCondition(rule.condition)
-      && !evaluate(unwrapWhenCondition(rule.condition), state));
+      && result.ruleIndex !== preemptIndex
+      && isDeterministicCondition(rule.condition));
   return { result, blocked };
 }
 

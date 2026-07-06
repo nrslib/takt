@@ -74,8 +74,13 @@ try {
   const runCompleted = result.status === 0 && !/aborted/i.test(output);
   // 完了宣言だけの空振りを弾く: 成果物の実在と内容まで確認する
   const artifactPath = join(workDir, 'greet.ts');
-  const artifactOk = existsSync(artifactPath)
-    && /export\s+(function\s+greet|const\s+greet)/.test(readFileSync(artifactPath, 'utf-8'));
+  let artifactOk = false;
+  if (existsSync(artifactPath)) {
+    const source = readFileSync(artifactPath, 'utf-8');
+    // 形だけの export では通さない: 要求仕様（"Hello, <name>!" の生成）まで確認する
+    artifactOk = /export\s+(function\s+greet|const\s+greet)/.test(source)
+      && /Hello,\s*\$\{[^}]*\}!|Hello,\s*['"] ?\+/.test(source);
+  }
 
   console.log(output.split('\n').slice(-15).join('\n'));
   console.log(`---\ncanary result: completed=${runCompleted} artifact=${artifactOk} toolErrors=${toolErrors}`);

@@ -273,3 +273,18 @@ describe('guarded compound rejection on unsupported paths', () => {
     )).toThrow('does not support findings guards');
   });
 });
+
+describe('reserved syntax fail-fast', () => {
+  it.each([
+    ['malformed ai', 'ai("unclosed'],
+    ['aggregate with trailing garbage', 'all("x") extra'],
+    ['chained when', 'when(findings.open.count == 0) && when(findings.conflicts.count == 0)'],
+  ])('should reject %s instead of degrading to a prose tag', (_label, condition) => {
+    expect(() => normalizeRule({ condition, next: 'COMPLETE' })).toThrow('reserved syntax');
+  });
+
+  it('should keep prose tags mentioning ai casually', () => {
+    const normalized = normalizeRule({ condition: 'aiレビューが完了した', next: 'COMPLETE' });
+    expect(normalized.isAiCondition).toBeUndefined();
+  });
+});

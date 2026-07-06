@@ -1,6 +1,6 @@
 import type { WorkflowState } from '../../models/types.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
-import { splitTopLevelClausesOrThrow } from '../../models/workflow-condition-expression.js';
+import { isEscapedQuote, splitTopLevelClausesOrThrow } from '../../models/workflow-condition-expression.js';
 
 export function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
   // トークナイズは models の唯一実装に委譲（parse/normalize と同一契約）。
@@ -9,12 +9,12 @@ export function splitTopLevel(expression: string, separator: '||' | '&&'): strin
   return splitTopLevelClausesOrThrow(expression, separator, 'when expression');
 }
 
-function findOperator(expression: string): string | undefined {
+function findOperator(expression: string): { operator: string; index: number } | undefined {
   const operators = ['>=', '<=', '!=', '==', '>', '<'] as const;
   let inString = false;
 
   for (let index = 0; index < expression.length; index++) {
-    if (expression[index] === '"') {
+    if (expression[index] === '"' && !isEscapedQuote(expression, index)) {
       inString = !inString;
       continue;
     }
@@ -23,7 +23,7 @@ function findOperator(expression: string): string | undefined {
     }
     for (const operator of operators) {
       if (expression.slice(index, index + operator.length) === operator) {
-        return operator;
+        return { operator, index };
       }
     }
   }
@@ -37,7 +37,7 @@ function splitFunctionArgs(argsText: string): [string, string] {
 
   for (let index = 0; index < argsText.length; index++) {
     const current = argsText[index];
-    if (current === '"') {
+    if (current === '"' && !isEscapedQuote(argsText, index)) {
       inString = !inString;
       continue;
     }
@@ -110,7 +110,8 @@ function parseLiteral(raw: string, state: WorkflowState, item?: unknown): unknow
 
 function evaluateExistsPredicate(predicate: string, item: unknown, state: WorkflowState): boolean {
   return splitTopLevel(predicate, '&&').every((clause) => {
-    const operator = findOperator(clause);
+    const operatorMatch = findOperator(clause);
+  const operator = operatorMatch?.operator;
     if (operator !== '==') {
       throw new Error(`exists() only supports "==" and "&&": "${predicate}"`);
     }
@@ -149,18 +150,18 @@ function evaluateClause(clause: string, state: WorkflowState): boolean {
     return evaluateExistsClause(normalized, state);
   }
 
-  const operator = findOperator(normalized);
-  if (!operator) {
+  const operatorMatch = findOperator(normalized);
+  if (!operatorMatch) {
     const value = parseLiteral(normalized, state);
     if (typeof value !== 'boolean') {
       throw new Error(`Bare when clause must resolve to boolean: "${normalized}"`);
     }
     return value;
   }
+  const { operator } = operatorMatch;
 
-  const operatorIndex = normalized.indexOf(operator);
-  const leftRaw = normalized.slice(0, operatorIndex);
-  const rightRaw = normalized.slice(operatorIndex + operator.length);
+  const leftRaw = normalized.slice(0, operatorMatch.index);
+  const rightRaw = normalized.slice(operatorMatch.index + operator.length);
   if (leftRaw.trim().length === 0 || rightRaw.trim().length === 0) {
     throw new Error(`Invalid when clause "${normalized}"`);
   }
