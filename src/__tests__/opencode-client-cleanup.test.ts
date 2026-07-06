@@ -13,6 +13,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/index.js';
 
+/**
+ * 自セッションの進捗が止まったまま、サーバ全体のバスに無関係イベントが
+ * 流れ続ける状況を再現するストリーム。旧実装はこれで永遠に延命していた。
+ */
+class ChatterOnlyEventStream implements AsyncIterable<unknown> {
+  constructor(private readonly chatterIntervalMs: number) {}
+
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+    const interval = this.chatterIntervalMs;
+    return {
+      async next(): Promise<IteratorResult<unknown, void>> {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, interval));
+        return {
+          done: false,
+          value: {
+            type: 'message.part.updated',
+            properties: { part: { id: 'p-x', type: 'text', text: 'sibling', sessionID: 'other-session' } },
+          },
+        };
+      },
+    };
+  }
+}
+
 class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   private index = 0;
   private readonly events: unknown[];
@@ -2418,6 +2442,38 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(4);
     expect(promptAsync.mock.calls[3]?.[0]).not.toHaveProperty('format');
   });
+
+  it('should time out a stalled session even while unrelated bus events keep flowing', async () => {
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+          session: {
+            create: vi.fn().mockResolvedValue({ data: { id: 'session-stalled' } }),
+            promptAsync: vi.fn().mockReturnValue(new Promise(() => { /* 完了しない */ })),
+          },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream: new ChatterOnlyEventStream(100) }) },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const result = await new OpenCodeClient().call('coder', 'do it', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        interactionTimeoutMs: 500,
+      });
+
+      // 兄弟セッションのイベントでは延命せず、無音タイムアウトが発火して
+      // エラーとして表面化する（永久ハングしない）
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('timed out');
+    } finally {
+      delete process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+    }
+  }, 20_000);
 
   it('should not trip the invalid-argument loop across interleaved unavailable errors', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');

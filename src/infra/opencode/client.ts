@@ -47,6 +47,23 @@ const TAKT_AGENT = 'takt';
 const TAKT_AGENT_REVIEW = 'takt-review';
 const TAKT_AGENT_REPORT = 'takt-report';
 
+/**
+ * イベントが属するセッション ID を取り出す。イベントバスはサーバ全体で
+ * 共有されるため、無音検出のリセットは「自セッションの進捗」だけに
+ * 反応させる必要がある（LSP・ファイルウォッチャ・兄弟セッションの
+ * イベントでリセットすると、生成が死んでいても永遠にハングする）。
+ */
+function extractEventSessionId(event: OpenCodeStreamEvent): string | undefined {
+  const props = event.properties as Record<string, unknown> | undefined;
+  if (!props) return undefined;
+  if (typeof props.sessionID === 'string') return props.sessionID;
+  const part = props.part as { sessionID?: unknown } | undefined;
+  if (part !== undefined && typeof part.sessionID === 'string') return part.sessionID;
+  const info = props.info as { sessionID?: unknown } | undefined;
+  if (info !== undefined && typeof info.sessionID === 'string') return info.sessionID;
+  return undefined;
+}
+
 function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
   if (allowedTools !== undefined && allowedTools.length === 0) {
     return TAKT_AGENT_REPORT;
@@ -62,7 +79,11 @@ function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
 }
 
 const log = createLogger('opencode-sdk');
-const OPENCODE_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+/** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
+function resolveStreamIdleTimeoutMs(): number {
+  const fromEnv = Number(process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
+  return fromEnv > 0 ? fromEnv : 10 * 60 * 1000;
+}
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_RETRY_MAX_ATTEMPTS = 3;
 const OPENCODE_RETRY_BASE_DELAY_MS = 250;
@@ -578,7 +599,8 @@ export class OpenCodeClient {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
-      const timeoutMessage = `OpenCode stream timed out after ${Math.floor(OPENCODE_STREAM_IDLE_TIMEOUT_MS / 60000)} minutes of inactivity`;
+      const streamIdleTimeoutMs = resolveStreamIdleTimeoutMs();
+      const timeoutMessage = `OpenCode stream timed out after ${Math.round(streamIdleTimeoutMs / 60000)} minutes of inactivity`;
       let abortCause: OpenCodeAbortCause | undefined;
       let diagRef: StreamDiagnostics | undefined;
       let release: (() => void) | undefined;
@@ -623,9 +645,10 @@ export class OpenCodeClient {
         }
         idleTimeoutId = setTimeout(() => {
           diagRef?.onIdleTimeoutFired();
+          log.warn(timeoutMessage, { sessionId, model: options.model });
           abortCause = 'timeout';
           streamAbortController.abort();
-        }, OPENCODE_STREAM_IDLE_TIMEOUT_MS);
+        }, streamIdleTimeoutMs);
       };
 
       const onExternalAbort = (): void => {
@@ -788,11 +811,36 @@ export class OpenCodeClient {
           textOffsets.set(partId, prevOffset + rawDelta.length);
         };
 
-        for await (const event of stream) {
+        // for-await 単体だと、タイマーが abort してもイベントが来るまで
+        // 待ちから戻らない（SDK が signal を尊重しない場合は永久待機）。
+        // イテレータと abort をレースさせ、タイマー発火で必ず脱出する。
+        const streamIterator = (stream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+        const streamAborted = new Promise<never>((_, reject) => {
+          streamAbortController.signal.addEventListener('abort', () => {
+            reject(new Error(timeoutMessage));
+          }, { once: true });
+        });
+        streamAborted.catch(() => { /* race の敗者側での未処理拒否を防ぐ */ });
+
+        try {
+        while (true) {
           if (streamAbortController.signal.aborted) break;
-          resetIdleTimeout();
+          let iteration: IteratorResult<unknown>;
+          try {
+            iteration = await Promise.race([streamIterator.next(), streamAborted]);
+          } catch (raceError) {
+            if (streamAbortController.signal.aborted) break;
+            throw raceError;
+          }
+          if (iteration.done) break;
+          const event = iteration.value;
 
           const sseEvent = event as OpenCodeStreamEvent;
+          // 無音検出のリセットは自セッションのイベントだけ。サーバ全体の
+          // バスに流れる無関係イベントでは延命しない。
+          if (extractEventSessionId(sseEvent) === activeSessionId) {
+            resetIdleTimeout();
+          }
           diag.onFirstEvent(sseEvent.type);
           diag.onEvent(sseEvent.type);
           if (sseEvent.type === 'message.part.updated') {
@@ -1071,6 +1119,12 @@ export class OpenCodeClient {
             continue;
           }
         }
+        } finally {
+          // for-await が break 時に行っていた後始末（SSE クローズ）を再現する
+          try {
+            await streamIterator.return?.(undefined);
+          } catch { /* クローズ失敗は結果に影響させない */ }
+        }
 
         // The idle watchdog and external aborts cancel the stream. If the
         // iterator ends without throwing, the loop falls through with
@@ -1141,6 +1195,7 @@ export class OpenCodeClient {
             persona: agentType,
             status: 'error',
             content: message,
+            error: message,
             timestamp: new Date(),
             sessionId: activeSessionId,
           };
@@ -1215,6 +1270,7 @@ export class OpenCodeClient {
           persona: agentType,
           status: 'error',
           content: errorMessage,
+          error: errorMessage,
           timestamp: new Date(),
           sessionId,
         };
