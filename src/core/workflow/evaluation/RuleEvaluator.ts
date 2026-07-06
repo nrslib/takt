@@ -177,9 +177,11 @@ export class RuleEvaluator {
     if (rule?.guardCondition !== undefined && !evaluateWhenExpression(rule.guardCondition, this.ctx.state)) {
       return -1;
     }
-    // 決定的条件のルールはタグ申告（[STEP:N]）でも成立させない。
-    // 実状態で偽なら不一致として扱い、決定的評価ステージに委ねる。
-    if (rule !== undefined && isDeterministicCondition(rule.condition) && !evaluateWhenExpression(unwrapWhenCondition(rule.condition), this.ctx.state)) {
+    // 決定的条件のルールはタグ申告（[STEP:N]）では常に成立させない。
+    // 真であっても採用は段階評価（位置準拠の決定的ステージ）に一任する。
+    // 真なら通す形にすると、モデルのタグ申告が when(true) 等を本来の段階
+    // より早く発火させ、位置意味論を迂回できてしまう。
+    if (rule !== undefined && isDeterministicCondition(rule.condition)) {
       return -1;
     }
 

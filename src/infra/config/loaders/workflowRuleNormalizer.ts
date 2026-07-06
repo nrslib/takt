@@ -43,6 +43,28 @@ export function splitTagFindingsCondition(condition: string): { tagText: string;
   return { tagText, guard: guardClauses.map(unwrapWhenCondition).join(' && ') };
 }
 
+
+/**
+ * ai() / all() / any() / when() は予約構文。これらで始まるのにパースできない
+ * 条件は、散文タグへ落とさず設定エラーにする（黙殺すると malformed な
+ * "all(\"x\") extra" 等がモデル判定行きになり原因が見えなくなる）。
+ */
+function assertReservedSyntaxWellFormed(condition: string): void {
+  const trimmed = condition.trim();
+  const reserved = /^(ai|all|any|when)\(/.exec(trimmed)?.[1];
+  if (reserved === undefined) {
+    return;
+  }
+  const wellFormed = (reserved === 'ai' && parseAiConditionExpression(trimmed) !== undefined)
+    || ((reserved === 'all' || reserved === 'any') && parseAggregateConditionExpression(trimmed) !== undefined)
+    || (reserved === 'when' && (isDeterministicCondition(trimmed) || splitTagFindingsCondition(trimmed) !== undefined));
+  if (!wellFormed) {
+    throw new Error(
+      `Configuration error: rule condition "${condition}" starts with reserved syntax "${reserved}(" but cannot be parsed as it`,
+    );
+  }
+}
+
 export function normalizeRule(rule: {
   condition?: string;
   when?: string;
@@ -59,6 +81,7 @@ export function normalizeRule(rule: {
     throw new Error('Workflow rule requires condition or when');
   }
   const next = rule.next ?? '';
+  assertReservedSyntaxWellFormed(condition);
   const aiExpression = parseAiConditionExpression(condition);
   if (aiExpression) {
     return {

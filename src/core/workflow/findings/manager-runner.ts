@@ -89,11 +89,18 @@ function extractStructuredRawFindings(input: {
 }): RawFinding[] {
   return input.subResults.flatMap((result) => {
     const structuredOutput = result.response.structuredOutput;
+    // raw findings は Finding Contract の契約入力。欠落や不正 shape を
+    // 空扱いすると台帳に指摘が残らず findings.open.count == 0 のゲートが
+    // 誤って通るため、黙って捨てず fail-fast する。
     if (structuredOutput === undefined) {
-      return [];
+      throw new Error(
+        `Finding contract reviewer "${result.subStep.name}" returned no structured output; raw findings are required`,
+      );
     }
     if (!Array.isArray(structuredOutput.rawFindings)) {
-      return [];
+      throw new Error(
+        `Finding contract reviewer "${result.subStep.name}" returned structured output without a rawFindings array`,
+      );
     }
     return parseReviewerRawFindings(structuredOutput.rawFindings).map((rawFinding) => ({
       ...rawFinding,
