@@ -2423,7 +2423,7 @@ describe('OpenCodeClient stream cleanup', () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const INVALID = 'The read tool was called with invalid arguments: SchemaError(Expected string)';
     const UNAVAILABLE = 'unavailable tool: fetch';
-    const toolError = (id, tool, error) => ({
+    const toolError = (id: string, tool: string, error: string) => ({
       type: 'message.part.updated',
       properties: { part: { id, type: 'tool', tool, callID: id, state: { status: 'error', error } } },
     });

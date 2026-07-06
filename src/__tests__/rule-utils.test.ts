@@ -195,17 +195,25 @@ describe('getReportFiles', () => {
 });
 
 describe('generateStatusRulesComponents interactive default', () => {
-  it('should exclude interactive-only rules when interactive is unspecified', async () => {
+  const rules = [
+    { condition: 'approved', next: 'COMPLETE' },
+    { condition: 'ユーザー入力が必要', next: 'ask', interactiveOnly: true },
+  ] as WorkflowRule[];
+
+  it('should exclude interactive-only rules from the criteria table when interactive is unspecified', async () => {
     const { generateStatusRulesComponents } = await import('../core/workflow/instruction/status-rules.js');
-    const rules = [
-      { condition: 'approved', next: 'COMPLETE' },
-      { condition: 'ユーザー入力が必要', next: 'ask', interactiveOnly: true },
-    ] as WorkflowRule[];
 
-    const withoutOption = generateStatusRulesComponents('gate', rules, 'ja');
-    expect(JSON.stringify(withoutOption)).not.toContain('ユーザー入力が必要');
+    const components = generateStatusRulesComponents('gate', rules, 'ja');
 
-    const interactive = generateStatusRulesComponents('gate', rules, 'ja', { interactive: true });
-    expect(JSON.stringify(interactive)).toContain('ユーザー入力が必要');
+    expect(components.criteriaTable).toContain('approved');
+    expect(components.criteriaTable).not.toContain('ユーザー入力が必要');
+  });
+
+  it('should include interactive-only rules in the criteria table when interactive is true', async () => {
+    const { generateStatusRulesComponents } = await import('../core/workflow/instruction/status-rules.js');
+
+    const components = generateStatusRulesComponents('gate', rules, 'ja', { interactive: true });
+
+    expect(components.criteriaTable).toContain('ユーザー入力が必要');
   });
 });
