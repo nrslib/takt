@@ -158,6 +158,15 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       persona: 'security-review',
       content: '[SECURITY-REVIEW:1] approved',
     }));
+    // error 席は新セッションで1回再試行される。terminal のままにするため
+    // 再試行分も同じエラーを返す
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: 'Reconnecting... 2/5',
+      error: 'timeout waiting for child process to exit',
+      failureCategory: 'provider_error',
+    }));
 
     const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
@@ -328,6 +337,15 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       error: 'Security reviewer failed after retry.',
       failureCategory: 'provider_error',
     }));
+    // 再試行分も同じエラー（terminal 維持）
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      status: 'error',
+      content: '',
+      error: 'Security reviewer failed after retry.',
+      failureCategory: 'provider_error',
+    }));
+
 
     const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
@@ -355,6 +373,13 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     queueAgentResponse(makeAgentResponse({
       persona: 'security-review',
       content: '[SECURITY-REVIEW:1] approved',
+    }));
+    // 再試行分も同じエラー（terminal 維持）
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: 'Provider failed with api_key=top-secret and Authorization: Bearer sk-secret123456',
     }));
 
     const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
