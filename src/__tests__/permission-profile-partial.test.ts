@@ -8,16 +8,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PROVIDER_PERMISSION_PROFILES,
+  mergeGlobalPermissionProfiles,
   resolveStepPermissionMode,
 } from '../core/workflow/permission-profile-resolution.js';
 
 describe('resolveStepPermissionMode with partial user profiles', () => {
   it('should keep the default mode for providers the user did not configure when profiles are merged', () => {
-    // runner と同じマージ（デフォルト表 + ユーザー定義の上書き）を通した場合
-    const merged = {
-      ...DEFAULT_PROVIDER_PERMISSION_PROFILES,
-      claude: { defaultPermissionMode: 'full' as const },
-    };
+    // runner が実際に使うマージ関数を通す（再現コードではなく実装をテストする）
+    const merged = mergeGlobalPermissionProfiles({
+      claude: { defaultPermissionMode: 'full' },
+    });
 
     const mode = resolveStepPermissionMode({
       stepName: 'implement',

@@ -329,6 +329,11 @@ export class ParallelRunner {
             error: result.error,
             providerUsage: result.providerUsage,
           }));
+          if (subResponse.sessionId === undefined) {
+            // 再試行がセッションIDを返さなかった場合、劣化していた旧セッションを
+            // resume 対象に残さない（残すと次の実行で文脈崩壊が再発する）
+            updatePersonaSession(subSessionKey, undefined);
+          }
         }
         if (findingLedgerCopyPath) {
           const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(executableSubStep, subResponse, runtime);

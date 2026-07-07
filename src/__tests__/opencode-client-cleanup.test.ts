@@ -2524,6 +2524,100 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   }, 20_000);
 
+  it('should complete normally when message cycles stay under the budget', async () => {
+    process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const cycles = Array.from({ length: 4 }, (_, i) => ({
+        type: 'message.updated',
+        properties: {
+          info: { sessionID: 'session-under', role: 'assistant', time: { completed: 1000 + i } },
+        },
+      }));
+      const stream = new MockEventStream([
+        ...cycles,
+        {
+          type: 'message.part.updated',
+          properties: { part: { id: 'p-t', type: 'text', text: 'done', sessionID: 'session-under' } },
+        },
+        { type: 'session.idle', properties: { sessionID: 'session-under' } },
+      ]);
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+          session: {
+            create: vi.fn().mockResolvedValue({ data: { id: 'session-under' } }),
+            promptAsync: vi.fn().mockResolvedValue(undefined),
+          },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const result = await new OpenCodeClient().call('coder', 'do it', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+      });
+
+      // 予算未満（4 < 5）なら通常どおり完了する
+      expect(result.status).toBe('done');
+    } finally {
+      delete process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET;
+    }
+  });
+
+  it('should complete normally when tool errors stay under the budget', async () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const tools = ['read', 'write', 'glob', 'grep', 'list'];
+      const events = tools.map((tool, i) => ({
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: `u${i}`,
+            type: 'tool',
+            tool,
+            callID: `u${i}`,
+            sessionID: 'session-under2',
+            state: { status: 'error', error: `The ${tool} tool was called with invalid arguments: SchemaError(x)` },
+          },
+        },
+      }));
+      const stream = new MockEventStream([
+        ...events,
+        {
+          type: 'message.part.updated',
+          properties: { part: { id: 'p-t2', type: 'text', text: 'done', sessionID: 'session-under2' } },
+        },
+        { type: 'session.idle', properties: { sessionID: 'session-under2' } },
+      ]);
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+          session: {
+            create: vi.fn().mockResolvedValue({ data: { id: 'session-under2' } }),
+            promptAsync: vi.fn().mockResolvedValue(undefined),
+          },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const result = await new OpenCodeClient().call('coder', 'do it', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+      });
+
+      // 予算未満（5 < 6）なら通常どおり完了する（回転ツール名で連続性検出も発火しない）
+      expect(result.status).toBe('done');
+    } finally {
+      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
+    }
+  });
+
   it('should stop a degenerate text-fragment loop via the message cycle budget', async () => {
     process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
     try {

@@ -360,6 +360,37 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toContain('Security reviewer failed after retry.');
   });
 
+  it('purges the stale persona session when the fresh retry returns no session id', async () => {
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: 'assistant message cycle budget exceeded',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+    // 再試行は成功するが sessionId を返さない
+    queueAgentResponse({
+      ...makeAgentResponse({
+        persona: 'ai-antipattern-review-2nd',
+        content: '[AI-ANTIPATTERN-REVIEW-2ND:1] approved',
+      }),
+      sessionId: undefined,
+    });
+
+    const updateSession = vi.fn();
+    const result = await runner.runParallelStep(step, state, 'test task', 5, updateSession);
+
+    expect(result.response.status).not.toBe('error');
+    // 劣化していた旧セッションが resume 対象に残らない（undefined で削除）
+    expect(updateSession).toHaveBeenCalledWith(expect.stringContaining('ai-antipattern-review-2nd'), undefined);
+  });
+
   it('does not retry a sub-step whose error is a rate limit', async () => {
     const { runner } = makeRunner();
     const step = makeParallelStep();

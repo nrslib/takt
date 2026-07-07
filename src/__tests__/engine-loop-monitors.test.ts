@@ -1082,9 +1082,13 @@ describe('Judge failure falls back to the natural transition', () => {
       { index: 0, method: 'phase1_tag' },  // reviewers → COMPLETE
     ]);
 
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
+    expect(abortFn).not.toHaveBeenCalled();
   });
 });
 

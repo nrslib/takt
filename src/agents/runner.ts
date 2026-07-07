@@ -16,7 +16,7 @@ import {
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
-import { DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
+import { mergeGlobalPermissionProfiles, DEFAULT_PROVIDER_PERMISSION_PROFILES, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
 import { buildWrappedSystemPrompt } from './runner-prompt.js';
@@ -158,13 +158,7 @@ export class AgentRunner {
         provider: resolvedProvider,
         projectProviderProfiles: options.permissionResolution.providerProfiles
           ?? localConfig.providerProfiles,
-        // ユーザー定義はデフォルト表へのプロバイダ単位の上書き。?? で丸ごと
-        // 置き換えると、書かれていないプロバイダの既定権限が黙って消え、
-        // edit: true のステップが readonly ツールで走る（実障害）。
-        globalProviderProfiles: {
-          ...DEFAULT_PROVIDER_PERMISSION_PROFILES,
-          ...(globalConfig.providerProfiles ?? {}),
-        },
+        globalProviderProfiles: mergeGlobalPermissionProfiles(globalConfig.providerProfiles),
       });
     }
     return options.permissionMode;
