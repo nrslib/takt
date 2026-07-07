@@ -124,7 +124,6 @@ steps:
       - testing
       - design-fidelity
       - screen-api
-    session: refresh
     knowledge:
       - frontend
       - react

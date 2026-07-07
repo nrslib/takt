@@ -411,3 +411,12 @@ export interface OpenCodeCallOptions {
   /** JSON schema for native structured output (OpenCode format: json_schema). */
   outputSchema?: Record<string, unknown>;
 }
+
+export interface OpenCodeCompactSessionOptions {
+  cwd: string;
+  sessionId: string;
+  model: string;
+  abortSignal?: AbortSignal;
+  opencodeApiKey?: string;
+  childProcessEnv?: Readonly<Record<string, string>>;
+}

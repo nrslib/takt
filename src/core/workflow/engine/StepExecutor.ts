@@ -47,6 +47,7 @@ import type {
 } from './structured-output-normalizer.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+import { compactSessionBeforePhase1 } from './session-compaction.js';
 
 const log = createLogger('step-executor');
 
@@ -608,6 +609,7 @@ export class StepExecutor {
       sequence: 1,
     });
     const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
+    await compactSessionBeforePhase1(step, baseAgentOptions);
     const agentOptions = {
       ...baseAgentOptions,
       onPromptResolved: (promptParts: PhasePromptParts) => {
