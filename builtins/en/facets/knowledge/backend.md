@@ -212,6 +212,8 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 
 Do not implement the same constraint twice as declarative validation (validation annotations, etc.) and a procedural check. Declarative validation runs before the handler body, so the hand-written check downstream becomes unreachable dead code, and the duplication hides which implementation actually decides the response.
 
+For scalar arguments such as `@PathVariable` or `@RequestParam`, this assumes Spring method validation is active in the running stack. Older Spring MVC setups commonly require class-level `@Validated`; Spring 6.1+ can use built-in method validation depending on configuration. Verify the project setup before relying on the annotation alone.
+
 ```kotlin
 // NG - same constraint twice; declarative validation runs first, procedural check is unreachable
 @GetMapping("/orders/{id}")

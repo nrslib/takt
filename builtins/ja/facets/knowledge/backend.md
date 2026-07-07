@@ -212,6 +212,8 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 
 同じ制約を宣言的検証（バリデーションアノテーション等）と手続き的チェックで二重に実装しない。宣言的検証は処理本体より先に走るため、後段の手書きチェックは到達不能なデッドコードになり、二重実装は「どちらが実際に応答を決めているか」を隠す。
 
+`@PathVariable` や `@RequestParam` のようなスカラー引数の制約は、実行中の Spring スタックで method validation が有効な前提で機能する。古い Spring MVC 構成では Controller クラスへの `@Validated` が必要になることが多く、Spring 6.1+ では構成に応じて組み込みの method validation を使える。アノテーションだけに依存する前に、対象プロジェクトの設定を確認する。
+
 ```kotlin
 // NG - 同じ制約の二重実装。宣言的検証が先に走り、手続き側は到達不能
 @GetMapping("/orders/{id}")
