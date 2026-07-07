@@ -208,6 +208,34 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 | Structural validation (@NotBlank, etc.) in domain | REJECT. Belongs in API layer |
 | UseCase-level validation inside Aggregate | REJECT. Read Model queries belong in UseCase layer |
 
+### Unify on Declarative Validation
+
+Do not implement the same constraint twice as declarative validation (validation annotations, etc.) and a procedural check. Declarative validation runs before the handler body, so the hand-written check downstream becomes unreachable dead code, and the duplication hides which implementation actually decides the response.
+
+```kotlin
+// NG - same constraint twice; declarative validation runs first, procedural check is unreachable
+@GetMapping("/orders/{id}")
+fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse {
+    requireIdWithinLimit(id)  // never executed; its error message is never used
+    return orderReadService.get(id).toResponse()
+}
+
+// OK - unify on the declaration and delete the procedural check
+@GetMapping("/orders/{id}")
+fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse =
+    orderReadService.get(id).toResponse()
+```
+
+Violation exceptions from declarative validation are thrown by the framework, outside your own exception hierarchy. Even with domain exception translation in place, if this exception goes untranslated the framework's default response (such as 500) is returned instead of the intended status. Follow "Exception Translation Scope" for where the translation belongs. The exception type thrown on violation depends on the framework configuration and version, so do not guess; pin the actual exception, status, and response shape with an integration test.
+
+| Criteria | Judgment |
+|----------|----------|
+| Same constraint implemented in both declarative validation and a procedural check | REJECT. Unify on the declarative side and delete the procedural check |
+| Declarative validation violations go untranslated and return the framework default response (such as 500) | REJECT |
+| No test pinning the status and response shape on validation violation | REJECT. Verify the actual exception type with an integration test |
+| Validation style differs by input kind (body vs. path vs. query) | Warning. Align on the declarative style |
+| Constraint values (max length, etc.) share a single constant across validation and API spec | OK |
+
 ### Read and Write Entrypoints
 
 Separate read and write entrypoints. Read-side query boundaries have no side effects; writes are handled by commands or UseCases.
