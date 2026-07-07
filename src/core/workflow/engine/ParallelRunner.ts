@@ -249,6 +249,7 @@ export class ParallelRunner {
         // Phase 1: main execution (Write excluded if sub-step has report)
         const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, runtime);
         let didEmitPhaseStart = false;
+        let phase1CompletionExecutionId = phaseExecutionId;
         let resolvedPromptParts: PhasePromptParts | undefined;
         const phaseExecutionId = buildPhaseExecutionId({
           step: subStep.name,
@@ -301,7 +302,11 @@ export class ParallelRunner {
             phase: 1,
             sequence: 2,
           });
-          // onPromptResolved は引き継がない（同一 phase:start の二重発火を防ぐ）
+          // onPromptResolved は引き継がない（初回IDでの phase:start 二重発火を
+          // 防ぐ）。再試行は専用IDで phase:start を発火し、初回の prompt parts を
+          // 引き継いで紐付ける（指示は同一）。
+          this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, resolvedPromptParts, retryPhaseExecutionId, parentIteration);
+          phase1CompletionExecutionId = retryPhaseExecutionId;
           const retryOptions = { ...agentOptions, sessionId: undefined, onPromptResolved: undefined };
           subResponse = await runWithPhaseSpan({
             enabled: this.deps.observabilityEnabled,
@@ -383,7 +388,7 @@ export class ParallelRunner {
         if (subResponse.sessionId !== undefined) {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
-        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
+        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phase1CompletionExecutionId, parentIteration);
         if (
           subResponse.status === 'done'
           && subResponse.structuredOutput === undefined
