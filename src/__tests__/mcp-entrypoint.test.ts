@@ -86,8 +86,8 @@ describe('MCP package entrypoint', () => {
       const runNextTaskContext = objectProperties(runNextProperties.taskContext);
 
       expect(enqueueProperties.workflow?.description).toBe('Workflow identifier to store on the queued task. Ask the user which workflow to use before enqueueing.');
-      expect(enqueueProperties.worktree?.description).toBe('Whether the queued task should run in a TAKT-managed worktree.');
-      expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should automatically open a pull request. Ask the user before enqueueing.');
+      expect(enqueueProperties.worktree?.description).toBe('Whether the queued task should run in a TAKT-managed worktree. When true, successful execution attempts to auto-commit resulting changes locally; autoPr false does not disable that.');
+      expect(enqueueProperties.autoPr?.description).toBe('Whether successful worktree execution should push the branch and automatically open a pull request. Ask the user before enqueueing; do not infer this from branch or PR context. When false, worktree execution may still auto-commit local changes.');
       expect(issueProperties.labels?.description).toBe('Issue labels to request from the configured issue provider.');
       expect(runNextProperties.provider?.description).toBe('Agent provider override for this task execution.');
       expect(runNextProperties.model?.description).toBe('Model override for this task execution.');
