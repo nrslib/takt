@@ -559,4 +559,104 @@ describe('validateWorkflowConfig', () => {
       'Configuration error: workflowCallResolver is required when workflow contains workflow_call steps',
     );
   });
+
+  it.each([
+    [
+      'system step',
+      {
+        name: 'cleanup',
+        kind: 'system',
+        session: 'compact',
+        personaDisplayName: 'cleanup',
+        instruction: '',
+        systemInputs: [],
+        effects: [],
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "cleanup": session is only supported on agent steps and parallel sub-steps',
+    ],
+    [
+      'workflow_call step',
+      {
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'takt/coding',
+        session: 'compact',
+        personaDisplayName: 'delegate',
+        instruction: '',
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "delegate": session is only supported on agent steps and parallel sub-steps',
+    ],
+    [
+      'parallel parent step',
+      {
+        name: 'reviewers',
+        persona: 'reviewer',
+        personaDisplayName: 'reviewer',
+        instruction: 'review',
+        session: 'compact',
+        parallel: [
+          {
+            name: 'api-review',
+            persona: 'reviewer',
+            personaDisplayName: 'reviewer',
+            instruction: 'review api',
+            passPreviousResponse: true,
+          },
+        ],
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "reviewers": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+    [
+      'empty parallel parent step',
+      {
+        name: 'reviewers',
+        persona: 'reviewer',
+        personaDisplayName: 'reviewer',
+        instruction: 'review',
+        session: 'compact',
+        parallel: [],
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "reviewers": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+    [
+      'arpeggio parent step',
+      {
+        name: 'batch',
+        persona: 'worker',
+        personaDisplayName: 'worker',
+        instruction: 'batch',
+        session: 'compact',
+        arpeggio: {},
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "batch": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+    [
+      'team_leader parent step',
+      {
+        name: 'split',
+        persona: 'leader',
+        personaDisplayName: 'leader',
+        instruction: 'split',
+        session: 'compact',
+        teamLeader: {},
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "split": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+  ])('rejects session compact on programmatic %s', (_label, step, message) => {
+    const workflow = createWorkflow({
+      initialStep: step.name,
+      steps: [step as unknown as WorkflowConfig['steps'][number]],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      workflowCallResolver: () => null,
+    })).toThrow(message);
+  });
 });

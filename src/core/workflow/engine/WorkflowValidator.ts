@@ -1,4 +1,4 @@
-import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule } from '../../models/types.js';
+import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, WorkflowStep } from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
@@ -72,6 +72,27 @@ function validateAgentStepProviderModel(
   validatePromotionProviderModels(agentStep, providerInfo, source);
 }
 
+function validateSessionEntrypoint(step: WorkflowStep, source: string): void {
+  const candidate = step as {
+    session?: unknown;
+    parallel?: unknown[];
+    arpeggio?: unknown;
+    teamLeader?: unknown;
+  };
+
+  if (candidate.session === undefined) {
+    return;
+  }
+
+  if (getWorkflowStepKind(step) !== 'agent') {
+    throw new Error(`${source}: session is only supported on agent steps and parallel sub-steps`);
+  }
+
+  if (candidate.parallel !== undefined || candidate.arpeggio !== undefined || candidate.teamLeader !== undefined) {
+    throw new Error(`${source}: session is only supported on normal agent steps and parallel sub-steps`);
+  }
+}
+
 function validatePromotionProviderModels(
   step: AgentWorkflowStep,
   baseProviderInfo: ReturnType<typeof resolveStepProviderModel>,
@@ -141,6 +162,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   stepNames.add(ABORT_STEP);
 
   for (const step of config.steps) {
+    validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
     validateAgentStepProviderModel(step, options, `Configuration error: step "${step.name}"`);
     for (const rule of step.rules ?? []) {
       if (rule.next && !stepNames.has(rule.next)) {
@@ -153,6 +175,10 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       );
     }
     for (const subStep of step.parallel ?? []) {
+      validateSessionEntrypoint(
+        subStep,
+        `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
+      );
       validateAgentStepProviderModel(
         subStep,
         options,

@@ -2,13 +2,19 @@
  * OpenCode provider implementation
  */
 
-import { callOpenCode, callOpenCodeCustom, type OpenCodeCallOptions } from '../opencode/index.js';
+import {
+  callOpenCode,
+  callOpenCodeCustom,
+  compactOpenCodeSession,
+  type OpenCodeCallOptions,
+  type OpenCodeCompactSessionOptions,
+} from '../opencode/index.js';
 import { keepsOpenCodeAllowedToolWithoutEdit } from '../opencode/allowedTools.js';
 import { resolveOpenCodeAllowedPermissions } from '../opencode/types.js';
 import { resolveOpencodeApiKey } from '../config/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { PermissionMode } from '../../core/models/index.js';
-import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
+import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions, ProviderCompactSessionOptions } from './types.js';
 
 const OPENCODE_TOOL_NAMING_FALLBACK = [
   'OpenCode tool names are lowercase.',
@@ -51,6 +57,21 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
   };
 }
 
+function toOpenCodeCompactSessionOptions(options: ProviderCompactSessionOptions): OpenCodeCompactSessionOptions {
+  if (!options.model) {
+    throw new Error("OpenCode provider requires model in 'provider/model' format (e.g. 'opencode/big-pickle').");
+  }
+
+  return {
+    cwd: options.cwd,
+    sessionId: options.sessionId,
+    model: options.model,
+    abortSignal: options.abortSignal,
+    opencodeApiKey: resolveOpencodeApiKey(),
+    childProcessEnv: options.childProcessEnv,
+  };
+}
+
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
   readonly supportsStructuredOutput = true;
@@ -68,6 +89,10 @@ export class OpenCodeProvider implements Provider {
 
   keepsAllowedToolWithoutEdit(tool: string): boolean {
     return keepsOpenCodeAllowedToolWithoutEdit(tool);
+  }
+
+  async compactSession(options: ProviderCompactSessionOptions): Promise<void> {
+    await compactOpenCodeSession(toOpenCodeCompactSessionOptions(options));
   }
 
   setup(config: AgentSetup): ProviderAgent {

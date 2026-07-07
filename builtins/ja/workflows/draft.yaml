@@ -49,7 +49,6 @@ steps:
     policy:
       - coding
       - testing
-    session: refresh
     knowledge:
       $param: impl_knowledge
     provider_options:

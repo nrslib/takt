@@ -23,6 +23,7 @@ import {
   buildOpenCodePromptTools,
   buildOpenCodeSessionPermission,
   resolveOpenCodePermissionReply,
+  type OpenCodeCompactSessionOptions,
   type OpenCodeCallOptions,
 } from './types.js';
 import {
@@ -1299,6 +1300,31 @@ export class OpenCodeClient {
     throw new Error('Unreachable: OpenCode retry loop exhausted without returning');
   }
 
+  async compactSession(options: OpenCodeCompactSessionOptions): Promise<void> {
+    const parsedModel = parseProviderModel(options.model, 'OpenCode model');
+    const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
+    const acquired = await acquireClient(
+      fullModel,
+      options.opencodeApiKey,
+      options.childProcessEnv,
+      options.abortSignal,
+    );
+
+    try {
+      await acquired.client.session.summarize({
+        sessionID: options.sessionId,
+        directory: options.cwd,
+        providerID: parsedModel.providerID,
+        modelID: parsedModel.modelID,
+        auto: false,
+      }, {
+        signal: options.abortSignal,
+      });
+    } finally {
+      acquired.release();
+    }
+  }
+
   /** Call OpenCode with a custom agent configuration (system prompt + prompt) */
   async callCustom(
     agentName: string,
@@ -1330,4 +1356,8 @@ export async function callOpenCodeCustom(
   options: OpenCodeCallOptions,
 ): Promise<AgentResponse> {
   return defaultClient.callCustom(agentName, prompt, systemPrompt, options);
+}
+
+export async function compactOpenCodeSession(options: OpenCodeCompactSessionOptions): Promise<void> {
+  return defaultClient.compactSession(options);
 }
