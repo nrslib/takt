@@ -386,7 +386,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     const updateSession = vi.fn();
     const result = await runner.runParallelStep(step, state, 'test task', 5, updateSession);
 
-    expect(result.response.status).not.toBe('error');
+    expect(result.response.status).toBe('done');
     // 劣化していた旧セッションが resume 対象に残らない（undefined で削除）
     expect(updateSession).toHaveBeenCalledWith(expect.stringContaining('ai-antipattern-review-2nd'), undefined);
   });

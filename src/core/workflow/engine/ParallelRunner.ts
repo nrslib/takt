@@ -302,14 +302,20 @@ export class ParallelRunner {
             phase: 1,
             sequence: 2,
           });
-          // onPromptResolved は引き継がない（初回IDでの phase:start 二重発火を
-          // 防ぐ）。再試行は専用IDで phase:start を発火し、初回の prompt parts を
-          // 引き継いで紐付ける（指示は同一）。
-          if (resolvedPromptParts !== undefined) {
-            this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, resolvedPromptParts, retryPhaseExecutionId, parentIteration);
-            phase1CompletionExecutionId = retryPhaseExecutionId;
-          }
-          const retryOptions = { ...agentOptions, sessionId: undefined, onPromptResolved: undefined };
+          // 再試行は専用IDで phase:start を発火する（初回IDの二重発火はしない）。
+          // onPromptResolved を再試行自身のものに差し替えることで、初回試行が
+          // プロンプト解決前に死んだ場合でも、再試行の成功が phase:start を
+          // 発火させ、後段の Missing prompt parts 検査を正しく満たす。
+          const retryOptions = {
+            ...agentOptions,
+            sessionId: undefined,
+            onPromptResolved: (promptParts: PhasePromptParts) => {
+              resolvedPromptParts = promptParts;
+              this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, retryPhaseExecutionId, parentIteration);
+              phase1CompletionExecutionId = retryPhaseExecutionId;
+              didEmitPhaseStart = true;
+            },
+          };
           subResponse = await runWithPhaseSpan({
             enabled: this.deps.observabilityEnabled,
             runId: this.deps.observabilityRunId,
