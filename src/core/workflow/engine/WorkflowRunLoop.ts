@@ -47,7 +47,8 @@ interface WorkflowRunLoopDeps {
     monitor: LoopMonitorConfig,
     cycleCount: number,
     triggeringStep: WorkflowStep,
-    triggeringRuntime?: RuntimeStepResolution,
+    triggeringRuntime: RuntimeStepResolution | undefined,
+    fallbackNextStep: string,
   ) => Promise<string>;
   runStep: (
     step: WorkflowStep,
@@ -519,7 +520,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           threshold: cycleCheck.monitor.threshold,
         });
         deps.emit('step:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
-        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime);
+        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime, nextStep);
       }
 
       if (nextStep === COMPLETE_STEP) {
