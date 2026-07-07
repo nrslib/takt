@@ -248,6 +248,8 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
 
+クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）からタスクを積んだり、issue を作成して積んだり、次の pending タスクを実行したりできます。
+
 ### インスタント exec モード
 
 `takt exec` は TAKT の対話型タスク入力モードを開始します。Assistant エージェントがリクエストを明確化し、`/go` で会話をワークフローに変換、Worker エージェントがタスクを実装、Review エージェントがレビュー、Replanning エージェントが必要に応じてユーザーに方針確認を行い、ループ検出が非生産的な繰り返しを防止します。
@@ -257,6 +259,8 @@ exec は前回の設定から開始するか、初回実行時はデフォルト
 exec プリセットの解決順序はプロジェクト `.takt/exec/presets/` → グローバル `$TAKT_CONFIG_DIR/exec/presets/`（デフォルト `~/.takt/exec/presets/`）→ ビルトイン `builtins/exec/presets/` です。`/setup` での変更は `$TAKT_CONFIG_DIR/exec.yaml`（デフォルト `~/.takt/exec.yaml`）に保存されます。`/setup` ではプロジェクト/グローバルプリセットの保存・削除も可能で、作成されたファセットは `.takt/facets/` または `$TAKT_CONFIG_DIR/facets/`（デフォルト `~/.takt/facets/`）に保存されます。
 
 `/go` を実行すると、TAKT は `.takt/exec/workflow.yaml` を生成し、通常のワークフローエンジンで実行します。`/go` の後のインラインテキストは追加メモとして扱われます。会話やインラインタスクテキストなしで `/go` を実行した場合、ワークフローは生成されません。`/cancel` で実行せずに終了します。
+
+exec の入力行を編集中に画像を添付できます。macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルでは OSC 1337 のインライン画像ペーストも使えます。TAKT は `[Image #N]` プレースホルダーを挿入します。そのプレースホルダーを Assistant へのメッセージや `/go` の追加メモで参照すると、その Assistant 依頼に画像が渡されます。同じセッションで添付されていないプレースホルダーは通常テキストとして扱われます。`/go` 実行時は、参照された保存済み画像だけが生成タスク仕様へコピーされ、添付セクションに列挙されます。対応形式は PNG、JPEG、GIF、WebP です。インライン画像とクリップボード画像は 10 MiB までです。未対応形式、インライン画像のファイル名拡張子と実データの不一致、上限超過、保存済み添付の一時パス消失、symlink、通常ファイルではない添付元はエラーになります。ネイティブ画像入力に対応しない provider には、プロンプト内のローカルパス参照として渡されます。
 
 通常のエージェントステップ、並列サブステップ、ループ検出ジャッジで `session_key` を設定して、ペルソナセッションを共有または分離できます。システムステップ、workflow_call ステップ、並列親ステップでは `session_key` を設定できません。TAKT はランタイムキーを `session_key` に解決済みプロバイダを付加して構築するため、値は他の生成されたセッションルートと衝突しない空でない文字列にする必要があります。
 

@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
   AgentWorkflowStep,
+  NormalAgentWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
   WorkflowStep,
@@ -274,7 +275,6 @@ export function normalizeStepFromRaw(
       name: step.name,
       description: step.description,
       kind: 'system',
-      session: step.session,
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       delayBeforeMs: step.delay_before_ms,
@@ -304,7 +304,10 @@ export function normalizeStepFromRaw(
     && !inheritedModelIsWorkflowFallback
     && !normalizedProvider.providerSpecified;
 
-  const normalizedStep: AgentWorkflowStep = {
+  const normalizedAgentFields: Omit<
+    NormalAgentWorkflowStep,
+    'session' | 'parallel' | 'concurrency' | 'arpeggio' | 'teamLeader'
+  > = {
     name: step.name,
     description: step.description,
     sessionKey: step.session_key,
@@ -313,7 +316,6 @@ export function normalizeStepFromRaw(
     persona: personaSpec,
     providerRoutingPersonaKey: normalizedRawPersona,
     tags: tags && tags.length > 0 ? tags : undefined,
-    session: step.session,
     personaDisplayName: resolvedPersonaDisplayName,
     personaPath,
     mcpServers: step.mcp_servers,
@@ -349,37 +351,52 @@ export function normalizeStepFromRaw(
   };
 
   if (step.parallel && step.parallel.length > 0) {
-    normalizedStep.parallel = step.parallel.map((sub) =>
-      normalizeStepFromRaw(
-        sub,
-        workflowDir,
-        sections,
-        workflowSchemas,
-        normalizedStep.provider,
-        normalizedStep.model,
-        normalizedStep.modelSpecified,
-        normalizedStep.directProviderOptions,
-        normalizedStep.workflowProviderOptions,
-        normalizedStep.allowGitCommit,
-        normalizedStep.providerSpecified === false,
-        normalizedStep.modelSpecified === false,
-        context,
-        projectOverrides,
-        globalOverrides,
-        workflowArpeggioPolicy,
-        workflowMcpServersPolicy,
+    const normalizedStep: AgentWorkflowStep = {
+      ...normalizedAgentFields,
+      parallel: step.parallel.map((sub) =>
+        normalizeStepFromRaw(
+          sub,
+          workflowDir,
+          sections,
+          workflowSchemas,
+          normalizedAgentFields.provider,
+          normalizedAgentFields.model,
+          normalizedAgentFields.modelSpecified,
+          normalizedAgentFields.directProviderOptions,
+          normalizedAgentFields.workflowProviderOptions,
+          normalizedAgentFields.allowGitCommit,
+          normalizedAgentFields.providerSpecified === false,
+          normalizedAgentFields.modelSpecified === false,
+          context,
+          projectOverrides,
+          globalOverrides,
+          workflowArpeggioPolicy,
+          workflowMcpServersPolicy,
+        ),
       ),
-    );
-    if (step.concurrency != null) {
-      normalizedStep.concurrency = step.concurrency;
-    }
+      ...(step.concurrency != null ? { concurrency: step.concurrency } : {}),
+    };
+    return normalizedStep;
   }
 
   const arpeggio = normalizeArpeggio(step.arpeggio, workflowDir);
-  if (arpeggio) normalizedStep.arpeggio = arpeggio;
+  if (arpeggio) {
+    return {
+      ...normalizedAgentFields,
+      arpeggio,
+    };
+  }
 
   const teamLeader = normalizeTeamLeader(step.team_leader, workflowDir, sections, context);
-  if (teamLeader) normalizedStep.teamLeader = teamLeader;
+  if (teamLeader) {
+    return {
+      ...normalizedAgentFields,
+      teamLeader,
+    };
+  }
 
-  return normalizedStep;
+  return {
+    ...normalizedAgentFields,
+    session: step.session,
+  };
 }

@@ -19,10 +19,20 @@ import {
   type RetryRunInfo,
   type WorkflowContext,
 } from '../../interactive/index.js';
+import { cleanupInteractiveResultAttachments } from '../../interactive/imageAttachments.js';
+import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { executeTaskWithResult } from '../execute/taskExecution.js';
+import { stageTaskSpecForExecution } from '../execute/taskSpecContext.js';
 import type { DirectResumeMetadata } from '../execute/runMeta.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
+import type { TaskAttachment } from '../attachments.js';
+import {
+  cleanupPreparedRetryTaskSpec,
+  hasAttachments,
+  prepareRetryTaskSpecWithAttachments,
+  type PreparedRetryTaskSpec,
+} from '../retryTaskSpecAttachments.js';
 import { runDirectInstructMode } from './directInstructMode.js';
 import { findLatestResumableDirectRun, type ResumableDirectRun } from './directRunFinder.js';
 
@@ -82,6 +92,13 @@ function displayRunSummary(run: ResumableDirectRun): void {
 interface ResolvedTaskContent {
   readonly taskContent: string;
   readonly previousOrderContent: string | null;
+}
+
+interface PreparedDirectResumeExecution {
+  readonly task: string;
+  readonly reportDirName: string;
+  readonly retryNote: string;
+  readonly preparedSpec: PreparedRetryTaskSpec;
 }
 
 function resolveTaskContent(projectDir: string, run: ResumableDirectRun): ResolvedTaskContent {
@@ -176,29 +193,76 @@ function buildDirectResumeMetadata(
   };
 }
 
+function prepareDirectResumeExecutionWithAttachments(
+  projectDir: string,
+  context: DirectRunResumeExecutionContext,
+  retryNote: string,
+  attachments: readonly TaskAttachment[],
+): PreparedDirectResumeExecution {
+  const preparedSpec = prepareRetryTaskSpecWithAttachments(
+    projectDir,
+    context.taskContent,
+    retryNote,
+    attachments,
+  );
+  if (!preparedSpec) {
+    throw new Error('Direct resume image attachments were not prepared.');
+  }
+
+  try {
+    const reportDirName = generateExecutionReportDir(projectDir, context.taskContent);
+    const stagedSpec = stageTaskSpecForExecution(projectDir, projectDir, preparedSpec.taskDirRelative, reportDirName);
+    return {
+      task: stagedSpec.taskPrompt,
+      reportDirName,
+      retryNote: preparedSpec.retryNote,
+      preparedSpec,
+    };
+  } catch (error) {
+    cleanupPreparedRetryTaskSpec(preparedSpec);
+    throw error;
+  }
+}
+
 async function executeDirectResume(
   projectDir: string,
   context: DirectRunResumeExecutionContext,
   resumeMode: DirectResumeMetadata['resumeMode'],
   agentOverrides: TaskExecutionOptions | undefined,
   retryNote?: string,
+  attachments?: readonly TaskAttachment[],
 ): Promise<boolean> {
-  const result = await executeTaskWithResult({
-    task: context.taskContent,
-    cwd: projectDir,
-    projectCwd: projectDir,
-    workflowIdentifier: context.run.meta.workflow,
-    agentOverrides,
-    startStep: context.startStep,
-    retryNote,
-    resumePoint: context.resumePoint,
-    directResume: buildDirectResumeMetadata(context.run, resumeMode),
-    traceTaskMetadata: buildTraceTaskMetadata({
-      taskContent: context.taskContent,
-      taskSlug: context.run.slug,
-    }),
-  });
-  return result.success;
+  let preparedExecution: PreparedDirectResumeExecution | undefined;
+  if (hasAttachments(attachments)) {
+    if (retryNote === undefined) {
+      throw new Error('Direct resume image attachments require a retry note.');
+    }
+    preparedExecution = prepareDirectResumeExecutionWithAttachments(projectDir, context, retryNote, attachments);
+  }
+  const executionTask = preparedExecution ? preparedExecution.task : context.taskContent;
+  const executionRetryNote = preparedExecution ? preparedExecution.retryNote : retryNote;
+
+  try {
+    const result = await executeTaskWithResult({
+      task: executionTask,
+      cwd: projectDir,
+      projectCwd: projectDir,
+      workflowIdentifier: context.run.meta.workflow,
+      agentOverrides,
+      startStep: context.startStep,
+      retryNote: executionRetryNote,
+      resumePoint: context.resumePoint,
+      directResume: buildDirectResumeMetadata(context.run, resumeMode),
+      ...(preparedExecution ? { reportDirName: preparedExecution.reportDirName } : {}),
+      traceTaskMetadata: buildTraceTaskMetadata({
+        taskContent: executionTask,
+        taskSlug: context.run.slug,
+      }),
+    });
+    return result.success;
+  } finally {
+    cleanupPreparedRetryTaskSpec(preparedExecution?.preparedSpec);
+  }
 }
 
 function requireConversationNote(note: string): string {
@@ -255,16 +319,21 @@ async function retryDirectRun(
 ): Promise<boolean> {
   const retryContext = buildRetryContext(projectDir, context);
   const retryResult = await runDirectRetryMode(projectDir, retryContext);
-  if (retryResult.action === 'cancel') {
-    return false;
+  try {
+    if (retryResult.action === 'cancel') {
+      return false;
+    }
+    return await executeDirectResume(
+      projectDir,
+      context,
+      'retry',
+      agentOverrides,
+      requireConversationNote(retryResult.task),
+      retryResult.attachments,
+    );
+  } finally {
+    cleanupInteractiveResultAttachments(retryResult);
   }
-  return executeDirectResume(
-    projectDir,
-    context,
-    'retry',
-    agentOverrides,
-    requireConversationNote(retryResult.task),
-  );
 }
 
 async function instructDirectRun(
@@ -280,16 +349,21 @@ async function instructDirectRun(
     runSessionContext: loadRunSessionContext(projectDir, context.run.slug),
     previousOrderContent: context.previousOrderContent,
   });
-  if (result.action === 'cancel') {
-    return false;
+  try {
+    if (result.action === 'cancel') {
+      return false;
+    }
+    return await executeDirectResume(
+      projectDir,
+      context,
+      'instruct',
+      agentOverrides,
+      requireConversationNote(result.task),
+      result.attachments,
+    );
+  } finally {
+    cleanupInteractiveResultAttachments(result);
   }
-  return executeDirectResume(
-    projectDir,
-    context,
-    'instruct',
-    agentOverrides,
-    requireConversationNote(result.task),
-  );
 }
 
 function showRunPaths(projectDir: string, run: ResumableDirectRun): void {

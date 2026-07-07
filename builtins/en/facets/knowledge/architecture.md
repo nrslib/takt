@@ -106,6 +106,17 @@ Prohibited patterns:
 - Error handling centralized (no try-catch scattered everywhere)
 - Business logic not leaking into Controller/View
 
+**Exception Translation at Protocol Boundaries:**
+
+Adapters such as HTTP, CLI, GraphQL, and message consumers are boundaries that translate internal exceptions into external protocol representations. Scattering the same try-catch / response translation across endpoints or handlers easily makes status codes, error shapes, logs, and authorization failures inconsistent. Centralize exception translation in a dedicated layer at the adapter boundary, and keep only truly cross-cutting translations in a global handler.
+
+| Criteria | Judgment |
+|----------|----------|
+| Each endpoint / handler implements the same translation from the same exception to the same protocol representation | REJECT |
+| Translation to protocol representation lives in the application or domain layer | REJECT |
+| API-specific exception translation is placed in a global handler shared by all APIs | REJECT |
+| Translation to external representation is centralized in an exception translation layer at the adapter boundary | OK |
+
 ## Resolve at the Boundary
 
 Values such as config, options, providers, permissions, and paths should be resolved at the boundary before entering the core flow. Main processing should assume values are already resolved and should not keep asking config sources.

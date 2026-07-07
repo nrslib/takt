@@ -58,8 +58,9 @@ describe('dispute guidance injection', () => {
 
     const section = extractFindingContractSection(instruction);
     expect(section).toContain('"## Disputed Findings" heading');
+    expect(section).toContain('no longer matches reality');
     expect(section).toContain('findingId: the ledger finding id');
-    expect(section).toContain('evidence: file:line references backing the reason');
+    expect(section).toContain('evidence: file:line references from the current code backing the reason');
   });
 
   it('should not inject dispute guidance when rawFindingsJsonSchema is present (reviewer branch wins)', () => {

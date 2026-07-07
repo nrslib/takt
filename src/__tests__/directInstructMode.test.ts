@@ -166,6 +166,58 @@ describe('runDirectInstructMode', () => {
     expect(options.map((option) => option.value)).toEqual(['execute', 'continue']);
   });
 
+  it('Given the conversation returns image attachments, When direct instruct completes, Then attachments are preserved', async () => {
+    const cleanupAttachments = vi.fn();
+    const attachment = {
+      placeholder: '[Image #1]',
+      tempPath: '/tmp/takt/session-1/attachments/image-1.png',
+      fileName: 'image-1.png',
+    };
+    mockRunConversationLoop.mockResolvedValueOnce({
+      action: 'execute',
+      task: 'Use [Image #1]',
+      attachments: [attachment],
+      cleanupAttachments,
+    });
+
+    const result = await runDirectInstructMode(buildOptions('# Previous Order'));
+
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Use [Image #1]',
+      attachments: [attachment],
+      cleanupAttachments: expect.any(Function),
+    });
+    result.cleanupAttachments?.();
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given the conversation cancels with image attachments, When direct instruct returns, Then attachments are preserved', async () => {
+    const cleanupAttachments = vi.fn();
+    const attachment = {
+      placeholder: '[Image #1]',
+      tempPath: '/tmp/takt/session-1/attachments/image-1.png',
+      fileName: 'image-1.png',
+    };
+    mockRunConversationLoop.mockResolvedValueOnce({
+      action: 'cancel',
+      task: 'ignored',
+      attachments: [attachment],
+      cleanupAttachments,
+    });
+
+    const result = await runDirectInstructMode(buildOptions('# Previous Order'));
+
+    expect(result).toEqual({
+      action: 'cancel',
+      task: '',
+      attachments: [attachment],
+      cleanupAttachments: expect.any(Function),
+    });
+    result.cleanupAttachments?.();
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
   it('Given the user cancels, When direct instruct returns, Then no instruction text is propagated', async () => {
     mockRunConversationLoop.mockResolvedValueOnce({ action: 'cancel', task: 'ignored' });
 

@@ -1467,7 +1467,7 @@ describe('encodeWorktreePath', () => {
     const encoded = encodeWorktreePath('/project/.takt/worktrees/my-task');
 
     expect(encoded).not.toContain('/');
-    expect(encoded).toContain('-');
+    expect(encoded).toBe('-project-.takt-worktrees-my-task');
   });
 
   it('should handle Windows-style paths', () => {

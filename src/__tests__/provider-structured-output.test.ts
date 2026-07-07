@@ -7,6 +7,15 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 // ===== Claude =====
 const {
   mockCallClaude,
@@ -72,6 +81,14 @@ vi.mock('../infra/config/index.js', () => ({
   resolveOpencodeApiKey: vi.fn(() => undefined),
   loadProjectConfig: vi.fn(() => ({})),
 }));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...actual,
+    createLogger: vi.fn(() => mockLogger),
+  };
+});
 
 // Codex の isInsideGitRepo をバイパス
 vi.mock('node:child_process', () => ({
@@ -413,6 +430,27 @@ describe('OpenCodeProvider — structured output', () => {
     const opts = mockCallOpenCodeCustom.mock.calls[0]?.[3];
     expect(opts).toHaveProperty('childProcessEnv', childProcessEnv);
   });
+
+  it('imageAttachments を callOpenCode に渡さず非空時だけログする', async () => {
+    mockCallOpenCode.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new OpenCodeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      model: 'openai/gpt-4',
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+    });
+
+    const opts = mockCallOpenCode.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.imageAttachments).toBeUndefined();
+    expect(mockLogger.info).toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
+
+    mockLogger.info.mockClear();
+    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4', imageAttachments: [] });
+    await agent.call('prompt', { cwd: '/tmp', model: 'openai/gpt-4' });
+
+    expect(mockLogger.info).not.toHaveBeenCalledWith('OpenCode provider does not support imageAttachments; ignoring');
+  });
 });
 
 // ---------- Mock ----------
@@ -441,5 +479,25 @@ describe('MockProvider — structured output', () => {
     expect(opts).toMatchObject({
       allowedTools: ['Read', 'Edit'],
     });
+  });
+
+  it('imageAttachments を callMock に渡さず非空時だけログする', async () => {
+    mockCallMock.mockResolvedValue(doneResponse('coder'));
+
+    const agent = new MockProvider().setup({ name: 'coder' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+    });
+
+    const opts = mockCallMock.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(opts.imageAttachments).toBeUndefined();
+    expect(mockLogger.info).toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
+
+    mockLogger.info.mockClear();
+    await agent.call('prompt', { cwd: '/tmp', imageAttachments: [] });
+    await agent.call('prompt', { cwd: '/tmp' });
+
+    expect(mockLogger.info).not.toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
   });
 });

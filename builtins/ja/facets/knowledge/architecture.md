@@ -106,6 +106,17 @@ Vertical Slice の判定基準:
 - エラーハンドリングが一元化されているか（各所でtry-catch禁止）
 - ビジネスロジックがController/Viewに漏れていないか
 
+**プロトコル境界の例外変換**
+
+HTTP、CLI、GraphQL、message consumer などの adapter は、内部例外を外部プロトコルの表現へ変換する境界である。endpoint や handler ごとに同じ try-catch / response 変換を散在させると、ステータス、エラー形状、ログ、認可失敗の扱いが不整合になりやすい。例外変換は adapter 境界の専用レイヤに集約し、真に横断的な変換だけを global handler に置く。
+
+| 基準 | 判定 |
+|------|------|
+| endpoint / handler ごとに同じ例外から同じプロトコル表現への変換を実装している | REJECT |
+| プロトコル表現への変換が application/domain 層に入っている | REJECT |
+| 特定 API 固有の例外変換を全 API 共通の global handler に置いている | REJECT |
+| adapter 境界の例外変換レイヤで、外部表現への変換を一元化している | OK |
+
 ## 境界での解決
 
 設定、Option、provider、権限、パスのような値は、境界で解決してから内部へ渡す。メイン処理は「何が解決済みか」を前提に組み立て、各所で設定ソースを問い合わせない。

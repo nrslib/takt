@@ -56,6 +56,7 @@ export type {
   WorkflowRuntimeConfig,
   WorkflowStepKind,
   WorkflowCallOverrides,
+  WorkflowSessionMode,
   WorkflowPromotionEntry,
   WorkflowParamType,
   WorkflowParamFacetKind,
@@ -69,6 +70,10 @@ export type {
   FindingLedger,
   FindingsRuleContext,
   AgentWorkflowStep,
+  NormalAgentWorkflowStep,
+  ParallelWorkflowStep,
+  ArpeggioWorkflowStep,
+  TeamLeaderWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
   WorkflowStep,
@@ -83,6 +88,10 @@ export type {
   FallbackContext,
   WorkflowConfig,
   WorkflowState,
+} from './workflow-types.js';
+
+export {
+  WORKFLOW_SESSION_MODES,
 } from './workflow-types.js';
 
 

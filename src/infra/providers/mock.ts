@@ -5,9 +5,16 @@
 import { callMock, callMockCustom, type MockCallOptions } from '../mock/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
+import { createLogger } from '../../shared/utils/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
+const log = createLogger('mock-provider');
+
 function toMockOptions(options: ProviderCallOptions): MockCallOptions {
+  if (options.imageAttachments && options.imageAttachments.length > 0) {
+    log.info('Mock provider does not support imageAttachments; ignoring');
+  }
+
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,

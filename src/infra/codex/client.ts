@@ -21,7 +21,7 @@ import {
 } from '../../shared/types/agent-failure.js';
 import type { StreamToolUseEventData } from '../../shared/types/provider.js';
 import { mapToCodexSandboxMode, type CodexCallOptions } from './types.js';
-import { formatImageAttachmentPathReference } from '../providers/imageAttachmentPrompt.js';
+import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import {
   type CodexEvent,
   type CodexItem,
@@ -102,6 +102,24 @@ function extractProviderUsageFromTurnCompleted(event: CodexEvent): ProviderUsage
   }
 
   return providerUsage;
+}
+
+function buildCodexInput(
+  fullPrompt: string,
+  imageAttachments: CodexCallOptions['imageAttachments'],
+): Input {
+  validateProviderImageAttachments(imageAttachments);
+  if (imageAttachments === undefined || imageAttachments.length === 0) {
+    return fullPrompt;
+  }
+
+  return [
+    { type: 'text', text: fullPrompt },
+    ...imageAttachments.flatMap((attachment) => [
+      { type: 'text' as const, text: attachment.placeholder },
+      { type: 'local_image' as const, path: attachment.path },
+    ]),
+  ];
 }
 
 /**
@@ -291,15 +309,15 @@ export class CodexClient {
     const fullPrompt = options.systemPrompt
       ? `${options.systemPrompt}\n\n${prompt}`
       : prompt;
-    const input: Input = options.imageAttachments && options.imageAttachments.length > 0
-      ? [
-        { type: 'text', text: fullPrompt },
-        ...options.imageAttachments.flatMap((attachment) => [
-          { type: 'text' as const, text: formatImageAttachmentPathReference(attachment) },
-          { type: 'local_image' as const, path: attachment.path },
-        ]),
-      ]
-      : fullPrompt;
+    let input: Input;
+    try {
+      input = buildCodexInput(fullPrompt, options.imageAttachments);
+    } catch (error) {
+      const failure = createProviderErrorFailure(getErrorMessage(error));
+      const errorResponse = this.buildErrorResponse(agentType, threadId, failure);
+      emitResult(options.onStream, false, errorResponse.error ?? errorResponse.content, threadId, failure.category);
+      return errorResponse;
+    }
     let standardRetryCount = 0;
     let timeoutRetryCount = 0;
 

@@ -23,6 +23,7 @@ import {
   buildOpenCodePromptTools,
   buildOpenCodeSessionPermission,
   resolveOpenCodePermissionReply,
+  type OpenCodeCompactSessionOptions,
   type OpenCodeCallOptions,
 } from './types.js';
 import {
@@ -38,7 +39,7 @@ import {
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
-import { InvalidToolArgumentLoopDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
+import { InvalidToolArgumentLoopDetector, ToolErrorBudgetDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 
 export type { OpenCodeCallOptions } from './types.js';
@@ -79,6 +80,12 @@ function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
 }
 
 const log = createLogger('opencode-sdk');
+/** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
+function resolveMessageCycleBudget(): number {
+  const fromEnv = Number(process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET);
+  return fromEnv > 0 ? fromEnv : 120;
+}
+
 /** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
 function resolveStreamIdleTimeoutMs(): number {
   const fromEnv = Number(process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
@@ -332,6 +339,29 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+function createExternalAbortPromise(
+  controller: AbortController,
+  externalAbortSignal: AbortSignal | undefined,
+): { promise?: Promise<never>; removeListener?: () => void } {
+  if (externalAbortSignal === undefined) {
+    return {};
+  }
+  let removeListener: (() => void) | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    const onExternalAbort = (): void => {
+      reject(new Error(OPENCODE_STREAM_ABORTED_MESSAGE));
+      controller.abort();
+    };
+    if (externalAbortSignal.aborted) {
+      onExternalAbort();
+      return;
+    }
+    externalAbortSignal.addEventListener('abort', onExternalAbort, { once: true });
+    removeListener = () => externalAbortSignal.removeEventListener('abort', onExternalAbort);
+  });
+  return { promise, removeListener };
+}
+
 function createReleaseHandle(server: SharedServer): () => void {
   let released = false;
   return () => {
@@ -352,24 +382,37 @@ async function withTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   timeoutErrorMessage: string,
+  externalAbortSignal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController();
+  let timedOut = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
+      timedOut = true;
       controller.abort();
       reject(new Error(timeoutErrorMessage));
     }, timeoutMs);
   });
+  const externalAbort = createExternalAbortPromise(controller, externalAbortSignal);
   try {
-    return await Promise.race([
-      operation(controller.signal),
-      timeoutPromise,
-    ]);
+    const operationPromise = operation(controller.signal).catch((error: unknown) => {
+      if (timedOut) {
+        return new Promise<never>(() => {
+          // The timeout promise owns the rejection after aborting the SDK call.
+        });
+      }
+      throw error;
+    });
+    const racePromises = externalAbort.promise !== undefined
+      ? [operationPromise, timeoutPromise, externalAbort.promise]
+      : [operationPromise, timeoutPromise];
+    return await Promise.race(racePromises);
   } finally {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
     }
+    externalAbort.removeListener?.();
   }
 }
 
@@ -790,6 +833,7 @@ export class OpenCodeClient {
         const state = createStreamTrackingState();
         const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
         const invalidArgumentLoopDetector = new InvalidToolArgumentLoopDetector();
+        const toolErrorBudgetDetector = new ToolErrorBudgetDetector();
         const echoState = { remainingPrompts: buildPromptEchoCandidates(prompt, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
@@ -821,6 +865,13 @@ export class OpenCodeClient {
           }, { once: true });
         });
         streamAborted.catch(() => { /* race の敗者側での未処理拒否を防ぐ */ });
+
+        // 劣化した生成は「ごく短いアシスタント応答サイクル」を数百回繰り返す
+        // （実測: 524〜1211 ループ）。テキスト断片だけの空転はツールエラー
+        // 予算にも無音検出にも掛からないため、応答サイクル数で打ち切る。
+        // 健全なステップはツール往復込みでも数十サイクルに収まる。
+        let assistantMessageCycles = 0;
+        const messageCycleBudget = resolveMessageCycleBudget();
 
         try {
         while (true) {
@@ -881,7 +932,12 @@ export class OpenCodeClient {
                   toolPart.tool,
                   toolPart.state.error,
                 );
-                loopError = unavailableError ?? invalidArgumentError;
+                const budgetError = toolErrorBudgetDetector.observe(
+                  toolPart.callID || toolPart.id,
+                  toolPart.tool,
+                  toolPart.state.error,
+                );
+                loopError = unavailableError ?? invalidArgumentError ?? budgetError;
               }
               if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
@@ -1043,6 +1099,15 @@ export class OpenCodeClient {
                 failureMessage = streamError;
                 diag.onStreamError('message.updated', streamError);
                 break;
+              }
+              if (info?.time?.completed !== undefined) {
+                assistantMessageCycles += 1;
+                if (assistantMessageCycles >= messageCycleBudget) {
+                  success = false;
+                  failureMessage = `OpenCode assistant message cycle budget exceeded (${assistantMessageCycles} cycles in one call)`;
+                  diag.onStreamError('message.updated', failureMessage);
+                  break;
+                }
               }
             }
             continue;
@@ -1299,6 +1364,34 @@ export class OpenCodeClient {
     throw new Error('Unreachable: OpenCode retry loop exhausted without returning');
   }
 
+  async compactSession(options: OpenCodeCompactSessionOptions): Promise<void> {
+    const parsedModel = parseProviderModel(options.model, 'OpenCode model');
+    const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
+    const acquired = await acquireClient(
+      fullModel,
+      options.opencodeApiKey,
+      options.childProcessEnv,
+      options.abortSignal,
+    );
+
+    try {
+      await withTimeout(
+        (signal) => acquired.client.session.summarize({
+          sessionID: options.sessionId,
+          directory: options.cwd,
+          providerID: parsedModel.providerID,
+          modelID: parsedModel.modelID,
+          auto: false,
+        }, { signal }),
+        OPENCODE_INTERACTION_TIMEOUT_MS,
+        'OpenCode session summarize timed out',
+        options.abortSignal,
+      );
+    } finally {
+      acquired.release();
+    }
+  }
+
   /** Call OpenCode with a custom agent configuration (system prompt + prompt) */
   async callCustom(
     agentName: string,
@@ -1330,4 +1423,8 @@ export async function callOpenCodeCustom(
   options: OpenCodeCallOptions,
 ): Promise<AgentResponse> {
   return defaultClient.callCustom(agentName, prompt, systemPrompt, options);
+}
+
+export async function compactOpenCodeSession(options: OpenCodeCompactSessionOptions): Promise<void> {
+  return defaultClient.compactSession(options);
 }

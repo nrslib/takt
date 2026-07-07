@@ -430,8 +430,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
     expect(state.status).toBe('aborted');
     expect(abortReasons[0]).toBe(
-      "Step execution failed: Configuration error: model 'sonnet' is a Claude model alias but provider is 'codex'. " +
-      "Either change the provider to 'claude-sdk' (or headless 'claude') or specify a codex-compatible model.",
+      "Step execution failed: Configuration error: auto_routing resolved model 'sonnet' is a Claude model alias but provider is 'codex'. " +
+      'Either choose a Claude provider or specify a codex-compatible model.',
     );
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });

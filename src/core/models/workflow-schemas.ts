@@ -29,6 +29,11 @@ import {
   isAiConditionExpression,
 } from './workflow-condition-expression.js';
 import { FindingContractConfigRawSchema } from './finding-schemas.js';
+import {
+  SESSION_AGENT_STEP_REQUIRED_MESSAGE,
+  SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
+} from './workflow-session-constraints.js';
+import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
 import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
@@ -281,6 +286,7 @@ const AgentParallelSubStepRawSchema = z.object({
   args: z.never().optional(),
   overrides: z.never().optional(),
   session_key: z.string().trim().min(1).optional(),
+  session: z.enum(WORKFLOW_SESSION_MODES).optional(),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
@@ -395,7 +401,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     call: z.string().min(1).optional(),
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
-    session: z.enum(['continue', 'refresh']).optional(),
+    session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: z.string().optional(),
     persona_name: z.string().optional(),
     tags: z.array(z.string().min(1)).optional(),
@@ -455,6 +461,25 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         code: z.ZodIssueCode.custom,
         path: ['session_key'],
         message: 'session_key is not supported on parallel parent steps; set it on each parallel sub-step',
+      });
+    }
+
+    if (data.session !== undefined && stepKind !== 'agent') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['session'],
+        message: SESSION_AGENT_STEP_REQUIRED_MESSAGE,
+      });
+    }
+
+    if (
+      data.session !== undefined
+      && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['session'],
+        message: SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
       });
     }
 

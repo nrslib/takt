@@ -18,6 +18,23 @@ workflow_config:
 
 loop_monitors:
   - cycle:
+      - plan
+      - write_tests
+      - implement
+      - reviewers
+      - fix
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The latest fix ended with fixes complete (not a dead end)
+          next: reviewers
+        - condition: Healthy (each replan moves the blocker toward resolution)
+          next: plan
+        - condition: Unproductive (the same dead end repeats)
+          next: ABORT
+  - cycle:
       - reviewers
       - fix
     threshold: 3
@@ -27,7 +44,9 @@ loop_monitors:
       rules:
         - condition: converging (findings decreasing, fixes applied)
           next: reviewers
-        - condition: unproductive (same findings repeating)
+        - condition: unproductive (the same findings repeat), but replanning could break the deadlock
+          next: plan
+        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
           next: ABORT
   - cycle:
       - reviewers
@@ -40,7 +59,9 @@ loop_monitors:
       rules:
         - condition: converging (findings decreasing, fixes applied)
           next: reviewers
-        - condition: unproductive (same findings repeating)
+        - condition: unproductive (the same findings repeat), but replanning could break the deadlock
+          next: plan
+        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
           next: ABORT
 
 steps:
@@ -255,4 +276,9 @@ steps:
       - condition: Fixes are complete
         next: reviewers
       - condition: Cannot proceed with fixes, or human judgment is required
-        next: ABORT
+        next: plan
+        appendix: |
+          The fix attempt is stuck. Read the rejection details and the stated
+          blocker, decompose the work again, and replan. Declare planning
+          impossible only if human judgment is genuinely required, with the
+          reasons stated explicitly.

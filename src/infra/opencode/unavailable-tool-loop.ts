@@ -95,3 +95,35 @@ export class InvalidToolArgumentLoopDetector {
     this.lastCallId = undefined;
   }
 }
+
+/** 呼び出し時に評価する（テストで env から上書きできるようにする） */
+function resolveToolErrorBudget(): number {
+  const fromEnv = Number(process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET);
+  return fromEnv > 0 ? fromEnv : 25;
+}
+
+/**
+ * 1回の呼び出し内のツールエラー総量の予算。
+ * 連続性ベースの検出器（unavailable / invalid-argument）はツール名を変えながら
+ * 壊れた呼び出しを繰り返す劣化ループを検出できない（切り替えでリセットされる）。
+ * 実測: 夜間のプロバイダ劣化で、1ステップが559ループ・26分の空転を続けた。
+ * 正常な試行錯誤がこの予算に届くことはない（実測の健全走行は1桁）。
+ */
+export class ToolErrorBudgetDetector {
+  private totalToolErrors = 0;
+  private lastCallId: string | undefined;
+
+  observe(toolCallId: string, tool: string, message: string): string | undefined {
+    if (toolCallId === this.lastCallId) {
+      return undefined;
+    }
+    this.lastCallId = toolCallId;
+    this.totalToolErrors += 1;
+
+    const budget = resolveToolErrorBudget();
+    if (this.totalToolErrors < budget) {
+      return undefined;
+    }
+    return `OpenCode tool error budget exceeded (${this.totalToolErrors} tool errors in one call; last tool "${tool}"): ${message}`;
+  }
+}

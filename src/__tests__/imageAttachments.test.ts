@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildInteractiveResultWithAttachments,
+  cleanupInteractiveResultAttachments,
   createImageAttachmentStore,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
@@ -23,6 +24,12 @@ function createTempRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-image-attachments-test-'));
   tempRoots.add(root);
   return root;
+}
+
+function createTempImage(root: string, fileName: string): string {
+  const filePath = path.join(root, fileName);
+  fs.writeFileSync(filePath, Buffer.from('image-data'));
+  return filePath;
 }
 
 describe('createImageAttachmentStore', () => {
@@ -77,6 +84,37 @@ describe('createImageAttachmentStore', () => {
     expect(fs.statSync(attachment.tempPath).mode & 0o777).toBe(0o600);
   });
 
+  it('should remove the session image attachment directory on cleanup', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-cleanup',
+    });
+    const attachment = await store.saveImage(Buffer.from('cleanup'), 'image/png');
+    const sessionDir = path.join(tmpRoot, 'takt', 'session-cleanup');
+
+    expect(fs.existsSync(attachment.tempPath)).toBe(true);
+
+    store.cleanup();
+
+    expect(fs.existsSync(sessionDir)).toBe(false);
+  });
+
+  it('should reject unsafe session ids before cleanup can target the tmp root', () => {
+    const tmpRoot = createTempRoot();
+    const sentinelPath = path.join(tmpRoot, 'sentinel.txt');
+    fs.writeFileSync(sentinelPath, 'keep');
+
+    for (const sessionId of ['.', '..', 'nested/session', 'nested\\session', '/absolute', 'C:\\absolute']) {
+      expect(() => createImageAttachmentStore({
+        tmpRoot,
+        sessionId,
+      })).toThrow('Image attachment sessionId must be a single path segment.');
+      expect(fs.existsSync(tmpRoot)).toBe(true);
+      expect(fs.existsSync(sentinelPath)).toBe(true);
+    }
+  });
+
   it('should create a process session store in the OS tmp directory', async () => {
     const store = createSessionImageAttachmentStore();
 
@@ -111,41 +149,61 @@ describe('createImageAttachmentStore', () => {
 
 describe('resolvePromptImageAttachments', () => {
   it('should return only attachments referenced by placeholders in the prompt', () => {
+    const tmpRoot = createTempRoot();
     const first = {
       placeholder: '[Image #1]',
-      tempPath: '/tmp/image-1.png',
+      tempPath: createTempImage(tmpRoot, 'image-1.png'),
       fileName: 'image-1.png',
     };
     const second = {
       placeholder: '[Image #2]',
-      tempPath: '/tmp/image-2.png',
+      tempPath: createTempImage(tmpRoot, 'image-2.png'),
       fileName: 'image-2.png',
     };
 
     const result = resolvePromptImageAttachments('Please inspect [Image #2].', [first, second]);
 
     expect(result).toEqual([
-      { placeholder: '[Image #2]', path: '/tmp/image-2.png' },
+      { placeholder: '[Image #2]', path: second.tempPath },
     ]);
   });
 
   it('should not match a prefix placeholder when only a later image is referenced', () => {
+    const tmpRoot = createTempRoot();
     const first = {
       placeholder: '[Image #1]',
-      tempPath: '/tmp/image-1.png',
+      tempPath: createTempImage(tmpRoot, 'image-1.png'),
       fileName: 'image-1.png',
     };
     const tenth = {
       placeholder: '[Image #10]',
-      tempPath: '/tmp/image-10.png',
+      tempPath: createTempImage(tmpRoot, 'image-10.png'),
       fileName: 'image-10.png',
     };
 
     const result = resolvePromptImageAttachments('Please inspect [Image #10].', [first, tenth]);
 
     expect(result).toEqual([
-      { placeholder: '[Image #10]', path: '/tmp/image-10.png' },
+      { placeholder: '[Image #10]', path: tenth.tempPath },
     ]);
+  });
+
+  it('should leave unknown image placeholder text unresolved', () => {
+    const result = resolvePromptImageAttachments('Please inspect [Image #1].', []);
+
+    expect(result).toEqual([]);
+  });
+
+  it('should reject referenced images whose tempPath is not a regular file', () => {
+    const tmpRoot = createTempRoot();
+    const directoryPath = path.join(tmpRoot, 'not-a-file.png');
+    fs.mkdirSync(directoryPath);
+
+    expect(() => resolvePromptImageAttachments('Please inspect [Image #1].', [{
+      placeholder: '[Image #1]',
+      tempPath: directoryPath,
+      fileName: 'image-1.png',
+    }])).toThrow(`Image attachment source must be a regular file: ${directoryPath}`);
   });
 });
 
@@ -176,6 +234,27 @@ describe('buildInteractiveResultWithAttachments', () => {
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [attachment],
+      cleanupAttachments: expect.any(Function),
     });
+    expect(result.cleanupAttachments).toEqual(expect.any(Function));
+    expect(Object.keys(result)).toEqual(['action', 'task', 'attachments', 'cleanupAttachments']);
+  });
+
+  it('should cleanup pasted image attachments from the interactive result owner', async () => {
+    const tmpRoot = createTempRoot();
+    const store = createImageAttachmentStore({
+      tmpRoot,
+      sessionId: 'session-result-cleanup',
+    });
+    const attachment = await store.saveImage(Buffer.from('result-cleanup-image'), 'image/png');
+    const sessionDir = path.join(tmpRoot, 'takt', 'session-result-cleanup');
+    const result = buildInteractiveResultWithAttachments({ action: 'execute', task: 'Use [Image #1].' }, store);
+
+    expect(fs.existsSync(attachment.tempPath)).toBe(true);
+
+    cleanupInteractiveResultAttachments(result);
+    cleanupInteractiveResultAttachments(result);
+
+    expect(fs.existsSync(sessionDir)).toBe(false);
   });
 });

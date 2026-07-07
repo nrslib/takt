@@ -228,11 +228,14 @@ Inside exec mode:
 | `/setup` | Edit agents, replan facets, loop detection thresholds, and project/global presets |
 | `/go` | Summarize the conversation into executable task instructions and run the generated workflow |
 | `/go <note>` | Run with an additional note appended to the conversation summary |
+| `/paste-image` | While editing the current input line, replace the line with a clipboard image placeholder |
 | `/cancel` | Exit without executing |
 
 `/setup` can save/delete project or global presets. Instruction, knowledge, and policy fields reference normal facets; new facets are saved under `.takt/facets/{instructions,knowledge,policies}/` or `$TAKT_CONFIG_DIR/facets/{instructions,knowledge,policies}/` (or `~/.takt/facets/{instructions,knowledge,policies}/` when unset).
 
 On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the existing workflow engine. `/go` with no prior conversation and no inline task text is rejected before creating the workflow. The review result reports are read from the completed run and injected back into the exec assistant session for the final summary.
+
+Image attachments are available while editing exec input. Use `/paste-image` or `Ctrl+V` to attach a clipboard image on macOS, or paste an OSC 1337 inline image from a compatible terminal. TAKT inserts a `[Image #N]` placeholder. The image is sent with an Assistant request only when the current message or `/go <note>` references that placeholder; placeholders that were not attached in the session are treated as normal text. When `/go` runs, referenced stored images are copied into the generated task spec and listed in its attachment section. Supported formats are PNG, JPEG, GIF, and WebP; inline and clipboard images are limited to 10 MiB. TAKT rejects unsupported image data, mismatched inline-image filename types, oversized images, and stored attachments whose temp path is missing, a symlink, or not a regular file. Providers without native image input receive local path references in the prompt.
 
 Generated exec workflows use `session_key` to keep Worker agent, Review agent, Replanning agent, and loop detection sessions separate even when they share a persona. In user-authored workflows, `session_key` is supported only on normal agent steps, parallel sub-steps, and `loop_monitors.judge`; it is not supported on system steps, workflow_call steps, or parallel parent steps. The effective session key is suffixed with the resolved provider.
 

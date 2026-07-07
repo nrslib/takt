@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const {
   mockExistsSync,
@@ -583,11 +584,12 @@ describe('retryFailedTask', () => {
 
   it('should promote image attachments for retry direct execution', async () => {
     const task = makeFailedTask();
-    mockRunTaskRetryMode.mockResolvedValue({
+    const cleanupAttachments = vi.fn();
+    mockRunTaskRetryMode.mockResolvedValue(withAttachmentCleanup({
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
-    });
+    }, cleanupAttachments));
 
     await retryFailedTask(task, '/project');
 
@@ -605,6 +607,24 @@ describe('retryFailedTask', () => {
       undefined,
       '.takt/tasks/my-task',
     );
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('should cleanup retry attachments when direct execution setup throws', async () => {
+    const task = makeFailedTask();
+    const cleanupAttachments = vi.fn();
+    mockRunTaskRetryMode.mockResolvedValue(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    }, cleanupAttachments));
+    mockStartReExecution.mockImplementationOnce(() => {
+      throw new Error('start failed');
+    });
+
+    await expect(retryFailedTask(task, '/project')).rejects.toThrow('start failed');
+
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 
   it('should preserve task_dir order content when retry task has image attachments', async () => {
@@ -652,6 +672,15 @@ describe('retryFailedTask', () => {
 
     await retryFailedTask(task, '/project');
 
+    expect(mockRequeueTask).toHaveBeenCalledWith(
+      'my-task',
+      ['failed'],
+      undefined,
+      'Use [Image #2].',
+      undefined,
+      undefined,
+      '.takt/tasks/my-task',
+    );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
       [
@@ -671,6 +700,38 @@ describe('retryFailedTask', () => {
         fileName: 'image-2.png',
       }],
       { sourceTaskDir: '/project/.takt/tasks/my-task' },
+    );
+  });
+
+  it('should pass renumbered retry note when executing retry attachments directly', async () => {
+    const task = makeFailedTask({
+      content: 'Implement using only the files in `.takt/tasks/my-task`.',
+      taskDir: '.takt/tasks/my-task',
+      data: { task: 'Implement using only the files in `.takt/tasks/my-task`.', workflow: 'default' },
+    });
+    mockReadFileSync.mockReturnValue([
+      'Original order with [Image #1].',
+      '',
+      '## 添付画像',
+      '',
+      '- [Image #1]: `attachments/image-1.png`',
+    ].join('\n'));
+    mockRunTaskRetryMode.mockResolvedValue({
+      action: 'execute',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    });
+
+    await retryFailedTask(task, '/project');
+
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'my-task',
+      ['failed'],
+      undefined,
+      'Use [Image #2].',
+      undefined,
+      undefined,
+      '.takt/tasks/my-task',
     );
   });
 

@@ -2,6 +2,7 @@ import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
+import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
 import type {
   ClaudeEffort,
   CodexReasoningEffort,
@@ -14,6 +15,7 @@ import { assertExecProviderEffort, CLAUDE_TOOL_PROVIDERS } from './configValidat
 
 interface AskExecAssistantOptions {
   readonly permissionMode?: PermissionMode;
+  readonly imageAttachments?: ImageAttachmentReference[];
 }
 
 export interface ExecSessionContext extends SessionContext {

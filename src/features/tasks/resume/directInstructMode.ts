@@ -22,6 +22,7 @@ import { getLabelObject } from '../../../shared/i18n/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { blankLine, info } from '../../../shared/ui/index.js';
+import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
 import type { InstructModeResult, InstructUIText } from '../../interactive/instructModeTypes.js';
 
 export interface DirectInstructModeOptions {
@@ -108,7 +109,15 @@ export async function runDirectInstructMode(
 
   const result = await runConversationLoop(options.cwd, ctx, strategy, options.workflowContext, undefined);
   if (result.action === 'cancel') {
-    return { action: 'cancel', task: '' };
+    return attachImageAttachmentCleanup({
+      action: 'cancel',
+      task: '',
+      ...(result.attachments ? { attachments: result.attachments } : {}),
+    }, result.cleanupAttachments);
   }
-  return { action: 'execute', task: result.task };
+  return attachImageAttachmentCleanup({
+    action: 'execute',
+    task: result.task,
+    ...(result.attachments ? { attachments: result.attachments } : {}),
+  }, result.cleanupAttachments);
 }

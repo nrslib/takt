@@ -23,6 +23,7 @@ import {
   prependSourceContextGuardToSystemPrompt,
 } from '../../interactive/promptSections.js';
 import { createSelectActionWithoutExecute, buildReplayHint } from '../../interactive/interactive-summary.js';
+import { attachImageAttachmentCleanup } from '../../interactive/imageAttachments.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from '../../interactive/runSessionReader.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
@@ -35,18 +36,18 @@ const INSTRUCT_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch']
 
 function toInstructModeResult(result: InteractiveModeResult): InstructModeResult {
   if (result.action === 'cancel') {
-    return {
+    return attachImageAttachmentCleanup({
       action: 'cancel',
       task: '',
       ...(result.attachments ? { attachments: result.attachments } : {}),
-    };
+    }, result.cleanupAttachments);
   }
 
-  return {
+  return attachImageAttachmentCleanup({
     action: result.action as InstructModeAction,
     task: result.task,
     ...(result.attachments ? { attachments: result.attachments } : {}),
-  };
+  }, result.cleanupAttachments);
 }
 
 function buildInstructTemplateVars(

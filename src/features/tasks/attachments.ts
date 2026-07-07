@@ -1,16 +1,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { StoredImageAttachment } from '../../shared/types/image-attachments.js';
+import {
+  assertRegularImageAttachmentFile,
+  validateStoredImageAttachment,
+} from '../../shared/utils/imageAttachmentReferences.js';
 import {
   cleanupTaskSpecDirectory,
   prepareTaskSpecDirectory as prepareEnqueuedTaskSpecDirectory,
   type PreparedTaskSpecDirectory,
 } from '../../infra/task/enqueueService.js';
 
-export interface TaskAttachment {
-  placeholder: string;
-  tempPath: string;
-  fileName: string;
-}
+export type TaskAttachment = StoredImageAttachment;
 
 export type PreparedTaskSpec = PreparedTaskSpecDirectory;
 
@@ -68,16 +69,11 @@ function normalizeTaskAttachmentReferences(
 }
 
 function validateTaskAttachment(attachment: TaskAttachment): void {
-  if (attachment.fileName.includes('/') || attachment.fileName.includes('\\') || attachment.fileName === '') {
-    throw new Error(`Invalid task attachment file name: ${attachment.fileName}`);
-  }
+  validateStoredImageAttachment(attachment);
 }
 
 function validateTaskAttachmentTempFile(attachment: TaskAttachment): void {
-  const stats = fs.lstatSync(attachment.tempPath);
-  if (stats.isSymbolicLink() || !stats.isFile()) {
-    throw new Error(`Task attachment source must be a regular file: ${attachment.tempPath}`);
-  }
+  assertRegularImageAttachmentFile(attachment.tempPath, 'Task attachment source');
 }
 
 export function promoteTaskAttachments(

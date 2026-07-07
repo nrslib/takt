@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const {
   mockExistsSync,
@@ -235,11 +236,12 @@ describe('instructBranch direct execution flow', () => {
   });
 
   it('should promote image attachments for instructed direct execution', async () => {
-    mockRunInstructMode.mockResolvedValue({
+    const cleanupAttachments = vi.fn();
+    mockRunInstructMode.mockResolvedValue(withAttachmentCleanup({
       action: 'execute',
       task: 'Use [Image #1].',
       attachments: [testAttachment],
-    });
+    }, cleanupAttachments));
     mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
       handlers.execute({ task: 'Use [Image #1].' }));
 
@@ -268,6 +270,30 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       '.takt/tasks/done-task',
     );
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('should cleanup instructed attachments when action dispatch throws', async () => {
+    const cleanupAttachments = vi.fn();
+    mockRunInstructMode.mockResolvedValue(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    }, cleanupAttachments));
+    mockDispatchConversationAction.mockRejectedValueOnce(new Error('dispatch failed'));
+
+    await expect(instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done' },
+    })).rejects.toThrow('dispatch failed');
+
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 
   it('should promote image attachments for instructed save_task requeue', async () => {
@@ -365,6 +391,15 @@ describe('instructBranch direct execution flow', () => {
       data: { task: 'Implement using only the files in `.takt/tasks/done-task`.' },
     });
 
+    expect(mockRequeueTask).toHaveBeenCalledWith(
+      'done-task',
+      ['completed', 'failed'],
+      undefined,
+      'Use [Image #2].',
+      undefined,
+      'default',
+      '.takt/tasks/done-task',
+    );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
       [
@@ -384,6 +419,45 @@ describe('instructBranch direct execution flow', () => {
         fileName: 'image-2.png',
       }],
       { sourceTaskDir: '/project/.takt/tasks/done-task' },
+    );
+  });
+
+  it('should pass renumbered instruction note when executing instructed attachments directly', async () => {
+    mockReadFileSync.mockReturnValue([
+      'Full order with [Image #1].',
+      '',
+      '## 添付画像',
+      '',
+      '- [Image #1]: `attachments/image-1.png`',
+    ].join('\n'));
+    mockRunInstructMode.mockResolvedValue({
+      action: 'execute',
+      task: 'Use [Image #1].',
+      attachments: [testAttachment],
+    });
+    mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
+      handlers.execute({ task: 'Use [Image #1].' }));
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'Implement using only the files in `.takt/tasks/done-task`.',
+      taskDir: '.takt/tasks/done-task',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'Implement using only the files in `.takt/tasks/done-task`.' },
+    });
+
+    expect(mockStartReExecution).toHaveBeenCalledWith(
+      'done-task',
+      ['completed', 'failed'],
+      undefined,
+      'Use [Image #2].',
+      undefined,
+      undefined,
+      '.takt/tasks/done-task',
     );
   });
 

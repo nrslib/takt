@@ -18,6 +18,23 @@ workflow_config:
 
 loop_monitors:
   - cycle:
+      - plan
+      - write_tests
+      - implement
+      - reviewers
+      - fix
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 直近の fix は修正完了で終わっている（行き詰まりではない）
+          next: reviewers
+        - condition: 健全（再計画のたびに blocker が解消へ向かっている）
+          next: plan
+        - condition: 非生産的（同じ行き詰まりが繰り返されている）
+          next: ABORT
+  - cycle:
       - reviewers
       - fix
     threshold: 3
@@ -27,7 +44,9 @@ loop_monitors:
       rules:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: 非生産的（同じ指摘が繰り返される）だが、計画の立て直しで打開できる見込みがある
+          next: plan
+        - condition: 非生産的（同じ指摘が繰り返される）で、再計画でも打開できる見込みがない
           next: ABORT
   - cycle:
       - reviewers
@@ -40,7 +59,9 @@ loop_monitors:
       rules:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: 非生産的（同じ指摘が繰り返される）だが、計画の立て直しで打開できる見込みがある
+          next: plan
+        - condition: 非生産的（同じ指摘が繰り返される）で、再計画でも打開できる見込みがない
           next: ABORT
 
 steps:
@@ -259,4 +280,8 @@ steps:
       - condition: 修正完了
         next: reviewers
       - condition: 修正を進められない、または人間の判断が必要
-        next: ABORT
+        next: plan
+        appendix: |
+          修正が行き詰まりました。直前の差し戻し内容と行き詰まりの理由を読み、
+          作業を分解し直して再計画してください。本当に人間の判断が必要だと
+          判断した場合のみ、その根拠を明記して計画不能を宣言してください。

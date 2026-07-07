@@ -17,6 +17,9 @@ import type {
 } from './workflow-system-input-types.js';
 import type { FindingContractConfig, FindingsRuleContext } from './finding-types.js';
 
+export const WORKFLOW_SESSION_MODES = ['continue', 'refresh', 'compact'] as const;
+export type WorkflowSessionMode = typeof WORKFLOW_SESSION_MODES[number];
+
 export type {
   WorkflowPrListWhere,
   WorkflowSystemInput,
@@ -160,7 +163,7 @@ interface WorkflowStepBase {
   passPreviousResponse?: boolean;
 }
 
-export interface AgentWorkflowStep extends WorkflowStepBase {
+interface AgentWorkflowStepBase extends WorkflowStepBase {
   kind?: 'agent';
   mode?: never;
   call?: never;
@@ -169,7 +172,6 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   requiresUserInput?: boolean;
   persona?: string;
   allowGitCommit?: boolean;
-  session?: 'continue' | 'refresh';
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
   provider?: ProviderTypeOrAuto;
@@ -195,6 +197,44 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   knowledgeContents?: string[];
 }
 
+export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
+  session?: WorkflowSessionMode;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio?: never;
+  teamLeader?: never;
+}
+
+export interface ParallelWorkflowStep extends AgentWorkflowStepBase {
+  session?: never;
+  parallel: WorkflowStep[];
+  concurrency?: number;
+  arpeggio?: never;
+  teamLeader?: never;
+}
+
+export interface ArpeggioWorkflowStep extends AgentWorkflowStepBase {
+  session?: never;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio: ArpeggioStepConfig;
+  teamLeader?: never;
+}
+
+export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
+  session?: never;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio?: never;
+  teamLeader: TeamLeaderConfig;
+}
+
+export type AgentWorkflowStep =
+  | NormalAgentWorkflowStep
+  | ParallelWorkflowStep
+  | ArpeggioWorkflowStep
+  | TeamLeaderWorkflowStep;
+
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
   mode?: never;
@@ -205,7 +245,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   persona?: never;
   tags?: never;
   allowGitCommit?: never;
-  session?: 'continue' | 'refresh';
+  session?: never;
   mcpServers?: never;
   personaPath?: never;
   provider?: never;

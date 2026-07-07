@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
+import type { TaskAttachment } from '../features/tasks/attachments.js';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const {
   mockFindLatestResumableDirectRun,
@@ -95,6 +100,8 @@ const workflow: WorkflowConfig = {
   ],
 };
 
+const tempRoots = new Set<string>();
+
 function createRun(overrides?: Record<string, unknown>) {
   return {
     slug: '20260524-direct-failed',
@@ -118,7 +125,47 @@ function createRun(overrides?: Record<string, unknown>) {
   };
 }
 
+function createTempRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-direct-resume-test-'));
+  tempRoots.add(root);
+  return root;
+}
+
+function createAttachment(root: string, content: string): TaskAttachment {
+  const attachmentDir = path.join(root, 'tmp-attachments');
+  fs.mkdirSync(attachmentDir, { recursive: true });
+  const tempPath = path.join(attachmentDir, 'image-1.png');
+  fs.writeFileSync(tempPath, content, 'utf-8');
+  return {
+    placeholder: '[Image #1]',
+    tempPath,
+    fileName: 'image-1.png',
+  };
+}
+
+function expectPromotedAttachment(projectDir: string, content: string, imageIndex = 1): void {
+  const executeArg = mockExecuteTaskWithResult.mock.calls[0]?.[0] as {
+    task: string;
+    reportDirName: string;
+  };
+  const fileName = `image-${imageIndex}.png`;
+  const contextTaskDir = path.join(projectDir, '.takt', 'runs', executeArg.reportDirName, 'context', 'task');
+  const orderContent = fs.readFileSync(path.join(contextTaskDir, 'order.md'), 'utf-8');
+  expect(executeArg.task).toContain(`.takt/runs/${executeArg.reportDirName}/context/task`);
+  expect(orderContent).toContain(content);
+  expect(orderContent).toContain(`.takt/runs/${executeArg.reportDirName}/context/task/attachments/${fileName}`);
+  expect(fs.readFileSync(path.join(contextTaskDir, 'attachments', fileName), 'utf-8')).toBe('png-data');
+  expect(fs.existsSync(path.join(projectDir, '.takt', 'tasks'))).toBe(false);
+}
+
 describe('resumeDirectRun', () => {
+  afterEach(() => {
+    for (const root of tempRoots) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
@@ -283,7 +330,11 @@ describe('resumeDirectRun', () => {
   it('Given Retry is selected, When conversation returns a retry note, Then the note is passed to direct execution', async () => {
     mockFindLatestResumableDirectRun.mockReturnValue(createRun({ status: 'failed' }));
     mockSelectOption.mockResolvedValueOnce('retry');
-    mockRunDirectRetryMode.mockResolvedValueOnce({ action: 'execute', task: 'Retry with failing spec fixed' });
+    const cleanupAttachments = vi.fn();
+    mockRunDirectRetryMode.mockResolvedValueOnce(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Retry with failing spec fixed',
+    }, cleanupAttachments));
 
     await resumeDirectRun('/project');
 
@@ -309,12 +360,65 @@ describe('resumeDirectRun', () => {
         resumeMode: 'retry',
       },
     }));
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given Retry is selected and conversation returns image attachments, When direct execution starts, Then attachments are promoted before cleanup', async () => {
+    const projectDir = createTempRoot();
+    const attachment = createAttachment(projectDir, 'png-data');
+    mockReadRunContextOrderContent.mockReturnValue([
+      'Order file instruction with [Image #1].',
+      '',
+      '## 添付画像',
+      '',
+      '- [Image #1]: `attachments/image-1.png`',
+    ].join('\n'));
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ status: 'failed' }));
+    mockSelectOption.mockResolvedValueOnce('retry');
+    const cleanupAttachments = vi.fn();
+    mockRunDirectRetryMode.mockResolvedValueOnce(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Retry with [Image #1]',
+      attachments: [attachment],
+    }, cleanupAttachments));
+
+    await resumeDirectRun(projectDir);
+
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+      retryNote: 'Retry with [Image #2]',
+      reportDirName: expect.any(String),
+      directResume: {
+        sourceRunSlug: '20260524-direct-failed',
+        resumeMode: 'retry',
+      },
+    }));
+    expectPromotedAttachment(projectDir, 'Retry with [Image #2]', 2);
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given Retry is selected, When direct execution throws, Then conversation attachments are cleaned up', async () => {
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun({ status: 'failed' }));
+    mockSelectOption.mockResolvedValueOnce('retry');
+    const cleanupAttachments = vi.fn();
+    mockRunDirectRetryMode.mockResolvedValueOnce(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Retry with failing spec fixed',
+    }, cleanupAttachments));
+    mockExecuteTaskWithResult.mockRejectedValueOnce(new Error('direct execution failed'));
+
+    await expect(resumeDirectRun('/project')).rejects.toThrow('direct execution failed');
+
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 
   it('Given Instruct is selected, When conversation returns additional instructions, Then the instructions are passed as retryNote', async () => {
     mockFindLatestResumableDirectRun.mockReturnValue(createRun());
     mockSelectOption.mockResolvedValueOnce('instruct');
-    mockRunDirectInstructMode.mockResolvedValueOnce({ action: 'execute', task: 'Also update regression coverage' });
+    const cleanupAttachments = vi.fn();
+    mockRunDirectInstructMode.mockResolvedValueOnce(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Also update regression coverage',
+    }, cleanupAttachments));
 
     await resumeDirectRun('/project');
 
@@ -331,6 +435,40 @@ describe('resumeDirectRun', () => {
         resumeMode: 'instruct',
       },
     }));
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given Instruct is selected and conversation returns image attachments, When direct execution starts, Then attachments are promoted before cleanup', async () => {
+    const projectDir = createTempRoot();
+    const attachment = createAttachment(projectDir, 'png-data');
+    mockReadRunContextOrderContent.mockReturnValue([
+      'Order file instruction with [Image #1].',
+      '',
+      '## 添付画像',
+      '',
+      '- [Image #1]: `attachments/image-1.png`',
+    ].join('\n'));
+    mockFindLatestResumableDirectRun.mockReturnValue(createRun());
+    mockSelectOption.mockResolvedValueOnce('instruct');
+    const cleanupAttachments = vi.fn();
+    mockRunDirectInstructMode.mockResolvedValueOnce(withAttachmentCleanup({
+      action: 'execute',
+      task: 'Also inspect [Image #1]',
+      attachments: [attachment],
+    }, cleanupAttachments));
+
+    await resumeDirectRun(projectDir);
+
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
+      retryNote: 'Also inspect [Image #2]',
+      reportDirName: expect.any(String),
+      directResume: {
+        sourceRunSlug: '20260524-direct-failed',
+        resumeMode: 'instruct',
+      },
+    }));
+    expectPromotedAttachment(projectDir, 'Also inspect [Image #2]', 2);
+    expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
 
   it('Given Retry is selected and order.md is absent, When meta.task is used, Then previousOrderContent is not passed as order.md', async () => {

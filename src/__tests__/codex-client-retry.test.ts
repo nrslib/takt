@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -11,6 +14,7 @@ let runPlanIndex = 0;
 let startThreadCalls: Array<Record<string, unknown> | undefined> = [];
 let resumeThreadCalls: Array<{ threadId: string; options?: Record<string, unknown> }> = [];
 let runStreamedInputs: unknown[] = [];
+const tempRoots = new Set<string>();
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -101,6 +105,14 @@ function createThread(id: string) {
   };
 }
 
+function createTempImage(fileName: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-image-test-'));
+  tempRoots.add(root);
+  const filePath = path.join(root, fileName);
+  fs.writeFileSync(filePath, Buffer.from('image-bytes'));
+  return filePath;
+}
+
 vi.mock('@openai/codex-sdk', () => {
   return {
     Codex: class MockCodex {
@@ -133,6 +145,10 @@ describe('CodexClient retry', () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    for (const root of tempRoots) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
   });
 
   it('turn.failed が rate limit を示す場合は retry せず rate_limited を返す', async () => {
@@ -169,18 +185,47 @@ describe('CodexClient retry', () => {
     ];
 
     const client = new CodexClient();
+    const imagePath = createTempImage('image-1.png');
 
     const result = await client.call('coder', 'この画像を見て [Image #1]', {
       cwd: '/tmp',
-      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+      imageAttachments: [{ placeholder: '[Image #1]', path: imagePath }],
     });
 
     expect(result.status).toBe('done');
     expect(runStreamedInputs[0]).toEqual([
       { type: 'text', text: 'この画像を見て [Image #1]' },
-      { type: 'text', text: '[Image #1] path: `/tmp/image-1.png`' },
-      { type: 'local_image', path: '/tmp/image-1.png' },
+      { type: 'text', text: '[Image #1]' },
+      { type: 'local_image', path: imagePath },
     ]);
+  });
+
+  it('imageAttachments の validation error は reject せず AgentResponse.error として返す', async () => {
+    const client = new CodexClient();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-missing-image-test-'));
+    tempRoots.add(root);
+    const missingPath = path.join(root, 'missing.png');
+    const onStream = vi.fn();
+
+    const result = await client.call('coder', 'この画像を見て [Image #1]', {
+      cwd: '/tmp',
+      imageAttachments: [{ placeholder: '[Image #1]', path: missingPath }],
+      onStream,
+    });
+
+    expect(startThreadCalls).toHaveLength(0);
+    expect(runStreamedInputs).toHaveLength(0);
+    expect(result.status).toBe('error');
+    expect(result.error).toContain(`Failed to read image attachment at ${missingPath}`);
+    expect(result.failureCategory).toBe('provider_error');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({
+        success: false,
+        error: expect.stringContaining(`Failed to read image attachment at ${missingPath}`),
+        failureCategory: 'provider_error',
+      }),
+    });
   });
 
   it('turn.failed の at capacity を 1 秒後に retry して成功を返す', async () => {

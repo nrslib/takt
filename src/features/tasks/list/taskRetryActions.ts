@@ -25,6 +25,7 @@ import {
   type RetryFailureInfo,
   type RetryRunInfo,
 } from '../../interactive/index.js';
+import { cleanupInteractiveResultAttachments } from '../../interactive/imageAttachments.js';
 import { executeAndCompleteTask } from '../execute/taskExecution.js';
 import {
   appendRetryNote,
@@ -38,7 +39,7 @@ import { prepareTaskForExecution } from './prepareTaskForExecution.js';
 import {
   cleanupPreparedRetryTaskSpec,
   prepareRetryTaskSpecWithAttachments,
-} from './retryTaskSpecAttachments.js';
+} from '../retryTaskSpecAttachments.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 
@@ -374,22 +375,43 @@ export async function retryFailedTask(
   };
 
   const retryResult = await runTaskRetryMode(selection.worktreePath, retryContext);
-  if (retryResult.action === 'cancel') {
-    return false;
-  }
+  try {
+    if (retryResult.action === 'cancel') {
+      return false;
+    }
 
-  const retryNote = appendRetryNote(task.data?.retry_note, retryResult.task);
-  const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, task.content, retryNote, retryResult.attachments, task.taskDir);
-  const taskDir = preparedSpec?.taskDirRelative;
-  const runner = new TaskRunner(projectDir);
+    const retryNote = appendRetryNote(task.data?.retry_note, retryResult.task);
+    const preparedSpec = prepareRetryTaskSpecWithAttachments(projectDir, task.content, retryNote, retryResult.attachments, task.taskDir);
+    const executionRetryNote = preparedSpec ? preparedSpec.retryNote : retryNote;
+    const taskDir = preparedSpec?.taskDirRelative;
+    const runner = new TaskRunner(projectDir);
 
-  if (retryResult.action === 'save_task') {
+    if (retryResult.action === 'save_task') {
+      try {
+        runner.requeueTask(
+          task.name,
+          ['failed'],
+          selection.startStep,
+          executionRetryNote,
+          selection.selectedResumePoint,
+          selection.selectedWorkflowOverride,
+          taskDir,
+        );
+      } catch (error) {
+        cleanupPreparedRetryTaskSpec(preparedSpec);
+        throw error;
+      }
+      info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
+      return true;
+    }
+
+    let taskInfo: ReturnType<TaskRunner['startReExecution']>;
     try {
-      runner.requeueTask(
+      taskInfo = runner.startReExecution(
         task.name,
         ['failed'],
         selection.startStep,
-        retryNote,
+        executionRetryNote,
         selection.selectedResumePoint,
         selection.selectedWorkflowOverride,
         taskDir,
@@ -398,32 +420,16 @@ export async function retryFailedTask(
       cleanupPreparedRetryTaskSpec(preparedSpec);
       throw error;
     }
-    info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
-    return true;
+    const taskForExecution = prepareTaskForExecution(taskInfo, selection.selectedWorkflow);
+
+    log.info('Starting re-execution of failed task', {
+      name: task.name,
+      worktreePath: selection.worktreePath,
+      startStep: selection.startStep,
+    });
+
+    return executeAndCompleteTask(taskForExecution, runner, projectDir);
+  } finally {
+    cleanupInteractiveResultAttachments(retryResult);
   }
-
-  let taskInfo: ReturnType<TaskRunner['startReExecution']>;
-  try {
-    taskInfo = runner.startReExecution(
-      task.name,
-      ['failed'],
-      selection.startStep,
-      retryNote,
-      selection.selectedResumePoint,
-      selection.selectedWorkflowOverride,
-      taskDir,
-    );
-  } catch (error) {
-    cleanupPreparedRetryTaskSpec(preparedSpec);
-    throw error;
-  }
-  const taskForExecution = prepareTaskForExecution(taskInfo, selection.selectedWorkflow);
-
-  log.info('Starting re-execution of failed task', {
-    name: task.name,
-    worktreePath: selection.worktreePath,
-    startStep: selection.startStep,
-  });
-
-  return executeAndCompleteTask(taskForExecution, runner, projectDir);
 }

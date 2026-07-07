@@ -459,8 +459,7 @@ async function createUser(data) {
 }
 
 // ✅ 上位層で一元処理
-// Controller/Handler層でまとめてキャッチ
-// または @ControllerAdvice / ErrorBoundary で処理
+// 境界の例外変換レイヤでまとめて処理
 async function createUser(data) {
   return await userService.create(data)  // 例外はそのまま上に投げる
 }
@@ -471,8 +470,20 @@ async function createUser(data) {
 | 層 | 責務 |
 |----|------|
 | ドメイン/サービス層 | ビジネスルール違反時に例外をスロー |
-| Controller/Handler層 | 例外をキャッチしてレスポンスに変換 |
-| グローバルハンドラ | 共通例外（NotFound, 認証エラー等）を処理 |
+| Application層 | 例外を握りつぶさず、必要な補償や再試行だけを明示的に扱う |
+| Adapter境界 | 例外をプロトコル固有のレスポンスや表示に変換 |
+| グローバルハンドラ | 認証、入力検証、共通エラー形状など横断的な例外だけを処理 |
+
+### HTTP 例外変換
+
+HTTP adapter / controller / handler は、endpoint ごとに例外を HTTP 表現へ変換しない。例外から HTTP ステータス、レスポンス本文、ヘッダへの変換は HTTP adapter 境界の例外変換レイヤへ集約する。
+
+| 基準 | 判定 |
+|------|------|
+| 各 endpoint が同じ try-catch や wrapper で例外を HTTP 表現に変換している | REJECT。HTTP adapter 境界の例外変換レイヤに分離 |
+| 特定 API 固有の例外変換を全 API 共通の global handler に追加する | REJECT。対象 API の境界に閉じる |
+| 認証、入力検証、共通エラー形状など真に横断的な変換だけを global handler で扱う | OK |
+| 例外型から HTTP 表現への変換が application/domain 層にある | REJECT。HTTP adapter 境界で扱う |
 
 ## 変換処理の配置
 

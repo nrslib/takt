@@ -2524,6 +2524,108 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   }, 20_000);
 
+  /** 予算系4テスト共通: イベント列を流して call の結果だけ返す */
+  async function runBudgetScenario(sessionId: string, events: unknown[]): Promise<import('../core/models/index.js').AgentResponse> {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      ...events,
+      { type: 'session.idle', properties: { sessionID: sessionId } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    return new OpenCodeClient().call('coder', 'do it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      interactionTimeoutMs: 500,
+    });
+  }
+
+  it('should complete normally when message cycles stay under the budget', async () => {
+    process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
+    try {
+      const result = await runBudgetScenario('session-under', Array.from({ length: 4 }, (_, i) => ({
+        type: 'message.updated',
+        properties: { info: { sessionID: 'session-under', role: 'assistant', time: { completed: 1000 + i } } },
+      })).concat([{
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-t', type: 'text', text: 'done', sessionID: 'session-under' } },
+      }] as unknown[]));
+
+      // 予算未満（4 < 5）なら通常どおり完了する
+      expect(result.status).toBe('done');
+    } finally {
+      delete process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET;
+    }
+  });
+
+  it('should complete normally when tool errors stay under the budget', async () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
+    try {
+      const result = await runBudgetScenario('session-under2', ['read', 'write', 'glob', 'grep', 'list'].map((tool, i) => ({
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: `u${i}`, type: 'tool', tool, callID: `u${i}`, sessionID: 'session-under2',
+            state: { status: 'error', error: `The ${tool} tool was called with invalid arguments: SchemaError(x)` },
+          },
+        },
+      })).concat([{
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-t2', type: 'text', text: 'done', sessionID: 'session-under2' } },
+      }] as unknown[]));
+
+      // 予算未満（5 < 6）なら通常どおり完了する（回転ツール名で連続性検出も発火しない）
+      expect(result.status).toBe('done');
+    } finally {
+      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
+    }
+  });
+
+  it('should stop a degenerate text-fragment loop via the message cycle budget', async () => {
+    process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
+    try {
+      const result = await runBudgetScenario('session-spin', Array.from({ length: 6 }, (_, i) => ({
+        type: 'message.updated',
+        properties: { info: { sessionID: 'session-spin', role: 'assistant', time: { completed: 1000 + i } } },
+      })));
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('message cycle budget exceeded');
+    } finally {
+      delete process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET;
+    }
+  });
+
+  it('should stop a degenerate loop that rotates tool names via the error budget', async () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
+    try {
+      const result = await runBudgetScenario('session-degenerate', ['read', 'write', 'glob', 'grep', 'list', 'edit'].map((tool, i) => ({
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: `c${i}`, type: 'tool', tool, callID: `c${i}`, sessionID: 'session-degenerate',
+            state: { status: 'error', error: `The ${tool} tool was called with invalid arguments: SchemaError(x)` },
+          },
+        },
+      })));
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('tool error budget exceeded');
+    } finally {
+      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
+    }
+  });
+
   it('should not trip the invalid-argument loop across interleaved unavailable errors', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const INVALID = 'The read tool was called with invalid arguments: SchemaError(Expected string)';
