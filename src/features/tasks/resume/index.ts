@@ -29,6 +29,7 @@ import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
 import type { TaskAttachment } from '../attachments.js';
 import {
   cleanupPreparedRetryTaskSpec,
+  hasAttachments,
   prepareRetryTaskSpecWithAttachments,
   type PreparedRetryTaskSpec,
 } from '../retryTaskSpecAttachments.js';
@@ -192,10 +193,6 @@ function buildDirectResumeMetadata(
   };
 }
 
-function hasAttachments(attachments: readonly TaskAttachment[] | undefined): attachments is readonly TaskAttachment[] {
-  return attachments !== undefined && attachments.length > 0;
-}
-
 function prepareDirectResumeExecutionWithAttachments(
   projectDir: string,
   context: DirectRunResumeExecutionContext,
@@ -326,7 +323,7 @@ async function retryDirectRun(
     if (retryResult.action === 'cancel') {
       return false;
     }
-    return executeDirectResume(
+    return await executeDirectResume(
       projectDir,
       context,
       'retry',
@@ -356,7 +353,7 @@ async function instructDirectRun(
     if (result.action === 'cancel') {
       return false;
     }
-    return executeDirectResume(
+    return await executeDirectResume(
       projectDir,
       context,
       'instruct',

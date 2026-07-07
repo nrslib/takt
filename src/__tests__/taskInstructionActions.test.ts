@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const {
   mockExistsSync,
@@ -157,13 +158,6 @@ const testAttachment = {
   tempPath: '/tmp/takt/session-1/attachments/image-1.png',
   fileName: 'image-1.png',
 };
-
-function withAttachmentCleanup<T extends object>(result: T, cleanupAttachments: () => void): T & { cleanupAttachments: () => void } {
-  return {
-    ...result,
-    cleanupAttachments,
-  };
-}
 
 describe('instructBranch direct execution flow', () => {
   beforeEach(() => {

@@ -9,7 +9,7 @@ export interface PreparedRetryTaskSpec {
   retryNote: string;
 }
 
-function hasAttachments(attachments: readonly TaskAttachment[] | undefined): attachments is readonly TaskAttachment[] {
+export function hasAttachments(attachments: readonly TaskAttachment[] | undefined): attachments is readonly TaskAttachment[] {
   return attachments !== undefined && attachments.length > 0;
 }
 

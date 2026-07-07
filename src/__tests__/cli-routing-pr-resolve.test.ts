@@ -137,6 +137,7 @@ import { executeDefaultAction } from '../app/cli/routing.js';
 import { error as logError } from '../shared/ui/index.js';
 import type { InteractiveModeResult } from '../features/interactive/index.js';
 import type { PrReviewData } from '../infra/git/index.js';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const mockSelectAndExecuteTask = vi.mocked(selectAndExecuteTask);
 const mockDetermineWorkflow = vi.mocked(determineWorkflow);
@@ -157,13 +158,6 @@ const testAttachment = {
   tempPath: '/tmp/takt/session-1/attachments/image-1.png',
   fileName: 'image-1.png',
 };
-
-function withAttachmentCleanup(result: InteractiveModeResult, cleanupAttachments: () => void): InteractiveModeResult {
-  return {
-    ...result,
-    cleanupAttachments,
-  };
-}
 
 function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: string }> = {}): PrReviewData {
   return {

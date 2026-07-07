@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import type { TaskAttachment } from '../features/tasks/attachments.js';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const {
   mockFindLatestResumableDirectRun,
@@ -155,13 +156,6 @@ function expectPromotedAttachment(projectDir: string, content: string, imageInde
   expect(orderContent).toContain(`.takt/runs/${executeArg.reportDirName}/context/task/attachments/${fileName}`);
   expect(fs.readFileSync(path.join(contextTaskDir, 'attachments', fileName), 'utf-8')).toBe('png-data');
   expect(fs.existsSync(path.join(projectDir, '.takt', 'tasks'))).toBe(false);
-}
-
-function withAttachmentCleanup<T extends object>(result: T, cleanupAttachments: () => void): T & { cleanupAttachments: () => void } {
-  return {
-    ...result,
-    cleanupAttachments,
-  };
 }
 
 describe('resumeDirectRun', () => {

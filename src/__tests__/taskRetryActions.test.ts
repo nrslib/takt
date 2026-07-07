@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { attachWorkflowSourcePath, attachWorkflowTrustInfo } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { withAttachmentCleanup } from './testUtils/attachmentTestHelpers.js';
 
 const {
   mockExistsSync,
@@ -199,13 +200,6 @@ const testAttachment = {
   tempPath: '/tmp/takt/session-1/attachments/image-1.png',
   fileName: 'image-1.png',
 };
-
-function withAttachmentCleanup<T extends object>(result: T, cleanupAttachments: () => void): T & { cleanupAttachments: () => void } {
-  return {
-    ...result,
-    cleanupAttachments,
-  };
-}
 
 beforeEach(() => {
   vi.clearAllMocks();
