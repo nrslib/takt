@@ -258,6 +258,7 @@ export class ParallelRunner {
           phase: 1,
           sequence: 1,
         });
+        let phase1CompletionExecutionId = phaseExecutionId;
 
         // Override onStream with parallel logger's prefixed handler (immutable)
         const agentOptions = parallelLogger
@@ -288,6 +289,60 @@ export class ParallelRunner {
           error: result.error,
           providerUsage: result.providerUsage,
         }));
+        if (subResponse.status === 'error' && subResponse.errorKind !== 'rate_limit') {
+          // 並列レビューの1席のプロバイダ障害で走行全体を落とさない。
+          // 空転はセッション文脈起因のことが多いため（長文脈での生成品質
+          // 崩壊を実測）、再試行は resume を切った新しいセッションで行う。
+          // rate limit は再試行で叩かず既存の rate_limited 経路に委ねる。
+          log.warn('Parallel sub-step provider error; retrying once with a fresh session', {
+            step: subStep.name,
+            error: subResponse.error,
+          });
+          const retryPhaseExecutionId = buildPhaseExecutionId({
+            step: subStep.name,
+            iteration: parentIteration,
+            phase: 1,
+            sequence: 2,
+          });
+          // 再試行は専用IDで phase:start を発火する（初回IDの二重発火はしない）。
+          // onPromptResolved を再試行自身のものに差し替えることで、初回試行が
+          // プロンプト解決前に死んだ場合でも、再試行の成功が phase:start を
+          // 発火させ、後段の Missing prompt parts 検査を正しく満たす。
+          const retryOptions = {
+            ...agentOptions,
+            sessionId: undefined,
+            onPromptResolved: (promptParts: PhasePromptParts) => {
+              resolvedPromptParts = promptParts;
+              this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, retryPhaseExecutionId, parentIteration);
+              phase1CompletionExecutionId = retryPhaseExecutionId;
+              didEmitPhaseStart = true;
+            },
+          };
+          subResponse = await runWithPhaseSpan({
+            enabled: this.deps.observabilityEnabled,
+            runId: this.deps.observabilityRunId,
+            workflowName: this.deps.getWorkflowName(),
+            step: executableSubStep,
+            iteration: parentIteration,
+            phase: 1,
+            phaseName: 'execute',
+            instruction: phase1Instruction,
+            phaseExecutionId: retryPhaseExecutionId,
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
+            sanitizeText: this.deps.sanitizeObservabilityText,
+            providerInfo: subPm,
+          }, () => executeAgent(executableSubStep.persona, phase1Instruction, retryOptions), (result) => ({
+            status: result.status,
+            content: result.content,
+            error: result.error,
+            providerUsage: result.providerUsage,
+          }));
+          if (subResponse.sessionId === undefined) {
+            // 再試行がセッションIDを返さなかった場合、劣化していた旧セッションを
+            // resume 対象に残さない（残すと次の実行で文脈崩壊が再発する）
+            updatePersonaSession(subSessionKey, undefined);
+          }
+        }
         if (findingLedgerCopyPath) {
           const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(executableSubStep, subResponse, runtime);
           subResponse = normalized.response;
@@ -348,7 +403,7 @@ export class ParallelRunner {
         if (subResponse.sessionId !== undefined) {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
-        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phaseExecutionId, parentIteration);
+        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phase1CompletionExecutionId, parentIteration);
         if (
           subResponse.status === 'done'
           && subResponse.structuredOutput === undefined

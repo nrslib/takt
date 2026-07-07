@@ -39,7 +39,7 @@ import {
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
-import { InvalidToolArgumentLoopDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
+import { InvalidToolArgumentLoopDetector, ToolErrorBudgetDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 
 export type { OpenCodeCallOptions } from './types.js';
@@ -80,6 +80,12 @@ function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
 }
 
 const log = createLogger('opencode-sdk');
+/** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
+function resolveMessageCycleBudget(): number {
+  const fromEnv = Number(process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET);
+  return fromEnv > 0 ? fromEnv : 120;
+}
+
 /** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
 function resolveStreamIdleTimeoutMs(): number {
   const fromEnv = Number(process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
@@ -827,6 +833,7 @@ export class OpenCodeClient {
         const state = createStreamTrackingState();
         const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
         const invalidArgumentLoopDetector = new InvalidToolArgumentLoopDetector();
+        const toolErrorBudgetDetector = new ToolErrorBudgetDetector();
         const echoState = { remainingPrompts: buildPromptEchoCandidates(prompt, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
@@ -858,6 +865,13 @@ export class OpenCodeClient {
           }, { once: true });
         });
         streamAborted.catch(() => { /* race の敗者側での未処理拒否を防ぐ */ });
+
+        // 劣化した生成は「ごく短いアシスタント応答サイクル」を数百回繰り返す
+        // （実測: 524〜1211 ループ）。テキスト断片だけの空転はツールエラー
+        // 予算にも無音検出にも掛からないため、応答サイクル数で打ち切る。
+        // 健全なステップはツール往復込みでも数十サイクルに収まる。
+        let assistantMessageCycles = 0;
+        const messageCycleBudget = resolveMessageCycleBudget();
 
         try {
         while (true) {
@@ -918,7 +932,12 @@ export class OpenCodeClient {
                   toolPart.tool,
                   toolPart.state.error,
                 );
-                loopError = unavailableError ?? invalidArgumentError;
+                const budgetError = toolErrorBudgetDetector.observe(
+                  toolPart.callID || toolPart.id,
+                  toolPart.tool,
+                  toolPart.state.error,
+                );
+                loopError = unavailableError ?? invalidArgumentError ?? budgetError;
               }
               if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
@@ -1080,6 +1099,15 @@ export class OpenCodeClient {
                 failureMessage = streamError;
                 diag.onStreamError('message.updated', streamError);
                 break;
+              }
+              if (info?.time?.completed !== undefined) {
+                assistantMessageCycles += 1;
+                if (assistantMessageCycles >= messageCycleBudget) {
+                  success = false;
+                  failureMessage = `OpenCode assistant message cycle budget exceeded (${assistantMessageCycles} cycles in one call)`;
+                  diag.onStreamError('message.updated', failureMessage);
+                  break;
+                }
               }
             }
             continue;

@@ -222,7 +222,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(state.iteration).toBe(8);
     });
 
-    it('should abort when judge returns non-done status', async () => {
+    it('should continue with the natural transition when judge returns non-done status', async () => {
       const config = buildConfigWithLoopMonitor(1);
       engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -236,11 +236,16 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           content: 'judge failed',
           error: 'judge interrupted',
         }),
+        // 判定不能 → 自然遷移（ai_fix → ai_review）で続行
+        makeResponse({ persona: 'ai_review', content: 'No issues' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
       ]);
 
       mockDetectMatchedRuleSequence([
         { index: 0, method: 'phase1_tag' },
         { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
         { index: 0, method: 'phase1_tag' },
       ]);
 
@@ -249,11 +254,9 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
       const state = await engine.run();
 
-      expect(state.status).toBe('aborted');
-      expect(abortFn).toHaveBeenCalledOnce();
-      const reason = abortFn.mock.calls[0]![1] as string;
-      expect(reason).toContain('Unhandled response status: error');
-      expect(runReportPhase).not.toHaveBeenCalled();
+      // 判定役の障害は走行を落とさない（自然遷移で続行して完走する）
+      expect(state.status).toBe('completed');
+      expect(abortFn).not.toHaveBeenCalled();
     });
 
     it('should inherit resolved provider and model from the step that triggered the judge', async () => {
@@ -1016,6 +1019,76 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(state.status).toBe('completed');
       expect(state.iteration).toBe(3);
     });
+  });
+});
+
+// =====================================================
+// 判定役の障害は走行を落とさない（自然遷移で続行）
+// =====================================================
+describe('Judge failure falls back to the natural transition', () => {
+  let tmpDir: string;
+  let engine: WorkflowEngine | null = null;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    tmpDir = createTestTmpDir();
+  });
+
+  afterEach(() => {
+    if (engine) {
+      cleanupWorkflowEngine(engine);
+      engine = null;
+    }
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should continue with the natural next step when the judge agent errors', async () => {
+    const config = buildConfigWithLoopMonitor(2, {
+      judge: {
+        persona: 'supervisor',
+        instruction: 'The loop repeated {cycle_count} times.',
+        rules: [
+          { condition: 'Healthy', next: 'ai_review' },
+          { condition: 'Unproductive', next: 'reviewers' },
+        ],
+      },
+    });
+    engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'implement', content: 'Implementation done' }),
+      makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+      makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+      makeResponse({ persona: 'ai_review', content: 'Issues found: Y' }),
+      makeResponse({ persona: 'ai_fix', content: 'Fixed Y' }),
+      // 判定役がプロバイダエラーで decision を返せない
+      makeResponse({ persona: 'supervisor', content: '', status: 'error', error: 'provider exploded' }),
+      // 自然遷移（ai_fix → ai_review）で続行し、承認 → reviewers → COMPLETE
+      makeResponse({ persona: 'ai_review', content: 'No issues' }),
+      makeResponse({ persona: 'reviewers', content: 'All approved' }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },  // implement → ai_review
+      { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
+      { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review
+      { index: 1, method: 'phase1_tag' },  // ai_review → ai_fix
+      { index: 0, method: 'phase1_tag' },  // ai_fix → ai_review（ここで cycle 検出）
+      // 判定役は error なのでルール照合なし
+      { index: 0, method: 'phase1_tag' },  // ai_review → reviewers（No issues）
+      { index: 0, method: 'phase1_tag' },  // reviewers → COMPLETE
+    ]);
+
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(abortFn).not.toHaveBeenCalled();
   });
 });
 
