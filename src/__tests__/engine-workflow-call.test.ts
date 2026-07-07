@@ -46,7 +46,8 @@ import {
   mockDetectMatchedRuleSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
-import type { AutoRoutingConfig, WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
+import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
@@ -61,30 +62,6 @@ function writeWorkflow(projectDir: string, relativePath: string, content: string
 
 function createParentWorkflow(projectDir: string, raw: Record<string, unknown>) {
   return normalizeWorkflowConfig(raw, projectDir);
-}
-
-function findWorkflowCallStep(
-  workflow: WorkflowConfig,
-  stepName: string,
-  call?: string,
-): WorkflowCallStep {
-  const visit = (steps: readonly WorkflowStep[]): WorkflowCallStep | undefined => {
-    for (const step of steps) {
-      if (step.kind === 'workflow_call' && step.name === stepName && (call === undefined || step.call === call)) {
-        return step;
-      }
-      const nested = visit(step.parallel ?? []);
-      if (nested) {
-        return nested;
-      }
-    }
-    return undefined;
-  };
-  const step = visit(workflow.steps);
-  if (!step) {
-    throw new Error(`workflow_call step "${stepName}" was not found in test workflow "${workflow.name}"`);
-  }
-  return step;
 }
 
 function loadWorkflowOrThrow(identifier: string, projectDir: string, basePath?: string) {

@@ -250,9 +250,9 @@ export async function createWorkflowExecutionBootstrap(
     enabled: isUsageEventsEnabled(globalConfig),
   });
 
-  const analyticsWriterOptions = globalConfig.telemetry?.routingDecisions === false
-    ? undefined
-    : { routingEventsDir: join(projectCwd, '.takt', 'events') };
+  const analyticsWriterOptions = globalConfig.telemetry?.routingDecisions === true
+    ? { routingEventsDir: join(projectCwd, '.takt', 'events') }
+    : undefined;
   initAnalyticsWriter(
     globalConfig.analytics?.enabled === true,
     globalConfig.analytics?.eventsPath ?? join(getGlobalConfigDir(), 'analytics', 'events'),

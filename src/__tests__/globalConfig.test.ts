@@ -557,12 +557,12 @@ logging:
       expect(saved).toContain('workflow_command_gates:');
     });
 
-    it('should default local routing decision recording to enabled when telemetry is omitted', () => {
+    it('should default local routing decision recording to disabled when telemetry is omitted', () => {
       writeFileSync(testConfigPath, 'language: en\n', 'utf-8');
 
       const status = getRoutingTelemetryStatus();
 
-      expect(status.localRecordingEnabled).toBe(true);
+      expect(status.localRecordingEnabled).toBe(false);
     });
 
     it('should load local routing decision recording as disabled from telemetry config', () => {

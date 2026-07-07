@@ -196,6 +196,20 @@ describe('ParallelSubStepRawSchema', () => {
 
     expect(validResult.success).toBe(true);
     expect(invalidResult.success).toBe(false);
+    if (!invalidResult.success) {
+      expect(invalidResult.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: 'invalid_union',
+            errors: expect.arrayContaining([
+              expect.arrayContaining([
+                expect.objectContaining({ path: ['instruction'] }),
+              ]),
+            ]),
+          }),
+        ]),
+      );
+    }
   });
 
   it('should accept rules on sub-steps', () => {

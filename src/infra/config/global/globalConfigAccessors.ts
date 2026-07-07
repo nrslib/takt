@@ -68,7 +68,7 @@ export function getRoutingTelemetryStatus(projectDir?: string): RoutingTelemetry
 
   const config = loadGlobalConfig();
   return {
-    localRecordingEnabled: config.telemetry?.routingDecisions !== false,
+    localRecordingEnabled: config.telemetry?.routingDecisions === true,
   };
 }
 

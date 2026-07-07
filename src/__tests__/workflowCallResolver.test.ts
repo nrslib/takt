@@ -10,7 +10,8 @@ import * as workflowLoader from '../infra/config/loaders/workflowLoader.js';
 import * as workflowResolver from '../infra/config/loaders/workflowResolver.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, resolveWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
-import type { WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type { WorkflowConfig } from '../core/models/index.js';
+import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
 
 describe('workflowCallResolver module boundary', () => {
   let projectDir: string;
@@ -36,30 +37,6 @@ describe('workflowCallResolver module boundary', () => {
         lookupCwd: worktreeDir,
       }),
     });
-  }
-
-  function findWorkflowCallStep(
-    workflow: WorkflowConfig,
-    stepName: string,
-    call?: string,
-  ): WorkflowCallStep {
-    const visit = (steps: readonly WorkflowStep[]): WorkflowCallStep | undefined => {
-      for (const step of steps) {
-        if (step.kind === 'workflow_call' && step.name === stepName && (call === undefined || step.call === call)) {
-          return step;
-        }
-        const nested = visit(step.parallel ?? []);
-        if (nested) {
-          return nested;
-        }
-      }
-      return undefined;
-    };
-    const step = visit(workflow.steps);
-    if (!step) {
-      throw new Error(`workflow_call step "${stepName}" was not found in test workflow "${workflow.name}"`);
-    }
-    return step;
   }
 
   beforeEach(() => {

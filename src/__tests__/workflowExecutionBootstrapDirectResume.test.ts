@@ -687,7 +687,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     );
   });
 
-  it('Given telemetry config is omitted, When bootstrap initializes analytics, Then project .takt/events is passed by default', async () => {
+  it('Given telemetry config is omitted, When bootstrap initializes analytics, Then routing event directory is not passed by default', async () => {
     const projectDir = createTempProject();
     mockResolveWorkflowConfigValues.mockReturnValue({
       provider: 'mock',
@@ -711,11 +711,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       reportDirName: 'routing-telemetry-default',
     });
 
-    expect(initAnalyticsWriter).toHaveBeenCalledWith(
-      false,
-      '/tmp/.takt/analytics/events',
-      { routingEventsDir: join(projectDir, '.takt', 'events') },
-    );
+    const options = vi.mocked(initAnalyticsWriter).mock.calls[0]?.[2];
+    expect(options ?? {}).not.toHaveProperty('routingEventsDir');
   });
 
   it('Given routing telemetry is disabled, When bootstrap initializes analytics, Then routing event directory is not passed', async () => {

@@ -1031,7 +1031,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(routingEvents[0]?.[5]).toBe(2000);
   });
 
-  it('是正コールが blocked を返しても Phase 1 の本文を保持する', async () => {
+  it('should preserve Phase 1 content when the correction call returns blocked', async () => {
     const initialLedger = {
       version: 1,
       workflowName: 'structured-retry-blocked-test',
