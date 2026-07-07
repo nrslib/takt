@@ -73,12 +73,15 @@ export class LoopMonitorJudgeRunner {
     if (response.status !== 'done') {
       // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で
       // 走行本体を落とさない。介入しなかった場合の自然な遷移で続行する。
+      // リセットしないと次のサイクル末尾ステップ完了のたびに壊れた判定役を
+      // 呼び直すため、成功時と同様に検出状態をリセットする。
       log.warn('Loop monitor judge did not produce a decision; continuing with the natural transition', {
         cycle: monitor.cycle,
         status: response.status,
         error: response.error,
         fallbackNextStep,
       });
+      this.deps.resetCycleDetector();
       return fallbackNextStep;
     }
     const nextStep = this.deps.resolveNextStepFromDone(judgeStep, response);

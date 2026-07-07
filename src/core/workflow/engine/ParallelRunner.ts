@@ -286,16 +286,42 @@ export class ParallelRunner {
           error: result.error,
           providerUsage: result.providerUsage,
         }));
-        if (subResponse.status === 'error') {
+        if (subResponse.status === 'error' && subResponse.errorKind !== 'rate_limit') {
           // 並列レビューの1席のプロバイダ障害で走行全体を落とさない。
           // 空転はセッション文脈起因のことが多いため（長文脈での生成品質
           // 崩壊を実測）、再試行は resume を切った新しいセッションで行う。
+          // rate limit は再試行で叩かず既存の rate_limited 経路に委ねる。
           log.warn('Parallel sub-step provider error; retrying once with a fresh session', {
             step: subStep.name,
             error: subResponse.error,
           });
-          const retryOptions = { ...agentOptions, sessionId: undefined };
-          subResponse = await executeAgent(executableSubStep.persona, phase1Instruction, retryOptions);
+          const retryPhaseExecutionId = buildPhaseExecutionId({
+            step: subStep.name,
+            iteration: parentIteration,
+            phase: 1,
+            sequence: 2,
+          });
+          // onPromptResolved は引き継がない（同一 phase:start の二重発火を防ぐ）
+          const retryOptions = { ...agentOptions, sessionId: undefined, onPromptResolved: undefined };
+          subResponse = await runWithPhaseSpan({
+            enabled: this.deps.observabilityEnabled,
+            runId: this.deps.observabilityRunId,
+            workflowName: this.deps.getWorkflowName(),
+            step: executableSubStep,
+            iteration: parentIteration,
+            phase: 1,
+            phaseName: 'execute',
+            instruction: phase1Instruction,
+            phaseExecutionId: retryPhaseExecutionId,
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
+            sanitizeText: this.deps.sanitizeObservabilityText,
+            providerInfo: subPm,
+          }, () => executeAgent(executableSubStep.persona, phase1Instruction, retryOptions), (result) => ({
+            status: result.status,
+            content: result.content,
+            error: result.error,
+            providerUsage: result.providerUsage,
+          }));
         }
         if (findingLedgerCopyPath) {
           const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(executableSubStep, subResponse, runtime);

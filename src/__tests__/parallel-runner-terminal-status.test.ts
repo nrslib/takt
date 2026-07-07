@@ -360,6 +360,29 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toContain('Security reviewer failed after retry.');
   });
 
+  it('does not retry a sub-step whose error is a rate limit', async () => {
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: '429 too many requests',
+      errorKind: 'rate_limit',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+
+    // rate limit は新セッション再試行の対象外（既存の rate_limited 経路に委ねる）
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
+    expect(result.response.status).toBe('error');
+  });
+
   it('redacts sensitive sub-step error details from parent diagnostics', async () => {
     const { runner } = makeRunner();
     const step = makeParallelStep();
