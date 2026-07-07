@@ -705,7 +705,7 @@ describe('exec command setup', () => {
     expect(replan).toMatchObject({ provider: 'claude', model: 'opus' });
   });
 
-  it('should start with stale inherited effort when the configured default model is incompatible', async () => {
+  it('should start with inherited Claude xhigh effort for the configured default model', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: true,
       language: 'en',
@@ -1353,7 +1353,7 @@ describe('exec command setup', () => {
     });
   });
 
-  it('should clear incompatible effort when setup changes Claude models', async () => {
+  it('should keep effort when setup changes Claude models', async () => {
     saveExecPreset('xhigh-team', 'Claude xhigh team', {
       ...DEFAULT_EXEC_CONFIG,
       session: {
@@ -1395,22 +1395,22 @@ describe('exec command setup', () => {
 
     await expect(runExecCommand(projectDir, { preset: 'xhigh-team' })).resolves.toBeUndefined();
 
-    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toBeUndefined();
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4].providerOptions).toEqual({ claude: { effort: 'xhigh' } });
     const workflow = parseYaml(readFileSync(join(projectDir, '.takt', 'exec', 'workflow.yaml'), 'utf-8'));
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(execute.parallel[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
-    expect(execute.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    expect(execute.parallel[0].provider_options?.claude).toMatchObject({ effort: 'xhigh' });
     expect(replan).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
-    expect(replan.provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    expect(replan.provider_options?.claude).toMatchObject({ effort: 'xhigh' });
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.session).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
-    expect(saved.session).not.toHaveProperty('effort');
+    expect(saved.session).toMatchObject({ effort: 'xhigh' });
     expect(saved.workers[0]).toMatchObject({ model: 'claude-sonnet-4-5-20250929' });
-    expect(saved.workers[0]).not.toHaveProperty('effort');
+    expect(saved.workers[0]).toMatchObject({ effort: 'xhigh' });
   });
 
-  it('should clear incompatible effort when setup changes a Claude model back to provider default', async () => {
+  it('should keep effort when setup changes a Claude model back to provider default', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: true,
       language: 'en',
@@ -1440,7 +1440,7 @@ describe('exec command setup', () => {
 
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
     expect(saved.session).not.toHaveProperty('model');
-    expect(saved.session).not.toHaveProperty('effort');
+    expect(saved.session).toMatchObject({ effort: 'xhigh' });
   });
 
   it('should apply assistant effort changes from setup to AI facet calls in the same setup session', async () => {
@@ -2522,7 +2522,7 @@ describe('exec command setup', () => {
     expect(workflow).toContain('threshold: 9');
   });
 
-  it('should clear stale inherited effort from presets loaded in setup before generating workflow', async () => {
+  it('should keep inherited effort from presets loaded in setup before generating workflow', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       enableBuiltinWorkflows: true,
       language: 'en',
@@ -2566,13 +2566,13 @@ describe('exec command setup', () => {
     const execute = workflow.steps.find((step: { name: string }) => step.name === 'execute');
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
-    expect(execute.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
-    expect(judge.parallel[0].provider_options?.claude ?? {}).not.toHaveProperty('effort');
-    expect(replan.provider_options?.claude ?? {}).not.toHaveProperty('effort');
+    expect(execute.parallel[0].provider_options?.claude).toMatchObject({ effort: 'xhigh' });
+    expect(judge.parallel[0].provider_options?.claude).toMatchObject({ effort: 'xhigh' });
+    expect(replan.provider_options?.claude).toMatchObject({ effort: 'xhigh' });
     const saved = parseYaml(readFileSync(join(globalConfigDir, 'exec.yaml'), 'utf-8'));
-    expect(saved.session).not.toHaveProperty('effort');
-    expect(saved.workers[0]).not.toHaveProperty('effort');
-    expect(saved.reviews[0]).not.toHaveProperty('effort');
+    expect(saved.session).toMatchObject({ effort: 'xhigh' });
+    expect(saved.workers[0]).toMatchObject({ effort: 'xhigh' });
+    expect(saved.reviews[0]).toMatchObject({ effort: 'xhigh' });
   });
 
   it('should load the default configuration from setup before generating workflow', async () => {

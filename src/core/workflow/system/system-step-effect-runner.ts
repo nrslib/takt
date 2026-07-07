@@ -8,8 +8,8 @@ function requireString(value: unknown, field: string): string {
 }
 
 function requireNumber(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`System effect requires positive integer field "${field}"`);
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`System effect requires positive safe integer field "${field}"`);
   }
   return value;
 }

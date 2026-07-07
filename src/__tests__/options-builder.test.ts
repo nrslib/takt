@@ -893,6 +893,111 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     });
   });
 
+  it('passes session mcpServers to agent options when provider supports MCP', () => {
+    const step = createStep({ provider: 'claude' });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp' },
+      },
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.mcpServers).toEqual({
+      docs: { type: 'stdio', command: 'docs-mcp' },
+    });
+  });
+
+  it('merges session and step mcpServers when names do not overlap', () => {
+    const step = createStep({
+      provider: 'claude',
+      mcpServers: {
+        playwright: { type: 'stdio', command: 'playwright-mcp' },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp' },
+      },
+    });
+
+    const options = builder.buildAgentOptions(step);
+
+    expect(options.mcpServers).toEqual({
+      docs: { type: 'stdio', command: 'docs-mcp' },
+      playwright: { type: 'stdio', command: 'playwright-mcp' },
+    });
+  });
+
+  it('fails fast when session and step mcpServers use the same name', () => {
+    const step = createStep({
+      provider: 'claude',
+      mcpServers: {
+        docs: { type: 'stdio', command: 'step-docs-mcp' },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      mcpServers: {
+        docs: { type: 'stdio', command: 'session-docs-mcp' },
+      },
+    });
+
+    expect(() => builder.buildAgentOptions(step)).toThrow(
+      /MCP server "docs" is defined by both session and step "reviewers"/,
+    );
+  });
+
+  it('fails fast for session mcpServers when provider does not support MCP', () => {
+    const step = createStep({ provider: 'cursor' });
+    const builder = createBuilder(step, {
+      provider: 'cursor',
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp' },
+      },
+    });
+
+    expect(() => builder.buildAgentOptions(step)).toThrow(
+      /Provider "cursor" does not support session MCP servers for step "reviewers"/,
+    );
+  });
+
+  it('resolves mcpServers for structured team leader planning calls', () => {
+    const step = createStep({
+      provider: 'claude',
+      mcpServers: {
+        playwright: { type: 'stdio', command: 'playwright-mcp' },
+      },
+    });
+    const builder = createBuilder(step, {
+      provider: 'claude',
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp' },
+      },
+    });
+
+    expect(builder.resolveMcpServersForStep(step, 'claude')).toEqual({
+      docs: { type: 'stdio', command: 'docs-mcp' },
+      playwright: { type: 'stdio', command: 'playwright-mcp' },
+    });
+  });
+
+  it('fails fast for structured team leader planning when session mcpServers are unsupported', () => {
+    const step = createStep({ provider: 'cursor' });
+    const builder = createBuilder(step, {
+      provider: 'cursor',
+      mcpServers: {
+        docs: { type: 'stdio', command: 'docs-mcp' },
+      },
+    });
+
+    expect(() => builder.resolveMcpServersForStep(step, 'cursor')).toThrow(
+      /Provider "cursor" does not support session MCP servers for step "reviewers"/,
+    );
+  });
+
   it('fails fast when structured_output is used without a resolved provider', () => {
     const step = createStep({
       structuredOutput: {

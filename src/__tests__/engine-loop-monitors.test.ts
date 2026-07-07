@@ -1018,3 +1018,149 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
     });
   });
 });
+
+// =====================================================
+// for-local-llm 系譜の再計画 judge（family 形状の実行時検証）
+// =====================================================
+describe('Replan-family judge transitions (runtime)', () => {
+  let tmpDir: string;
+  let engine: WorkflowEngine | null = null;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    tmpDir = createTestTmpDir();
+  });
+
+  afterEach(() => {
+    if (engine) {
+      cleanupWorkflowEngine(engine);
+      engine = null;
+    }
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function buildReplanFamilyConfig(): WorkflowConfig {
+    return {
+      name: 'test-replan-family',
+      description: 'family-shaped replan monitor',
+      maxSteps: 40,
+      initialStep: 'plan',
+      loopMonitors: [
+        {
+          cycle: ['plan', 'write_tests', 'implement', 'reviewers', 'fix'],
+          threshold: 2,
+          judge: {
+            persona: 'supervisor',
+            instruction: 'The replan loop repeated {cycle_count} times.',
+            rules: [
+              { condition: 'The latest fix ended with fixes complete', next: 'reviewers' },
+              { condition: 'Healthy replanning', next: 'plan' },
+              { condition: 'Same dead end repeats', next: 'ABORT' },
+            ],
+          },
+        },
+      ],
+      steps: [
+        makeStep('plan', {
+          rules: [makeRule('Planned', 'write_tests'), makeRule('Cannot plan', 'ABORT')],
+        }),
+        makeStep('write_tests', { rules: [makeRule('Tests written', 'implement')] }),
+        makeStep('implement', { rules: [makeRule('Implemented', 'reviewers')] }),
+        makeStep('reviewers', {
+          rules: [makeRule('Issues found', 'fix'), makeRule('All approved', 'COMPLETE')],
+        }),
+        makeStep('fix', {
+          rules: [makeRule('Fixes complete', 'reviewers'), makeRule('Cannot proceed', 'plan')],
+        }),
+      ],
+    };
+  }
+
+  /** 2周分の応答とルール一致を積み、judge の選択だけ差し替える */
+  function primeTwoCycles(judgeMatch: { index: number; method: 'ai_judge_fallback' }, tail: {
+    responses: ReturnType<typeof makeResponse>[];
+    matches: { index: number; method: 'phase1_tag' }[];
+  }): void {
+    const cycleResponses = [
+      makeResponse({ persona: 'plan', content: 'Planned' }),
+      makeResponse({ persona: 'write_tests', content: 'Tests written' }),
+      makeResponse({ persona: 'implement', content: 'Implemented' }),
+      makeResponse({ persona: 'reviewers', content: 'Issues found' }),
+      makeResponse({ persona: 'fix', content: 'Cannot proceed' }),
+    ];
+    mockRunAgentSequence([
+      ...cycleResponses,
+      ...cycleResponses,
+      makeResponse({ persona: 'supervisor', content: 'judged' }),
+      ...tail.responses,
+    ]);
+    const cycleMatches: { index: number; method: 'phase1_tag' }[] = [
+      { index: 0, method: 'phase1_tag' }, // plan → write_tests
+      { index: 0, method: 'phase1_tag' }, // write_tests → implement
+      { index: 0, method: 'phase1_tag' }, // implement → reviewers
+      { index: 0, method: 'phase1_tag' }, // reviewers → fix
+      { index: 1, method: 'phase1_tag' }, // fix → plan（行き詰まり）
+    ];
+    mockDetectMatchedRuleSequence([
+      ...cycleMatches,
+      ...cycleMatches,
+      judgeMatch,
+      ...tail.matches,
+    ]);
+  }
+
+  function collectStepStarts(target: WorkflowEngine): string[] {
+    const names: string[] = [];
+    // judge は合成ステップ（_loop_judge_...）として step:start を発火するため除外
+    target.on('step:start', (step: WorkflowStep) => {
+      if (!step.name.startsWith('_loop_judge')) {
+        names.push(step.name);
+      }
+    });
+    return names;
+  }
+
+  it('should return to reviewers when the judge sees the latest fix as complete', async () => {
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
+    primeTwoCycles({ index: 0, method: 'ai_judge_fallback' }, {
+      responses: [makeResponse({ persona: 'reviewers', content: 'All approved' })],
+      matches: [{ index: 1, method: 'phase1_tag' }],
+    });
+    const steps = collectStepStarts(engine);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(steps[steps.length - 1]).toBe('reviewers');
+  });
+
+  it('should return to plan when the judge sees healthy replanning', async () => {
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
+    primeTwoCycles({ index: 1, method: 'ai_judge_fallback' }, {
+      responses: [makeResponse({ persona: 'plan', content: 'Cannot plan' })],
+      matches: [{ index: 1, method: 'phase1_tag' }],
+    });
+    const steps = collectStepStarts(engine);
+
+    const state = await engine.run();
+
+    // judge → plan に戻り、その plan が計画不能を宣言して中断（planner が打ち切り権を持つ）
+    expect(steps[steps.length - 1]).toBe('plan');
+    expect(state.status).toBe('aborted');
+  });
+
+  it('should abort when the judge sees the same dead end repeating', async () => {
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
+    primeTwoCycles({ index: 2, method: 'ai_judge_fallback' }, { responses: [], matches: [] });
+    const steps = collectStepStarts(engine);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    // judge の後に新しいステップは始まらない
+    expect(steps[steps.length - 1]).toBe('fix');
+  });
+});

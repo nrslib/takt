@@ -4,13 +4,14 @@ import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import { extractBlockedPrompt } from '../../../core/workflow/engine/transitions.js';
 import { CONFIGURED_PROVIDER_OPTION_VALUE } from '../../../core/workflow/providerOptionsRedaction.js';
-import type { ProviderType } from '../../../shared/types/provider.js';
+import type { ProviderType, StreamEvent } from '../../../shared/types/provider.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
 import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
-import type { ExceededInfo, WorkflowExecutionOptions } from './types.js';
+import type { ExceededInfo, WorkflowExecutionEvent, WorkflowExecutionOptions } from './types.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
 import {
   finalizeWorkflowAbort,
@@ -26,6 +27,7 @@ export interface WorkflowExecutionEventState {
   exceededInfo?: ExceededInfo;
   lastStepContent?: string;
   lastStepName?: string;
+  currentStepName?: string;
   lastResumePoint?: WorkflowExecutionOptions['resumePoint'];
   currentIteration: number;
   sessionLog: SessionLog;
@@ -52,6 +54,7 @@ interface WorkflowExecutionEventBridgeDeps {
   sessionLogger: import('./sessionLogger.js').SessionLogger;
   runMetaManager: import('./runMeta.js').RunMetaManager;
   ndjsonLogPath: string;
+  shouldNotifyRateLimit: boolean;
   shouldNotifyWorkflowComplete: boolean;
   shouldNotifyWorkflowAbort: boolean;
   traceDiscovery?: WorkflowTraceDiscovery;
@@ -59,14 +62,175 @@ interface WorkflowExecutionEventBridgeDeps {
   getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined;
   initialResumePoint: WorkflowExecutionOptions['resumePoint'];
   sessionLog: SessionLog;
+  eventSink: WorkflowExecutionOptions['eventSink'];
+  reportDirectory: string;
 }
 
 export interface WorkflowExecutionEventBridge {
   state: WorkflowExecutionEventState;
   syncLatestResumePoint: () => void;
+  emitRunStarted: (event: Extract<WorkflowExecutionEvent, { type: 'run_started' }>) => void;
+  emitWorkflowFailed: (event: Extract<WorkflowExecutionEvent, { type: 'completed' }>) => void;
+  emitProviderOutput: (event: StreamEvent) => void;
+  flushEventSink: () => Promise<void>;
 }
 
 type OutInfo = { info: (line: string) => void };
+function emitWorkflowExecutionEvent(
+  sink: WorkflowExecutionOptions['eventSink'],
+  event: WorkflowExecutionEvent,
+  onFailure: (error: unknown) => void,
+  dispatchState: {
+    current: Promise<void>;
+    hasError: boolean;
+    firstError: unknown;
+  },
+): void {
+  if (!sink) {
+    return;
+  }
+  const dispatch = dispatchState.current.then(() => sink(event)).then(
+    () => undefined,
+    (error) => {
+      if (!dispatchState.hasError) {
+        dispatchState.hasError = true;
+        dispatchState.firstError = error;
+      }
+      onFailure(error);
+    },
+  );
+  dispatchState.current = dispatch;
+}
+
+function getEventSinkErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function createOutputEvents(
+  streamEvent: StreamEvent,
+  step: string | undefined,
+  pendingToolCallIds: string[],
+  pendingPermissionRequestIds: string[],
+): WorkflowExecutionEvent[] {
+  switch (streamEvent.type) {
+    case 'tool_use':
+      pendingToolCallIds.push(streamEvent.data.id);
+      return [{
+        type: 'tool_started',
+        toolCallId: streamEvent.data.id,
+        tool: streamEvent.data.tool,
+        input: streamEvent.data.input,
+        step,
+      }];
+    case 'text':
+      return streamEvent.data.text
+        ? [{ type: 'output', outputType: 'text', message: streamEvent.data.text, step }]
+        : [];
+    case 'thinking':
+      return streamEvent.data.thinking
+        ? [{ type: 'output', outputType: 'thinking', message: streamEvent.data.thinking, step }]
+        : [];
+    case 'tool_output':
+      return streamEvent.data.output
+        ? [{
+            type: 'output',
+            outputType: 'tool_output',
+            message: streamEvent.data.output,
+            step,
+            tool: streamEvent.data.tool,
+          }]
+        : [];
+    case 'tool_result': {
+      const completedToolCallId = pendingToolCallIds.shift();
+      if (!completedToolCallId && !streamEvent.data.content) {
+        return [];
+      }
+      return completedToolCallId
+        ? [{
+            type: 'tool_completed',
+            toolCallId: completedToolCallId,
+            message: streamEvent.data.content,
+            step,
+            isError: streamEvent.data.isError,
+          }]
+        : [{
+            type: 'output',
+            outputType: 'tool_result',
+            message: streamEvent.data.content,
+            step,
+            isError: streamEvent.data.isError,
+          }];
+    }
+    case 'result':
+      return [{
+        type: 'output',
+        outputType: 'result',
+        message: streamEvent.data.error ?? streamEvent.data.result,
+        step,
+        isError: !streamEvent.data.success,
+      }];
+    case 'assistant_error':
+      return [{
+        type: 'output',
+        outputType: 'error',
+        message: streamEvent.data.error,
+        step,
+        isError: true,
+      }];
+    case 'error':
+      return [{
+        type: 'output',
+        outputType: 'error',
+        message: streamEvent.data.message,
+        step,
+        isError: true,
+      }];
+    case 'permission_asked':
+      pendingPermissionRequestIds.push(streamEvent.data.requestId);
+      return [{
+        type: 'confirmation_requested',
+        confirmationId: streamEvent.data.requestId,
+        message: `Permission requested: ${streamEvent.data.permission}`,
+        step,
+      }];
+    case 'permission_summary':
+      if (pendingPermissionRequestIds.length === 0) {
+        return [{
+          type: 'progress',
+          message: `Permission summary: ${streamEvent.data.resolvedPermissions.length} resolved permissions`,
+          step,
+        }];
+      }
+      return pendingPermissionRequestIds.splice(0).map((requestId) => ({
+        type: 'tool_completed',
+        toolCallId: requestId,
+        message: `Permission summary: ${streamEvent.data.resolvedPermissions.length} resolved permissions`,
+        step,
+        isError: false,
+      }));
+    case 'rate_limit': {
+      const message = [
+        `Rate limit ${streamEvent.data.status}`,
+        streamEvent.data.rateLimitType ? `(${streamEvent.data.rateLimitType})` : undefined,
+      ].filter((line): line is string => line !== undefined).join(' ');
+
+      return [
+        {
+          type: 'rate_limited',
+          message,
+          ...(step ? { step } : {}),
+        },
+        {
+          type: streamEvent.data.status === 'rejected' ? 'error' : 'progress',
+          message,
+          step,
+        },
+      ];
+    }
+    default:
+      return [];
+  }
+}
 
 function sourceSuffix(
   path: string,
@@ -140,6 +304,24 @@ export function bindWorkflowExecutionEvents(
     lastResumePoint: deps.initialResumePoint,
     sessionLog: deps.sessionLog,
   };
+  const eventSinkDispatchState = {
+    current: Promise.resolve(),
+    hasError: false,
+    firstError: undefined as unknown,
+  };
+  const pendingToolCallIds: string[] = [];
+  const pendingPermissionRequestIds: string[] = [];
+  let confirmationSequence = 0;
+  const nextConfirmationId = (): string => {
+    confirmationSequence += 1;
+    return `confirmation-${confirmationSequence}`;
+  };
+  const onEventSinkFailure = (error: unknown): void => {
+    if (!state.abortReason) {
+      state.abortReason = `Workflow event sink failed: ${getEventSinkErrorMessage(error)}`;
+    }
+    deps.engine.abort();
+  };
   const stepIterations = new Map<string, number>();
   const syncLatestResumePoint = (): void => {
     if (!canReadResumePoint()) {
@@ -199,8 +381,30 @@ export function bindWorkflowExecutionEvents(
 
   deps.engine.on('step:start', (step, iteration, instruction, providerInfo) => {
     state.currentIteration = iteration;
+    state.currentStepName = step.name;
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateStep(step.name, iteration, state.lastResumePoint);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'step_started',
+        step: step.name,
+        iteration,
+        maxSteps: deps.workflowConfig.maxSteps,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'progress',
+        message: `Starting step "${step.name}" (${iteration}/${deps.workflowConfig.maxSteps})`,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
 
     const stepIteration = (stepIterations.get(step.name) ?? 0) + 1;
     stepIterations.set(step.name, stepIteration);
@@ -253,6 +457,7 @@ export function bindWorkflowExecutionEvents(
     syncLatestResumePoint();
     state.lastStepContent = response.content;
     state.lastStepName = step.name;
+    state.currentStepName = step.name;
 
     if (deps.displayRef.current) {
       deps.displayRef.current.flush();
@@ -271,10 +476,40 @@ export function bindWorkflowExecutionEvents(
 
     if (response.error) {
       deps.out.error(`Error: ${response.error}`);
+      emitWorkflowExecutionEvent(
+        deps.eventSink,
+        {
+          type: 'error',
+          message: response.error,
+          step: step.name,
+        },
+        onEventSinkFailure,
+        eventSinkDispatchState,
+      );
     }
     if (response.sessionId) {
       deps.out.status('Session', response.sessionId);
     }
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'step_completed',
+        step: step.name,
+        status: response.status,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'progress',
+        message: `Completed step "${step.name}" with status ${response.status}`,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
 
     updateUsageForStepCompletion(deps.usageEventLogger, response);
     deps.sessionLogger.onStepComplete(step, response, instruction, deps.getCurrentWorkflowStack());
@@ -288,8 +523,57 @@ export function bindWorkflowExecutionEvents(
     }
     deps.prefixWriter?.flush();
     const message = response.error ?? `Step "${step.name}" hit a rate limit`;
-    playWarningSound();
-    notifyWarning('TAKT', message);
+    if (deps.shouldNotifyRateLimit) {
+      playWarningSound();
+      notifyWarning('TAKT', message);
+    }
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'rate_limited',
+        message,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'error',
+        message,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+
+  deps.engine.on('step:blocked', (step, response) => {
+    const confirmationId = nextConfirmationId();
+    const message = extractBlockedPrompt(response.content);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'blocked',
+        confirmationId,
+        message,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'confirmation_requested',
+        confirmationId,
+        message,
+        step: step.name,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
   });
 
   deps.engine.on('step:report', (_step, filePath, fileName) => {
@@ -326,6 +610,16 @@ export function bindWorkflowExecutionEvents(
       deps.ndjsonLogPath,
       deps.shouldNotifyWorkflowComplete,
       deps.traceDiscovery,
+    );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'completed',
+        success: true,
+        reportDirectory: deps.reportDirectory,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
     );
   });
 
@@ -364,10 +658,59 @@ export function bindWorkflowExecutionEvents(
       deps.shouldNotifyWorkflowAbort,
       deps.traceDiscovery,
     );
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      {
+        type: 'completed',
+        success: false,
+        reportDirectory: deps.reportDirectory,
+        reason,
+      },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
   });
 
   return {
     state,
     syncLatestResumePoint,
+    emitRunStarted(event): void {
+      emitWorkflowExecutionEvent(
+        deps.eventSink,
+        event,
+        onEventSinkFailure,
+        eventSinkDispatchState,
+      );
+    },
+    emitWorkflowFailed(event): void {
+      emitWorkflowExecutionEvent(
+        deps.eventSink,
+        event,
+        onEventSinkFailure,
+        eventSinkDispatchState,
+      );
+    },
+    emitProviderOutput(event: StreamEvent): void {
+      const outputEvents = createOutputEvents(
+        event,
+        state.currentStepName,
+        pendingToolCallIds,
+        pendingPermissionRequestIds,
+      );
+      for (const outputEvent of outputEvents) {
+        emitWorkflowExecutionEvent(
+          deps.eventSink,
+          outputEvent,
+          onEventSinkFailure,
+          eventSinkDispatchState,
+        );
+      }
+    },
+    async flushEventSink(): Promise<void> {
+      await eventSinkDispatchState.current;
+      if (eventSinkDispatchState.hasError) {
+        throw eventSinkDispatchState.firstError;
+      }
+    },
   };
 }

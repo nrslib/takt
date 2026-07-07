@@ -24,6 +24,7 @@ import {
   appendRetryNote,
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
+  resolveSelectedWorkflowOverride,
   selectWorkflowWithOptionalReuse,
   selectRunSessionContext,
 } from './requeueHelpers.js';
@@ -190,7 +191,7 @@ export async function instructBranch(
             undefined,
             executionRetryNote,
             undefined,
-            undefined,
+            resolveSelectedWorkflowOverride(target.data?.workflow, selectedWorkflow),
             taskDir,
           );
         } catch (error) {

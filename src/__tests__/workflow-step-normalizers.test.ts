@@ -29,7 +29,7 @@ describe('workflow step normalizer helpers', () => {
 
   it('normalizes aggregate rules with deterministic guards', () => {
     const normalized = normalizeRule({
-      condition: 'any("needs_fix") && findings.conflicts.count == 0',
+      condition: 'any("needs_fix") && when(findings.conflicts.count == 0)',
       next: 'fix',
     });
 
@@ -53,7 +53,7 @@ describe('workflow step normalizer helpers', () => {
   it('normalizes aggregate arguments with escaped quotes through the rule helper', () => {
     const targetCondition = String.raw`condition == "test\"inner"`;
     const normalized = normalizeRule({
-      condition: String.raw`all("condition == \"test\\\"inner\"") && findings.open.count == 0`,
+      condition: String.raw`all("condition == \"test\\\"inner\"") && when(findings.open.count == 0)`,
       next: 'COMPLETE',
     });
 
@@ -65,7 +65,7 @@ describe('workflow step normalizer helpers', () => {
   it('normalizes unquoted aggregate condition expressions as matched rule text', () => {
     const targetCondition = String.raw`condition == "test\"inner"`;
     const normalized = normalizeRule({
-      condition: String.raw`all(condition == "test\"inner") && findings.open.count == 0`,
+      condition: String.raw`all(condition == "test\"inner") && when(findings.open.count == 0)`,
       next: 'COMPLETE',
     });
 
@@ -77,7 +77,7 @@ describe('workflow step normalizer helpers', () => {
 
   it('normalizes aggregate arguments when an even backslash run closes the quote', () => {
     const normalized = normalizeRule({
-      condition: String.raw`any("path ends with \\") && findings.conflicts.count == 0`,
+      condition: String.raw`any("path ends with \\") && when(findings.conflicts.count == 0)`,
       next: 'fix',
     });
 
@@ -152,5 +152,139 @@ describe('workflow step normalizer helpers', () => {
       sourcePath: join(workflowDir, 'fixtures/input.txt'),
       templatePath: join(workflowDir, 'fixtures/template.md'),
     });
+  });
+});
+
+describe('normalizeRule tag-and-findings compound conditions', () => {
+  it('should split a tag condition with a findings guard', () => {
+    const normalized = normalizeRule({ condition: 'approved && when(findings.open.count == 0)', next: 'COMPLETE' });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('findings.open.count == 0');
+    expect(normalized.isAggregateCondition).toBeUndefined();
+  });
+
+  it('should join multiple findings clauses into one guard', () => {
+    const normalized = normalizeRule({
+      condition: 'approved && when(findings.open.count == 0) && when(findings.conflicts.count == 0)',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('findings.open.count == 0 && findings.conflicts.count == 0');
+  });
+
+  it('should not split pure findings conditions', () => {
+    const normalized = normalizeRule({ condition: 'findings.open.count > 0', next: 'fix' });
+
+    expect(normalized.condition).toBe('findings.open.count > 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should not split plain tag conditions or non-findings compounds', () => {
+    expect(normalizeRule({ condition: 'approved', next: 'COMPLETE' }).guardCondition).toBeUndefined();
+    expect(normalizeRule({ condition: 'approved && rejected', next: 'COMPLETE' }).guardCondition).toBeUndefined();
+  });
+
+  it('should not split compounds whose left side is itself a deterministic condition', () => {
+    // 状態式だけの複合は単一の when() に書く（when(A) && when(B) の連結ではなく）
+    const normalized = normalizeRule({
+      condition: 'when(structured.status == "approved" && findings.open.count == 0)',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('when(structured.status == "approved" && findings.open.count == 0)');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it.each([
+    ['middle', 'approved && && when(findings.open.count == 0)'],
+    ['leading', '&& when(findings.open.count == 0)'],
+    ['trailing', 'approved &&'],
+    ['consecutive', 'approved && && && when(findings.open.count == 0)'],
+  ])('should fail fast on malformed compounds with %s empty clauses', (_label, condition) => {
+    expect(() => normalizeRule({ condition, next: 'COMPLETE' })).toThrow('contains an empty clause');
+  });
+
+  it('should not split prose tags containing && when any clause is not a findings condition', () => {
+    const normalized = normalizeRule({
+      condition: 'レビュー && 承認 && findings.open.count == 0',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.condition).toBe('レビュー && 承認 && findings.open.count == 0');
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+
+  it('should split guards containing top-level-protected && inside exists()', () => {
+    const normalized = normalizeRule({
+      condition: 'approved && when(exists(findings.open.items, item.severity == "high" && item.id == "F-0001"))',
+      next: 'fix',
+    });
+
+    expect(normalized.condition).toBe('approved');
+    expect(normalized.guardCondition).toBe('exists(findings.open.items, item.severity == "high" && item.id == "F-0001")');
+  });
+
+  it('should keep aggregate guard splitting on the aggregate path', () => {
+    const normalized = normalizeRule({
+      condition: 'all("approved") && when(findings.open.count == 0)',
+      next: 'COMPLETE',
+    });
+
+    expect(normalized.isAggregateCondition).toBe(true);
+    expect(normalized.guardCondition).toBeUndefined();
+  });
+});
+
+describe('guarded compound rejection on unsupported paths', () => {
+  it('should reject tag-and-findings compounds on loop monitor judge rules', async () => {
+    const { normalizeLoopMonitors } = await import('../infra/config/loaders/workflowLoopMonitorNormalizer.js');
+
+    expect(() => normalizeLoopMonitors(
+      [
+        {
+          cycle: ['review', 'fix'],
+          threshold: 3,
+          judge: {
+            rules: [
+              { condition: '健全 && when(findings.open.count == 0)', next: 'review' },
+            ],
+          },
+        },
+      ] as Parameters<typeof normalizeLoopMonitors>[0],
+      ...([undefined, undefined, undefined] as unknown as never[]),
+    )).toThrow('loop_monitor judge rule');
+  });
+
+  it('should reject findings guards on workflow_call rules', async () => {
+    const { validateWorkflowCallRulesAgainstChildReturns } = await import('../infra/config/loaders/workflowCallContracts.js');
+
+    expect(() => validateWorkflowCallRulesAgainstChildReturns(
+      {
+        kind: 'workflow_call',
+        name: 'final-gate',
+        call: 'merge-readiness-final-gate',
+        rules: [
+          { condition: 'COMPLETE', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
+        ],
+      } as Parameters<typeof validateWorkflowCallRulesAgainstChildReturns>[0],
+      { name: 'child', maxSteps: 1, initialStep: 'x', steps: [] } as Parameters<typeof validateWorkflowCallRulesAgainstChildReturns>[1],
+    )).toThrow('does not support findings guards');
+  });
+});
+
+describe('reserved syntax fail-fast', () => {
+  it.each([
+    ['malformed ai', 'ai("unclosed'],
+    ['aggregate with trailing garbage', 'all("x") extra'],
+    ['chained when', 'when(findings.open.count == 0) && when(findings.conflicts.count == 0)'],
+  ])('should reject %s instead of degrading to a prose tag', (_label, condition) => {
+    expect(() => normalizeRule({ condition, next: 'COMPLETE' })).toThrow('reserved syntax');
+  });
+
+  it('should keep prose tags mentioning ai casually', () => {
+    const normalized = normalizeRule({ condition: 'aiレビューが完了した', next: 'COMPLETE' });
+    expect(normalized.isAiCondition).toBeUndefined();
   });
 });

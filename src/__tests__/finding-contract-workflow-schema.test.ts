@@ -58,7 +58,7 @@ describe('workflow finding_contract schema', () => {
     });
     expect(workflow.steps[0]?.rules?.[0]).toEqual(
       expect.objectContaining({
-        condition: 'findings.open.count == 0',
+        condition: 'when(findings.open.count == 0)',
         next: 'COMPLETE',
       }),
     );
@@ -168,7 +168,7 @@ describe('workflow finding_contract schema', () => {
             cycle: ['review', 'review'],
             threshold: 2,
             judge: {
-              rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+              rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
             },
           },
         ],
@@ -192,7 +192,7 @@ describe('workflow finding_contract schema', () => {
                 name: 'coding-review',
                 persona: 'reviewer',
                 instruction: 'Review the change.',
-                rules: [{ condition: 'findings.open.count == 0' }],
+                rules: [{ condition: 'when(findings.open.count == 0)' }],
               },
             ],
             rules: [{ condition: 'all(\"approved\")', next: 'COMPLETE' }],
@@ -221,7 +221,7 @@ describe('workflow finding_contract schema', () => {
                 rules: [{ condition: 'approved' }],
               },
             ],
-            rules: [{ condition: 'all("approved") && findings.open.count == 0', next: 'COMPLETE' }],
+            rules: [{ condition: 'all("approved") && when(findings.open.count == 0)', next: 'COMPLETE' }],
           },
         ],
       }, '/tmp/project'),
@@ -252,7 +252,7 @@ describe('workflow finding_contract schema', () => {
               name: 'coding-review',
               persona: 'reviewer',
               instruction: 'Review the change.',
-              rules: [{ condition: 'findings.open.count == 0' }],
+              rules: [{ condition: 'when(findings.open.count == 0)' }],
             },
           ],
           rules: [{ condition: 'all(\"approved\")', next: 'COMPLETE' }],
@@ -262,7 +262,7 @@ describe('workflow finding_contract schema', () => {
 
     expect(workflow.steps[0]?.parallel?.[0]?.rules?.[0]).toEqual(
       expect.objectContaining({
-        condition: 'findings.open.count == 0',
+        condition: 'when(findings.open.count == 0)',
       }),
     );
   });
@@ -294,7 +294,7 @@ describe('workflow finding_contract schema', () => {
               rules: [{ condition: 'approved' }],
             },
           ],
-          rules: [{ condition: 'all("approved") && findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'all("approved") && when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     }, '/tmp/project');
@@ -334,7 +334,7 @@ describe('workflow finding_contract schema', () => {
           cycle: ['review', 'review'],
           threshold: 2,
           judge: {
-            rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
           },
         },
       ],
@@ -342,7 +342,7 @@ describe('workflow finding_contract schema', () => {
 
     expect(workflow.loopMonitors?.[0]?.judge.rules[0]).toEqual(
       expect.objectContaining({
-        condition: 'findings.open.count == 0',
+        condition: 'when(findings.open.count == 0)',
         next: 'COMPLETE',
       }),
     );

@@ -57,6 +57,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     resume_point: task.resume_point,
     source: task.source,
     pr_number: task.pr_number,
+    context_pr_number: task.context_pr_number,
   });
 }
 

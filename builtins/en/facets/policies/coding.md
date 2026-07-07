@@ -459,8 +459,7 @@ async function createUser(data) {
 }
 
 // ✅ Centralized handling at the upper layer
-// Catch collectively at the Controller/Handler layer
-// Or handle via @ControllerAdvice / ErrorBoundary
+// Handle collectively at the boundary exception translation layer
 async function createUser(data) {
   return await userService.create(data)  // Let exceptions propagate up
 }
@@ -471,8 +470,20 @@ async function createUser(data) {
 | Layer | Responsibility |
 |-------|---------------|
 | Domain/Service layer | Throw exceptions on business rule violations |
-| Controller/Handler layer | Catch exceptions and convert to responses |
-| Global handler | Handle common exceptions (NotFound, auth errors, etc.) |
+| Application layer | Do not swallow exceptions; only handle explicit compensation or retry |
+| Adapter boundary | Translate exceptions to protocol-specific responses or presentation |
+| Global handler | Handle only cross-cutting exceptions such as authentication, validation, and common error shapes |
+
+### HTTP Exception Translation
+
+HTTP adapters / controllers / handlers must not translate exceptions into HTTP representation endpoint by endpoint. Translate exceptions into HTTP status codes, response bodies, and headers at an exception translation layer on the HTTP adapter boundary.
+
+| Criteria | Judgment |
+|----------|----------|
+| Each endpoint maps exceptions to HTTP representation through the same try-catch or wrapper | REJECT. Move it to an exception translation layer at the HTTP adapter boundary |
+| API-specific exception mapping is added to a global handler shared by all APIs | REJECT. Keep it inside the target API boundary |
+| Only truly cross-cutting mappings such as authentication, validation, and common error shapes are handled by a global handler | OK |
+| HTTP representation mapping lives in the application or domain layer | REJECT. Keep it at the HTTP adapter boundary |
 
 ## Conversion Placement
 

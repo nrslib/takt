@@ -17,7 +17,7 @@ Procedure:
    - Do not mark a composite requirement as ✅ based on only one side of the cases
    - Do not reinterpret required task items as optional, out of scope, or different requirements without explicit evidence
    - For requirements involving IDs, names, metadata, config, environment variables, or output contracts, verify entry points, execution modes, and missing-value behavior separately
-   - Do not rely on the plan report or pure-review judgment; independently verify mergeability
+   - Do not rely on the plan report or prior review judgments; independently verify maintainability-aware merge quality
    - For requirements involving side effects or state changes, separate verification of happy paths, failure paths, and cleanup
    - If any requirement is unfulfilled, REJECT
 4. Re-evaluate prior review findings
@@ -27,17 +27,22 @@ Procedure:
    - Do not leave `false_positive` / `overreach` reasoning implicit
 5. If the diff adds or changes a shared helper, normalizer, builder, or adapter, reconcile its contract against existing branches with the same responsibility
    - Even when absent from the requirements table, contract inconsistencies introduced by the diff must be treated as unverified scope or a REJECT reason
+6. Check whether prior review prose mentions concerns that were not turned into findings
+   - If they are explicitly classified as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` with evidence, re-evaluate that classification
+   - If a concern has no classification or evidence, record it as an unclassified concern. Make it a REJECT reason only when it is independently confirmed from actual code or execution evidence and affects correctness, contracts, or wiring of the change
+7. Extract diff-introduced contracts that are not visible in the requirements table
+   - Metadata, source, trace, adapters, public tool contracts, and identifiers that are persisted, displayed, or reused must be checked as independent items even when absent from the original requirement
 
 ## Report Priority (supervise-specific)
 
 - Do not treat summary reports as primary evidence. Use execution-result reports, reviewer reports with concrete verification details, and actual code in that order
 - You may treat `Build Results` / `Test Results` sections in execution-result reports as primary evidence
-- For `architecture-review`, `qa-review`, `testing-review`, `security-review`, and `pure-review`, prioritize each report's `Verification Evidence` section
+- For `architecture-review`, `qa-review`, `testing-review`, and `security-review`, prioritize each report's `Verification Evidence` section
 - Treat each `Verification Evidence` item as supporting evidence only when it states the verified target, what was checked, and observed result. If any part is missing, mark that item as `unverified`
 - Evidence based on mocks, static inspection, or limited unit tests must not be treated as verification beyond that scope
 - If items of evidence conflict, prioritize them in this order: `execution-result report > reviewer report with concrete verification details > summary report`
 
 ## Output
 
-- Follow the `supervisor-validation` output contract to record requirements fulfillment, prior finding re-evaluation, verification evidence, and unverified scope
+- Follow the `supervisor-validation` output contract to record requirements fulfillment, prior finding re-evaluation, unclassified concern checks, verification evidence, and unverified scope
 - Only when APPROVE, follow the `summary` output contract to produce the completion summary

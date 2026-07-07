@@ -12,8 +12,14 @@ import type {
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
-import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
-import { isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
+import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+
+function ruleReferencesFindings(rule: { condition: string; aggregateGuardCondition?: string; guardCondition?: string }): boolean {
+  return isFindingsCondition(rule.condition)
+    || (rule.aggregateGuardCondition !== undefined && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
+    || (rule.guardCondition !== undefined && hasUnquotedFindingsReference(rule.guardCondition));
+}
 import { normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
@@ -120,14 +126,14 @@ function validateFindingsRulesRequireContract(
 
   for (const step of steps) {
     for (const rule of step.rules ?? []) {
-      if (rule.isAiCondition || !isFindingsCondition(rule.condition)) {
+      if (rule.isAiCondition || !ruleReferencesFindings(rule)) {
         continue;
       }
       throw new Error(`Configuration error: step "${step.name}" uses findings.* rule but finding_contract is not configured`);
     }
     for (const subStep of step.parallel ?? []) {
       for (const rule of subStep.rules ?? []) {
-        if (rule.isAiCondition || !isFindingsCondition(rule.condition)) {
+        if (rule.isAiCondition || !ruleReferencesFindings(rule)) {
           continue;
         }
         throw new Error(
@@ -139,7 +145,7 @@ function validateFindingsRulesRequireContract(
 
   for (const monitor of loopMonitors ?? []) {
     for (const rule of monitor.judge.rules) {
-      if (!isFindingsCondition(rule.condition)) {
+      if (!ruleReferencesFindings(rule)) {
         continue;
       }
       throw new Error('Configuration error: loop_monitor judge uses findings.* rule but finding_contract is not configured');
@@ -237,7 +243,7 @@ export function normalizeWorkflowConfig(
       judge: monitor.judge,
       triggeringProviderInfo,
     });
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       judgeProviderInfo.provider,
       judgeProviderInfo.model,
       {

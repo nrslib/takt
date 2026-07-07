@@ -6,8 +6,12 @@ import type { Language } from '../../../core/models/index.js';
 import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import type { WorkflowResumePoint } from '../../../core/models/index.js';
-import type { StepProviderInfo, WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
+import type { McpServerConfig, WorkflowResumePoint } from '../../../core/models/index.js';
+import type {
+  AskUserQuestionHandler,
+  StepProviderInfo,
+  WorkflowTraceTaskMetadata,
+} from '../../../core/workflow/types.js';
 import type { ProviderType } from '../../../infra/providers/index.js';
 import type {
   ProviderOptionsOriginResolver,
@@ -26,12 +30,96 @@ export interface ExceededInfo {
   resumePoint?: WorkflowResumePoint;
 }
 
+export type WorkflowExecutionEvent =
+  | {
+      type: 'run_started';
+      runDirectory: string;
+      reportDirectory: string;
+      ndjsonLogPath: string;
+    }
+  | {
+      type: 'step_started';
+      step: string;
+      iteration: number;
+      maxSteps: number | 'infinite';
+    }
+  | {
+      type: 'step_completed';
+      step: string;
+      status: string;
+    }
+  | {
+      type: 'rate_limited';
+      step?: string;
+      message: string;
+    }
+  | {
+      type: 'blocked';
+      step: string;
+      confirmationId: string;
+      message: string;
+    }
+  | {
+      type: 'progress';
+      message: string;
+      step?: string;
+    }
+  | {
+      type: 'output';
+      outputType: 'text' | 'thinking' | 'tool_output' | 'tool_result' | 'result' | 'error';
+      message: string;
+      step?: string;
+      tool?: string;
+      isError?: boolean;
+    }
+  | {
+      type: 'tool_started';
+      toolCallId: string;
+      tool: string;
+      input: Record<string, unknown>;
+      step?: string;
+    }
+  | {
+      type: 'tool_completed';
+      toolCallId: string;
+      message: string;
+      step?: string;
+      isError?: boolean;
+    }
+  | {
+      type: 'confirmation_requested';
+      confirmationId: string;
+      message: string;
+      step?: string;
+    }
+  | {
+      type: 'error';
+      message: string;
+      step?: string;
+    }
+  | {
+      type: 'completed';
+      success: true;
+      reportDirectory?: string;
+    }
+  | {
+      type: 'completed';
+      success: false;
+      reason: string;
+      reportDirectory?: string;
+    };
+
+export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void | Promise<void>;
+
 /** Result of workflow execution */
 export interface WorkflowExecutionResult {
   success: boolean;
   reason?: string;
   lastStep?: string;
   lastMessage?: string;
+  runDirectory?: string;
+  reportDirectory?: string;
+  ndjsonLogPath?: string;
   /** True when iteration limit was hit in non-interactive mode */
   exceeded?: boolean;
   exceededInfo?: ExceededInfo;
@@ -49,6 +137,14 @@ export interface InteractiveMetadata {
 export interface WorkflowExecutionOptions {
   /** Header prefix for display */
   headerPrefix?: string;
+  /** Controls terminal-oriented output side effects. */
+  outputMode?: 'terminal' | 'silent';
+  /** Receives workflow lifecycle events for non-CLI adapters. */
+  eventSink?: WorkflowExecutionEventSink;
+  /** Handles provider AskUserQuestion calls for non-CLI adapters. */
+  onAskUserQuestion?: AskUserQuestionHandler;
+  /** MCP servers supplied by a trusted application adapter for this run. */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Project root directory (where .takt/ lives). */
   projectCwd: string;
   /** Override maxSteps from workflow config (used when resuming exceeded tasks) */
@@ -114,6 +210,12 @@ export interface TaskExecutionOptions {
   modelSource?: ProviderResolutionSource;
 }
 
+export interface TaskExecutionContextOverride {
+  branch?: string;
+  baseBranch?: string;
+  prNumber?: number;
+}
+
 export interface RunAllTasksOptions extends TaskExecutionOptions {
   ignoreExceed?: boolean;
 }
@@ -123,6 +225,7 @@ export interface TaskExecutionParallelOptions {
   taskPrefix?: string;
   taskColorIndex?: number;
   taskDisplayLabel?: string;
+  outputMode?: 'terminal' | 'silent';
 }
 
 export interface ExecuteTaskOptions {
@@ -136,6 +239,14 @@ export interface ExecuteTaskOptions {
   projectCwd: string;
   /** Agent provider/model overrides */
   agentOverrides?: TaskExecutionOptions;
+  /** Controls terminal-oriented output side effects. */
+  outputMode?: 'terminal' | 'silent';
+  /** Receives workflow lifecycle events for non-CLI adapters. */
+  eventSink?: WorkflowExecutionEventSink;
+  /** Handles provider AskUserQuestion calls for non-CLI adapters. */
+  onAskUserQuestion?: AskUserQuestionHandler;
+  /** MCP servers supplied by a trusted application adapter for this run. */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Override maxSteps from workflow config (used when resuming exceeded tasks) */
   maxStepsOverride?: number;
   /** Override initial iteration count (used when resuming exceeded tasks) */

@@ -1243,7 +1243,7 @@ describe('workflow step tags', () => {
 });
 
 describe('provider_routing provider/model validation', () => {
-  it('Given routing layers compose an incompatible provider/model, When validating workflow, Then it fails fast', () => {
+  it('Given routing layers compose a codex provider with arbitrary model, When validating workflow, Then provider decides support', () => {
     expect(() => validateWorkflowConfig({
       name: 'provider-routing-validation',
       initialStep: 'review',
@@ -1262,7 +1262,7 @@ describe('provider_routing provider/model validation', () => {
           'claude-model': { model: 'sonnet' },
         },
       },
-    } as WorkflowEngineOptions)).toThrow(/model 'sonnet' is a Claude model alias but provider is 'codex'/);
+    } as WorkflowEngineOptions)).not.toThrow();
   });
 
   it('Given routing resolves opencode without a model, When validating workflow, Then it fails fast', () => {
@@ -1417,7 +1417,7 @@ describe('provider_routing provider/model validation', () => {
     } as WorkflowEngineOptions)).toThrow(/provider\/model/);
   });
 
-  it('Given parallel sub-step routing composes an incompatible provider/model, When validating workflow, Then it fails fast', () => {
+  it('Given parallel sub-step routing composes a codex provider with arbitrary model, When validating workflow, Then provider decides support', () => {
     expect(() => validateWorkflowConfig({
       name: 'provider-routing-parallel-validation',
       initialStep: 'implement',
@@ -1439,7 +1439,7 @@ describe('provider_routing provider/model validation', () => {
           'implement-api': { provider: 'codex', model: 'sonnet' },
         },
       },
-    } as WorkflowEngineOptions)).toThrow(/model 'sonnet' is a Claude model alias but provider is 'codex'/);
+    } as WorkflowEngineOptions)).not.toThrow();
   });
 
   it('Given parallel sub-step uses opencode with a bare model, When validating workflow, Then it fails fast', () => {

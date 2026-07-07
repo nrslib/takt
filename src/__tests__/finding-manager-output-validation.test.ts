@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
+import { parseRawFindings, parseReviewerRawFindings } from '../core/models/finding-schemas.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -52,11 +53,274 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     reopenedFindings: [],
     conflicts: [],
     resolvedConflicts: [],
+    waivedFindings: [],
+    disputeNotes: [],
     ...overrides,
   };
 }
 
+const CLAIM = '## Disputed Findings\n- findingId: F-0001\n  reason: frozen contract\n  evidence: src/types.ts:94';
+
 describe('validateFindingManagerOutput', () => {
+  it('should accept a waiver backed by a dispute claim in the prior response', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen public contract mandates Record', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('should accept a waiver claimed with a column-zero bare findingId field', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen public contract mandates Record', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        'findingId: F-0001',
+        'reason: frozen contract',
+        'evidence: src/types.ts:94',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('should reject duplicate dispute notes for the same finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        disputeNotes: [
+          { findingId: 'F-0001', reason: 'first note', evidence: 'src/a.ts:1' },
+          { findingId: 'F-0001', reason: 'second note', evidence: 'src/a.ts:2' },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('Duplicate dispute note');
+    }
+  });
+
+  it('should reject a waiver when the prior response contains no claim for the finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: 'All findings fixed.',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when the id appears outside a Disputed Findings block', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: 'F-0001 was fixed in src/types.ts:94. No disputes.',
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when the id only appears inside another finding entry', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        '- findingId: F-0002',
+        '  reason: external constraint',
+        '  evidence: src/b.ts:20',
+        '  note: F-0001 was fixed, not disputed.',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when findingId only appears inside another entry note line', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        '- findingId: F-0002',
+        '  reason: external constraint',
+        '  evidence: src/b.ts:20',
+        '  note: findingId: F-0001 was fixed in src/a.ts:1',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver when a bare findingId appears indented inside a multi-line note', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: [
+        '## Disputed Findings',
+        '- findingId: F-0002',
+        '  reason: external constraint',
+        '  evidence: src/b.ts:20',
+        '  note:',
+        '    findingId: F-0001 was fixed in src/a.ts:1',
+      ].join('\n'),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('no dispute claim');
+    }
+  });
+
+  it('should reject a waiver without file:line evidence', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'because I said so' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('file:line evidence');
+    }
+  });
+
+  it('should reject a dispute note recorded alongside a state transition', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/types.ts:94' }],
+        disputeNotes: [{ findingId: 'F-0001', reason: 'also disputed', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('state transition');
+    }
+  });
+
+  it('should reject waiving a critical finding', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.severity = 'critical';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('critical findings must stay open');
+    }
+  });
+
+  it('should reject waiving a finding that is not open', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'resolved';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it('should reject a waive combined with another decision for the same finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: CLAIM,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('multiple manager decisions');
+    }
+  });
+
+  it('should accept reopening a waived finding', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'waived';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'], evidence: 'premise no longer holds' }],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('should record dispute notes only against open findings', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'resolved';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        disputeNotes: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it('should accept a valid manager output before reconciliation', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
@@ -101,6 +365,8 @@ describe('validateFindingManagerOutput', () => {
       ok: false,
       errors: [
         'Raw finding id "raw-existing" appears in multiple manager decisions: newFindings[0] and resolvedFindings[0]',
+        'Resolved finding "F-0001" references current raw finding "raw-existing" that is not a resolution_confirmation',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
       ],
     });
   });
@@ -146,6 +412,8 @@ describe('validateFindingManagerOutput', () => {
       ok: false,
       errors: [
         'Raw finding id "raw-existing" appears in multiple manager decisions: resolvedFindings[0] and resolvedFindings[1]',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+        'Resolved finding "F-0002" requires at least one current resolution_confirmation raw finding targeting it',
       ],
     });
   });
@@ -241,7 +509,98 @@ describe('validateFindingManagerOutput', () => {
 
     expect(result).toEqual({
       ok: false,
-      errors: ['Resolved finding "F-0001" references raw finding id "raw-other" that does not belong to the finding'],
+      errors: [
+        'Resolved finding "F-0001" references raw finding id "raw-other" that does not belong to the finding',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+      ],
+    });
+  });
+
+  it('should accept a resolution backed by a current resolution_confirmation raw finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+          title: 'Confirmed fixed',
+          description: 'Verified at src/index.ts:42 that the issue is resolved.',
+        }),
+      ],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'Verified at src/index.ts:42.' }],
+      }),
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('should reject a resolution citing a confirmation that targets a different finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0099',
+          title: 'Confirmed fixed',
+          description: 'Verified elsewhere.',
+        }),
+      ],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'Verified.' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Resolution confirmation "raw-confirm" targets "F-0099" but was cited for "F-0001"',
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+      ],
+    });
+  });
+
+  it('should reject a resolution confirmation cited as issue evidence', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+          title: 'Confirmed fixed',
+          description: 'Verified at src/index.ts:42.',
+        }),
+      ],
+      managerOutput: makeManagerOutput({
+        newFindings: [{ rawFindingIds: ['raw-confirm'], title: 'Fake issue', severity: 'high' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Resolution confirmation "raw-confirm" cannot be cited as issue evidence in newFindings[0]',
+      ],
+    });
+  });
+
+  it('should reject a silence-based resolution citing only previous ledger raw findings', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-existing'], evidence: 'No longer reported.' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it',
+      ],
     });
   });
 
@@ -297,5 +656,60 @@ describe('validateFindingManagerOutput', () => {
         'Cannot create a new finding from raw findings with different familyTag values: "bug" and "security" (newFindings[0])',
       ],
     });
+  });
+});
+
+describe('finding-schemas backward compatibility', () => {
+  it('should parse pre-existing raw findings without kind or targetFindingId', () => {
+    const parsed = parseRawFindings([
+      {
+        rawFindingId: 'raw-old',
+        stepName: 'arch-review',
+        reviewer: 'arch-review',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Old entry',
+        description: 'Stored before the kind field existed.',
+      },
+    ]);
+
+    expect(parsed[0]?.kind).toBeUndefined();
+    expect(parsed[0]?.targetFindingId).toBeUndefined();
+  });
+
+  it('should treat empty location and suggestion from structured output as unset', () => {
+    const parsed = parseReviewerRawFindings([
+      {
+        rawFindingId: 'raw-confirm',
+        familyTag: 'bug',
+        severity: 'low',
+        title: 'Confirmed fixed',
+        description: 'Verified at src/index.ts:42.',
+        kind: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        location: '',
+        suggestion: '',
+      },
+    ]);
+
+    expect(parsed[0]?.location).toBeUndefined();
+    expect(parsed[0]?.suggestion).toBeUndefined();
+  });
+
+  it('should treat an empty targetFindingId from structured output as unset', () => {
+    const parsed = parseReviewerRawFindings([
+      {
+        rawFindingId: 'raw-1',
+        familyTag: 'bug',
+        severity: 'low',
+        title: 'Issue entry',
+        description: 'Strict structured output fills every field.',
+        kind: 'issue',
+        targetFindingId: '',
+      },
+    ]);
+
+    expect(parsed[0]?.kind).toBe('issue');
+    expect(parsed[0]?.targetFindingId).toBeUndefined();
   });
 });

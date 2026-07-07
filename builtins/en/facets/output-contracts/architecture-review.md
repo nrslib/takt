@@ -41,11 +41,16 @@ Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non
 - Tests: {Verified target, what was checked, and observed result; or state that it was unverified}
 - Functional check: {Verified target, what was checked, and observed result; or state that it was unverified}
 
+## Re-scan Evidence (required from the second review onward)
+| Policy/Knowledge section checked | Evidence in the diff (`file:line` or "none") |
+|----------------------------------|----------------------------------------------|
+| {section name} | {evidence} |
+
 ## Rejection Gate
 - REJECT is valid only when at least one finding exists in `new`, `persists`, or `reopened`
 - Findings without `finding_id` are invalid
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE → Summary only (5 lines or fewer)
+- APPROVE → Summary + Verification Evidence + Re-scan Evidence (from the second iteration onward). Omit everything else
 - REJECT → Include only relevant finding rows (30 lines or fewer)

@@ -22,6 +22,7 @@ export interface DecomposeTaskOptions {
   onStream?: StreamCallback;
   workflowMeta?: RunAgentOptions['workflowMeta'];
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  mcpServers?: RunAgentOptions['mcpServers'];
   inspectTools?: string[];
   onPromptResolved?: (promptParts: {
     systemPrompt: string;
@@ -56,6 +57,7 @@ export async function decomposeTask(
     resolvedModel: options.resolvedModel,
     resolvedProvider: options.resolvedProvider,
     allowedTools: options.inspectTools ?? [],
+    mcpServers: options.mcpServers,
     permissionMode: 'readonly',
     outputSchema: loadDecompositionSchema(maxTotalParts),
     onStream: options.onStream,
@@ -101,6 +103,7 @@ export async function requestMoreParts(
     resolvedModel: options.resolvedModel,
     resolvedProvider: options.resolvedProvider,
     allowedTools: [],
+    mcpServers: options.mcpServers,
     permissionMode: 'readonly',
     outputSchema: loadMorePartsSchema(maxAdditionalParts),
     onStream: options.onStream,

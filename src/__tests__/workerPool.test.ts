@@ -2,7 +2,7 @@
  * Unit tests for runWithWorkerPool
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TaskInfo } from '../infra/task/index.js';
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -82,6 +82,10 @@ function createMockTaskRunner(taskBatches: TaskInfo[][]) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockExecuteRunTaskAndComplete.mockResolvedValue(true);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('runWithWorkerPool', () => {
@@ -361,6 +365,7 @@ describe('runWithWorkerPool', () => {
 
   describe('polling', () => {
     it('should pick up tasks added during execution via polling', async () => {
+      vi.useFakeTimers();
       // Given: 1 initial task running with concurrency=2, a second task appears via poll
       const task1 = createTask('initial');
       const task2 = createTask('added-later');
@@ -391,9 +396,12 @@ describe('runWithWorkerPool', () => {
       };
 
       // When: pollIntervalMs=30 so polling fires before task1 completes (80ms)
-      const result = await runWithWorkerPool(
+      const resultPromise = runWithWorkerPool(
         runner as never, [task1], 2, '/cwd', undefined, undefined, 30,
       );
+      await vi.advanceTimersByTimeAsync(30);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
 
       // Then: Both tasks were executed
       expect(result).toEqual({ success: 2, fail: 0, executedTaskNames: ['initial', 'added-later'] });

@@ -328,7 +328,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       'Use [Image #1].',
       undefined,
-      undefined,
+      'default',
       '.takt/tasks/done-task',
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
@@ -403,7 +403,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       'Use [Image #2].',
       undefined,
-      undefined,
+      'default',
       '.takt/tasks/done-task',
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
@@ -852,11 +852,69 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       '追加指示A',
       undefined,
-      undefined,
+      'default',
       undefined,
     );
     expect(mockStartReExecution).not.toHaveBeenCalled();
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
+  });
+
+  it('should pass selected workflow when save_task uses a different workflow', async () => {
+    mockConfirm.mockResolvedValue(false);
+    mockSelectWorkflow.mockResolvedValue('selected-workflow');
+    mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
+      handlers.save_task({ task: '追加指示A' }));
+
+    const result = await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done', workflow: 'default' },
+    });
+
+    expect(result).toBe(true);
+    expect(mockRequeueTask).toHaveBeenCalledWith(
+      'done-task',
+      ['completed', 'failed'],
+      undefined,
+      '追加指示A',
+      undefined,
+      'selected-workflow',
+      undefined,
+    );
+  });
+
+  it('should pass undefined workflow override when save_task keeps the same workflow', async () => {
+    mockConfirm.mockResolvedValue(true);
+    mockSelectWorkflow.mockResolvedValue('default');
+    mockDispatchConversationAction.mockImplementation(async (_result, handlers) =>
+      handlers.save_task({ task: '追加指示A' }));
+
+    const result = await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done', workflow: 'default' },
+    });
+
+    expect(result).toBe(true);
+    expect(mockRequeueTask).toHaveBeenCalledWith(
+      'done-task',
+      ['completed', 'failed'],
+      undefined,
+      '追加指示A',
+      undefined,
+      undefined,
+      undefined,
+    );
   });
 
   it('should requeue task with existing retry note appended when save_task', async () => {
@@ -880,7 +938,7 @@ describe('instructBranch direct execution flow', () => {
       undefined,
       '既存ノート\n\n追加指示A',
       undefined,
-      undefined,
+      'default',
       undefined,
     );
   });

@@ -80,6 +80,12 @@ language: ja         # 表示言語: ja | en
 #     review:
 #       provider: opencode
 #       model: opencode/qwen3-coder-next
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
 #     edit:
 #       provider_options:
 #         codex:

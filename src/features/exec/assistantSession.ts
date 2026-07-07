@@ -23,7 +23,7 @@ export interface ExecSessionContext extends SessionContext {
 }
 
 function buildSessionProviderOptions(session: ResolvedExecSessionConfig): StepProviderOptions | undefined {
-  assertExecProviderEffort(session.provider, session.model, session.effort, 'exec.session.effort');
+  assertExecProviderEffort(session.provider, session.effort, 'exec.session.effort');
   if (session.effort === undefined) {
     return undefined;
   }

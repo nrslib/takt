@@ -9,6 +9,7 @@
  */
 
 import type { WorkflowRule, Language } from '../../models/types.js';
+import { isJudgeableRule } from '../evaluation/rule-utils.js';
 
 /** Components of the generated status rules */
 export interface StatusRulesComponents {
@@ -32,10 +33,14 @@ export function generateStatusRulesComponents(
   options?: { interactive?: boolean },
 ): StatusRulesComponents {
   const tag = stepName.toUpperCase();
-  const interactiveEnabled = options?.interactive;
+  // 実行側（RuleEvaluator / judge-utils）と同じ既定: 未指定は非対話として
+  // 扱う。既定が逆だと「表示されるのに採用されない」ルールが生まれる。
+  const interactiveEnabled = options?.interactive === true;
+  // 決定的条件はエンジンが実状態から評価する（モデルに選ばせない）。
+  // 表示から除外しても原 index を保持するため番号はずれない。
   const visibleRules = rules
     .map((rule, index) => ({ rule, index }))
-    .filter(({ rule }) => interactiveEnabled !== false || !rule.interactiveOnly);
+    .filter(({ rule }) => isJudgeableRule(rule, interactiveEnabled));
 
   // Build criteria table rows
   const headerNum = '#';

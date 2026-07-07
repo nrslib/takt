@@ -54,6 +54,12 @@ interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default
 #     review:
 #       provider: opencode
 #       model: opencode/qwen3-coder-next
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
 #     edit:
 #       provider_options:
 #         codex:
@@ -462,6 +468,12 @@ provider_routing:
     review:
       provider: opencode
       model: opencode/qwen3-coder-next
+    final-gate:
+      provider: codex
+      model: gpt-5
+      provider_options:
+        codex:
+          reasoning_effort: high
     edit:
       provider_options:
         codex:
@@ -481,7 +493,7 @@ steps:
     tags: [implementation, edit]
 ```
 
-`provider_routing.personas` uses the raw `persona` key from the workflow step, so `persona_name` is display-only and does not affect routing. `provider_routing.tags` applies entries matching the step's `tags`; when multiple tags match, TAKT applies them in the order written on the step, and later tags override the same provider/model/provider_options leaf. `provider_routing.steps` uses the workflow step `name`.
+`provider_routing.personas` uses the raw `persona` key from the workflow step, so `persona_name` is display-only and does not affect routing. `provider_routing.tags` applies entries matching the step's `tags`; when multiple tags match, TAKT applies them in the order written on the step, and later tags override the same provider/model/provider_options leaf. For example, builtin final-gate steps put `final-gate` after `review`, so you can route ordinary reviewers to OpenCode while overriding only merge-readiness / supervisor to a high-reasoning Codex model. For finer routing, target `merge-readiness` and `supervise` separately. `provider_routing.steps` uses the workflow step `name`.
 
 Each routing entry can include `provider`, `model`, and/or `provider_options`. Those fields are individually optional, but each entry must include at least one of them. Empty `provider_options` objects are rejected.
 

@@ -41,7 +41,10 @@ const WorkflowFacetRefValueSchema = z.union([WorkflowFacetRefScalarSchema, Workf
 const WorkflowFacetRefOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
 const WorkflowFacetRefListOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema, WorkflowParamReferenceRawSchema]);
 
-const WorkflowCallArgsRawSchema = z.record(z.string().min(1), WorkflowFacetRefValueSchema);
+const WorkflowCallArgsRawSchema = z.record(
+  z.string().min(1),
+  z.union([WorkflowFacetRefValueSchema, WorkflowParamReferenceRawSchema]),
+);
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
   extends: z.string().min(1).optional(),

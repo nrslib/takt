@@ -1,0 +1,288 @@
+name: backend-cqrs-for-local-llm
+description: CQRS+ES backend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract build discipline for weak models structurally
+finding_contract:
+  ledger_path: .takt/findings/backend-cqrs-for-local-llm.json
+  raw_findings_path: .takt/findings/backend-cqrs-for-local-llm/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+max_steps: 50
+initial_step: plan
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
+loop_monitors:
+  - cycle:
+      - plan
+      - write_tests
+      - implement
+      - reviewers
+      - fix
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: The latest fix ended with fixes complete (not a dead end)
+          next: reviewers
+        - condition: Healthy (each replan moves the blocker toward resolution)
+          next: plan
+        - condition: Unproductive (the same dead end repeats)
+          next: ABORT
+  - cycle:
+      - reviewers
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: converging (findings decreasing, fixes applied)
+          next: reviewers
+        - condition: unproductive (the same findings repeat), but replanning could break the deadlock
+          next: plan
+        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
+          next: ABORT
+  - cycle:
+      - reviewers
+      - final-gate
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: converging (findings decreasing, fixes applied)
+          next: reviewers
+        - condition: unproductive (the same findings repeat), but replanning could break the deadlock
+          next: plan
+        - condition: unproductive (the same findings repeat), and replanning is unlikely to help
+          next: ABORT
+
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    knowledge:
+      - backend
+      - cqrs-es
+      - architecture
+    provider_options:
+      extends: review-readonly
+    instruction: plan
+    rules:
+      - condition: Task analysis and planning is complete
+        next: write_tests
+      - condition: The user is asking a question (not an implementation task)
+        next: COMPLETE
+      - condition: Requirements are unclear and planning cannot proceed
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
+  - name: write_tests
+    tags:
+      - coding
+      - test-planning
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - backend
+      - cqrs-es
+      - architecture
+      - unit-testing
+      - e2e-testing
+      - implementation-semantics
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: Test creation is complete
+        next: implement
+      - condition: Skipping test creation as target is not yet implemented
+        next: implement
+      - condition: Cannot proceed with test creation
+        next: plan
+      - condition: User input required for clarification
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+
+  - name: implement
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+    knowledge:
+      - backend
+      - cqrs-es
+      - architecture
+      - implementation-semantics
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: implement
+    rules:
+      - condition: Implementation is complete
+        next: reviewers
+      - condition: Cannot proceed with implementation (environment issue or missing information)
+        next: ABORT
+
+  - name: reviewers
+    tags:
+      - review
+    parallel:
+      - name: cqrs-es-review
+        tags:
+          - review
+        edit: false
+        persona: cqrs-es-reviewer
+        policy:
+          - review
+        knowledge:
+          - cqrs-es
+        instruction: review-cqrs-es
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: cqrs-es-review.md
+              format: cqrs-es-review-finding-contract
+
+      - name: ai-antipattern-review
+        tags:
+          - review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - review
+          - ai-antipattern
+        pass_previous_response: false
+        instruction: ai-antipattern-review
+        rules:
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review-finding-contract
+
+      - name: coding-review
+        tags:
+          - review
+        edit: false
+        persona: coding-reviewer
+        policy:
+          - review
+          - coding
+        pass_previous_response: false
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review-finding-contract
+
+      - name: implementation-semantics-review
+        tags:
+          - review
+        edit: false
+        persona: implementation-semantics-reviewer
+        policy:
+          - review
+        knowledge:
+          - implementation-semantics
+        pass_previous_response: false
+        instruction: review-implementation-semantics
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: implementation-semantics-review.md
+              format: implementation-semantics-review-finding-contract
+    rules:
+      - condition: all("approved", "No AI-specific issues", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: final-gate
+      - condition: any("needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
+        next: fix
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+
+  - name: final-gate
+    tags:
+      - review
+      - final-gate
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    pass_previous_response: false
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review-finding-contract
+    rules:
+      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: COMPLETE
+      - condition: needs_fix && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
+        next: fix
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+
+  - name: fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+    knowledge:
+      - backend
+      - cqrs-es
+      - architecture
+      - implementation-semantics
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: fix
+    rules:
+      - condition: Fixes are complete
+        next: reviewers
+      - condition: Cannot proceed with fixes, or human judgment is required
+        next: plan
+        appendix: |
+          The fix attempt is stuck. Read the rejection details and the stated
+          blocker, decompose the work again, and replan. Declare planning
+          impossible only if human judgment is genuinely required, with the
+          reasons stated explicitly.

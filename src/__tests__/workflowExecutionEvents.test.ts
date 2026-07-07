@@ -11,6 +11,8 @@ import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowE
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 
 class TestEngine extends EventEmitter {
+  public abort = vi.fn();
+
   constructor(
     private readonly resumePoint: WorkflowResumePoint,
     private readonly findingIds: string[] = [],
@@ -39,6 +41,8 @@ function createBridgeHarness(options?: {
   resumePoint?: WorkflowResumePoint;
   findingIds?: string[];
   traceDiscovery?: { queries: string[] };
+  eventSink?: ReturnType<typeof vi.fn>;
+  shouldNotifyRateLimit?: boolean;
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 1,
@@ -54,6 +58,7 @@ function createBridgeHarness(options?: {
     error: vi.fn(),
     logLine: vi.fn(),
     success: vi.fn(),
+    warn: vi.fn(),
   };
   const prefixWriter = {
     setStepContext: vi.fn(),
@@ -110,6 +115,7 @@ function createBridgeHarness(options?: {
     } as never,
     runMetaManager: runMetaManager as never,
     ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
+    shouldNotifyRateLimit: options?.shouldNotifyRateLimit ?? false,
     shouldNotifyWorkflowComplete: false,
     shouldNotifyWorkflowAbort: false,
     writeTraceReportOnce: vi.fn(),
@@ -125,6 +131,8 @@ function createBridgeHarness(options?: {
       status: 'running',
       history: [],
     },
+    eventSink: options?.eventSink,
+    reportDirectory: '/tmp/project/run/reports',
   });
 
   return { bridge, engine, out, runMetaManager, resumePoint, analyticsEmitter, usageEventLogger };
@@ -486,5 +494,536 @@ describe('bindWorkflowExecutionEvents', () => {
     } finally {
       resetDebugLogger();
     }
+  });
+
+  it('event sink へ progress、confirmation request、provider output を渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    bridge.emitProviderOutput({ type: 'text', data: { text: 'streamed answer' } });
+    engine.emit('step:blocked', step, {
+      content: '質問: Which file should be updated?',
+      status: 'blocked',
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'step_started',
+      step: 'review',
+      iteration: 1,
+      maxSteps: 5,
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'progress',
+      message: 'Starting step "review" (1/5)',
+      step: 'review',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'output',
+      outputType: 'text',
+      message: 'streamed answer',
+      step: 'review',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'blocked',
+      confirmationId: 'confirmation-1',
+      message: 'Which file should be updated?',
+      step: 'review',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'confirmation_requested',
+      confirmationId: 'confirmation-1',
+      message: 'Which file should be updated?',
+      step: 'review',
+    });
+  });
+
+  it('event sink へ step completed の専用イベントを渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:complete', step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'approved',
+      timestamp: new Date(),
+    }, 'instruction');
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'step_completed',
+      step: 'review',
+      status: 'done',
+    });
+  });
+
+  it('event sink へ rate limited の専用イベントを渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:rate_limited', step, {
+      status: 'rate_limited',
+      content: '',
+      error: 'retry later',
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'rate_limited',
+      step: 'review',
+      message: 'retry later',
+    });
+  });
+
+  it('event sink へ blocked の専用イベントを渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:blocked', step, {
+      content: '質問: Proceed?',
+      status: 'blocked',
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'blocked',
+      step: 'review',
+      confirmationId: 'confirmation-1',
+      message: 'Proceed?',
+    });
+  });
+
+  it('event sink へ run started を共通 bridge 経由で渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge } = createBridgeHarness({ eventSink });
+
+    bridge.emitRunStarted({
+      type: 'run_started',
+      runDirectory: '/tmp/project/run',
+      reportDirectory: '/tmp/project/run/reports',
+      ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'run_started',
+      runDirectory: '/tmp/project/run',
+      reportDirectory: '/tmp/project/run/reports',
+      ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
+    });
+  });
+
+  it('event sink へ provider output の公開種別を渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    bridge.emitProviderOutput({
+      type: 'tool_result',
+      data: { content: 'tool failed', isError: true },
+    });
+    bridge.emitProviderOutput({
+      type: 'result',
+      data: {
+        result: 'provider done',
+        sessionId: 'session-1',
+        success: true,
+      },
+    });
+    bridge.emitProviderOutput({
+      type: 'assistant_error',
+      data: { error: 'assistant crashed', sessionId: 'session-1' },
+    });
+    bridge.emitProviderOutput({
+      type: 'error',
+      data: { message: 'transport failed' },
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'output',
+      outputType: 'tool_result',
+      message: 'tool failed',
+      step: 'review',
+      isError: true,
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'output',
+      outputType: 'result',
+      message: 'provider done',
+      step: 'review',
+      isError: false,
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'output',
+      outputType: 'error',
+      message: 'assistant crashed',
+      step: 'review',
+      isError: true,
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'output',
+      outputType: 'error',
+      message: 'transport failed',
+      step: 'review',
+      isError: true,
+    });
+  });
+
+  it('event sink dispatch を発行順に直列化する', async () => {
+    const delivered: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstDispatched = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const eventSink = vi.fn(async (event: { type: string; message?: string }) => {
+      if (event.message === 'first') {
+        await firstDispatched;
+      }
+      delivered.push(event.message ?? event.type);
+    });
+    const { bridge } = createBridgeHarness({ eventSink });
+
+    bridge.emitProviderOutput({ type: 'text', data: { text: 'first' } });
+    bridge.emitProviderOutput({ type: 'text', data: { text: 'second' } });
+    await Promise.resolve();
+    expect(delivered).toEqual([]);
+
+    releaseFirst?.();
+    await bridge.flushEventSink();
+
+    expect(delivered).toEqual(['first', 'second']);
+  });
+
+  it('同一 step の confirmation request に一意な ID を付ける', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    engine.emit('step:blocked', step, {
+      content: '質問: First question?',
+      status: 'blocked',
+    });
+    engine.emit('step:blocked', step, {
+      content: '質問: Second question?',
+      status: 'blocked',
+    });
+    await bridge.flushEventSink();
+
+    const confirmationEvents = eventSink.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.type === 'confirmation_requested');
+    expect(confirmationEvents.map((event) => event.confirmationId)).toEqual([
+      'confirmation-1',
+      'confirmation-2',
+    ]);
+  });
+
+  it('event sink へ tool use と tool result を構造化して渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    bridge.emitProviderOutput({
+      type: 'tool_use',
+      data: { id: 'tool-1', tool: 'Read', input: { file_path: 'src/index.ts' } },
+    });
+    bridge.emitProviderOutput({
+      type: 'tool_result',
+      data: { content: 'file content', isError: false },
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'tool_started',
+      toolCallId: 'tool-1',
+      tool: 'Read',
+      input: { file_path: 'src/index.ts' },
+      step: 'review',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'tool_completed',
+      toolCallId: 'tool-1',
+      message: 'file content',
+      step: 'review',
+      isError: false,
+    });
+  });
+
+  it('event sink へ複数 tool use の tool result を FIFO で対応づける', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    bridge.emitProviderOutput({
+      type: 'tool_use',
+      data: { id: 'tool-a', tool: 'Read', input: { file_path: 'src/a.ts' } },
+    });
+    bridge.emitProviderOutput({
+      type: 'tool_use',
+      data: { id: 'tool-b', tool: 'Read', input: { file_path: 'src/b.ts' } },
+    });
+    bridge.emitProviderOutput({
+      type: 'tool_result',
+      data: { content: 'content a', isError: false },
+    });
+    bridge.emitProviderOutput({
+      type: 'tool_result',
+      data: { content: 'content b', isError: false },
+    });
+    await bridge.flushEventSink();
+
+    const toolEvents = eventSink.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.type === 'tool_started' || event.type === 'tool_completed');
+
+    expect(toolEvents).toEqual([
+      {
+        type: 'tool_started',
+        toolCallId: 'tool-a',
+        tool: 'Read',
+        input: { file_path: 'src/a.ts' },
+        step: 'review',
+      },
+      {
+        type: 'tool_started',
+        toolCallId: 'tool-b',
+        tool: 'Read',
+        input: { file_path: 'src/b.ts' },
+        step: 'review',
+      },
+      {
+        type: 'tool_completed',
+        toolCallId: 'tool-a',
+        message: 'content a',
+        step: 'review',
+        isError: false,
+      },
+      {
+        type: 'tool_completed',
+        toolCallId: 'tool-b',
+        message: 'content b',
+        step: 'review',
+        isError: false,
+      },
+    ]);
+  });
+
+  it('event sink へ空の tool result でも pending tool call の完了を渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+    bridge.emitProviderOutput({
+      type: 'tool_use',
+      data: { id: 'tool-a', tool: 'Read', input: { file_path: 'src/a.ts' } },
+    });
+    bridge.emitProviderOutput({
+      type: 'tool_use',
+      data: { id: 'tool-b', tool: 'Read', input: { file_path: 'src/b.ts' } },
+    });
+    bridge.emitProviderOutput({
+      type: 'tool_result',
+      data: { content: '', isError: false },
+    });
+    bridge.emitProviderOutput({
+      type: 'tool_result',
+      data: { content: 'content b', isError: false },
+    });
+    await bridge.flushEventSink();
+
+    const toolCompletedEvents = eventSink.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.type === 'tool_completed');
+
+    expect(toolCompletedEvents).toEqual([
+      {
+        type: 'tool_completed',
+        toolCallId: 'tool-a',
+        message: '',
+        step: 'review',
+        isError: false,
+      },
+      {
+        type: 'tool_completed',
+        toolCallId: 'tool-b',
+        message: 'content b',
+        step: 'review',
+        isError: false,
+      },
+    ]);
+  });
+
+  it('event sink へ permission と rate limit stream event を渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine } = createBridgeHarness({ eventSink });
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep;
+
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'opencode', model: 'gpt-test' });
+    bridge.emitProviderOutput({
+      type: 'permission_asked',
+      data: {
+        requestId: 'perm-1',
+        sessionId: 'session-1',
+        permission: 'edit',
+        patterns: ['src/index.ts'],
+        always: [],
+        reply: 'reject',
+      },
+    });
+    bridge.emitProviderOutput({
+      type: 'permission_summary',
+      data: {
+        sessionId: 'session-1',
+        resolvedPermissions: [{ permission: 'edit', pattern: 'src/index.ts', action: 'reject' }],
+      },
+    });
+    bridge.emitProviderOutput({
+      type: 'rate_limit',
+      data: {
+        sessionId: 'session-1',
+        status: 'rejected',
+        rateLimitType: 'requests',
+      },
+    });
+    await bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'confirmation_requested',
+      confirmationId: 'perm-1',
+      message: 'Permission requested: edit',
+      step: 'review',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'tool_completed',
+      toolCallId: 'perm-1',
+      message: 'Permission summary: 1 resolved permissions',
+      step: 'review',
+      isError: false,
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'rate_limited',
+      message: 'Rate limit rejected (requests)',
+      step: 'review',
+    });
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'error',
+      message: 'Rate limit rejected (requests)',
+      step: 'review',
+    });
+  });
+
+  it('event sink へ workflow completed 成功/失敗を渡す', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const successHarness = createBridgeHarness({ eventSink });
+
+    successHarness.engine.emit('workflow:complete', { iteration: 2 });
+    await successHarness.bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'completed',
+      success: true,
+      reportDirectory: '/tmp/project/run/reports',
+    });
+
+    eventSink.mockClear();
+    const failureHarness = createBridgeHarness({ eventSink });
+    failureHarness.engine.emit('workflow:abort', { iteration: 3 }, 'Step "review" failed');
+    await failureHarness.bridge.flushEventSink();
+
+    expect(eventSink).toHaveBeenCalledWith({
+      type: 'completed',
+      success: false,
+      reportDirectory: '/tmp/project/run/reports',
+      reason: 'Step "review" failed',
+    });
+  });
+
+  it('event sink 失敗時は workflow を abort し、flush で伝播する', async () => {
+    const eventSinkError = new Error('session/update failed');
+    const { bridge, engine } = createBridgeHarness({
+      eventSink: vi.fn().mockRejectedValue(eventSinkError),
+    });
+
+    engine.emit('step:start', {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+    } as WorkflowStep, 1, 'instruction', { provider: 'mock', model: 'gpt-test' });
+
+    await expect(bridge.flushEventSink()).rejects.toThrow('session/update failed');
+    expect(engine.abort).toHaveBeenCalled();
+    expect(bridge.state.abortReason).toBe('Workflow event sink failed: session/update failed');
+  });
+
+  it('event sink の同期 throw も workflow を abort し、flush で伝播する', async () => {
+    const eventSinkError = new Error('session/update threw');
+    const { bridge, engine } = createBridgeHarness({
+      eventSink: vi.fn(() => {
+        throw eventSinkError;
+      }),
+    });
+
+    bridge.emitRunStarted({
+      type: 'run_started',
+      runDirectory: '/tmp/project/run',
+      reportDirectory: '/tmp/project/run/reports',
+      ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
+    });
+
+    await expect(bridge.flushEventSink()).rejects.toThrow('session/update threw');
+    expect(engine.abort).toHaveBeenCalled();
+    expect(bridge.state.abortReason).toBe('Workflow event sink failed: session/update threw');
   });
 });

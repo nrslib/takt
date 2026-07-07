@@ -32,6 +32,7 @@ import {
   buildAutoRequeueNote,
   DEPRECATED_PROVIDER_CONFIG_WARNING,
   hasDeprecatedProviderConfig,
+  resolveSelectedWorkflowOverride,
   selectWorkflowWithOptionalReuse,
 } from './requeueHelpers.js';
 import { prepareTaskForExecution } from './prepareTaskForExecution.js';
@@ -219,13 +220,6 @@ function resolveWorktreePath(task: TaskListItem): string {
     throw new Error(`Worktree directory does not exist: ${task.worktreePath}`);
   }
   return task.worktreePath;
-}
-
-function resolveSelectedWorkflowOverride(
-  previousWorkflow: string | undefined,
-  selectedWorkflow: string,
-): string | undefined {
-  return previousWorkflow === selectedWorkflow ? undefined : selectedWorkflow;
 }
 
 function requireFailedTaskFailure(task: TaskListItem): TaskFailure {

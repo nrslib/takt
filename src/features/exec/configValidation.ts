@@ -2,10 +2,8 @@ import {
   CLAUDE_EFFORT_VALUES,
   CODEX_REASONING_EFFORT_VALUES,
   COPILOT_EFFORT_VALUES,
-  type ClaudeEffort,
 } from '../../core/models/workflow-types.js';
-import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
-import { validateProviderModelCompatibility } from '../../core/workflow/provider-model-compatibility.js';
+import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ResolvedExecConfig } from './types.js';
 
@@ -77,7 +75,7 @@ export function assertExecProviderModel(provider: ProviderType, model: string | 
     throw new Error(`Invalid exec config at ${path}: expected non-empty string`);
   }
   try {
-    validateProviderModelCompatibility(provider, model, {
+    validateProviderModelRequirements(provider, model, {
       modelFieldName: `Invalid exec config at ${path}`,
     });
   } catch (error) {
@@ -87,7 +85,6 @@ export function assertExecProviderModel(provider: ProviderType, model: string | 
 
 export function assertExecProviderEffort(
   provider: ProviderType,
-  model: string | undefined,
   effort: ExecEffort | undefined,
   path: string,
 ): void {
@@ -96,9 +93,6 @@ export function assertExecProviderEffort(
   }
   if (!providerSupportsExecEffort(provider, effort)) {
     throw new Error(`Invalid exec config at ${path}: provider "${provider}" does not support effort "${effort}"`);
-  }
-  if (CLAUDE_TOOL_PROVIDERS.has(provider) && model !== undefined) {
-    validateClaudeEffortCompatibility(model, effort as ClaudeEffort);
   }
 }
 
@@ -137,7 +131,7 @@ export function assertExecConfig(config: ExecConfig): void {
   }
   if (config.session.provider !== undefined) {
     assertExecProviderModel(config.session.provider, config.session.model, 'exec.session.model');
-    assertExecProviderEffort(config.session.provider, config.session.model, config.session.effort, 'exec.session.effort');
+    assertExecProviderEffort(config.session.provider, config.session.effort, 'exec.session.effort');
   }
   assertUniqueActorSessionKeys([...config.workers, ...config.reviews]);
   config.workers.forEach((worker, index) => {
@@ -146,7 +140,7 @@ export function assertExecConfig(config: ExecConfig): void {
     }
     if (worker.provider !== undefined) {
       assertExecProviderModel(worker.provider, worker.model, `exec.workers[${index}].model`);
-      assertExecProviderEffort(worker.provider, worker.model, worker.effort, `exec.workers[${index}].effort`);
+      assertExecProviderEffort(worker.provider, worker.effort, `exec.workers[${index}].effort`);
     }
   });
   config.reviews.forEach((review, index) => {
@@ -155,7 +149,7 @@ export function assertExecConfig(config: ExecConfig): void {
     }
     if (review.provider !== undefined) {
       assertExecProviderModel(review.provider, review.model, `exec.reviews[${index}].model`);
-      assertExecProviderEffort(review.provider, review.model, review.effort, `exec.reviews[${index}].effort`);
+      assertExecProviderEffort(review.provider, review.effort, `exec.reviews[${index}].effort`);
     }
   });
 }
@@ -163,16 +157,16 @@ export function assertExecConfig(config: ExecConfig): void {
 export function assertResolvedExecConfig(config: ExecConfig): asserts config is ResolvedExecConfig {
   assertExecProviderConfigured(config.session.provider, 'exec.session.provider');
   assertExecProviderModel(config.session.provider, config.session.model, 'exec.session.model');
-  assertExecProviderEffort(config.session.provider, config.session.model, config.session.effort, 'exec.session.effort');
+  assertExecProviderEffort(config.session.provider, config.session.effort, 'exec.session.effort');
   assertUniqueActorSessionKeys([...config.workers, ...config.reviews]);
   config.workers.forEach((worker, index) => {
     assertExecProviderConfigured(worker.provider, `exec.workers[${index}].provider`);
     assertExecProviderModel(worker.provider, worker.model, `exec.workers[${index}].model`);
-    assertExecProviderEffort(worker.provider, worker.model, worker.effort, `exec.workers[${index}].effort`);
+    assertExecProviderEffort(worker.provider, worker.effort, `exec.workers[${index}].effort`);
   });
   config.reviews.forEach((review, index) => {
     assertExecProviderConfigured(review.provider, `exec.reviews[${index}].provider`);
     assertExecProviderModel(review.provider, review.model, `exec.reviews[${index}].model`);
-    assertExecProviderEffort(review.provider, review.model, review.effort, `exec.reviews[${index}].effort`);
+    assertExecProviderEffort(review.provider, review.effort, `exec.reviews[${index}].effort`);
   });
 }

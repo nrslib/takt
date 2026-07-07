@@ -24,13 +24,12 @@ export function formatProviderModel(provider: ProviderType, model: string | unde
   return `${formattedProvider}/${formattedModel}`;
 }
 
-function canKeepEffortForProviderModel(
+function canKeepEffortForProvider(
   provider: ProviderType,
-  model: string | undefined,
   effort: ExecEffort,
 ): boolean {
   try {
-    assertExecProviderEffort(provider, model, effort, 'exec.effort');
+    assertExecProviderEffort(provider, effort, 'exec.effort');
     return true;
   } catch {
     return false;
@@ -50,7 +49,7 @@ export function resolveEffortAfterProviderModelOverride(
   if (currentProvider === nextProvider && currentModel === nextModel) {
     return effort;
   }
-  return canKeepEffortForProviderModel(nextProvider, nextModel, effort) ? effort : undefined;
+  return canKeepEffortForProvider(nextProvider, effort) ? effort : undefined;
 }
 
 export function resolveModelAfterProviderOverride(
@@ -97,7 +96,7 @@ function applyProviderOverride<T extends { provider?: ProviderType; model?: stri
   } as T;
   if (nextResolvedProviderModel !== undefined) {
     assertExecProviderModel(nextResolvedProviderModel.provider, nextResolvedProviderModel.model, `${errorPath}.model`);
-    assertExecProviderEffort(nextResolvedProviderModel.provider, nextResolvedProviderModel.model, next.effort, `${errorPath}.effort`);
+    assertExecProviderEffort(nextResolvedProviderModel.provider, next.effort, `${errorPath}.effort`);
   }
   return next;
 }

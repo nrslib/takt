@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry } from '../../models/types.js';
+import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
@@ -17,12 +17,14 @@ import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
   resolveMcpServersForProvider,
+  resolveSessionMcpServersForProvider,
   resolvePartAllowedToolsForProvider,
 } from './engine-provider-options.js';
 import {
   providerSupportsMaxTurns,
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -252,6 +254,33 @@ export class OptionsBuilder {
     return providerSupportsMaxTurns(resolvedProvider) === false ? undefined : maxTurns;
   }
 
+  resolveMcpServersForStep(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+  ): Record<string, McpServerConfig> | undefined {
+    const sessionServers = resolveSessionMcpServersForProvider(
+      this.engineOptions.mcpServers,
+      provider,
+      step.name,
+    );
+    const stepServers = resolveMcpServersForProvider(step.mcpServers, provider);
+    if (!sessionServers) {
+      return stepServers;
+    }
+    if (!stepServers) {
+      return sessionServers;
+    }
+    for (const serverName of Object.keys(sessionServers)) {
+      if (Object.prototype.hasOwnProperty.call(stepServers, serverName)) {
+        throw new Error(`MCP server "${serverName}" is defined by both session and step "${step.name}"`);
+      }
+    }
+    return {
+      ...sessionServers,
+      ...stepServers,
+    };
+  }
+
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
@@ -287,7 +316,7 @@ export class OptionsBuilder {
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
       sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, resolvedProvider)) : undefined,
       allowedTools,
-      mcpServers: resolveMcpServersForProvider(step.mcpServers, resolvedProvider),
+      mcpServers: this.resolveMcpServersForStep(step, resolvedProvider),
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
     };
   }

@@ -6,6 +6,51 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.50.0] - 2026-07-06
+
+### Added
+
+- MCP server entrypoint `takt-mcp` (#938, #943). TAKT can now run as a stdio Model Context Protocol server, letting an MCP client (Codex, Claude Code, …) drive TAKT without shelling out to `takt add` / `takt run`. Three tools are exposed: `takt_enqueue_task` (save a pending task to `.takt/tasks.yaml`), `takt_create_issue_and_enqueue_task` (create an issue through the configured issue provider, then enqueue the task with the new issue number), and `takt_run_next_task` (claim and execute the next pending task). Every tool `cwd` is resolved with `realpath` and must stay inside the server's allowed project root. Register it in Codex with `codex mcp add takt -- takt-mcp` or a `[mcp_servers.takt]` block. See the CLI Reference for the full tool schemas.
+- ACP agent entrypoint `takt-acp` (#913, #916). TAKT can now run as an Agent Client Protocol agent over stdio JSON-RPC, launched from an ACP-compatible client. `session/prompt` is enqueue-first by default: prompts such as "enqueue this task" add a pending task (with `worktree: true`) to `.takt/tasks.yaml` for later `takt run`, while explicit "run it now" / "execute now" prompts execute directly. TAKT supports `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/update`; stdio MCP servers passed on `session/new` are forwarded to workflow execution.
+- `for-local-llm` workflow family (#958, #974, #982). Five workflows tuned for local or weaker models — `takt-default-for-local-llm`, `frontend-for-local-llm`, `backend-for-local-llm`, `backend-cqrs-for-local-llm`, and `dual-for-local-llm` — each running four (five for dual) parallel deep reviewers backed by the Finding Contract (ledger, resolution confirmations, dispute adjudication) plus a flat merge-readiness final gate. A new `implementation-semantics` reviewer (persona, knowledge, instruction, and finding-contract output contract) catches behavioral defects that survive compilation. A review-only `peer-review-for-local-llm` workflow ships alongside them.
+- `cli` workflow (#947). A CLI-development workflow: plan → write_tests → draft (implement + AI self-review) → peer-review (parallel reviewers + fix) → supervise → COMPLETE.
+- Finding Contract dispute/waiver lifecycle (#969). A coder that cannot fix a valid finding can now state a dispute under a fixed `## Disputed Findings` heading (finding id / reason / file:line); the findings manager either waives the finding (removing it from the blocking set with a recorded reason and evidence) or rejects the dispute (it stays open and blocking). Gates keep their existing `findings.open.count == 0` condition, so this unblocks runs that previously deadlocked on a valid-but-unfixable finding.
+- `when()` syntax for engine-evaluated conditions (#977). Deterministic state expressions in rule conditions are now declared explicitly with `when(...)`, matching the existing `ai()` / `all()` / `any()` family — e.g. `condition: when(findings.conflicts.count > 0)` or `approved && when(findings.open.count == 0)`. The rule-level `when:` key is sugar that wraps its expression automatically. See the BREAKING note below for custom workflows.
+- Final-gate provider routing tag (#954). Builtin final-gate steps now carry a `final-gate` tag, so `provider_routing.tags.final-gate` can route the merge-readiness gate to a stronger provider/model independently of other review steps.
+- Merge-readiness review gate (#949). Builtin development and maintenance workflows gained a parallel final merge-readiness gate (`merge-readiness-final-gate` / `merge-readiness-dual-final-gate`) that judges only whether the change is ready to merge.
+- OpenCode native `json_schema` structured output (#965), with a one-shot corrective retry when a reviewer emits invalid structured output (#963). OpenCode reviewer steps now request structured output via OpenCode's native `format: json_schema`, which enforces key structure at the source instead of relying on hand-written JSON; when a reviewer still emits invalid JSON, TAKT asks the same session once to re-emit the corrected payload before failing.
+
+### Changed
+
+- **BREAKING:** deterministic rule conditions now require the explicit `when()` wrapper (#977). Bare comparison expressions (e.g. `findings.open.count == 0`) in a rule `condition` are treated as plain prose tag conditions, not engine-evaluated facts, and aggregate guards containing a bare expression fail configuration with a migration hint. This replaces a fragile comparison-operator heuristic that could silently turn prose like `coverage >= 80%` into an unmatchable dead rule. Custom workflows that relied on the old heuristic must wrap deterministic clauses in `when(...)` (or use the `when:` rule key); builtin workflows were migrated.
+- **BREAKING:** the `-with-fc` workflow lineage was removed (#974). `takt-default-with-fc` and `peer-review-with-fc` (added in 0.47.0) are superseded by the new `for-local-llm` family, which is now the Finding Contract lineup. Update any references to the old workflow names.
+- The fixer no longer aborts a run on "cannot proceed" (#986). When the fixer gives up on a blocker, the workflow now routes back to the planner to re-decompose it (the planner seat can be routed to a stronger model) instead of throwing away the whole run. A new replan-cycle loop monitor aborts only when consecutive replans repeat the same dead end, with a handoff summary for the human. Applies to the five development workflows.
+- Codex `approval_policy` is pinned to `never`. Because TAKT runs Codex non-interactively there is no human to approve escalations, so the sandbox mode is now the sole write boundary: `readonly` hard-blocks writes and `edit`/`full` behave as before, instead of Codex's default approval policy auto-approving an escalation past a read-only sandbox.
+- Codex model-capability checks are delegated to the provider (#983).
+
+### Fixed
+
+- OpenCode idle watchdog now fires on stalled sessions (#984). The 10-minute idle watchdog could sleep through a stall because its timer reset on any server-wide event (LSP, file watcher, sibling sessions); the reset is now scoped to the session's own events.
+- OpenCode session is preserved across step phases via per-prompt tool restriction (#948), and out-of-workspace denial is kept effective but non-fatal (#957).
+- OpenCode structured-output recovery: fall back to a formatless retry when native structured output is not produced (#967), recover when the gateway rejects `json_schema`, and treat empty or typo'd raw-finding location/suggestion fields as unset (#962).
+- Finding-contract resolution is reachable and guarded tag rules are supported (#961); dispute guidance is injected only when open findings exist (#973).
+- Cursor CLI config directory is preserved across runs (#960).
+- Symlinked stdio entrypoints are resolved to their real path (#955), so `takt-mcp` / `takt-acp` work when launched via a symlink.
+- Report-phase failures and empty Phase 1 output are now soft errors (#907, #911, #927). A report-generation failure continues to Phase 3 (status judgment) instead of aborting, empty Phase 1 output is detected as an error so later phases do not run on no content, and a report fallback path was added.
+- Isolated clone fetch no longer fails when the parent repo HEAD is on the target branch (#924) — TAKT detaches HEAD before fetching.
+- `bash` tool handling in OpenCode readonly and no-tools phases corrected (#918, #919).
+- `takt list` instruct + requeue flow fixed (#942).
+- Judgment, findings, and OpenCode handling hardened per a full-area audit (#981).
+
+### Internal
+
+- CQRS+ES knowledge and guidance strengthened (#925, #940, #941, #979, #988).
+- Prompt-quality tooling: a promptfoo-based facet quality eval (#946) and a rescan-semantics eval suite for the implementation-semantics reviewer (#951, #952, #959).
+- Reviewers must cite re-scan evidence in review reports (#951), were taught published-state immutability and family-level finding aggregation (#953), and no longer flag guarded Records (#968).
+- Review / write-tests / test-policy facet contracts tightened (#915, #917, #932, #944, #966, #987).
+- Codex: parallelized test gates (#920), MCP task workflow and auto-PR decisions (#972).
+- `when()` helpers tightened per coding standards (#978).
+
 ## [0.49.0] - 2026-06-28
 
 ### Added

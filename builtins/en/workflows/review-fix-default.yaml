@@ -1,5 +1,5 @@
 name: review-fix-default
-description: Multi-perspective review + fix loop (architecture, security, QA, testing, pure review, coding — 6 parallel reviewers with iterative fixes)
+description: Multi-perspective review + fix loop (architecture, security, QA, testing, and coding in parallel, followed by a parallel merge-readiness/supervise final gate)
 workflow_config:
   provider_options:
     codex:
@@ -11,6 +11,7 @@ initial_step: gather
 loop_monitors:
   - cycle:
       - reviewers
+      - final-gate
       - fix
     threshold: 3
     judge:
@@ -20,7 +21,7 @@ loop_monitors:
         - condition: Healthy (progress being made)
           next: reviewers
         - condition: Unproductive (repeated findings, fixes not applied)
-          next: supervise
+          next: final-gate
 
 steps:
   - name: gather
@@ -161,30 +162,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
       - name: coding-review
         tags:
           - review
@@ -213,10 +190,22 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: final-gate
       - condition: any("needs_fix")
         next: fix
 
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+      - condition: need_replan
+        next: fix
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding
@@ -246,63 +235,4 @@ steps:
       - condition: Fixes complete
         next: reviewers
       - condition: Unable to proceed with fixes
-        next: supervise
-
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: supervisor
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    instruction: supervise
-    pass_previous_response: false
-    rules:
-      - condition: All validations complete, ready to merge
-        next: COMPLETE
-      - condition: Issues detected
-        next: fix_supervisor
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false
-
-  - name: fix_supervisor
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - architecture
-      - security
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: fix-supervisor
-    pass_previous_response: false
-    rules:
-      - condition: Fixes for supervisor findings complete
-        next: supervise
-      - condition: Unable to proceed with fixes
-        next: supervise
+        next: final-gate

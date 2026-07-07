@@ -36,6 +36,8 @@ interface RunFindingManagerForParallelStepInput {
   runId: string;
   timestamp: string;
   ledgerCopyPath?: string;
+  /** Response text of the step that ran before the reviewers (usually the coder's fix report, which may contain dispute claims). */
+  priorStepResponseText?: string;
 }
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
@@ -87,11 +89,18 @@ function extractStructuredRawFindings(input: {
 }): RawFinding[] {
   return input.subResults.flatMap((result) => {
     const structuredOutput = result.response.structuredOutput;
+    // raw findings は Finding Contract の契約入力。欠落や不正 shape を
+    // 空扱いすると台帳に指摘が残らず findings.open.count == 0 のゲートが
+    // 誤って通るため、黙って捨てず fail-fast する。
     if (structuredOutput === undefined) {
-      return [];
+      throw new Error(
+        `Finding contract reviewer "${result.subStep.name}" returned no structured output; raw findings are required`,
+      );
     }
     if (!Array.isArray(structuredOutput.rawFindings)) {
-      return [];
+      throw new Error(
+        `Finding contract reviewer "${result.subStep.name}" returned structured output without a rawFindings array`,
+      );
     }
     return parseReviewerRawFindings(structuredOutput.rawFindings).map((rawFinding) => ({
       ...rawFinding,
@@ -148,6 +157,8 @@ function buildManagerInputLedger(ledger: FindingLedger): unknown {
         .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined),
       firstSeen: finding.firstSeen,
       lastSeen: finding.lastSeen,
+      waivers: finding.waivers,
+      disputes: finding.disputes,
     })),
     conflicts: ledger.conflicts.map((conflict) => ({
       id: conflict.id,
@@ -161,12 +172,21 @@ function buildManagerInputLedger(ledger: FindingLedger): unknown {
   };
 }
 
+
+/** 内容中の backtick 連長より長いフェンスで text ブロック化する（フェンス破り注入対策）。 */
+function renderFencedTextBlock(content: string): string {
+  const longestRun = content.match(/`+/g)?.reduce((max, run) => Math.max(max, run.length), 0) ?? 0;
+  const fence = '`'.repeat(Math.max(longestRun + 1, 5));
+  return [`${fence}text`, content, fence].join('\n');
+}
+
 function buildManagerInstruction(input: {
   contract: FindingContractConfig;
   previousLedger: FindingLedger;
   ledgerCopyPath: string;
   rawFindingsPath: string;
   rawFindings: RawFinding[];
+  priorStepResponseText?: string;
 }): string {
   const managerInputLedger = buildManagerInputLedger(input.previousLedger);
   return loadTemplate('finding_manager_instruction', 'en', {
@@ -176,6 +196,7 @@ function buildManagerInstruction(input: {
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),
     rawFindingsPath: input.rawFindingsPath,
     rawFindings: renderFencedJsonBlock(input.rawFindings),
+    coderResponse: renderFencedTextBlock(input.priorStepResponseText ?? '(no prior step response)'),
   });
 }
 
@@ -243,6 +264,7 @@ async function runManagerWithSemanticRetry(input: {
   instruction: string;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  priorStepResponseText?: string;
 }): Promise<ValidatedManagerOutputRun> {
   const firstManagerOutput = await runManagerAttempt({
     managerStep: input.managerStep,
@@ -254,6 +276,7 @@ async function runManagerWithSemanticRetry(input: {
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
     managerOutput: firstManagerOutput,
+    priorStepResponseText: input.priorStepResponseText,
   });
   if (firstValidation.ok) {
     return { managerOutput: firstManagerOutput, validation: firstValidation, invalidAttempts: [] };
@@ -278,6 +301,7 @@ async function runManagerWithSemanticRetry(input: {
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
     managerOutput: retryManagerOutput,
+    priorStepResponseText: input.priorStepResponseText,
   });
 
   return {
@@ -315,6 +339,7 @@ export async function runFindingManagerForParallelStep(
     ledgerCopyPath,
     rawFindingsPath,
     rawFindings,
+    priorStepResponseText: input.priorStepResponseText,
   });
   const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
   const {
@@ -328,6 +353,7 @@ export async function runFindingManagerForParallelStep(
     instruction,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
+    priorStepResponseText: input.priorStepResponseText,
   });
 
   if (!validation.ok) {
@@ -351,6 +377,7 @@ export async function runFindingManagerForParallelStep(
   }
 
   const nextLedger = reconcileFindingLedger({
+    priorStepResponseText: input.priorStepResponseText,
     previousLedger,
     rawFindings,
     managerOutput,

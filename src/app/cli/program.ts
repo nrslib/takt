@@ -5,7 +5,6 @@
  * and sets up the preAction hook for initialization.
  */
 
-import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import { resolve } from 'node:path';
 import {
@@ -16,11 +15,11 @@ import {
 } from '../../infra/config/index.js';
 import { initGitProvider } from '../../infra/git/index.js';
 import { setQuietMode } from '../../shared/context.js';
+import { packageVersion } from '../../shared/package-info.js';
 import { setLogLevel } from '../../shared/ui/index.js';
 import { initDebugLogger, createLogger, setVerboseConsole } from '../../shared/utils/index.js';
 
-const require = createRequire(import.meta.url);
-const { version: cliVersion } = require('../../../package.json') as { version: string };
+const cliVersion = packageVersion;
 
 const log = createLogger('cli');
 

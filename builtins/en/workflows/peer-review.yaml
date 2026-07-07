@@ -1,5 +1,5 @@
 name: peer-review
-description: Six parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop.
+description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) ⇄ fix loop, followed by a parallel merge-readiness/supervise final gate.
 subworkflow:
   callable: true
   visibility: internal
@@ -12,6 +12,12 @@ subworkflow:
       default:
         - architecture
         - takt
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
 workflow_config:
   provider_options:
     codex:
@@ -23,6 +29,7 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
+      - final-gate
       - fix
     threshold: 5
     judge:
@@ -112,22 +119,6 @@ steps:
           report:
             - name: testing-review.md
               format: testing-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          extends: review-readonly
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -167,9 +158,24 @@ steps:
               format: ai-antipattern-review
     rules:
       - condition: all("approved")
-        next: COMPLETE
+        next: final-gate
       - condition: any("needs_fix")
         next: fix
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    args:
+      supervise_knowledge:
+        $param: arch_knowledge
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding
@@ -179,8 +185,7 @@ steps:
       - coding
       - testing
     knowledge:
-      - takt
-      - architecture
+      $param: fix_knowledge
     provider_options:
       extends: edit
     required_permission_mode: edit

@@ -92,7 +92,7 @@ describe('AggregateEvaluator', () => {
       const sub2 = makeSubStep('review-b', [targetCondition]);
       const step = makeParentStep([sub1, sub2], [
         normalizeRule({
-          condition: String.raw`all(condition == "test\"inner") && findings.open.count == 0`,
+          condition: String.raw`all(condition == "test\"inner") && when(findings.open.count == 0)`,
           next: 'COMPLETE',
         }),
       ]);
@@ -382,7 +382,7 @@ describe('AggregateEvaluator', () => {
       const sub2 = makeSubStep('review-b', ['approved', 'needs_fix']);
       const step = makeParentStep([sub1, sub2], [
         {
-          condition: 'any("needs_fix") && findings.conflicts.count == 0',
+          condition: 'any("needs_fix") && when(findings.conflicts.count == 0)',
           isAggregateCondition: true,
           aggregateType: 'any',
           aggregateConditionText: 'needs_fix',
@@ -411,7 +411,7 @@ describe('AggregateEvaluator', () => {
       const sub2 = makeSubStep('review-b', ['approved', 'needs_fix']);
       const step = makeParentStep([sub1, sub2], [
         {
-          condition: 'any("needs_fix") && findings.conflicts.count == 0',
+          condition: 'any("needs_fix") && when(findings.conflicts.count == 0)',
           isAggregateCondition: true,
           aggregateType: 'any',
           aggregateConditionText: 'needs_fix',

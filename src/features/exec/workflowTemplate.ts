@@ -41,11 +41,10 @@ function buildModelEntry(provider: ProviderType, model: string | undefined): { m
 
 function buildProviderOptions(
   provider: ProviderType,
-  model: string | undefined,
   effort: ExecEffort | undefined,
   claudeAllowedTools: string[],
 ): ProviderOptions | undefined {
-  assertExecProviderEffort(provider, model, effort, 'exec provider_options.effort');
+  assertExecProviderEffort(provider, effort, 'exec provider_options.effort');
   if (CLAUDE_TOOL_PROVIDERS.has(provider)) {
     return {
       claude: {
@@ -66,7 +65,6 @@ function buildProviderOptions(
 function buildSessionReviewProviderFields(config: ResolvedExecConfig): Record<string, unknown> {
   const providerOptions = buildProviderOptions(
     config.session.provider,
-    config.session.model,
     config.session.effort,
     REVIEW_CLAUDE_TOOLS,
   );
@@ -82,7 +80,7 @@ export function buildReviewReportName(actorName: string): string {
 }
 
 function buildActorStep(actor: ResolvedExecActorConfig, edit: boolean, claudeAllowedTools: string[]): Record<string, unknown> {
-  const providerOptions = buildProviderOptions(actor.provider, actor.model, actor.effort, claudeAllowedTools);
+  const providerOptions = buildProviderOptions(actor.provider, actor.effort, claudeAllowedTools);
   return {
     name: actor.name,
     session_key: actor.name,

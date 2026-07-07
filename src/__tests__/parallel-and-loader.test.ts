@@ -454,7 +454,11 @@ describe('all()/any() aggregate condition expression parsing', () => {
   });
 
   it('should match aggregate condition with deterministic guard', () => {
-    expect(parseAggregateConditionExpression('all("approved") && findings.open.count == 0')).toEqual({
+    expect(() => parseAggregateConditionExpression('all("approved") && findings.open.count == 0'))
+      .toThrow('must be wrapped in when(...)');
+    expect(() => parseAggregateConditionExpression('all("approved") && && when(findings.open.count == 0)'))
+      .toThrow('contains an empty clause');
+    expect(parseAggregateConditionExpression('all("approved") && when(findings.open.count == 0)')).toEqual({
       type: 'all',
       argsText: '"approved"',
       guardCondition: 'findings.open.count == 0',
@@ -462,7 +466,7 @@ describe('all()/any() aggregate condition expression parsing', () => {
   });
 
   it('should keep escaped quotes inside aggregate arguments when locating the closing parenthesis', () => {
-    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && findings.open.count == 0')).toEqual({
+    expect(parseAggregateConditionExpression('any("approved with \\"quoted ) text\\"") && when(findings.open.count == 0)')).toEqual({
       type: 'any',
       argsText: '"approved with \\"quoted ) text\\""',
       guardCondition: 'findings.open.count == 0',
@@ -470,7 +474,7 @@ describe('all()/any() aggregate condition expression parsing', () => {
   });
 
   it('should treat a quote after an even backslash run as the aggregate argument boundary', () => {
-    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && findings.open.count == 0`)).toEqual({
+    expect(parseAggregateConditionExpression(String.raw`any("path ends with \\") && when(findings.open.count == 0)`)).toEqual({
       type: 'any',
       argsText: String.raw`"path ends with \\"`,
       guardCondition: 'findings.open.count == 0',

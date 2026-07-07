@@ -53,6 +53,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     });
 
     const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
       decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
         options.onPromptResolved?.({
           systemPrompt: 'team-leader-system',
@@ -74,6 +76,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -209,6 +212,200 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     );
   });
 
+  it('passes resolved session and step mcpServers to team leader structured planning calls', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxTotalParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [
+          { id: 'part-1', title: 'API', instruction: 'Implement API' },
+        ];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+    const optionsBuilder = new OptionsBuilder(
+      {
+        projectCwd: '/tmp/project',
+        provider: 'claude',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      () => '/tmp/project',
+      () => '/tmp/project',
+      () => undefined,
+      () => '.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: 'implement' }],
+      () => 'workflow',
+      () => 'test workflow',
+    );
+    const runner = new TeamLeaderRunner({
+      optionsBuilder,
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        provider: 'claude',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      observabilityEnabled: false,
+    });
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      provider: 'claude',
+      mcpServers: {
+        playwright: { type: 'stdio', command: 'playwright-mcp' },
+      },
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 2,
+        maxTotalParts: 2,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    const expectedMcpServers = {
+      docs: { type: 'stdio', command: 'docs-mcp' },
+      playwright: { type: 'stdio', command: 'playwright-mcp' },
+    };
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    const [, , , , requestOptions] = structuredCaller.requestMoreParts.mock.calls[0] ?? [];
+    expect(decomposeOptions.mcpServers).toEqual(expectedMcpServers);
+    expect(requestOptions.mcpServers).toEqual(expectedMcpServers);
+  });
+
+  it('fails before team leader decomposition when session mcpServers are unsupported', async () => {
+    const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn(),
+      requestMoreParts: vi.fn(),
+    };
+    const optionsBuilder = new OptionsBuilder(
+      {
+        projectCwd: '/tmp/project',
+        provider: 'cursor',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      () => '/tmp/project',
+      () => '/tmp/project',
+      () => undefined,
+      () => '.takt/runs/sample/reports',
+      () => 'ja',
+      () => [{ name: 'implement' }],
+      () => 'workflow',
+      () => 'test workflow',
+    );
+    const runner = new TeamLeaderRunner({
+      optionsBuilder,
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd: '/tmp/project',
+        provider: 'cursor',
+        mcpServers: {
+          docs: { type: 'stdio', command: 'docs-mcp' },
+        },
+        structuredCaller,
+      },
+      getCwd: () => '/tmp/project',
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      observabilityEnabled: false,
+    });
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Task: {task}',
+      passPreviousResponse: true,
+      provider: 'cursor',
+      teamLeader: {
+        persona: 'team-leader',
+        maxConcurrency: 1,
+        maxTotalParts: 1,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+    const state: WorkflowState = {
+      workflowName: 'workflow',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await expect(runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn()))
+      .rejects.toThrow(/Provider "cursor" does not support session MCP servers for step "implement"/);
+    expect(structuredCaller.decomposeTask).not.toHaveBeenCalled();
+  });
+
   it('should keep an existing team leader part session when the response omits sessionId', async () => {
     mockExecuteAgent.mockResolvedValue({
       persona: 'coder',
@@ -316,6 +513,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -451,6 +649,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           },
         }),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -686,6 +885,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -831,6 +1031,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -944,6 +1145,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -1056,6 +1258,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -1162,6 +1365,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -1261,6 +1465,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -1368,6 +1573,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildAgentOptions,
         buildBaseOptions: vi.fn().mockReturnValue({}),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
         resolveStepProviderModel,
       },
       stepExecutor: {
@@ -1457,6 +1663,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
           buildBaseOptions: vi.fn().mockReturnValue({}),
           buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
           resolveStepProviderModel: vi.fn().mockReturnValue({
             provider: 'claude',
             model: 'opus',
@@ -1628,6 +1835,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project', language: 'en' }),
           buildBaseOptions: vi.fn().mockReturnValue({}),
           buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+          resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
           resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'model' }),
         },
         stepExecutor: {

@@ -69,8 +69,10 @@ function makeContext(state: WorkflowState): RuleEvaluatorContext {
 
 describe('RuleEvaluator findings conditions', () => {
   it('should classify findings references as deterministic conditions', () => {
-    expect(isDeterministicCondition('findings.open.count == 0')).toBe(true);
-    expect(isDeterministicCondition('findings.open.bySeverity.high > 0')).toBe(true);
+    expect(isDeterministicCondition('when(findings.open.count == 0)')).toBe(true);
+    expect(isDeterministicCondition('when(findings.open.bySeverity.high > 0)')).toBe(true);
+    // when() で包まない裸の式は決定的扱いしない（散文タグとして扱う）
+    expect(isDeterministicCondition('findings.open.count == 0')).toBe(false);
   });
 
   it('should evaluate finding count and severity without AI judge', async () => {
@@ -89,8 +91,8 @@ describe('RuleEvaluator findings conditions', () => {
     const step = makeStep({
       name: 'peer-review',
       rules: [
-        { condition: 'findings.open.count == 0', next: 'COMPLETE' },
-        { condition: 'findings.open.bySeverity.high > 0', next: 'fix' },
+        { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
+        { condition: 'when(findings.open.bySeverity.high > 0)', next: 'fix' },
       ],
     });
     const ctx = makeContext(state);
@@ -114,7 +116,7 @@ describe('RuleEvaluator findings conditions', () => {
     const step = makeStep({
       name: 'peer-review',
       rules: [
-        { condition: 'exists(findings.open.items, item.severity == "high" && item.id == "F-0001")', next: 'fix' },
+        { condition: 'when(exists(findings.open.items, item.severity == "high" && item.id == "F-0001"))', next: 'fix' },
       ],
     });
 
@@ -140,7 +142,7 @@ describe('RuleEvaluator findings conditions', () => {
             status: 'active',
             findingIds: ['F-0001'],
             rawFindingIds: ['raw-security-review-1'],
-            description: 'Security and pure review disagree about resolution.',
+            description: 'Security and merge-readiness review disagree about resolution.',
           },
         ],
       },
@@ -148,13 +150,13 @@ describe('RuleEvaluator findings conditions', () => {
     const step = makeStep({
       name: 'peer-review',
       rules: [
-        { condition: 'findings.open.count == 0 && findings.conflicts.count == 0', next: 'COMPLETE' },
-        { condition: 'findings.conflicts.count == 0 && findings.open.count > 0', next: 'fix' },
+        { condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0)', next: 'COMPLETE' },
+        { condition: 'when(findings.conflicts.count == 0 && findings.open.count > 0)', next: 'fix' },
         makeRule('ai("adjudicate active findings conflicts")', 'fix', {
           isAiCondition: true,
           aiConditionText: 'adjudicate active findings conflicts',
         }),
-        { condition: 'findings.conflicts.count > 0', return: 'need_replan' },
+        { condition: 'when(findings.conflicts.count > 0)', return: 'need_replan' },
       ],
     });
     const ctx = makeContext(state);
@@ -223,7 +225,7 @@ describe('RuleEvaluator findings conditions', () => {
   it('should fail fast when findings state is absent for a findings rule', async () => {
     const step = makeStep({
       name: 'peer-review',
-      rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+      rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
     });
 
     await expect(new RuleEvaluator(step, makeContext(makeState())).evaluate('', '')).rejects.toThrow(
@@ -278,5 +280,57 @@ describe('RuleEvaluator findings conditions', () => {
 
     expect(result).toEqual({ index: 0, method: 'ai_judge' });
     expect(evaluateCondition).toHaveBeenCalledOnce();
+  });
+});
+
+describe('RuleEvaluator guarded tag rules', () => {
+  const openFindings = {
+    open: {
+      count: 1,
+      bySeverity: { high: 1 },
+      items: [{ id: 'F-0001', severity: 'high', title: 'Blocks release' }],
+    },
+    resolved: { count: 0 },
+    conflicts: { count: 0, items: [] },
+  };
+  const noFindings = {
+    open: { count: 0, bySeverity: {}, items: [] },
+    resolved: { count: 1 },
+    conflicts: { count: 0, items: [] },
+  };
+
+  it('should accept a tag-matched rule when its findings guard holds', async () => {
+    const state = makeState(noFindings);
+    const step = makeStep({
+      name: 'final-gate',
+      rules: [
+        { condition: 'approved', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
+        { condition: 'needs_fix', next: 'fix' },
+      ],
+    });
+    const ctx = makeContext(state);
+    ctx.detectRuleIndex = vi.fn().mockReturnValue(0);
+
+    const result = await new RuleEvaluator(step, ctx).evaluate('', '[FINAL-GATE:1]');
+
+    expect(result).toEqual({ index: 0, method: 'phase3_tag' });
+  });
+
+  it('should skip a tag-matched rule whose findings guard fails and fall through to deterministic rules', async () => {
+    const state = makeState(openFindings);
+    const step = makeStep({
+      name: 'final-gate',
+      rules: [
+        { condition: 'approved', guardCondition: 'findings.open.count == 0', next: 'COMPLETE' },
+        { condition: 'when(findings.open.count > 0)', next: 'fix' },
+      ],
+    });
+    const ctx = makeContext(state);
+    ctx.detectRuleIndex = vi.fn().mockReturnValue(0);
+
+    const result = await new RuleEvaluator(step, ctx).evaluate('', '[FINAL-GATE:1]');
+
+    expect(result).toEqual({ index: 1, method: 'auto_select' });
+    expect(ctx.structuredCaller.evaluateCondition).not.toHaveBeenCalled();
   });
 });

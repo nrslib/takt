@@ -20,8 +20,7 @@ jobs:
       (
         github.event.comment.body == '/review' ||
         startsWith(github.event.comment.body, '/review ') ||
-        startsWith(github.event.comment.body, '/review
-')
+        startsWith(github.event.comment.body, format('/review{0}', fromJSON('"\n"')))
       ) &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     concurrency:

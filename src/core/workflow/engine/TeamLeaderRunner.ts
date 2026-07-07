@@ -101,6 +101,7 @@ export class TeamLeaderRunner {
       leaderBaseOptions.workflowMeta,
     );
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
+    const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
     let didEmitPhaseStart = false;
@@ -141,6 +142,7 @@ export class TeamLeaderRunner {
         resolvedProvider: leaderProvider,
         language: this.deps.engineOptions.language,
         inspectTools,
+        mcpServers: leaderMcpServers,
         workflowMeta: leaderWorkflowMeta,
         childProcessEnv: this.deps.engineOptions.childProcessEnv,
         onStream: this.deps.engineOptions.onStream,
@@ -259,6 +261,7 @@ export class TeamLeaderRunner {
               provider: leaderProvider,
               resolvedModel: leaderModel,
               resolvedProvider: leaderProvider,
+              mcpServers: leaderMcpServers,
               workflowMeta: leaderWorkflowMeta,
               childProcessEnv: this.deps.engineOptions.childProcessEnv,
               onStream: this.deps.engineOptions.onStream,

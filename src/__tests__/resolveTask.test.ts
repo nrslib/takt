@@ -747,6 +747,91 @@ describe('resolveTaskExecution', () => {
     mockResolveBaseBranch.mockRestore();
   });
 
+  it('should prefer runtime task context over saved branch metadata', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task with runtime context',
+        worktree: true,
+        branch: 'feature/saved-branch',
+        base_branch: 'release/saved-base',
+        source: 'pr_review',
+        pr_number: 100,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath: undefined,
+      status: 'pending',
+    });
+
+    const mockResolveBaseBranch = vi.spyOn(infraTask, 'resolveBaseBranch').mockReturnValue({
+      branch: 'main',
+    });
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/shared-clone',
+      branch: 'takt/938/add-mcp',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'takt/938/add-mcp',
+        baseBranch: 'main',
+        prNumber: 938,
+      },
+    });
+
+    expect(mockResolveBaseBranch).toHaveBeenCalledWith(root, 'main');
+    expect(mockCreateSharedClone).toHaveBeenCalledWith(
+      root,
+      expect.objectContaining({
+        worktree: true,
+        branch: 'takt/938/add-mcp',
+        baseBranch: 'main',
+      }),
+      undefined,
+    );
+    expect(result.branch).toBe('takt/938/add-mcp');
+    expect(result.baseBranch).toBe('main');
+    expect(result.prNumber).toBe(938);
+
+    mockCreateSharedClone.mockRestore();
+    mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should resolve saved context_pr_number as runtime PR context when no override is provided', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved PR context',
+        workflow: 'default',
+        context_pr_number: 938,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      status: 'pending',
+    });
+
+    const result = await resolveTaskExecution(task, root);
+
+    expect(result.prNumber).toBe(938);
+  });
+
+  it('should prefer runtime prNumber over saved context_pr_number', async () => {
+    const root = createTempProjectDir();
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved and runtime PR context',
+        workflow: 'default',
+        context_pr_number: 100,
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      status: 'pending',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        prNumber: 938,
+      },
+    });
+
+    expect(result.prNumber).toBe(938);
+  });
+
   it('should forward abortSignal to shared clone creation', async () => {
     const root = createTempProjectDir();
     const task = createTask({
@@ -898,6 +983,149 @@ describe('resolveTaskExecution', () => {
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
+  });
+
+  it('should allow runtime branch override when reused worktree metadata has no saved branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with reused worktree and runtime branch',
+        worktree: true,
+        base_branch: 'release/main',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'takt/938/add-mcp',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'takt/938/add-mcp',
+      },
+    });
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.isWorktree).toBe(true);
+    expect(result.branch).toBeUndefined();
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should reject runtime branch override that conflicts with a reused worktree branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved worktree branch',
+        worktree: true,
+        branch: 'feature/saved-branch',
+        base_branch: 'release/main',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'takt/938/add-mcp',
+    });
+
+    await expect(resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'takt/938/add-mcp',
+      },
+    })).rejects.toThrow(
+      `Task "task-name" has existing worktree ${worktreePath} for branch "feature/saved-branch", but runtime taskContext.branch is "takt/938/add-mcp".`,
+    );
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should reject runtime baseBranch override that conflicts with reused worktree metadata', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with saved worktree base branch',
+        worktree: true,
+        branch: 'feature/saved-branch',
+        base_branch: 'release/main',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'feature/saved-branch',
+    });
+
+    await expect(resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'main',
+      },
+    })).rejects.toThrow(
+      `Task "task-name" has existing worktree ${worktreePath} with base_branch "release/main", but runtime taskContext.baseBranch is "main".`,
+    );
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should allow runtime baseBranch override when reused worktree metadata has no saved base_branch', async () => {
+    const root = createTempProjectDir();
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+
+    const task = createTask({
+      data: ({
+        task: 'Run task with unsaved worktree base branch',
+        worktree: true,
+        branch: 'feature/saved-branch',
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const mockCreateSharedClone = vi.spyOn(infraTask, 'createSharedCloneAbortable').mockResolvedValue({
+      path: '/tmp/new-clone',
+      branch: 'feature/saved-branch',
+    });
+
+    const result = await resolveTaskExecution(task, root, undefined, {
+      taskContext: {
+        branch: 'feature/saved-branch',
+        baseBranch: 'main',
+      },
+    });
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.baseBranch).toBe('main');
+    expect(mockCreateSharedClone).not.toHaveBeenCalled();
+
+    mockCreateSharedClone.mockRestore();
+    branchExistsSpy.mockRestore();
   });
 
   it('should prefer base_branch over legacy baseBranch when reusing an existing worktree path', async () => {

@@ -106,6 +106,17 @@ Prohibited patterns:
 - Error handling centralized (no try-catch scattered everywhere)
 - Business logic not leaking into Controller/View
 
+**Exception Translation at Protocol Boundaries:**
+
+Adapters such as HTTP, CLI, GraphQL, and message consumers are boundaries that translate internal exceptions into external protocol representations. Scattering the same try-catch / response translation across endpoints or handlers easily makes status codes, error shapes, logs, and authorization failures inconsistent. Centralize exception translation in a dedicated layer at the adapter boundary, and keep only truly cross-cutting translations in a global handler.
+
+| Criteria | Judgment |
+|----------|----------|
+| Each endpoint / handler implements the same translation from the same exception to the same protocol representation | REJECT |
+| Translation to protocol representation lives in the application or domain layer | REJECT |
+| API-specific exception translation is placed in a global handler shared by all APIs | REJECT |
+| Translation to external representation is centralized in an exception translation layer at the adapter boundary | OK |
+
 ## Resolve at the Boundary
 
 Values such as config, options, providers, permissions, and paths should be resolved at the boundary before entering the core flow. Main processing should assume values are already resolved and should not keep asking config sources.
@@ -537,6 +548,31 @@ Verification steps:
 1. When finding defensive branches (TTY check, null guard, etc.), check all callers
 2. If all callers already guarantee the condition, guard is unnecessary → REJECT
 3. If some callers don't guarantee it, keep the guard
+
+## Immutability of Published State
+
+Verify that shared state a module publishes (initial-state constants, singletons, configuration objects) cannot be mutated by consumers. Mutable shared state silently propagates a single write to every usage site.
+
+| Criterion | Verdict |
+|-----------|---------|
+| A published initial-state constant (e.g. initialState) is not frozen and consumers can mutate it | REJECT |
+| Mutable objects nested inside a published constant (arrays, Records, Maps) are exposed raw | REJECT |
+| A store or read model returns references to its internal state as-is | REJECT |
+| Protected via recursive deep freeze (`Object.freeze` alone is shallow and does not protect nested mutable objects or `Map`/`Set`), factory functions, or defensive copies | OK |
+| Only `Readonly` type annotations, or a shallow freeze that leaves nested objects raw | REJECT (static or shallow guards do not prevent runtime mutation) |
+
+```typescript
+// REJECT - mutable published initial state; one consumer write poisons every replay
+export const initialState: State = { count: 0, entries: {} };
+
+// OK - frozen, including nested objects
+export const initialState: State = Object.freeze({ count: 0, entries: Object.freeze({}) });
+
+// OK - factory returning a fresh instance every time
+export function createInitialState(): State {
+  return { count: 0, entries: {} };
+}
+```
 
 ## Quality Attributes
 

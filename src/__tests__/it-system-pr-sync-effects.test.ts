@@ -98,8 +98,11 @@ vi.mock('../infra/git/index.js', () => ({
   })),
 }));
 
-vi.mock('../features/tasks/add/index.js', () => ({
-  saveTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
+vi.mock('../infra/task/enqueuedTaskFile.js', () => ({
+  saveEnqueuedTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
+}));
+
+vi.mock('../infra/task/issueTask.js', () => ({
   createIssueFromTask: (...args: unknown[]) => mockCreateIssueFromTask(...args),
 }));
 
@@ -605,7 +608,7 @@ describe('system workflow PR sync integration', () => {
     expect(prepareMergeResult.nextStep).toBe('explode');
     expect(mockRemoveClone).not.toHaveBeenCalled();
 
-    await expect(engine.runSingleIteration()).rejects.toThrow('System effect requires positive integer');
+    await expect(engine.runSingleIteration()).rejects.toThrow('System effect requires positive safe integer');
     expect(mockRemoveClone).toHaveBeenCalledTimes(1);
     expect(mockRemoveClone).toHaveBeenCalledWith(worktreePath);
   });

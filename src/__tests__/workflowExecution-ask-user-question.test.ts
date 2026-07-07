@@ -240,6 +240,17 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     expect(() => handler()).toThrow(AskUserQuestionDeniedError);
   });
 
+  it('should pass a custom AskUserQuestion handler when supplied by an adapter', async () => {
+    const onAskUserQuestion = vi.fn().mockResolvedValue({ Answer: 'Use src/index.ts' });
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      onAskUserQuestion,
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.onAskUserQuestion).toBe(onAskUserQuestion);
+  });
+
   it('should complete successfully despite deny handler being present', async () => {
     // Given/When: normal workflow execution with deny handler wired
     const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {

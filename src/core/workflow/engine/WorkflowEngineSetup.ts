@@ -25,7 +25,7 @@ import type { StructuredOutputNormalizerRegistry } from './structured-output-nor
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
-import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('workflow-engine');
@@ -149,6 +149,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+      hasOpenFindings: ledgerHasOpenFindings(ledger),
+      hasWaivedFindings: ledgerHasWaivedFindings(ledger),
       ...(includeRawFindingsSchema
         ? {
             rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,

@@ -69,6 +69,14 @@ function makePrFailedRecord() {
   };
 }
 
+const taskIdFields = ['issue', 'pr_number', 'context_pr_number'] as const;
+const invalidTaskIdValues = [
+  ['zero', 0],
+  ['negative', -1],
+  ['decimal', 1.5],
+  ['unsafe', Number.MAX_SAFE_INTEGER + 1],
+] as const;
+
 describe('TaskExecutionConfigSchema', () => {
   it('should accept valid config with all optional fields', () => {
     const config = {
@@ -112,6 +120,22 @@ describe('TaskExecutionConfigSchema', () => {
 
   it('should reject non-integer issue number', () => {
     expect(() => TaskExecutionConfigSchema.parse({ issue: 1.5 })).toThrow();
+  });
+
+  it('should accept positive safe integer task id fields', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    })).not.toThrow();
+  });
+
+  it('should reject non-positive, decimal, and unsafe task id fields', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(() => TaskExecutionConfigSchema.parse({ [field]: value })).toThrow();
+      }
+    }
   });
 
   it('should accept base_branch when provided in config', () => {
@@ -234,6 +258,23 @@ describe('TaskFileSchema', () => {
 
   it('should reject missing task field', () => {
     expect(() => TaskFileSchema.parse({})).toThrow();
+  });
+
+  it('should accept positive safe integer task id fields', () => {
+    expect(() => TaskFileSchema.parse({
+      task: 'do something',
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    })).not.toThrow();
+  });
+
+  it('should reject non-positive, decimal, and unsafe task id fields', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(() => TaskFileSchema.parse({ task: 'do something', [field]: value })).toThrow();
+      }
+    }
   });
 });
 
@@ -457,5 +498,22 @@ describe('TaskRecordSchema', () => {
       task_dir: '.takt/tasks/feat-bugfix',
       base_branch: 'release/main',
     })).not.toThrow();
+  });
+
+  it('should accept positive safe integer task id fields', () => {
+    expect(() => TaskRecordSchema.parse({
+      ...makePendingRecord(),
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    })).not.toThrow();
+  });
+
+  it('should reject non-positive, decimal, and unsafe task id fields', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(() => TaskRecordSchema.parse({ ...makePendingRecord(), [field]: value })).toThrow();
+      }
+    }
   });
 });

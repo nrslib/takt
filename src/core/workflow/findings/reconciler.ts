@@ -16,6 +16,7 @@ interface ReconcileFindingLedgerInput {
   rawFindings: RawFinding[];
   managerOutput: FindingManagerOutput;
   context: FindingReconcileContext;
+  priorStepResponseText?: string;
 }
 
 function formatFindingId(nextId: number): string {
@@ -103,6 +104,24 @@ function assertFindingIdsHaveSingleDecision(managerOutput: FindingManagerOutput)
   for (const reopened of managerOutput.reopenedFindings) {
     markFindingIdDecision(usedFindingDecisions, reopened.findingId, 'reopen');
   }
+  for (const waived of managerOutput.waivedFindings) {
+    markFindingIdDecision(usedFindingDecisions, waived.findingId, 'waive');
+  }
+  const transitioned = new Set([
+    ...managerOutput.waivedFindings.map((waived) => waived.findingId),
+    ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
+    ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
+  ]);
+  const seenDisputeIds = new Set<string>();
+  for (const note of managerOutput.disputeNotes) {
+    if (transitioned.has(note.findingId)) {
+      throw new Error(`Cannot record a dispute on "${note.findingId}" because it also has a state transition in this output`);
+    }
+    if (seenDisputeIds.has(note.findingId)) {
+      throw new Error(`Duplicate dispute note for finding "${note.findingId}"`);
+    }
+    seenDisputeIds.add(note.findingId);
+  }
   for (const conflict of managerOutput.conflicts) {
     assertUniqueIds(conflict.findingIds, 'finding id');
     for (const findingId of conflict.findingIds) {
@@ -140,15 +159,39 @@ function assertResolvedEvidenceRawFindings(input: {
   finding: FindingRecord;
   resolvedRawFindingIds: readonly string[];
   previousRawFindingsById: ReadonlyMap<string, RawFinding>;
+  currentRawFindingsById: ReadonlyMap<string, RawFinding>;
 }): void {
-  assertKnownRawFindings(new Set(input.finding.rawFindingIds), input.resolvedRawFindingIds);
+  let hasCurrentConfirmation = false;
   for (const rawFindingId of input.resolvedRawFindingIds) {
-    const rawFinding = input.previousRawFindingsById.get(rawFindingId);
-    if (rawFinding === undefined) {
+    const currentRawFinding = input.currentRawFindingsById.get(rawFindingId);
+    if (currentRawFinding !== undefined) {
+      if (currentRawFinding.kind !== 'resolution_confirmation') {
+        throw new Error(
+          `Resolved finding "${input.finding.id}" references current raw finding "${rawFindingId}" that is not a resolution_confirmation`,
+        );
+      }
+      if (currentRawFinding.targetFindingId !== input.finding.id) {
+        throw new Error(
+          `Resolution confirmation "${rawFindingId}" targets "${currentRawFinding.targetFindingId ?? '(none)'}" but was cited for "${input.finding.id}"`,
+        );
+      }
+      hasCurrentConfirmation = true;
+      continue;
+    }
+    if (!input.finding.rawFindingIds.includes(rawFindingId)) {
+      throw new Error(`Unknown raw finding id "${rawFindingId}"`);
+    }
+    if (input.previousRawFindingsById.get(rawFindingId) === undefined) {
       throw new Error(
         `Resolved finding "${input.finding.id}" references previous raw finding "${rawFindingId}" that is not in the ledger`,
       );
     }
+  }
+  // 解消には現在ラウンドの解消確認が必須（レビュアーの沈黙では解消させない）。
+  if (!hasCurrentConfirmation) {
+    throw new Error(
+      `Resolved finding "${input.finding.id}" requires at least one current resolution_confirmation raw finding targeting it`,
+    );
   }
 }
 
@@ -270,6 +313,8 @@ function withoutResolutionFields(finding: FindingRecord): Omit<FindingRecord, 'r
     title: finding.title,
     rawFindingIds: finding.rawFindingIds,
     ...(finding.location !== undefined ? { location: finding.location } : {}),
+    ...(finding.waivers !== undefined ? { waivers: finding.waivers } : {}),
+    ...(finding.disputes !== undefined ? { disputes: finding.disputes } : {}),
     ...(finding.description !== undefined ? { description: finding.description } : {}),
     ...(finding.suggestion !== undefined ? { suggestion: finding.suggestion } : {}),
     reviewers: finding.reviewers,
@@ -357,10 +402,21 @@ function reconcileLedgerConflicts(input: {
 }
 
 export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): FindingLedger {
+  // 手組みの manager output（zod を経ない経路）でも新配列の欠落で落ちないよう
+  // 入口で正規化する。
+  input = {
+    ...input,
+    managerOutput: {
+      ...input.managerOutput,
+      waivedFindings: input.managerOutput.waivedFindings ?? [],
+      disputeNotes: input.managerOutput.disputeNotes ?? [],
+    },
+  };
   const validation = validateFindingManagerOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
     managerOutput: input.managerOutput,
+    priorStepResponseText: input.priorStepResponseText,
   });
   if (!validation.ok) {
     throw new Error(validation.errors.join('\n'));
@@ -374,6 +430,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     finding,
   ]));
   const knownFindingIds = new Set(previousById.keys());
+  const currentRawFindingsById = new Map(input.rawFindings.map((finding) => [finding.rawFindingId, finding]));
   assertFindingIdsHaveSingleDecision(input.managerOutput);
   let nextId = input.previousLedger.nextId;
   const usedRawFindingIds = new Set<string>();
@@ -417,7 +474,12 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       finding,
       resolvedRawFindingIds: resolved.rawFindingIds,
       previousRawFindingsById,
+      currentRawFindingsById,
     });
+    markRawFindingIdsUsed(
+      usedRawFindingIds,
+      resolved.rawFindingIds.filter((rawFindingId) => currentRawFindingsById.has(rawFindingId)),
+    );
     updatedById.set(resolved.findingId, {
       ...finding,
       status: 'resolved',
@@ -432,7 +494,9 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     assertKnownRawFindings(rawFindingIds, reopened.rawFindingIds);
     markRawFindingIdsUsed(usedRawFindingIds, reopened.rawFindingIds);
     const finding = updatedById.get(reopened.findingId)!;
-    assertFindingStatus(finding, 'resolved', 'reopen');
+    if (finding.status !== 'resolved' && finding.status !== 'waived') {
+      throw new Error(`Cannot reopen finding "${finding.id}" because it is not resolved or waived`);
+    }
     const reopenedRawFindings = getRawFindings(input.rawFindings, reopened.rawFindingIds);
     assertFindingFamilyTagCompatible({
       finding,
@@ -453,6 +517,39 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       reviewers: mergeReviewers(finding.reviewers, reopenedRawFindings),
       lastSeen: observationFromContext(input.context),
       reopenedEvidence: reopened.evidence,
+    });
+  }
+
+  for (const waived of input.managerOutput.waivedFindings) {
+    assertKnownFinding(knownFindingIds, waived.findingId);
+    const finding = updatedById.get(waived.findingId)!;
+    assertFindingStatus(finding, 'open', 'waive');
+    if (finding.severity === 'critical') {
+      throw new Error(`Cannot waive finding "${finding.id}" because critical findings must stay open`);
+    }
+    updatedById.set(waived.findingId, {
+      ...finding,
+      status: 'waived',
+      lifecycle: 'waived',
+      waivers: [
+        ...(finding.waivers ?? []),
+        { reason: waived.reason, evidence: waived.evidence, decidedAt: observationFromContext(input.context) },
+      ],
+      lastSeen: observationFromContext(input.context),
+    });
+  }
+
+  for (const note of input.managerOutput.disputeNotes) {
+    assertKnownFinding(knownFindingIds, note.findingId);
+    const finding = updatedById.get(note.findingId)!;
+    assertFindingStatus(finding, 'open', 'record a dispute on');
+    // 却下された異議は記録のみ: status は open のまま（ゲートを塞ぎ続ける）
+    updatedById.set(note.findingId, {
+      ...finding,
+      disputes: [
+        ...(finding.disputes ?? []),
+        { reason: note.reason, evidence: note.evidence, recordedAt: observationFromContext(input.context) },
+      ],
     });
   }
 
@@ -485,6 +582,8 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
   });
 
   const unmentionedNewFindings = input.rawFindings
+    // 解消確認は問題の観測ではないため、未言及でも新規 finding にしない。
+    .filter((rawFinding) => rawFinding.kind !== 'resolution_confirmation')
     .filter((rawFinding) => !usedRawFindingIds.has(rawFinding.rawFindingId))
     .map((rawFinding) => {
       const id = formatFindingId(nextId);
