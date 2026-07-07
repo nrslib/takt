@@ -104,7 +104,9 @@ describe('compactSessionBeforePhase1', () => {
   });
 
   it('Given provider compaction fails When Phase 1 starts Then the failure is warned and not rethrown', async () => {
-    const compactSession = vi.fn().mockRejectedValue(new Error('summarize failed'));
+    const compactSession = vi.fn().mockRejectedValue(
+      new Error('summarize failed with api_key=top-secret and Authorization: Bearer sk-secret123456'),
+    );
     const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
     const warn = vi.fn();
 
@@ -120,8 +122,31 @@ describe('compactSessionBeforePhase1', () => {
         step: 'review',
         provider: 'opencode',
         sessionId: 'session-1',
-        error: expect.any(Error),
+        error: 'summarize failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
       }),
     );
+    const metadata = warn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(metadata.error).not.toBeInstanceOf(Error);
+    expect(metadata.error).not.toContain('top-secret');
+    expect(metadata.error).not.toContain('sk-secret123456');
+  });
+
+  it('Given compact mode without a resolved provider When Phase 1 starts Then compaction is skipped with a minimal warning', async () => {
+    const getProvider = vi.fn();
+    const warn = vi.fn();
+
+    await expect(compactSessionBeforePhase1(
+      makeCompactStep(),
+      makeAgentOptions({ resolvedProvider: undefined }),
+      { getProvider, warn },
+    )).resolves.toBeUndefined();
+
+    expect(getProvider).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [_message, metadata] = warn.mock.calls[0] ?? [];
+    expect(metadata).toEqual({
+      step: 'review',
+      sessionId: 'session-1',
+    });
   });
 });

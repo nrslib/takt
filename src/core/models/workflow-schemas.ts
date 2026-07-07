@@ -27,6 +27,10 @@ import {
   isAiConditionExpression,
 } from './workflow-condition-expression.js';
 import { FindingContractConfigRawSchema } from './finding-schemas.js';
+import {
+  SESSION_AGENT_STEP_REQUIRED_MESSAGE,
+  SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
+} from './workflow-session-constraints.js';
 import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
 import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
@@ -379,7 +383,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['session'],
-        message: 'session is only supported on agent steps and parallel sub-steps',
+        message: SESSION_AGENT_STEP_REQUIRED_MESSAGE,
       });
     }
 
@@ -390,7 +394,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['session'],
-        message: 'session is only supported on normal agent steps and parallel sub-steps',
+        message: SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
       });
     }
 

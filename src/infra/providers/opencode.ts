@@ -20,6 +20,7 @@ const OPENCODE_TOOL_NAMING_FALLBACK = [
   'OpenCode tool names are lowercase.',
   'Use bash for shell commands, glob for file discovery, grep for search, read for file reads, edit/write for changes, and todowrite for todos.',
 ].join(' ');
+const OPENCODE_MODEL_REQUIRED_MESSAGE = "OpenCode provider requires model in 'provider/model' format (e.g. 'opencode/big-pickle').";
 
 function buildToolNamingInstruction(
   allowedTools: string[],
@@ -34,9 +35,7 @@ function buildToolNamingInstruction(
 }
 
 function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
-  if (!options.model) {
-    throw new Error("OpenCode provider requires model in 'provider/model' format (e.g. 'opencode/big-pickle').");
-  }
+  const model = requireOpenCodeModel(options.model);
 
   const openCodeAllowedTools = options.allowedTools;
 
@@ -44,7 +43,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
-    model: options.model,
+    model,
     allowedTools: openCodeAllowedTools,
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.opencode?.networkAccess,
@@ -58,18 +57,23 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
 }
 
 function toOpenCodeCompactSessionOptions(options: ProviderCompactSessionOptions): OpenCodeCompactSessionOptions {
-  if (!options.model) {
-    throw new Error("OpenCode provider requires model in 'provider/model' format (e.g. 'opencode/big-pickle').");
-  }
+  const model = requireOpenCodeModel(options.model);
 
   return {
     cwd: options.cwd,
     sessionId: options.sessionId,
-    model: options.model,
+    model,
     abortSignal: options.abortSignal,
     opencodeApiKey: resolveOpencodeApiKey(),
     childProcessEnv: options.childProcessEnv,
   };
+}
+
+function requireOpenCodeModel(model: string | undefined): string {
+  if (!model) {
+    throw new Error(OPENCODE_MODEL_REQUIRED_MESSAGE);
+  }
+  return model;
 }
 
 /** OpenCode provider — delegates to OpenCode SDK */

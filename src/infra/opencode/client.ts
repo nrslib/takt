@@ -333,6 +333,29 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+function createExternalAbortPromise(
+  controller: AbortController,
+  externalAbortSignal: AbortSignal | undefined,
+): { promise?: Promise<never>; removeListener?: () => void } {
+  if (externalAbortSignal === undefined) {
+    return {};
+  }
+  let removeListener: (() => void) | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    const onExternalAbort = (): void => {
+      reject(new Error(OPENCODE_STREAM_ABORTED_MESSAGE));
+      controller.abort();
+    };
+    if (externalAbortSignal.aborted) {
+      onExternalAbort();
+      return;
+    }
+    externalAbortSignal.addEventListener('abort', onExternalAbort, { once: true });
+    removeListener = () => externalAbortSignal.removeEventListener('abort', onExternalAbort);
+  });
+  return { promise, removeListener };
+}
+
 function createReleaseHandle(server: SharedServer): () => void {
   let released = false;
   return () => {
@@ -353,24 +376,37 @@ async function withTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   timeoutErrorMessage: string,
+  externalAbortSignal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController();
+  let timedOut = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
+      timedOut = true;
       controller.abort();
       reject(new Error(timeoutErrorMessage));
     }, timeoutMs);
   });
+  const externalAbort = createExternalAbortPromise(controller, externalAbortSignal);
   try {
-    return await Promise.race([
-      operation(controller.signal),
-      timeoutPromise,
-    ]);
+    const operationPromise = operation(controller.signal).catch((error: unknown) => {
+      if (timedOut) {
+        return new Promise<never>(() => {
+          // The timeout promise owns the rejection after aborting the SDK call.
+        });
+      }
+      throw error;
+    });
+    const racePromises = externalAbort.promise !== undefined
+      ? [operationPromise, timeoutPromise, externalAbort.promise]
+      : [operationPromise, timeoutPromise];
+    return await Promise.race(racePromises);
   } finally {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
     }
+    externalAbort.removeListener?.();
   }
 }
 
@@ -1311,15 +1347,18 @@ export class OpenCodeClient {
     );
 
     try {
-      await acquired.client.session.summarize({
-        sessionID: options.sessionId,
-        directory: options.cwd,
-        providerID: parsedModel.providerID,
-        modelID: parsedModel.modelID,
-        auto: false,
-      }, {
-        signal: options.abortSignal,
-      });
+      await withTimeout(
+        (signal) => acquired.client.session.summarize({
+          sessionID: options.sessionId,
+          directory: options.cwd,
+          providerID: parsedModel.providerID,
+          modelID: parsedModel.modelID,
+          auto: false,
+        }, { signal }),
+        OPENCODE_INTERACTION_TIMEOUT_MS,
+        'OpenCode session summarize timed out',
+        options.abortSignal,
+      );
     } finally {
       acquired.release();
     }

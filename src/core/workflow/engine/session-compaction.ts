@@ -2,7 +2,8 @@ import type { RunAgentOptions } from '../../../agents/runner.js';
 import { getProvider } from '../../../infra/providers/index.js';
 import type { Provider, ProviderType } from '../../../infra/providers/types.js';
 import type { WorkflowStep } from '../../models/types.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
 const log = createLogger('session-compaction');
 
@@ -26,7 +27,11 @@ export async function compactSessionBeforePhase1(
   }
 
   if (agentOptions.resolvedProvider === undefined) {
-    throw new Error(`Resolved provider is required for session compaction: ${step.name}`);
+    deps.warn('Session compaction skipped because provider is not resolved', {
+      step: step.name,
+      sessionId: agentOptions.sessionId,
+    });
+    return;
   }
 
   const provider = deps.getProvider(agentOptions.resolvedProvider);
@@ -47,7 +52,7 @@ export async function compactSessionBeforePhase1(
       step: step.name,
       provider: agentOptions.resolvedProvider,
       sessionId: agentOptions.sessionId,
-      error,
+      error: sanitizeSensitiveText(getErrorMessage(error)),
     });
   }
 }

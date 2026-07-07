@@ -1,4 +1,8 @@
 import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, WorkflowStep } from '../../models/types.js';
+import {
+  SESSION_AGENT_STEP_REQUIRED_MESSAGE,
+  SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
+} from '../../models/workflow-session-constraints.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
@@ -85,11 +89,11 @@ function validateSessionEntrypoint(step: WorkflowStep, source: string): void {
   }
 
   if (getWorkflowStepKind(step) !== 'agent') {
-    throw new Error(`${source}: session is only supported on agent steps and parallel sub-steps`);
+    throw new Error(`${source}: ${SESSION_AGENT_STEP_REQUIRED_MESSAGE}`);
   }
 
   if (candidate.parallel !== undefined || candidate.arpeggio !== undefined || candidate.teamLeader !== undefined) {
-    throw new Error(`${source}: session is only supported on normal agent steps and parallel sub-steps`);
+    throw new Error(`${source}: ${SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE}`);
   }
 }
 
