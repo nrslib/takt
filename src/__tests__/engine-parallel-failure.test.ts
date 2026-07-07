@@ -101,6 +101,46 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     }
   });
 
+  it('should retry a sub-step once with a fresh session when the provider errors', async () => {
+    const config = buildParallelOnlyConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    const mock = vi.mocked(runAgent);
+    const sessionIds: Array<string | undefined> = [];
+    let archCalls = 0;
+    mock.mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      if (String(persona).includes('arch-review')) {
+        archCalls += 1;
+        sessionIds.push(options?.sessionId);
+        if (archCalls === 1) {
+          // 1回目はプロバイダ障害（劣化ループをガードがエラー化した形）
+          return makeResponse({ persona, status: 'error', content: '', error: 'assistant message cycle budget exceeded' });
+        }
+        return makeResponse({ persona, content: 'approved' });
+      }
+      return makeResponse({ persona: String(persona), content: 'approved' });
+    });
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' }, // arch-review（再試行後）→ approved
+      { index: 0, method: 'phase1_tag' }, // security-review → approved
+      { index: 0, method: 'aggregate' },  // 親 reviewers → done
+      { index: 0, method: 'phase1_tag' }, // done → COMPLETE
+    ]);
+
+    const state = await engine.run();
+
+    // 1席の一過性エラーで走行が落ちず、再試行で完走する
+    expect(state.status).toBe('completed');
+    expect(archCalls).toBe(2);
+    // 再試行は resume を切った新しいセッションで行われる
+    expect(sessionIds[1]).toBeUndefined();
+  });
+
   it('should abort with parent error when one sub-step rejects and another approves', async () => {
     const config = buildParallelOnlyConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });

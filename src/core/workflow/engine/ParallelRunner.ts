@@ -286,6 +286,17 @@ export class ParallelRunner {
           error: result.error,
           providerUsage: result.providerUsage,
         }));
+        if (subResponse.status === 'error') {
+          // 並列レビューの1席のプロバイダ障害で走行全体を落とさない。
+          // 空転はセッション文脈起因のことが多いため（長文脈での生成品質
+          // 崩壊を実測）、再試行は resume を切った新しいセッションで行う。
+          log.warn('Parallel sub-step provider error; retrying once with a fresh session', {
+            step: subStep.name,
+            error: subResponse.error,
+          });
+          const retryOptions = { ...agentOptions, sessionId: undefined };
+          subResponse = await executeAgent(executableSubStep.persona, phase1Instruction, retryOptions);
+        }
         if (findingLedgerCopyPath) {
           const normalized = this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(executableSubStep, subResponse, runtime);
           subResponse = normalized.response;
