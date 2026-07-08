@@ -289,6 +289,7 @@ describe('builtin takt-default provider_options refs', () => {
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
           personaPath: personaPath(locale, 'findings-manager'),
           instruction: readFileSync(instructionPath(locale, 'findings-manager'), 'utf-8'),
           outputContract: readFileSync(outputContractPath(locale, 'findings-manager'), 'utf-8'),

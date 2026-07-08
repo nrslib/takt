@@ -12,6 +12,7 @@ import type {
   AgentResponse,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
+  WorkflowConfig,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { isWorkflowCallStep } from '../step-kind.js';
@@ -136,6 +137,8 @@ export interface ParallelRunnerDeps {
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
+  readonly workflowProvider?: WorkflowConfig['provider'];
+  readonly workflowModel?: WorkflowConfig['model'];
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
   readonly updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
@@ -869,6 +872,8 @@ export class ParallelRunner {
     }
     const result = await runFindingManagerForParallelStep({
       contract: this.deps.findingContract,
+      workflowProvider: this.deps.workflowProvider,
+      workflowModel: this.deps.workflowModel,
       ledgerStore: this.deps.findingLedgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this.deps.stepExecutor,

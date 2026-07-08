@@ -374,6 +374,8 @@ TAKT のモデル選択は 2 段階で解決されます。
 1. **入力 `model` の解決** - workflow 実行前に、入力 `model` が CLI `--model`、次に config `model`、最後に provider デフォルトの順で解決されます。
 2. **Workflow step の `model` 解決** - 各 step では、実効モデルが step YAML の `model`、次に `provider_routing.steps.<step.name>`、step に書かれた順の `provider_routing.tags`、`provider_routing.personas.<raw persona key>`、deprecated の `persona_providers.<persona display name>`、`workflow_config.model`、最後に解決済みの入力 `model` の順で決まります。
 
+Finding Contract workflow では、`finding_contract.manager.provider` と `finding_contract.manager.model` は合成 `findings-manager` step の step レベル provider/model として扱われます。`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力値より優先されます。未指定の場合、manager は通常の workflow step と同じ fallback chain を使います。
+
 workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` の `model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定の場合は routing、workflow、loop monitor judge のトリガー元 step、入力由来の値など、適用可能な下位優先度のソースへフォールバックしますが、`model: null` はその entry で model 解決を止め、実効 model を未定義のままにします。解決済み provider に CLI または provider 側のデフォルトを使わせたい場合に指定します。明示 model が必須の provider では、model が供給されないため検証エラーになります。
 
 ### Provider 固有のモデルに関する注意
@@ -515,6 +517,8 @@ step YAML provider/model
 ```
 
 解決済みの入力は workflow 実行前に CLI フラグ、次に project `.takt/config.yaml`、global `~/.takt/config.yaml`、最後に provider デフォルトの順で決まります。promotion が有効な場合は、step YAML の値よりもさらに高い優先順位になります。
+
+Finding Contract manager では、`finding_contract.manager.provider` と `finding_contract.manager.model` が合成 `findings-manager` step の `step YAML provider/model` 位置に入ります。
 
 ### Auto Routing
 

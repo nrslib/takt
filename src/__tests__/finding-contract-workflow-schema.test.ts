@@ -52,6 +52,7 @@ describe('workflow finding_contract schema', () => {
       manager: {
         persona: 'findings-manager',
         personaDisplayName: 'findings-manager',
+        providerRoutingPersonaKey: 'findings-manager',
         instruction: 'findings-manager',
         outputContract: 'findings-manager',
       },
@@ -62,6 +63,42 @@ describe('workflow finding_contract schema', () => {
         next: 'COMPLETE',
       }),
     );
+  });
+
+  it('should preserve finding manager provider and model through workflow normalization', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'finding-contract-manager-provider-workflow',
+      finding_contract: {
+        ledger_path: '.takt/findings/peer-review.json',
+        raw_findings_path: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+      initial_step: 'peer-review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'peer-review',
+          persona: 'reviewer',
+          instruction: 'Review the change.',
+          rules: [{ when: 'findings.open.count == 0', next: 'COMPLETE' }],
+        },
+      ],
+    }, '/tmp/project');
+
+    expect(workflow.findingContract?.manager).toMatchObject({
+      persona: 'findings-manager',
+      providerRoutingPersonaKey: 'findings-manager',
+      instruction: 'findings-manager',
+      outputContract: 'findings-manager',
+      provider: 'codex',
+      model: 'gpt-5.5',
+    });
   });
 
   it('should resolve finding manager facets through the normal facet lookup path', () => {
@@ -422,6 +459,10 @@ describe('workflow finding_contract schema', () => {
       { ...validFindingContract, manager: { ...validFindingContract.manager, persona: null } },
       { ...validFindingContract, manager: { ...validFindingContract.manager, instruction: {} } },
       { ...validFindingContract, manager: { ...validFindingContract.manager, output_contract: null } },
+      { ...validFindingContract, manager: { ...validFindingContract.manager, provider: 'auto' } },
+      { ...validFindingContract, manager: { ...validFindingContract.manager, provider: 'unknown-provider' } },
+      { ...validFindingContract, manager: { ...validFindingContract.manager, model: null } },
+      { ...validFindingContract, manager: { ...validFindingContract.manager, model: '' } },
     ];
 
     for (const findingContract of invalidFindingContracts) {

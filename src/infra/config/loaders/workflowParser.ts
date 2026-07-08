@@ -101,6 +101,7 @@ function normalizeFindingContractConfig(
   if (!outputContract) {
     throw new Error(`Configuration error: failed to resolve finding_contract.manager.output_contract "${raw.manager.output_contract}"`);
   }
+  const providerRoutingPersonaKey = raw.manager.persona.trim();
 
   return {
     ledgerPath: raw.ledger_path,
@@ -108,9 +109,12 @@ function normalizeFindingContractConfig(
     manager: {
       persona: personaSpec,
       personaDisplayName: personaPath ? extractPersonaDisplayName(personaPath) : personaSpec,
+      ...(providerRoutingPersonaKey ? { providerRoutingPersonaKey } : {}),
       ...(personaPath ? { personaPath } : {}),
       instruction,
       outputContract,
+      ...(raw.manager.provider ? { provider: raw.manager.provider } : {}),
+      ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
   };
 }

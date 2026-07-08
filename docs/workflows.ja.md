@@ -193,6 +193,24 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
 - 並列サブ step は `promotion` をサポートしません
 
+### Finding Contract manager の provider/model
+
+`finding_contract.manager` では、合成 Finding Manager step 専用の provider と model を指定できます。
+
+```yaml
+finding_contract:
+  ledger_path: .takt/findings/review.json
+  raw_findings_path: .takt/findings/review/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: codex
+    model: gpt-5.5
+```
+
+指定した値は Finding Manager の step レベル `provider` / `model` として扱われます。`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力 provider/model より優先されます。未指定の場合、manager は通常の workflow step provider/model 解決を維持します。
+
 ### Finding Contract parallel の retry 失敗ルーティング
 
 workflow に `finding_contract` がある場合、各 parallel 親 step は Finding Manager output が retry 後も意味論的に invalid なときの決定的な rule を宣言する必要があります。この rule により、invalid manager output で workflow を abort したり ledger を更新したりしません。

@@ -147,3 +147,5 @@ persona_providers:
 ```
 
 This configuration applies globally to all workflows. Any step using the specified persona will be routed to the corresponding provider, regardless of which workflow is being executed.
+
+For Finding Contract manager routing, prefer the workflow-local `finding_contract.manager.provider` and `finding_contract.manager.model` fields. They are explicit to the ledger adjudicator and take priority over `persona_providers.findings-manager`.

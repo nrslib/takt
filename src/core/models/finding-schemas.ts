@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -18,6 +19,8 @@ export const FindingContractManagerConfigRawSchema = z.object({
   persona: nonEmptyString,
   instruction: nonEmptyString,
   output_contract: nonEmptyString,
+  provider: z.enum(PROVIDER_TYPES).optional(),
+  model: nonEmptyString.optional(),
 }).strict();
 
 export const FindingContractConfigRawSchema = z.object({

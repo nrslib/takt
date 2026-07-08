@@ -1,0 +1,51 @@
+[
+  {
+    "persona": "review-agent",
+    "status": "done",
+    "content": "approved",
+    "structured_output": {
+      "rawFindings": []
+    }
+  },
+  {
+    "persona": "review-agent",
+    "status": "done",
+    "content": "approved",
+    "structured_output": {
+      "rawFindings": []
+    }
+  },
+  {
+    "persona": "conductor",
+    "status": "done",
+    "content": "",
+    "structured_output": {
+      "step": 1,
+      "reason": "approved"
+    }
+  },
+  {
+    "persona": "conductor",
+    "status": "done",
+    "content": "",
+    "structured_output": {
+      "step": 1,
+      "reason": "approved"
+    }
+  },
+  {
+    "persona": "findings-manager",
+    "status": "done",
+    "content": "manager reconciled no findings",
+    "structured_output": {
+      "matches": [],
+      "newFindings": [],
+      "resolvedFindings": [],
+      "reopenedFindings": [],
+      "conflicts": [],
+      "resolvedConflicts": [],
+      "waivedFindings": [],
+      "disputeNotes": []
+    }
+  }
+]

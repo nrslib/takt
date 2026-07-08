@@ -10,12 +10,21 @@ import { InstructionBuilder } from '../../core/workflow/instruction/InstructionB
 import { ReportInstructionBuilder } from '../../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
 import { needsStatusJudgmentPhase } from '../../core/workflow/index.js';
+import { resolveStepProviderModel } from '../../core/workflow/provider-resolution.js';
+import { buildFindingManagerStep } from '../../core/workflow/findings/manager-step.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
 import type { Language } from '../../core/models/types.js';
 import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+
+interface PreviewProviderResolution {
+  provider: WorkflowStep['provider'];
+  model: WorkflowStep['model'];
+  personaProviders: Parameters<typeof resolveStepProviderModel>[0]['personaProviders'];
+  providerRouting: Parameters<typeof resolveStepProviderModel>[0]['providerRouting'];
+}
 
 function printStepExecutionMetadata(step: WorkflowStep): void {
   if (step.sessionKey) {
@@ -27,6 +36,54 @@ function printStepExecutionMetadata(step: WorkflowStep): void {
   if (step.parallel && step.parallel.length > 0) {
     console.log(`Parallel substeps: ${step.parallel.length}`);
   }
+}
+
+function formatConfiguredValue(value: string | undefined): string {
+  return value === undefined ? 'not configured' : sanitizeTerminalText(value);
+}
+
+function resolvePreviewProviderResolution(cwd: string): PreviewProviderResolution {
+  return {
+    provider: resolveWorkflowConfigValue(cwd, 'provider'),
+    model: resolveWorkflowConfigValue(cwd, 'model'),
+    personaProviders: resolveWorkflowConfigValue(cwd, 'personaProviders'),
+    providerRouting: resolveWorkflowConfigValue(cwd, 'providerRouting'),
+  };
+}
+
+function resolveFindingManagerProviderModel(
+  config: WorkflowConfig,
+  resolution: PreviewProviderResolution,
+): ReturnType<typeof resolveStepProviderModel> | undefined {
+  if (!config.findingContract) {
+    return undefined;
+  }
+  return resolveStepProviderModel({
+    step: buildFindingManagerStep({
+      contract: config.findingContract,
+      workflowProvider: config.provider,
+      workflowModel: config.model,
+    }),
+    provider: resolution.provider,
+    model: resolution.model,
+    personaProviders: resolution.personaProviders,
+    providerRouting: resolution.providerRouting,
+  });
+}
+
+function printFindingContractMetadata(
+  config: WorkflowConfig,
+  resolution: PreviewProviderResolution,
+): void {
+  const manager = config.findingContract?.manager;
+  if (!manager) {
+    return;
+  }
+  const providerInfo = resolveFindingManagerProviderModel(config, resolution);
+
+  info(`Finding manager: ${sanitizeTerminalText(manager.personaDisplayName ?? manager.persona)}`);
+  info(`Finding manager provider: ${formatConfiguredValue(providerInfo?.provider)}`);
+  info(`Finding manager model: ${formatConfiguredValue(providerInfo?.model)}`);
 }
 
 function buildInstructionContext(
@@ -100,11 +157,13 @@ export async function previewPrompts(cwd: string, workflowIdentifier?: string): 
   }
 
   const language = resolveWorkflowConfigValue(cwd, 'language') as Language;
+  const providerResolution = resolvePreviewProviderResolution(cwd);
   const safeWorkflowName = sanitizeTerminalText(config.name);
 
   header(`Workflow Prompt Preview: ${safeWorkflowName}`);
   info(`Steps: ${config.steps.length}`);
   info(`Language: ${language}`);
+  printFindingContractMetadata(config, providerResolution);
   blankLine();
 
   for (const [i, step] of config.steps.entries()) {

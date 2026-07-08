@@ -181,6 +181,104 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
   });
 
+  it('fails fast when finding_contract.manager uses opencode without a model', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          provider: 'opencode',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+    })).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('validates finding_contract.manager through workflow provider fallback when manager provider is not direct', () => {
+    const workflow = createWorkflow({
+      provider: 'opencode',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+    })).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('validates finding_contract.manager through provider_routing.personas when manager provider is not direct', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+      providerRouting: {
+        personas: {
+          'findings-manager': { provider: 'opencode' },
+        },
+      },
+    })).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('prefers finding_contract.manager provider/model over provider_routing and persona_providers', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+      providerRouting: {
+        steps: {
+          'findings-manager': { provider: 'opencode' },
+        },
+        personas: {
+          'findings-manager': { provider: 'opencode' },
+        },
+      },
+      personaProviders: {
+        'findings-manager': { provider: 'opencode' },
+      },
+    })).not.toThrow();
+  });
+
   it('fails fast when a findingContract parallel parent cannot route invalid manager output', () => {
     const workflow = createWorkflow({
       findingContract: {

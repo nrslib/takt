@@ -2665,6 +2665,372 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 
+  it('finding_contract.manager の provider/model は personaProviders より優先して manager 実行へ渡す', async () => {
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        expect(options?.resolvedProvider).toBe('claude');
+        return {
+          persona: 'architecture-reviewer',
+          status: 'done',
+          content: 'Architecture issue found.',
+          structuredOutput: {
+            rawFindings: [
+              {
+                rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
+                familyTag: 'bug',
+                severity: 'high',
+                title: 'Manager provider override must survive synthesis',
+                location: 'src/core/workflow/findings/manager-runner.ts:120',
+                description: 'The synthesized manager step must carry explicit provider and model.',
+                suggestion: 'Copy manager provider and model onto the agent step before resolution.',
+              },
+            ],
+          },
+          timestamp: new Date('2026-06-13T00:00:01.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        const rawFindingId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-architecture-1/)?.[0];
+        if (rawFindingId === undefined) {
+          throw new Error(`expected normalized raw finding id in manager instruction: ${instruction.slice(instruction.indexOf('Raw findings:'))}`);
+        }
+        expect(persona).toBe('findings-manager');
+        expect(options?.resolvedProvider).toBe('codex');
+        expect(options?.resolvedModel).toBe('gpt-5.5');
+        expect(options?.outputSchema).toBeUndefined();
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: 'manager output',
+          structuredOutput: {
+            matches: [],
+            newFindings: [
+              {
+                rawFindingIds: [rawFindingId],
+                title: 'Manager provider override must survive synthesis',
+                severity: 'high',
+              },
+            ],
+            resolvedFindings: [],
+            reopenedFindings: [],
+            conflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      });
+
+    const config = {
+      name: 'finding-manager-provider-model-test',
+      maxSteps: 2,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'architecture-review',
+              persona: 'architecture-reviewer',
+              instruction: 'Review architecture.',
+              rules: [makeRule('when(true)', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
+            makeRule('when(findings.open.count == 0)', 'ABORT'),
+            {
+              condition: 'when(findings.conflicts.count > 0)',
+              returnValue: 'need_replan',
+            },
+          ],
+        }),
+      ],
+    } as unknown as WorkflowConfig;
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      personaProviders: {
+        'findings-manager': {
+          provider: 'opencode',
+          model: 'opencode/persona-model',
+        },
+      },
+    }).run();
+
+    expect(result.status).toBe('completed');
+    expect(JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8'))).toEqual(
+      expect.objectContaining({
+        workflowName: 'finding-manager-provider-model-test',
+        nextId: 2,
+      }),
+    );
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  it('finding_contract.manager 未指定時は workflow provider/model fallback を manager 実行へ渡す', async () => {
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        expect(options?.resolvedProvider).toBe('claude');
+        return {
+          persona: 'architecture-reviewer',
+          status: 'done',
+          content: 'Architecture issue found.',
+          structuredOutput: {
+            rawFindings: [
+              {
+                rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
+                familyTag: 'bug',
+                severity: 'high',
+                title: 'Manager workflow fallback must survive synthesis',
+                location: 'src/core/workflow/findings/manager-runner.ts:120',
+                description: 'The synthesized manager step must carry workflow provider and model fallback.',
+                suggestion: 'Copy workflow provider and model onto the agent step as fallback values.',
+              },
+            ],
+          },
+          timestamp: new Date('2026-06-13T00:00:01.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        const rawFindingId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-architecture-1/)?.[0];
+        if (rawFindingId === undefined) {
+          throw new Error(`expected normalized raw finding id in manager instruction: ${instruction.slice(instruction.indexOf('Raw findings:'))}`);
+        }
+        expect(persona).toBe('findings-manager');
+        expect(options?.resolvedProvider).toBe('codex');
+        expect(options?.resolvedModel).toBe('gpt-5.5');
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: 'manager output',
+          structuredOutput: {
+            matches: [],
+            newFindings: [
+              {
+                rawFindingIds: [rawFindingId],
+                title: 'Manager workflow fallback must survive synthesis',
+                severity: 'high',
+              },
+            ],
+            resolvedFindings: [],
+            reopenedFindings: [],
+            conflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      });
+
+    const config = {
+      name: 'finding-manager-workflow-fallback-test',
+      provider: 'codex',
+      model: 'gpt-5.5',
+      maxSteps: 2,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'architecture-review',
+              persona: 'architecture-reviewer',
+              instruction: 'Review architecture.',
+              rules: [makeRule('when(true)', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
+            makeRule('when(findings.open.count == 0)', 'ABORT'),
+            {
+              condition: 'when(findings.conflicts.count > 0)',
+              returnValue: 'need_replan',
+            },
+          ],
+        }),
+      ],
+    } as unknown as WorkflowConfig;
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    }).run();
+
+    expect(result.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  it('finding_contract.manager 未指定時は provider_routing.personas を manager 実行へ渡す', async () => {
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        expect(options?.resolvedProvider).toBe('claude');
+        return {
+          persona: 'architecture-reviewer',
+          status: 'done',
+          content: 'Architecture issue found.',
+          structuredOutput: {
+            rawFindings: [
+              {
+                rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
+                familyTag: 'bug',
+                severity: 'high',
+                title: 'Manager persona routing must survive synthesis',
+                location: 'src/core/workflow/findings/manager-runner.ts:120',
+                description: 'The synthesized manager step must carry the raw persona routing key.',
+                suggestion: 'Copy providerRoutingPersonaKey onto the synthesized manager step.',
+              },
+            ],
+          },
+          timestamp: new Date('2026-06-13T00:00:01.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        const rawFindingId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-architecture-1/)?.[0];
+        if (rawFindingId === undefined) {
+          throw new Error(`expected normalized raw finding id in manager instruction: ${instruction.slice(instruction.indexOf('Raw findings:'))}`);
+        }
+        expect(persona).toBe('findings-manager');
+        expect(options?.resolvedProvider).toBe('codex');
+        expect(options?.resolvedModel).toBe('gpt-5.5');
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: 'manager output',
+          structuredOutput: {
+            matches: [],
+            newFindings: [
+              {
+                rawFindingIds: [rawFindingId],
+                title: 'Manager persona routing must survive synthesis',
+                severity: 'high',
+              },
+            ],
+            resolvedFindings: [],
+            reopenedFindings: [],
+            conflicts: [],
+            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      });
+
+    const config = {
+      name: 'finding-manager-persona-routing-test',
+      maxSteps: 2,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'architecture-review',
+              persona: 'architecture-reviewer',
+              instruction: 'Review architecture.',
+              rules: [makeRule('when(true)', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('when(findings.open.bySeverity.high > 0)', 'COMPLETE'),
+            makeRule('when(findings.open.count == 0)', 'ABORT'),
+            {
+              condition: 'when(findings.conflicts.count > 0)',
+              returnValue: 'need_replan',
+            },
+          ],
+        }),
+      ],
+    } as unknown as WorkflowConfig;
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      providerRouting: {
+        personas: {
+          'findings-manager': {
+            provider: 'codex',
+            model: 'gpt-5.5',
+          },
+        },
+      },
+    }).run();
+
+    expect(result.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
   it('findings manager は非 structured-output provider で JSON schema fallback を使う', async () => {
     vi.mocked(runAgent)
       .mockImplementationOnce(async (_persona, instruction, options) => {

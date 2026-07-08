@@ -10,6 +10,7 @@ import { validateProviderModelRequirements } from '../provider-model-requirement
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
 import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
+import { buildFindingManagerStep } from '../findings/manager-step.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -47,6 +48,34 @@ function validateFindingContractParallelStructuredOutput(config: WorkflowConfig)
       }
     }
   }
+}
+
+function validateFindingContractManagerProviderModel(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  const findingContract = config.findingContract;
+  if (!findingContract) {
+    return;
+  }
+  const managerStep = buildFindingManagerStep({
+    contract: findingContract,
+    workflowProvider: config.provider,
+    workflowModel: config.model,
+  });
+  const providerInfo = resolveStepProviderModel({
+    step: managerStep,
+    provider: options.provider,
+    providerSource: options.providerSource,
+    model: options.model,
+    modelSource: options.modelSource,
+    providerRouting: options.providerRouting,
+    personaProviders: options.personaProviders,
+  });
+  validateProviderModelRequirements(
+    providerInfo.provider,
+    providerInfo.model,
+    {
+      modelFieldName: 'Configuration error: finding_contract.manager.model',
+    },
+  );
 }
 
 function validateAgentStepProviderModel(
@@ -182,6 +211,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     throw new Error('Configuration error: provider: auto requires auto_routing configuration');
   }
   validateFindingContractParallelStructuredOutput(config);
+  validateFindingContractManagerProviderModel(config, options);
   validateFindingContractInvalidManagerOutputRules(config);
   validateParallelSubStepNamesUnique(config);
 

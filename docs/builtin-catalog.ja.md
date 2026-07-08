@@ -147,3 +147,5 @@ persona_providers:
 ```
 
 この設定はすべての workflow にグローバルに適用されます。指定された persona を使用する step は、実行中の workflow に関係なく、対応する provider にルーティングされます。
+
+Finding Contract manager のルーティングには、workflow 内の `finding_contract.manager.provider` と `finding_contract.manager.model` を優先してください。台帳裁定者専用の明示設定であり、`persona_providers.findings-manager` より優先されます。

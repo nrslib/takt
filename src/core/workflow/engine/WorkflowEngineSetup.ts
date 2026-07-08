@@ -232,6 +232,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.config.findingContract,
+    workflowProvider: params.config.provider,
+    workflowModel: params.config.model,
     findingLedgerStore: params.findingLedgerStore,
     getWorkflowCallRunner: () => workflowCallRunner,
     updateMaxSteps: params.updateMaxSteps,

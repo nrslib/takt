@@ -1,3 +1,5 @@
+import type { ProviderType } from '../../shared/types/provider.js';
+
 export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
 export const FINDING_STATUSES = ['open', 'resolved', 'waived'] as const;
 export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived'] as const;
@@ -12,8 +14,11 @@ export interface FindingContractManagerConfig {
   persona: string;
   personaPath?: string;
   personaDisplayName?: string;
+  providerRoutingPersonaKey?: string;
   instruction: string;
   outputContract: string;
+  provider?: ProviderType;
+  model?: string;
 }
 
 export interface FindingContractConfig {

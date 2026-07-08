@@ -1,7 +1,6 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
-import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowStep } from '../../models/types.js';
+import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowConfig, WorkflowStep } from '../../models/types.js';
 import {
-  FindingManagerOutputJsonSchema,
   RawFindingsOutputJsonSchema,
   parseFindingManagerOutput,
   parseReviewerRawFindings,
@@ -20,6 +19,9 @@ import type { StepExecutor } from '../engine/StepExecutor.js';
 import type { StepProviderInfo } from '../types.js';
 import { renderFencedJsonBlock } from '../instruction/fenced-json.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { buildFindingManagerStep } from './manager-step.js';
+
+export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 
 export interface FindingManagerSubStepResult {
   subStep: WorkflowStep;
@@ -28,6 +30,8 @@ export interface FindingManagerSubStepResult {
 
 interface RunFindingManagerForParallelStepInput {
   contract: FindingContractConfig;
+  workflowProvider?: WorkflowConfig['provider'];
+  workflowModel?: WorkflowConfig['model'];
   ledgerStore: FindingLedgerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
@@ -43,7 +47,6 @@ interface RunFindingManagerForParallelStepInput {
 }
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
-export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v1';
 export const RawFindingsStructuredOutput = {
   schemaRef: RAW_FINDINGS_SCHEMA_REF,
   schema: RawFindingsOutputJsonSchema,
@@ -117,23 +120,6 @@ function extractStructuredRawFindings(input: {
       stepName: result.subStep.name,
     }));
   });
-}
-
-function buildManagerStep(contract: FindingContractConfig): AgentWorkflowStep {
-  return {
-    kind: 'agent',
-    name: 'findings-manager',
-    persona: contract.manager.persona,
-    personaDisplayName: contract.manager.personaDisplayName ?? contract.manager.persona,
-    personaPath: contract.manager.personaPath,
-    instruction: contract.manager.instruction,
-    session: 'refresh',
-    edit: false,
-    structuredOutput: {
-      schemaRef: FINDING_MANAGER_SCHEMA_REF,
-      schema: FindingManagerOutputJsonSchema,
-    },
-  };
 }
 
 /**
@@ -404,7 +390,11 @@ export async function runFindingManagerForParallelStep(
     parentStepName: input.parentStep.name,
   });
   const rawFindingsPath = input.ledgerStore.saveRawFindings(input.runId, input.parentStep.name, rawFindings);
-  const managerStep = buildManagerStep(input.contract);
+  const managerStep = buildFindingManagerStep({
+    contract: input.contract,
+    workflowProvider: input.workflowProvider,
+    workflowModel: input.workflowModel,
+  });
   const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
 
   // フィールド等価で確定する raw（解消確認・open 指摘への完全一致）はコードで

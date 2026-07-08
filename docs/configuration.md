@@ -374,6 +374,8 @@ TAKT resolves model selection in two stages:
 1. **Base input model** - Before workflow execution starts, the input `model` is resolved from CLI `--model`, then config `model`, then the provider default.
 2. **Workflow step model** - For each workflow step, the effective model is resolved from step YAML `model`, then `provider_routing.steps.<step.name>`, then matching `provider_routing.tags` in the order written on the step, then `provider_routing.personas.<raw persona key>`, then deprecated `persona_providers.<persona display name>`, then `workflow_config.model`, then the already-resolved input `model`.
 
+For Finding Contract workflows, `finding_contract.manager.provider` and `finding_contract.manager.model` are treated as step-level provider/model values for the synthetic `findings-manager` step. They override `provider_routing`, deprecated `persona_providers.findings-manager`, workflow defaults, and resolved input values. When omitted, the manager uses the same fallback chain as any other workflow step.
+
 In workflow YAML, `model: null` is an explicit model omission for a normal step, parallel sub-step, or `loop_monitors.judge`. It differs from leaving `model` unspecified: an unspecified model continues to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input sources, while `model: null` stops model resolution at that entry and leaves the effective model undefined. Use it when the resolved provider should use its own CLI or provider default instead of inheriting another model source. Providers that require an explicit model still fail validation when no model is supplied.
 
 ### Provider-specific Model Notes
@@ -515,6 +517,8 @@ step YAML provider/model
 ```
 
 The resolved input is determined before workflow execution from CLI flags, then project `.takt/config.yaml`, then global `~/.takt/config.yaml`, then the provider default. Promotion entries, when active, are higher priority than the step YAML value.
+
+For the Finding Contract manager, `finding_contract.manager.provider` and `finding_contract.manager.model` occupy the `step YAML provider/model` position for the synthetic `findings-manager` step.
 
 ### Auto Routing
 
