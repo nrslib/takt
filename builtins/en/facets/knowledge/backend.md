@@ -259,6 +259,7 @@ class OrderExceptionHandler {
 | Throwing generic Exception or RuntimeException | REJECT. Use specific exception types |
 | Empty try-catch blocks | REJECT |
 | Controller swallowing exceptions and returning 200 | REJECT |
+| Expressing an actually reachable call pattern (e.g., a caller with a different role) as a 500 | REJECT. Make it an explicit 4xx; guarantee "unreachable" assumptions with authorization |
 
 ### Exception Translation Scope
 
@@ -414,6 +415,34 @@ fun execute(input: DeleteInput, currentUserId: String) {
 | Authorization logic in UseCase or domain layer | REJECT. Belongs in Controller layer |
 | Data access control in Controller | REJECT. Belongs in UseCase layer |
 | Authentication processing inside Controller | REJECT. Belongs in Filter/Interceptor |
+| Application-layer service reads the security context directly (e.g., resolving the current user) | REJECT. Resolve at the boundary and pass as an argument |
+| The same authorization check is duplicated in the Controller and a lower layer | REJECT. Consolidate the responsibility in one place |
+
+## Distinguishing the Caller from the Domain Actor
+
+Treat the API caller (authenticated principal) and the business actor recorded on the data (person in charge, author, confirmer) as separate concepts. They diverge on ingestion, delegated operations, and administrative paths.
+
+| Criteria | Judgment |
+|----------|----------|
+| Unconditionally recording the caller as the business actor | Warning. Verify it does not break on ingestion, delegated, or administrative paths |
+| Reusing the creation-time caller, via state, as the actor of later operations | REJECT. Pass the performer as an argument per operation |
+| Requiring an actor field before the business actor is actually determined | Warning. Check whether it can be recorded at the operation that determines it (approval, confirmation, etc.) |
+| Resolving denormalized display names (etc.) at the boundary of the operation that establishes the fact | OK |
+| Placing resolution logic that assumes the caller is a member of the resource on a path also used by non-members | REJECT |
+
+The author of a memo is "whoever performed that operation"; the confirmer is "whoever performed the confirmation". Obtain the actor from each operation's performer. Facts determined later, such as the person in charge, are recorded at the operation/event that determines them — do not force a value at creation time.
+
+```kotlin
+// NG - Store the creation-time caller in state and reuse it as the actor of later operations
+fun addMemo(text: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = this.registeredBy)  // registrant != memo author
+}
+
+// OK - Receive the performer per operation
+fun addMemo(text: String, authorId: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = authorId)
+}
+```
 
 ## Test Strategy
 

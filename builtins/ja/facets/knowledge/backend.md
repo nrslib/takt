@@ -259,6 +259,7 @@ class OrderExceptionHandler {
 | 汎用的な Exception や RuntimeException を throw | REJECT。具体的な例外型を使う |
 | try-catch の空 catch | REJECT |
 | Controller 内で例外を握りつぶして 200 を返す | REJECT |
+| 実際に到達し得る呼び出しパターン（別ロールの呼び出し者等）を 500 で表現する | REJECT。4xx で明示し、「到達しない」前提は認可で保証する |
 
 ### 例外変換のスコープ
 
@@ -414,6 +415,34 @@ fun execute(input: DeleteInput, currentUserId: String) {
 | 認可ロジックが UseCase 層やドメイン層にある | REJECT。Controller層で |
 | データアクセス制御が Controller にある | REJECT。UseCase層で |
 | 認証処理が Controller 内にある | REJECT。Filter/Interceptor で |
+| Application 層のサービスがセキュリティコンテキスト（現在ユーザーの解決等）を直接読む | REJECT。境界で解決し引数で渡す |
+| 同じ認可チェックが Controller と下位層で重複している | REJECT。責務を一箇所へ一本化 |
+
+## 呼び出し者とドメイン上のアクターの区別
+
+API の呼び出し者（認証主体）と、記録に残す業務上のアクター（担当者・作成者・確定者）は別の概念として扱う。取り込み・代理操作・管理経路では両者が一致しない。
+
+| 基準 | 判定 |
+|------|------|
+| 呼び出し者を無条件に業務上の担当者として記録する | 警告。取り込み・代理・管理経路で破綻しないか確認 |
+| 作成時の呼び出し者を、後続操作のアクターとして状態経由で流用する | REJECT。操作ごとに実行者を引数で渡す |
+| 業務上の担当者がまだ確定しない段階で担当者フィールドを必須にする | 警告。担当者が確定する操作（承認・確定等）の時点で記録できないか確認 |
+| 表示用に非正規化する氏名等を、その事実が確定する操作の境界で解決する | OK |
+| 呼び出し者がリソースの構成員である前提の解決処理を、構成員以外も通る経路に置く | REJECT |
+
+メモの作成者は「その操作をした本人」、確定者は「確定操作をした本人」のように、アクターは各操作の実行者から都度取得する。担当者のように後から確定する事実は、確定を表す操作・イベントの時点で記録し、作成時に無理に埋めない。
+
+```kotlin
+// NG - 作成時の呼び出し者を状態に保存し、後続操作のアクターとして流用
+fun addMemo(text: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = this.registeredBy)  // 登録者 ≠ メモ作成者
+}
+
+// OK - 操作ごとに実行者を受け取る
+fun addMemo(text: String, authorId: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = authorId)
+}
+```
 
 ## テスト戦略
 

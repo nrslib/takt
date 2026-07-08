@@ -52,6 +52,7 @@ The Command Model (Aggregate) role is to "receive commands, make decisions, and 
 | Holding fields not used for decisions | REJECT |
 | Branching state transitions with origin metadata such as `source` / `input` / `origin` / `channel` / `type` | REJECT by default |
 | Rejecting, only for a specific input source, a state allowed by the existing Aggregate's normal lifecycle | REJECT |
+| Keeping the creation-time caller in Aggregate state and reusing it as the actor of later events | REJECT. Pass the performer with each command |
 
 Being used in an `if` / `require` branch is not enough to justify keeping a field in Aggregate state. First verify that the branch or validation is an essential invariant of the whole Aggregate.
 
