@@ -202,10 +202,21 @@ function renderFencedTextBlock(content: string): string {
   return [`${fence}text`, content, fence].join('\n');
 }
 
-/** residual raws が参照する指摘（reopen・再確認の候補）は台帳スタブ化から除外して全文を渡す。 */
+/**
+ * residual raws が参照する指摘（reopen・再確認の候補）と、active conflict が
+ * 参照する指摘は台帳スタブ化から除外して全文を渡す。
+ */
 function collectFullDetailFindingIds(ledger: FindingLedger, residualRawFindings: readonly RawFinding[]): Set<string> {
   const rawFindingsById = new Map(ledger.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]));
   const ids = new Set<string>();
+  for (const conflict of ledger.conflicts) {
+    if (conflict.status !== 'active') {
+      continue;
+    }
+    for (const findingId of conflict.findingIds) {
+      ids.add(findingId);
+    }
+  }
   for (const raw of residualRawFindings) {
     if (raw.targetFindingId !== undefined) {
       ids.add(raw.targetFindingId);
@@ -396,11 +407,13 @@ export async function runFindingManagerForParallelStep(
   const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
 
   // フィールド等価で確定する raw（解消確認・open 指摘への完全一致）はコードで
-  // 分類し、判断が必要な残りだけを LLM manager に渡す。残りがゼロで、かつ
-  // waiver 判断の材料になる prior step response も無い場合は LLM を呼ばない。
+  // 分類し、判断が必要な残りだけを LLM manager に渡す。LLM を呼ばないのは
+  // 「残りゼロ・waiver 判断の材料になる prior step response なし・裁定待ちの
+  // active conflict なし」が全て揃う場合だけ。
   const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings });
   const hasPriorResponse = input.priorStepResponseText !== undefined && input.priorStepResponseText.trim() !== '';
-  const needsAgent = mechanical.residualRawFindings.length > 0 || hasPriorResponse;
+  const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
+  const needsAgent = mechanical.residualRawFindings.length > 0 || hasPriorResponse || hasActiveConflict;
 
   let managerOutput: FindingManagerOutput;
   let validation: FindingManagerValidationResult;

@@ -191,3 +191,27 @@ describe('mergeFindingManagerOutputs', () => {
     expect(base.matches[0]?.rawFindingIds).toEqual(['raw-a']);
   });
 });
+
+describe('classifyRawFindingsMechanically conflicting signals', () => {
+  it('Given a confirmation and a re-reported issue for the same finding When classified Then all related raws fall to residual', () => {
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirm',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    const reReport = makeRawFinding({
+      rawFindingId: 'raw-issue',
+      kind: 'issue',
+      location: 'src/a.ts:10',
+      familyTag: 'bug',
+    });
+    const result = classifyRawFindingsMechanically({
+      previousLedger: makeLedger(),
+      rawFindings: [confirmation, reReport],
+    });
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.output.matches).toEqual([]);
+    expect(new Set(result.residualRawFindings.map((raw) => raw.rawFindingId)))
+      .toEqual(new Set(['raw-confirm', 'raw-issue']));
+  });
+});

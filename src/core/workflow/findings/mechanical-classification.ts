@@ -58,6 +58,13 @@ export function classifyRawFindingsMechanically(input: {
 
   const resolvedByFindingId = new Map<string, { findingId: string; rawFindingIds: string[]; evidence: string }>();
   const matchesByFindingId = new Map<string, { findingId: string; rawFindingIds: string[] }>();
+  const rawsByFindingId = new Map<string, RawFinding[]>();
+
+  const trackRaw = (findingId: string, raw: RawFinding): void => {
+    const list = rawsByFindingId.get(findingId) ?? [];
+    list.push(raw);
+    rawsByFindingId.set(findingId, list);
+  };
 
   for (const raw of input.rawFindings) {
     if (raw.kind === 'resolution_confirmation') {
@@ -67,6 +74,7 @@ export function classifyRawFindingsMechanically(input: {
           ?? { findingId: target.id, rawFindingIds: [], evidence: raw.description };
         entry.rawFindingIds.push(raw.rawFindingId);
         resolvedByFindingId.set(target.id, entry);
+        trackRaw(target.id, raw);
         continue;
       }
       // 対象不明・既に解消済みへの確認は判断（reopen / conflict / no-op）が絡むため LLM へ。
@@ -84,9 +92,21 @@ export function classifyRawFindingsMechanically(input: {
       const entry = matchesByFindingId.get(target.id) ?? { findingId: target.id, rawFindingIds: [] };
       entry.rawFindingIds.push(raw.rawFindingId);
       matchesByFindingId.set(target.id, entry);
+      trackRaw(target.id, raw);
       continue;
     }
     residualRawFindings.push(raw);
+  }
+
+  // 同じ指摘に「解消確認」と「再報告（issue 一致）」が同時に来た場合は
+  // レビュワー間の食い違いであり、conflict 裁定は manager の判断領域。
+  // 両側の raw をすべて residual に落とし、機械分類からは取り下げる。
+  for (const findingId of [...resolvedByFindingId.keys()]) {
+    if (matchesByFindingId.has(findingId)) {
+      resolvedByFindingId.delete(findingId);
+      matchesByFindingId.delete(findingId);
+      residualRawFindings.push(...(rawsByFindingId.get(findingId) ?? []));
+    }
   }
 
   output.resolvedFindings = [...resolvedByFindingId.values()];

@@ -215,3 +215,94 @@ describe('runFindingManagerForParallelStep mechanical path', () => {
     expect(result.status).toBe('updated');
   });
 });
+
+describe('runFindingManagerForParallelStep conflict handling', () => {
+  it('Given an active conflict in the ledger When all raws are mechanical Then the agent is still called', async () => {
+    executeAgentMock.mockResolvedValue({
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        matches: [],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+      },
+    } as unknown as AgentResponse);
+
+    const ledger = makeLedger({
+      conflicts: [
+        {
+          id: 'C-0001',
+          status: 'active',
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-existing'],
+          description: 'Reviewers disagree about F-0001.',
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+    });
+    const harness = makeHarness(ledger);
+    const result = await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('updated');
+  });
+
+  it('Given an active conflict referencing a resolved finding When the agent is called Then that finding keeps full detail in the instruction', async () => {
+    executeAgentMock.mockResolvedValue({
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        matches: [],
+        newFindings: [
+          { rawFindingIds: ['run-2:reviewers:2:arch-review:i-1'], title: 'New unmatched issue', severity: 'medium' },
+        ],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+      },
+    } as unknown as AgentResponse);
+
+    const ledger = makeLedger({
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'resolved',
+          lifecycle: 'resolved',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/a.ts:10',
+          description: 'Original detailed description of the conflicted finding.',
+          reviewers: ['arch-review'],
+          rawFindingIds: ['raw-existing'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+      conflicts: [
+        {
+          id: 'C-0001',
+          status: 'active',
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-existing'],
+          description: 'Reviewers disagree about F-0001.',
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+    });
+    const harness = makeHarness(ledger);
+    await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW] });
+
+    const instruction = executeAgentMock.mock.calls[0]?.[1] as string;
+    expect(instruction).toContain('Original detailed description of the conflicted finding.');
+  });
+});
