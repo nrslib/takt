@@ -7,6 +7,7 @@ import {
   parseReviewerRawFindings,
 } from './schemas.js';
 import { reconcileFindingLedger } from './reconciler.js';
+import { classifyRawFindingsMechanically, mergeFindingManagerOutputs } from './mechanical-classification.js';
 import type { FindingLedgerStore, FindingManagerValidationAttemptReport } from './store.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
 import {
@@ -134,32 +135,53 @@ function buildManagerStep(contract: FindingContractConfig): AgentWorkflowStep {
   };
 }
 
-function buildManagerInputLedger(ledger: FindingLedger): unknown {
+/**
+ * manager へ渡す台帳ビューを構築する。
+ * 解消済み・免除済みの指摘は照合キー（id / status / title / location）だけの
+ * スタブに落とし、本文と raw findings 全文は open な指摘と、residual raws が
+ * 参照する指摘（reopen 候補）だけに載せる。台帳肥大による manager の
+ * トークン消費を抑えるため。
+ */
+function buildManagerInputLedger(ledger: FindingLedger, fullDetailFindingIds?: ReadonlySet<string>): unknown {
   const rawFindingsById = new Map(ledger.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]));
+  const needsFullDetail = (finding: FindingLedger['findings'][number]): boolean =>
+    finding.status === 'open'
+    || fullDetailFindingIds === undefined
+    || fullDetailFindingIds.has(finding.id);
   return {
     version: ledger.version,
     workflowName: ledger.workflowName,
     nextId: ledger.nextId,
     updatedAt: ledger.updatedAt,
-    findings: ledger.findings.map((finding) => ({
-      id: finding.id,
-      status: finding.status,
-      lifecycle: finding.lifecycle,
-      severity: finding.severity,
-      title: finding.title,
-      location: finding.location,
-      description: finding.description,
-      suggestion: finding.suggestion,
-      reviewers: finding.reviewers,
-      rawFindingIds: finding.rawFindingIds,
-      rawFindings: finding.rawFindingIds
-        .map((rawFindingId) => rawFindingsById.get(rawFindingId))
-        .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined),
-      firstSeen: finding.firstSeen,
-      lastSeen: finding.lastSeen,
-      waivers: finding.waivers,
-      disputes: finding.disputes,
-    })),
+    findings: ledger.findings.map((finding) => (needsFullDetail(finding)
+      ? {
+        id: finding.id,
+        status: finding.status,
+        lifecycle: finding.lifecycle,
+        severity: finding.severity,
+        title: finding.title,
+        location: finding.location,
+        description: finding.description,
+        suggestion: finding.suggestion,
+        reviewers: finding.reviewers,
+        rawFindingIds: finding.rawFindingIds,
+        rawFindings: finding.rawFindingIds
+          .map((rawFindingId) => rawFindingsById.get(rawFindingId))
+          .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined),
+        firstSeen: finding.firstSeen,
+        lastSeen: finding.lastSeen,
+        waivers: finding.waivers,
+        disputes: finding.disputes,
+      }
+      : {
+        id: finding.id,
+        status: finding.status,
+        lifecycle: finding.lifecycle,
+        severity: finding.severity,
+        title: finding.title,
+        location: finding.location,
+        lastSeen: finding.lastSeen,
+      })),
     conflicts: ledger.conflicts.map((conflict) => ({
       id: conflict.id,
       status: conflict.status,
@@ -180,22 +202,55 @@ function renderFencedTextBlock(content: string): string {
   return [`${fence}text`, content, fence].join('\n');
 }
 
+/** residual raws が参照する指摘（reopen・再確認の候補）は台帳スタブ化から除外して全文を渡す。 */
+function collectFullDetailFindingIds(ledger: FindingLedger, residualRawFindings: readonly RawFinding[]): Set<string> {
+  const rawFindingsById = new Map(ledger.rawFindings.map((rawFinding) => [rawFinding.rawFindingId, rawFinding]));
+  const ids = new Set<string>();
+  for (const raw of residualRawFindings) {
+    if (raw.targetFindingId !== undefined) {
+      ids.add(raw.targetFindingId);
+    }
+    for (const finding of ledger.findings) {
+      if (raw.location !== undefined && finding.location === raw.location) {
+        ids.add(finding.id);
+        continue;
+      }
+      const tagMatched = finding.rawFindingIds.some((id) => rawFindingsById.get(id)?.familyTag === raw.familyTag);
+      if (tagMatched) {
+        ids.add(finding.id);
+      }
+    }
+  }
+  return ids;
+}
+
 function buildManagerInstruction(input: {
   contract: FindingContractConfig;
   previousLedger: FindingLedger;
   ledgerCopyPath: string;
   rawFindingsPath: string;
-  rawFindings: RawFinding[];
+  residualRawFindings: RawFinding[];
+  mechanicallyClassifiedCount: number;
   priorStepResponseText?: string;
 }): string {
-  const managerInputLedger = buildManagerInputLedger(input.previousLedger);
+  const managerInputLedger = buildManagerInputLedger(
+    input.previousLedger,
+    collectFullDetailFindingIds(input.previousLedger, input.residualRawFindings),
+  );
+  const mechanicalNote = input.mechanicallyClassifiedCount > 0
+    ? [
+      input.contract.manager.instruction,
+      '',
+      `NOTE: ${input.mechanicallyClassifiedCount} raw findings (exact resolution confirmations and exact matches to open findings) were already classified mechanically by the engine and are NOT shown below. Classify only the raw findings listed below. Do not reference raw finding ids that are not listed.`,
+    ].join('\n')
+    : input.contract.manager.instruction;
   return loadTemplate('finding_manager_instruction', 'en', {
-    managerInstruction: input.contract.manager.instruction,
+    managerInstruction: mechanicalNote,
     outputContract: input.contract.manager.outputContract,
     ledgerCopyPath: input.ledgerCopyPath,
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),
     rawFindingsPath: input.rawFindingsPath,
-    rawFindings: renderFencedJsonBlock(input.rawFindings),
+    rawFindings: renderFencedJsonBlock(input.residualRawFindings),
     coderResponse: renderFencedTextBlock(input.priorStepResponseText ?? '(no prior step response)'),
   });
 }
@@ -260,18 +315,22 @@ async function runManagerAttempt(input: {
 async function runManagerWithSemanticRetry(input: {
   previousLedger: FindingLedger;
   rawFindings: RawFinding[];
+  mechanicalOutput: FindingManagerOutput;
   managerStep: AgentWorkflowStep;
   instruction: string;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
   priorStepResponseText?: string;
 }): Promise<ValidatedManagerOutputRun> {
-  const firstManagerOutput = await runManagerAttempt({
+  // 検証は「機械分類 + LLM 分類」を統合した最終形に対して行う。
+  // 全 raw finding の網羅性は統合後でしか成立しないため。
+  const firstAgentOutput = await runManagerAttempt({
     managerStep: input.managerStep,
     instruction: input.instruction,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
   });
+  const firstManagerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, firstAgentOutput);
   const firstValidation = validateFindingManagerOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
@@ -287,16 +346,17 @@ async function runManagerWithSemanticRetry(input: {
     managerOutput: firstManagerOutput,
     validationErrors: firstValidation.errors,
   };
-  const retryManagerOutput = await runManagerAttempt({
+  const retryAgentOutput = await runManagerAttempt({
     managerStep: input.managerStep,
     instruction: buildManagerRetryInstruction({
       originalInstruction: input.instruction,
       validationErrors: firstValidation.errors,
-      managerOutput: firstManagerOutput,
+      managerOutput: firstAgentOutput,
     }),
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
   });
+  const retryManagerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, retryAgentOutput);
   const retryValidation = validateFindingManagerOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
@@ -333,28 +393,50 @@ export async function runFindingManagerForParallelStep(
   });
   const rawFindingsPath = input.ledgerStore.saveRawFindings(input.runId, input.parentStep.name, rawFindings);
   const managerStep = buildManagerStep(input.contract);
-  const instruction = buildManagerInstruction({
-    contract: input.contract,
-    previousLedger,
-    ledgerCopyPath,
-    rawFindingsPath,
-    rawFindings,
-    priorStepResponseText: input.priorStepResponseText,
-  });
   const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
-  const {
-    managerOutput,
-    validation,
-    invalidAttempts,
-  } = await runManagerWithSemanticRetry({
-    previousLedger,
-    rawFindings,
-    managerStep,
-    instruction,
-    optionsBuilder: input.optionsBuilder,
-    stepExecutor: input.stepExecutor,
-    priorStepResponseText: input.priorStepResponseText,
-  });
+
+  // フィールド等価で確定する raw（解消確認・open 指摘への完全一致）はコードで
+  // 分類し、判断が必要な残りだけを LLM manager に渡す。残りがゼロで、かつ
+  // waiver 判断の材料になる prior step response も無い場合は LLM を呼ばない。
+  const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings });
+  const hasPriorResponse = input.priorStepResponseText !== undefined && input.priorStepResponseText.trim() !== '';
+  const needsAgent = mechanical.residualRawFindings.length > 0 || hasPriorResponse;
+
+  let managerOutput: FindingManagerOutput;
+  let validation: FindingManagerValidationResult;
+  let invalidAttempts: FindingManagerValidationAttemptReport[];
+  if (needsAgent) {
+    const instruction = buildManagerInstruction({
+      contract: input.contract,
+      previousLedger,
+      ledgerCopyPath,
+      rawFindingsPath,
+      residualRawFindings: mechanical.residualRawFindings,
+      mechanicallyClassifiedCount: rawFindings.length - mechanical.residualRawFindings.length,
+      priorStepResponseText: input.priorStepResponseText,
+    });
+    ({ managerOutput, validation, invalidAttempts } = await runManagerWithSemanticRetry({
+      previousLedger,
+      rawFindings,
+      mechanicalOutput: mechanical.output,
+      managerStep,
+      instruction,
+      optionsBuilder: input.optionsBuilder,
+      stepExecutor: input.stepExecutor,
+      priorStepResponseText: input.priorStepResponseText,
+    }));
+  } else {
+    managerOutput = mechanical.output;
+    validation = validateFindingManagerOutput({
+      previousLedger,
+      rawFindings,
+      managerOutput,
+      priorStepResponseText: input.priorStepResponseText,
+    });
+    invalidAttempts = validation.ok
+      ? []
+      : [{ attempt: 1, managerOutput, validationErrors: validation.errors }];
+  }
 
   if (!validation.ok) {
     const reportPath = input.ledgerStore.saveManagerValidationReport({
