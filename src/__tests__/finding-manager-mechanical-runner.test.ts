@@ -189,6 +189,17 @@ describe('runFindingManagerForParallelStep mechanical path', () => {
     expect(ledger?.findings.some((entry) => entry.title === 'New unmatched issue' && entry.status === 'open')).toBe(true);
   });
 
+  it('Given zero residual and a prior response without a Disputed Findings heading When run Then the agent is skipped', async () => {
+    const harness = makeHarness(makeLedger());
+    const result = await harness.run({
+      reviewerRawFindings: [CONFIRMATION_RAW],
+      priorStepResponseText: 'F-0001 を修正しました。全テスト green です。',
+    });
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(result.status).toBe('updated');
+  });
+
   it('Given zero residual but a prior step response When run Then the agent is still called for waiver adjudication', async () => {
     executeAgentMock.mockResolvedValue({
       status: 'done',

@@ -77,6 +77,20 @@ const FILE_LINE_EVIDENCE_PATTERN = /[^\s:]+\.[A-Za-z0-9_]+:\d+/;
  * する entry があり、その同一 entry 内に file:line 証跡がある」ことを判定する。
  * 別 finding の entry 内に対象 ID が付随的に現れただけでは claim と認めない。
  */
+/**
+ * 直前ステップ応答に「Disputed Findings」見出しがあるかを判定する。
+ * waiver はこの見出し配下の claim からしか成立しないため、見出しが無い応答は
+ * manager の判断材料を含まない（機械分類のみで完結できるかの判定に使う）。
+ */
+export function hasDisputeClaimsHeading(priorStepResponseText: string | undefined): boolean {
+  if (priorStepResponseText === undefined) {
+    return false;
+  }
+  return priorStepResponseText
+    .split('\n')
+    .some((line) => /^#{1,6}\s.*disputed findings/i.test(line.trim()));
+}
+
 function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId: string): boolean {
   if (priorStepResponseText === undefined) {
     return false;

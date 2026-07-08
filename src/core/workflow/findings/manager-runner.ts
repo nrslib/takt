@@ -11,6 +11,7 @@ import { classifyRawFindingsMechanically, mergeFindingManagerOutputs } from './m
 import type { FindingLedgerStore, FindingManagerValidationAttemptReport } from './store.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
 import {
+  hasDisputeClaimsHeading,
   validateFindingManagerOutput,
   type FindingManagerValidationResult,
 } from './manager-output-validation.js';
@@ -408,12 +409,13 @@ export async function runFindingManagerForParallelStep(
 
   // フィールド等価で確定する raw（解消確認・open 指摘への完全一致）はコードで
   // 分類し、判断が必要な残りだけを LLM manager に渡す。LLM を呼ばないのは
-  // 「残りゼロ・waiver 判断の材料になる prior step response なし・裁定待ちの
-  // active conflict なし」が全て揃う場合だけ。
+  // 「残りゼロ・prior step response に異議申告（Disputed Findings 見出し）なし・
+  // 裁定待ちの active conflict なし」が全て揃う場合だけ。waiver は見出し配下の
+  // claim からしか成立しないため、見出しの無い応答は判断材料を含まない。
   const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings });
-  const hasPriorResponse = input.priorStepResponseText !== undefined && input.priorStepResponseText.trim() !== '';
+  const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
   const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
-  const needsAgent = mechanical.residualRawFindings.length > 0 || hasPriorResponse || hasActiveConflict;
+  const needsAgent = mechanical.residualRawFindings.length > 0 || hasDisputeClaims || hasActiveConflict;
 
   let managerOutput: FindingManagerOutput;
   let validation: FindingManagerValidationResult;
