@@ -227,6 +227,33 @@ describe('runFindingManagerForParallelStep mechanical path', () => {
   });
 });
 
+describe('runFindingManagerForParallelStep invalid manager output', () => {
+  it('Given the agent returns semantically invalid output twice When run Then the result is invalid_manager_output and the ledger is not saved', async () => {
+    // 存在しない findingId への match は意味検証で invalid になる。
+    executeAgentMock.mockResolvedValue({
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        matches: [{ findingId: 'F-9999', rawFindingIds: ['run-2:reviewers:2:arch-review:i-1'], evidence: null }],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+      },
+    } as unknown as AgentResponse);
+
+    const harness = makeHarness(makeLedger());
+    const result = await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW] });
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('invalid_manager_output');
+    expect(harness.savedLedgers).toHaveLength(0);
+  });
+});
+
 describe('runFindingManagerForParallelStep conflict handling', () => {
   it('Given an active conflict in the ledger When all raws are mechanical Then the agent is still called', async () => {
     executeAgentMock.mockResolvedValue({
