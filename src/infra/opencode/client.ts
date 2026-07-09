@@ -354,11 +354,14 @@ async function postmortemRateLimitError(
     return undefined;
   }
 
-  const latestAssistantInfo = [...messages]
-    .reverse()
-    .map((message) => message.info)
-    .find((info): info is Extract<typeof info, { role: 'assistant' }> => info?.role === 'assistant');
-  const error = latestAssistantInfo?.error;
+  // 末尾が assistant でないなら、今回のターンの応答はまだ作られていない。
+  // ここで過去へ遡ると、セッション再利用時に前回ターンの 429 を今回の死因と
+  // 誤認する（[前回 assistant 429, 今回 user prompt] のまま無音停止する形）。
+  const latestInfo = messages[messages.length - 1]?.info;
+  if (latestInfo?.role !== 'assistant') {
+    return undefined;
+  }
+  const error = latestInfo.error;
   if (error === undefined) {
     return undefined;
   }

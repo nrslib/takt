@@ -2628,6 +2628,29 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   }, 20_000);
 
+  it('Given an older assistant carries a 429 and the latest message is still a user turn When the idle watchdog fires Then the stale rate limit is not reported', async () => {
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';
+    try {
+      // セッション再利用で「前回 assistant の 429 → 今回 user prompt → assistant
+      // 未生成のまま無音停止」という並びを再現する。
+      const result = await runStalledSessionScenario([
+        {
+          info: {
+            role: 'assistant',
+            error: { name: 'APIError', data: { message: 'Too Many Requests', statusCode: 429, isRetryable: true } },
+          },
+          parts: [],
+        },
+        { info: { role: 'user' }, parts: [] },
+      ]);
+
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('timed out');
+    } finally {
+      delete process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+    }
+  }, 20_000);
+
   it('Given the latest assistant error exposes the rate limit only in a top level message When the idle watchdog fires Then it is reported as rate limited', async () => {
     process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';
     try {
