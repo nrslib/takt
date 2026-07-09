@@ -2693,6 +2693,8 @@ describe('OpenCodeClient stream cleanup', () => {
 
   it('Given the postmortem query hangs When the idle watchdog fires Then the timeout error is preserved without hanging', async () => {
     process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';
+    // 検死 RPC のハングを実時間 5 秒待たない（CI でのフレークを避ける）
+    process.env.TAKT_OPENCODE_POSTMORTEM_TIMEOUT_MS = '200';
     try {
       const { OpenCodeClient } = await import('../infra/opencode/client.js');
       const chatterStream = new ChatterOnlyEventStream(100);
@@ -2720,8 +2722,9 @@ describe('OpenCodeClient stream cleanup', () => {
       expect(result.error).toContain('timed out');
     } finally {
       delete process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+      delete process.env.TAKT_OPENCODE_POSTMORTEM_TIMEOUT_MS;
     }
-  }, 30_000);
+  }, 20_000);
 
   it('Given the postmortem query itself fails When the idle watchdog fires Then the timeout error is preserved', async () => {
     process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '300';

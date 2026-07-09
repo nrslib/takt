@@ -298,8 +298,15 @@ export type OpenCodeSessionMessages = NonNullable<Awaited<ReturnType<OpencodeCli
 
 /** レート制限を示す HTTP ステータス。プロバイダは 429 を返す。 */
 const RATE_LIMIT_STATUS_CODE = 429;
-/** 検死 RPC の上限。検死自体がハングして再度の無限待ちを招かないようにする。 */
-const OPENCODE_POSTMORTEM_TIMEOUT_MS = 5000;
+
+/**
+ * 検死 RPC の上限。検死自体がハングして再度の無限待ちを招かないようにする。
+ * 呼び出し時に評価する（テストで env から上書きできるようにする）。
+ */
+function resolvePostmortemTimeoutMs(): number {
+  const fromEnv = Number(process.env.TAKT_OPENCODE_POSTMORTEM_TIMEOUT_MS);
+  return fromEnv > 0 ? fromEnv : 5000;
+}
 
 /** statusCode は数値でも文字列でも来うるため正規化する。 */
 function extractStatusCode(error: unknown): number | undefined {
@@ -338,7 +345,7 @@ async function postmortemRateLimitError(
   try {
     const result = await withTimeout(
       (signal) => client.session.messages({ sessionID, directory }, { signal }),
-      OPENCODE_POSTMORTEM_TIMEOUT_MS,
+      resolvePostmortemTimeoutMs(),
       'OpenCode rate limit postmortem timed out',
     );
     if (!result.data) {
@@ -1318,10 +1325,11 @@ export class OpenCodeClient {
               options.cwd,
             );
             if (rateLimitMessage !== undefined) {
+              // プロバイダ由来の生エラー文はリクエスト内容やアカウント情報を
+              // 含みうるため、分類済みの事実だけを永続化する。
               log.warn('OpenCode stream stalled on a provider rate limit', {
                 sessionId: activeSessionId,
                 model: options.model,
-                error: rateLimitMessage,
               });
               // 検死で 429 と確定済み。message 文字列に 429 の語が含まれるとは
               // 限らない（statusCode だけで判定した場合）ため再判定はしない。
