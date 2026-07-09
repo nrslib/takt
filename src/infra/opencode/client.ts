@@ -1006,6 +1006,15 @@ export class OpenCodeClient {
               const toolPart = part as OpenCodeToolPart;
               let loopError: string | undefined;
               if (toolPart.state.status === 'error') {
+                // 失敗したツール呼び出しの引数を残す。エラー文だけでは
+                // モデルが何をどう間違えたか（スキーマ違反の該当欄、
+                // 幻覚パス、oldString の不一致）を後から特定できない。
+                log.debug('OpenCode tool call failed', {
+                  tool: toolPart.tool,
+                  callId: toolPart.callID || toolPart.id,
+                  error: toolPart.state.error,
+                  input: toolPart.state.input,
+                });
                 // 両検出器に必ず観測させる（?? 短絡だと invalid 側が
                 // unavailable エラーを見逃し、連続性の判定が狂う）
                 const unavailableError = unavailableToolLoopDetector.observe(
