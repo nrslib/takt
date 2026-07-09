@@ -336,17 +336,11 @@ async function postmortemRateLimitError(
 ): Promise<string | undefined> {
   let messages: OpenCodeSessionMessages;
   try {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const result = await Promise.race([
-      client.session.messages({ sessionID, directory }),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('OpenCode postmortem timed out')), OPENCODE_POSTMORTEM_TIMEOUT_MS);
-      }),
-    ]).finally(() => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
-    });
+    const result = await withTimeout(
+      (signal) => client.session.messages({ sessionID, directory }, { signal }),
+      OPENCODE_POSTMORTEM_TIMEOUT_MS,
+      'OpenCode rate limit postmortem timed out',
+    );
     if (!result.data) {
       return undefined;
     }
