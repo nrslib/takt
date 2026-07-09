@@ -148,7 +148,7 @@ steps:
       - condition: 実装完了
         next: reviewers
       - condition: 実装を進められない（環境問題・情報不足）
-        next: ABORT
+        next: plan
 
   - name: reviewers
     tags:

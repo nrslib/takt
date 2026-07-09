@@ -141,7 +141,7 @@ steps:
       - condition: Implementation is complete
         next: reviewers
       - condition: Cannot proceed with implementation (environment issue or missing information)
-        next: ABORT
+        next: plan
 
   - name: reviewers
     tags:
