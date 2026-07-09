@@ -298,14 +298,36 @@ export type OpenCodeSessionMessages = NonNullable<Awaited<ReturnType<OpencodeCli
 
 /** レート制限を示す HTTP ステータス。プロバイダは 429 を返す。 */
 const RATE_LIMIT_STATUS_CODE = 429;
+/** 検死 RPC の上限。検死自体がハングして再度の無限待ちを招かないようにする。 */
+const OPENCODE_POSTMORTEM_TIMEOUT_MS = 5000;
+
+/** statusCode は数値でも文字列でも来うるため正規化する。 */
+function extractStatusCode(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined;
+  }
+  const data = (error as { data?: { statusCode?: unknown } }).data;
+  const raw = data?.statusCode;
+  if (typeof raw === 'number') {
+    return raw;
+  }
+  if (typeof raw === 'string') {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
 
 /**
- * セッションの最後の assistant メッセージのエラーを検死し、レート制限なら
- * その内容を返す。
+ * 直近の assistant メッセージのエラーを検死し、レート制限ならその内容を返す。
  *
  * OpenCode サーバはプロバイダの 429 を内部リトライで握り、イベントバスへ
  * session.error を流さない。takt からは「無音のまま停止したセッション」に
  * 見えるため、無音ウォッチドッグのタイムアウト後にここで死因を確かめる。
+ *
+ * 判定するのは「最新の assistant メッセージ」だけに限る。sessionId は phase や
+ * resume で再利用されるため、過去の assistant に残る古い 429 を今回の死因と
+ * 誤認しないようにする。
  */
 async function postmortemRateLimitError(
   client: OpencodeClient,
@@ -314,13 +336,23 @@ async function postmortemRateLimitError(
 ): Promise<string | undefined> {
   let messages: OpenCodeSessionMessages;
   try {
-    const result = await client.session.messages({ sessionID, directory });
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      client.session.messages({ sessionID, directory }),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('OpenCode postmortem timed out')), OPENCODE_POSTMORTEM_TIMEOUT_MS);
+      }),
+    ]).finally(() => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    });
     if (!result.data) {
       return undefined;
     }
     messages = result.data;
   } catch (error) {
-    // 検死そのものの失敗で本来のエラーを覆い隠さない。
+    // 検死そのものの失敗（RPC エラー・ハング）で本来のエラーを覆い隠さない。
     log.debug('Rate limit postmortem could not read session messages', {
       sessionID,
       error: getErrorMessage(error),
@@ -328,24 +360,20 @@ async function postmortemRateLimitError(
     return undefined;
   }
 
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const info = messages[index]?.info;
-    if (info?.role !== 'assistant') {
-      continue;
-    }
-    const error = info.error;
-    if (error === undefined) {
-      continue;
-    }
-    const data = error.data as { message?: unknown; statusCode?: unknown } | undefined;
-    const message = typeof data?.message === 'string' ? data.message : undefined;
-    const statusCode = typeof data?.statusCode === 'number' ? data.statusCode : undefined;
-    if (statusCode === RATE_LIMIT_STATUS_CODE || (message !== undefined && containsRateLimitError(message))) {
-      return message ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
-    }
-    // 直近の assistant メッセージにレート制限以外のエラーが乗っているなら、
-    // それが死因なので探索を打ち切る。
+  const latestAssistantInfo = [...messages]
+    .reverse()
+    .map((message) => message.info)
+    .find((info): info is Extract<typeof info, { role: 'assistant' }> => info?.role === 'assistant');
+  const error = latestAssistantInfo?.error;
+  if (error === undefined) {
     return undefined;
+  }
+  const message = extractOpenCodeErrorMessage(error);
+  if (extractStatusCode(error) === RATE_LIMIT_STATUS_CODE) {
+    return message ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
+  }
+  if (message !== undefined && containsRateLimitError(message)) {
+    return message;
   }
   return undefined;
 }
@@ -1278,7 +1306,7 @@ export class OpenCodeClient {
         diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
 
         if (!success) {
-          let message = failureMessage || 'OpenCode execution failed';
+          const message = failureMessage || 'OpenCode execution failed';
           // 無音タイムアウトで止めた場合、死因はサーバが握った 429 かもしれない。
           // メッセージ文字列だけでは判別できないため、セッションを検死する。
           if (
@@ -1298,7 +1326,11 @@ export class OpenCodeClient {
                 model: options.model,
                 error: rateLimitMessage,
               });
-              message = rateLimitMessage;
+              // 検死で 429 と確定済み。message 文字列に 429 の語が含まれるとは
+              // 限らない（statusCode だけで判定した場合）ため再判定はしない。
+              const rateLimitedResponse = this.buildRateLimitedResponse(agentType, activeSessionId, rateLimitMessage);
+              emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
+              return rateLimitedResponse;
             }
           }
           if (containsRateLimitError(message)) {
