@@ -296,6 +296,60 @@ export async function getOpenCodeSessionSnapshot(
 
 export type OpenCodeSessionMessages = NonNullable<Awaited<ReturnType<OpencodeClient['session']['messages']>>['data']>;
 
+/** レート制限を示す HTTP ステータス。プロバイダは 429 を返す。 */
+const RATE_LIMIT_STATUS_CODE = 429;
+
+/**
+ * セッションの最後の assistant メッセージのエラーを検死し、レート制限なら
+ * その内容を返す。
+ *
+ * OpenCode サーバはプロバイダの 429 を内部リトライで握り、イベントバスへ
+ * session.error を流さない。takt からは「無音のまま停止したセッション」に
+ * 見えるため、無音ウォッチドッグのタイムアウト後にここで死因を確かめる。
+ */
+async function postmortemRateLimitError(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+): Promise<string | undefined> {
+  let messages: OpenCodeSessionMessages;
+  try {
+    const result = await client.session.messages({ sessionID, directory });
+    if (!result.data) {
+      return undefined;
+    }
+    messages = result.data;
+  } catch (error) {
+    // 検死そのものの失敗で本来のエラーを覆い隠さない。
+    log.debug('Rate limit postmortem could not read session messages', {
+      sessionID,
+      error: getErrorMessage(error),
+    });
+    return undefined;
+  }
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const info = messages[index]?.info;
+    if (info?.role !== 'assistant') {
+      continue;
+    }
+    const error = info.error;
+    if (error === undefined) {
+      continue;
+    }
+    const data = error.data as { message?: unknown; statusCode?: unknown } | undefined;
+    const message = typeof data?.message === 'string' ? data.message : undefined;
+    const statusCode = typeof data?.statusCode === 'number' ? data.statusCode : undefined;
+    if (statusCode === RATE_LIMIT_STATUS_CODE || (message !== undefined && containsRateLimitError(message))) {
+      return message ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
+    }
+    // 直近の assistant メッセージにレート制限以外のエラーが乗っているなら、
+    // それが死因なので探索を打ち切る。
+    return undefined;
+  }
+  return undefined;
+}
+
 export async function getOpenCodeSessionMessages(
   model: string,
   sessionID: string,
@@ -1224,7 +1278,29 @@ export class OpenCodeClient {
         diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
 
         if (!success) {
-          const message = failureMessage || 'OpenCode execution failed';
+          let message = failureMessage || 'OpenCode execution failed';
+          // 無音タイムアウトで止めた場合、死因はサーバが握った 429 かもしれない。
+          // メッセージ文字列だけでは判別できないため、セッションを検死する。
+          if (
+            abortCause === 'timeout'
+            && !containsRateLimitError(message)
+            && opencodeApiClient !== undefined
+            && activeSessionId !== undefined
+          ) {
+            const rateLimitMessage = await postmortemRateLimitError(
+              opencodeApiClient,
+              activeSessionId,
+              options.cwd,
+            );
+            if (rateLimitMessage !== undefined) {
+              log.warn('OpenCode stream stalled on a provider rate limit', {
+                sessionId: activeSessionId,
+                model: options.model,
+                error: rateLimitMessage,
+              });
+              message = rateLimitMessage;
+            }
+          }
           if (containsRateLimitError(message)) {
             const rateLimitedResponse = this.buildRateLimitedResponse(agentType, activeSessionId, message);
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
