@@ -134,6 +134,39 @@ function coerceToolArgsPluginPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), 'plugins', 'coerce-tool-args.js');
 }
 
+/**
+ * OpenCode がツール呼び出しを拒否したときの、ツール名とエラー文を取り出す。
+ *
+ * OpenCode は2種類の拒否を `invalid` という擬似ツールの **status: 'completed'**
+ * として返す。存在しないツール名（`Model tried to call unavailable tool 'run'`）と、
+ * 実在ツールの引数不備（`Required argument 'filePath' is missing or invalid`）。
+ *
+ * 3 つの検出器はどれも status === 'error' でしか観測しないため、拒否がまるごと
+ * 死角に入る。実測: qwen が implement で 195 回連続して invalid を踏み、
+ * ループ検出も引数不正検出もエラー予算も一度も発火せず、cycle budget を
+ * 焼き切って abort した。しかも invalid は completed なので「ツールが成功した」
+ * として空転の計数までリセットしていた。
+ *
+ * 本来呼ぼうとしたツール名は state.input.tool に入っている。検出器は連続性と
+ * 総量で判断するので、1〜2 回の空振り（モデルが自力で直す場合）では発火しない。
+ */
+function extractOpenCodeToolRejection(
+  toolPart: OpenCodeToolPart,
+): { tool: string; error: string } | undefined {
+  if (toolPart.state.status === 'error') {
+    return { tool: toolPart.tool, error: toolPart.state.error };
+  }
+  if (toolPart.tool !== 'invalid' || toolPart.state.status !== 'completed') {
+    return undefined;
+  }
+  const input = toolPart.state.input as { tool?: unknown; error?: unknown } | undefined;
+  const attemptedTool = typeof input?.tool === 'string' ? input.tool : 'invalid';
+  const error = typeof input?.error === 'string'
+    ? input.error
+    : (typeof toolPart.state.output === 'string' ? toolPart.state.output : 'OpenCode rejected the tool call');
+  return { tool: attemptedTool, error };
+}
+
 /** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
 function resolveMessageCycleBudget(): number {
   const fromEnv = Number(process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET);
@@ -1133,7 +1166,11 @@ export class OpenCodeClient {
         // 数えるのは「ツール呼び出しが1つも成功しないまま続いたサイクル」に限る。
         // 総サイクル数で打ち切ると、健全な作業まで巻き込む（実測: 9万行の
         // リポジトリで implement が 120 サイクル・ツール成功 150 回の途中で
-        // 打ち切られた）。空転はツールを成功させないので、この数え方で分離できる。
+        // 打ち切られた）。
+        //
+        // OpenCode が拒否した呼び出し（`invalid` 擬似ツール）は status='completed'
+        // で返るため、素直に completed でリセットすると空転もリセットされる。
+        // extractOpenCodeToolRejection() で拒否を先に切り分けてから数える。
         let cyclesWithoutToolSuccess = 0;
         const messageCycleBudget = resolveMessageCycleBudget();
 
@@ -1182,38 +1219,38 @@ export class OpenCodeClient {
 
             if (part.type === 'tool') {
               const toolPart = part as OpenCodeToolPart;
+              const rejection = extractOpenCodeToolRejection(toolPart);
               let loopError: string | undefined;
-              if (toolPart.state.status === 'error') {
+              if (rejection !== undefined) {
                 // 失敗したツール呼び出しの引数を残す。エラー文だけでは
                 // モデルが何をどう間違えたか（スキーマ違反の該当欄、
                 // 幻覚パス、oldString の不一致）を後から特定できない。
                 // input/error は無加工では機密情報が残り得るためマスクする。
                 log.debug('OpenCode tool call failed', {
-                  tool: toolPart.tool,
+                  tool: rejection.tool,
                   callId: toolPart.callID || toolPart.id,
-                  error: sanitizeSensitiveText(toolPart.state.error),
+                  error: sanitizeSensitiveText(rejection.error),
                   input: sanitizeToolCallInputForLogging(toolPart.state.input),
                 });
                 // 両検出器に必ず観測させる（?? 短絡だと invalid 側が
                 // unavailable エラーを見逃し、連続性の判定が狂う）
                 const unavailableError = unavailableToolLoopDetector.observe(
                   toolPart.callID || toolPart.id,
-                  toolPart.tool,
-                  toolPart.state.error,
+                  rejection.tool,
+                  rejection.error,
                 );
                 const invalidArgumentError = invalidArgumentLoopDetector.observe(
                   toolPart.callID || toolPart.id,
-                  toolPart.tool,
-                  toolPart.state.error,
+                  rejection.tool,
+                  rejection.error,
                 );
                 const budgetError = toolErrorBudgetDetector.observe(
                   toolPart.callID || toolPart.id,
-                  toolPart.tool,
-                  toolPart.state.error,
+                  rejection.tool,
+                  rejection.error,
                 );
                 loopError = unavailableError ?? invalidArgumentError ?? budgetError;
-              }
-              if (toolPart.state.status === 'completed') {
+              } else if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
                 invalidArgumentLoopDetector.reset();
                 // ツールが1つでも成功したなら作業は前に進んでいる。

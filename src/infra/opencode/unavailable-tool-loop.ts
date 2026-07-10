@@ -43,6 +43,9 @@ export class UnavailableToolLoopDetector {
 const INVALID_ARGUMENT_ERROR_PATTERNS = [
   'invalid arguments',
   'schemaerror',
+  // OpenCode は必須引数の欠落をスキーマ検証の手前で弾き、SchemaError ではなく
+  // この文言で返す（実測: qwen が read を filePath 無しで 219 回連続で呼んだ）。
+  'is missing or invalid',
 ];
 
 // 引数エラーは正常な試行錯誤でも起きるため、unavailable より閾値を緩くする。

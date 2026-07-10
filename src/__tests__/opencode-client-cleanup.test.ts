@@ -1084,6 +1084,101 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
+  // OpenCode は拒否したツール呼び出しを `invalid` 擬似ツールの status='completed'
+  // として返す。実測（takt-bench v3-r1 の implement）: qwen が 195 回連続で踏み、
+  // 3 つの検出器も cycle budget も一度も発火しなかった。実物の形で検証する。
+  const invalidToolPart = (index: number, attempted: string, error: string) => ({
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `invalid-part-${index}`,
+        type: 'tool',
+        callID: `call-invalid-${index}`,
+        sessionID: 'session-invalid-loop',
+        tool: 'invalid',
+        state: {
+          status: 'completed',
+          input: { tool: attempted, error },
+          output: `The arguments provided to the tool are invalid: ${error}`,
+          title: 'invalid',
+        },
+      },
+    },
+  });
+
+  const runInvalidScenario = async (events: unknown[]) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const stream = new MockEventStream([
+      ...events,
+      { type: 'session.idle', properties: { sessionID: 'session-invalid-loop' } },
+    ]);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: 'session-invalid-loop' } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const client = new OpenCodeClient();
+    return client.call('coder', 'write report', { cwd: '/tmp', model: 'opencode/qwen3-coder-next' });
+  };
+
+  it('should treat a completed "invalid" tool part as a rejected tool call and stop the repeating loop', async () => {
+    const error = "Model tried to call unavailable tool 'list'. Available tools: bash, edit, glob, grep, read.";
+    const result = await runInvalidScenario([
+      invalidToolPart(1, 'list', error),
+      invalidToolPart(2, 'list', error),
+      invalidToolPart(3, 'list', error),
+      invalidToolPart(4, 'list', error),
+    ]);
+
+    expect(result.status).toBe('error');
+    // 検出器には本来呼ぼうとしたツール名が渡る（"invalid" ではなく "list"）。
+    expect(result.content).toContain('list');
+  });
+
+  it('should treat a completed "invalid" tool part reporting a missing argument as a rejected call', async () => {
+    const error = "Required argument 'filePath' is missing or invalid.";
+    const result = await runInvalidScenario([
+      invalidToolPart(1, 'read', error),
+      invalidToolPart(2, 'read', error),
+      invalidToolPart(3, 'read', error),
+      invalidToolPart(4, 'read', error),
+    ]);
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('read');
+  });
+
+  it('should not punish a single invalid tool call that the model corrects on its own', async () => {
+    const error = "Model tried to call unavailable tool 'list'. Available tools: bash, edit, glob, grep, read.";
+    const result = await runInvalidScenario([
+      invalidToolPart(1, 'list', error),
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-ok',
+            type: 'tool',
+            callID: 'call-ok',
+            sessionID: 'session-invalid-loop',
+            tool: 'read',
+            state: { status: 'completed', input: { filePath: '/tmp/a.ts' }, output: 'ok', title: 'read' },
+          },
+        },
+      },
+    ]);
+
+    // 1 回の空振りは自己修正の余地として許す（実測: v3-r2 の qwen は直後に
+    // bash / glob へ切り替えた）。
+    expect(result.status).toBe('done');
+  });
+
   it('should return provider error when the same invalid OpenCode tool error repeats', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const invalidToolError = "Model tried to call invalid tool 'run'. Available tools: glob, grep, read.";
