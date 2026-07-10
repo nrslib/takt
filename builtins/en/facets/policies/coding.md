@@ -564,7 +564,8 @@ AI tends to define the same logic under multiple function names.
 |---------|---------|---------|
 | Same implementation with different names | `copyFacets()` and `placeFacetFiles()` doing the same thing | REJECT |
 | Same parameter signature and body | Two functions taking the same params and doing the same work | REJECT |
-| Public method that only forwards its arguments to a private method with the identical signature | `createXxxFromRequest()` delegating 1:1 to `createXxx()` | REJECT. Promote the delegate and merge |
+| Public method only forwards to a private method with the identical signature and has no distinct public contract, registration, decorator, authorization, instrumentation, or side effect | Internal alias delegates 1:1 to the implementation | REJECT. Promote the delegate and merge |
+| A 1:1 delegating public method is a stable API or an entry point for framework registration, decorators, authorization, or instrumentation | Public boundary delegates implementation while preserving an external contract | OK. Keep the boundary and make its role explicit |
 
 ```typescript
 // REJECT - Same implementation exists under different names

@@ -418,7 +418,7 @@ CQRS+ES の migration は、DB schema migration、data migration、event upcaste
 | ドメインモデルが配送・フレームワーク固有のコマンド型を直接受け取る | REJECT。application / adapter 境界でドメインの入力へ変換する |
 | domain 層から参照されない application メッセージを domain パッケージに置く | application 境界へ移す |
 | コマンドの移動・改名時に、永続参照の有無を確認せず互換性不要と判断する | REJECT。予約・outbox・再試行・dead-letter・監査等の保存契約を確認する |
-| イベントの型識別子や payload を、保存済みデータの変換経路なしで変更する | REJECT。利用する識別・シリアライズ方式に応じた互換経路を用意する。未リリースの場合のみ直接変更可 |
+| イベントの型識別子や payload を、保存済みデータの変換経路なしで変更する | REJECT。利用する識別・シリアライズ方式に応じた互換経路を用意する。直接変更できるのは保存済みイベントがまだ存在しない場合だけであり、リリース状態では判断しない |
 
 良いコマンドハンドラ:
 ```

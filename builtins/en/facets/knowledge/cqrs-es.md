@@ -418,7 +418,7 @@ Commands are usually short-lived messages created and handled at the application
 | A domain model directly receives a transport- or framework-specific command type | REJECT. Translate it into domain input at the application or adapter boundary |
 | An application message unused by domain classes sits in the domain package | Move it to the application boundary |
 | A command package is moved or renamed without checking for persisted references | REJECT. Check scheduling, outbox, retry, dead-letter, and audit storage contracts |
-| A stored event type identifier or payload changes without a conversion path | REJECT. Provide compatibility for the identifier and serialization strategy in use. Direct change is allowed only while unreleased |
+| A stored event type identifier or payload changes without a conversion path | REJECT. Provide compatibility for the identifier and serialization strategy in use. Direct change is allowed only when no persisted events exist yet; release status is not the criterion |
 
 Good command handler:
 ```

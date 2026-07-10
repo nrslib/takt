@@ -211,13 +211,13 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 
 ### Entry Validation Ownership
 
-Give each entry constraint a single owner and a single enforcement mechanism. Validations with different purposes per layer are not duplication, but do not re-implement the same boundary and the same condition in multiple mechanisms. Where declarative validation is active, it runs before the handler body, so the hand-written check downstream becomes unreachable dead code, and the duplication hides which implementation actually decides the response. Whether declarative validation is actually active depends on the framework configuration — verify it, then make a single mechanism the effective owner.
+Give each entry constraint a single owner and a single enforcement mechanism. Validations with different purposes per layer are not duplication, but do not re-implement the same boundary and the same condition in multiple mechanisms. Where declarative validation is active, invalid input is rejected before the handler; the downstream check remains reachable for valid input but redundantly re-evaluates the same condition and cannot define the violation response. Whether declarative validation is actually active depends on the framework configuration — verify it, then make a single mechanism the effective owner.
 
 ```kotlin
-// NG - same constraint twice; declarative validation runs first, procedural check is unreachable
+// NG - same constraint twice; declarative validation owns the violation response
 @GetMapping("/orders/{id}")
 fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse {
-    requireIdWithinLimit(id)  // never executed; its error message is never used
+    requireIdWithinLimit(id)  // runs only for valid input and cannot define the violation response
     return orderReadService.get(id).toResponse()
 }
 
@@ -420,7 +420,7 @@ data class OrderEntity(
 
 ### Persistence Boundary for Structured Attributes
 
-Choose the storage format for structured attributes based on update granularity, integrity, size, and schema evolution — not just current query requirements. Do not use the serialized form of a domain type as the persistence contract.
+For structured attributes in relational or read-model persistence, choose the storage format based on update granularity, integrity, size, and schema evolution — not just current query requirements. Do not implicitly use a domain type's generic serialized form as the persistence contract; use a persistence-specific representation or an explicit mapping. Event-store type identifiers and payloads may use an explicit, versioned serialization contract; govern their evolution with the CQRS-ES compatibility and upcaster rules.
 
 | Criteria | Judgment |
 |----------|----------|
