@@ -12,6 +12,7 @@ import {
   resolveAssistantProviderModelFromConfig,
   resolveAssistantScopedProviderModelFromConfig,
 } from '../core/config/provider-resolution.js';
+import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -37,6 +38,36 @@ describe('resolveProviderModelCandidates', () => {
 });
 
 describe('resolveStepProviderModel', () => {
+  it('should not inherit a persona model when the finding manager provider is direct', () => {
+    const step = buildFindingManagerStep({
+      contract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          provider: 'codex',
+        },
+      },
+    });
+
+    const result = resolveStepProviderModel({
+      step,
+      personaProviders: {
+        'findings-manager': {
+          provider: 'opencode',
+          model: 'opencode/persona-model',
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      provider: 'codex',
+      model: undefined,
+    });
+  });
+
   it('should prefer step.provider over personaProviders.provider when both are defined', () => {
     const result = resolveStepProviderModel({
       step: { provider: 'codex', model: undefined, personaDisplayName: 'coder' },

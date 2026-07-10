@@ -5,12 +5,19 @@
  * Useful for debugging and understanding what prompts agents will receive.
  */
 
-import { loadWorkflowByIdentifier, resolveWorkflowConfigValue } from '../../infra/config/index.js';
+import {
+  loadWorkflowByIdentifier,
+  resolveWorkflowConfigValue,
+  resolveWorkflowConfigValues,
+} from '../../infra/config/index.js';
 import { InstructionBuilder } from '../../core/workflow/instruction/InstructionBuilder.js';
 import { ReportInstructionBuilder } from '../../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
 import { needsStatusJudgmentPhase } from '../../core/workflow/index.js';
-import { resolveStepProviderModel } from '../../core/workflow/provider-resolution.js';
+import {
+  resolveStepProviderModel,
+  type ProviderModelResolutionContext,
+} from '../../core/workflow/provider-resolution.js';
 import { buildFindingManagerStep } from '../../core/workflow/findings/manager-step.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
@@ -19,12 +26,7 @@ import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
-interface PreviewProviderResolution {
-  provider: WorkflowStep['provider'];
-  model: WorkflowStep['model'];
-  personaProviders: Parameters<typeof resolveStepProviderModel>[0]['personaProviders'];
-  providerRouting: Parameters<typeof resolveStepProviderModel>[0]['providerRouting'];
-}
+type PreviewProviderResolution = ProviderModelResolutionContext;
 
 function printStepExecutionMetadata(step: WorkflowStep): void {
   if (step.sessionKey) {
@@ -43,12 +45,10 @@ function formatConfiguredValue(value: string | undefined): string {
 }
 
 function resolvePreviewProviderResolution(cwd: string): PreviewProviderResolution {
-  return {
-    provider: resolveWorkflowConfigValue(cwd, 'provider'),
-    model: resolveWorkflowConfigValue(cwd, 'model'),
-    personaProviders: resolveWorkflowConfigValue(cwd, 'personaProviders'),
-    providerRouting: resolveWorkflowConfigValue(cwd, 'providerRouting'),
-  };
+  return resolveWorkflowConfigValues(
+    cwd,
+    ['provider', 'model', 'personaProviders', 'providerRouting'],
+  );
 }
 
 function resolveFindingManagerProviderModel(

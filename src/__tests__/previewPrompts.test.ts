@@ -4,6 +4,7 @@ import type { MockInstance } from 'vitest';
 const {
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowConfigValue,
+  mockResolveWorkflowConfigValues,
   mockHeader,
   mockInfo,
   mockError,
@@ -14,6 +15,7 @@ const {
 } = vi.hoisted(() => ({
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
+  mockResolveWorkflowConfigValues: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
@@ -26,6 +28,7 @@ const {
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
   resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
+  resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
 }));
 
 vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
@@ -72,6 +75,12 @@ describe('previewPrompts', () => {
       if (key === 'language') return 'en';
       return undefined;
     });
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      personaProviders: undefined,
+      providerRouting: undefined,
+    });
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
       maxSteps: 1,
@@ -94,6 +103,10 @@ describe('previewPrompts', () => {
     await previewPrompts('/project');
 
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
+    expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith(
+      '/project',
+      ['provider', 'model', 'personaProviders', 'providerRouting'],
+    );
   });
 
   it('step番号の見出しを表示する', async () => {
@@ -227,17 +240,16 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の provider/model を runtime と同じ resolver 経由で表示する', async () => {
-    mockResolveWorkflowConfigValue.mockImplementation((_: string, key: string) => {
-      if (key === 'language') return 'en';
-      if (key === 'personaProviders') {
-        return {
-          'Findings Manager': {
-            provider: 'codex',
-            model: 'gpt-5.5',
-          },
-        };
-      }
-      return undefined;
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      personaProviders: {
+        'Findings Manager': {
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+      providerRouting: undefined,
     });
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
@@ -265,5 +277,46 @@ describe('previewPrompts', () => {
 
     expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
     expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
+  });
+
+  it('finding manager の provider 直接指定時は persona model を表示しない', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      personaProviders: {
+        'Findings Manager': {
+          provider: 'opencode',
+          model: 'opencode/persona-model',
+        },
+      },
+      providerRouting: undefined,
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          personaDisplayName: 'Findings Manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+          provider: 'codex',
+        },
+      },
+      steps: [
+        {
+          name: 'review',
+          personaDisplayName: 'reviewer',
+          outputContracts: [],
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: not configured');
   });
 });

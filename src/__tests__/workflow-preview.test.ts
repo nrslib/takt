@@ -19,8 +19,7 @@ describe('getWorkflowDescription', () => {
     return root;
   }
 
-  it('finding manager の解決済み provider/model を parallel step summary に含める', () => {
-    const projectDir = createProject();
+  function writeFindingManagerWorkflow(projectDir: string, managerProviderLines: string[]): void {
     const workflowDir = join(projectDir, '.takt', 'workflows');
     mkdirSync(workflowDir, { recursive: true });
     writeFileSync(join(workflowDir, 'finding-manager-preview.yaml'), [
@@ -34,8 +33,7 @@ describe('getWorkflowDescription', () => {
       '    persona: findings-manager',
       '    instruction: findings-manager',
       '    output_contract: findings-manager',
-      '    provider: codex',
-      '    model: gpt-5.5',
+      ...managerProviderLines.map((line) => `    ${line}`),
       'steps:',
       '  - name: reviewers',
       '    parallel:',
@@ -53,6 +51,11 @@ describe('getWorkflowDescription', () => {
       '      - when: done',
       '        next: COMPLETE',
     ].join('\n'));
+  }
+
+  it('finding manager の解決済み provider/model を parallel step summary に含める', () => {
+    const projectDir = createProject();
+    writeFindingManagerWorkflow(projectDir, ['provider: codex', 'model: gpt-5.5']);
 
     const description = getWorkflowDescription('finding-manager-preview', projectDir, 1);
     const reviewers = description.stepPreviews[0];
@@ -64,5 +67,27 @@ describe('getWorkflowDescription', () => {
       allowedTools: [],
       canEdit: false,
     });
+  });
+
+  it('finding manager の provider 直接指定時は persona model を継承しない', () => {
+    const projectDir = createProject();
+    writeFindingManagerWorkflow(projectDir, ['provider: codex']);
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
+      'persona_providers:',
+      '  findings-manager:',
+      '    provider: opencode',
+      '    model: opencode/persona-model',
+    ].join('\n'));
+
+    const description = getWorkflowDescription('finding-manager-preview', projectDir, 1);
+    const manager = description.stepPreviews[0]?.substeps
+      ?.find((substep) => substep.name === 'findings-manager');
+
+    expect(manager).toMatchObject({
+      provider: 'codex',
+      allowedTools: [],
+      canEdit: false,
+    });
+    expect(manager?.model).toBeUndefined();
   });
 });

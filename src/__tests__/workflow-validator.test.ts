@@ -198,6 +198,12 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       provider: 'claude',
+      personaProviders: {
+        'findings-manager': {
+          provider: 'claude',
+          model: 'claude/persona-model',
+        },
+      },
     })).toThrow(/provider 'opencode' requires model/);
   });
 

@@ -1,7 +1,9 @@
 import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
-import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import { resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
+import {
+  resolveStepProviderModel,
+  type ProviderModelResolutionContext,
+} from '../../../core/workflow/provider-resolution.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import { buildFindingManagerStep } from '../../../core/workflow/findings/manager-step.js';
 import {
@@ -43,11 +45,7 @@ export interface FirstStepInfo {
   allowedTools: string[];
 }
 
-interface PreviewProviderResolution {
-  provider: WorkflowStep['provider'];
-  model: WorkflowStep['model'];
-  personaProviders: Record<string, PersonaProviderEntry> | undefined;
-  providerRouting: ProviderRoutingConfig | undefined;
+interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];

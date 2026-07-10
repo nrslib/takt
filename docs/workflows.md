@@ -210,7 +210,7 @@ finding_contract:
     model: gpt-5.5
 ```
 
-When set, these values are applied as step-level `provider` / `model` for the Finding Manager. They take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, workflow defaults, and resolved input provider/model. If omitted, the manager keeps the normal workflow step provider/model resolution behavior.
+When set, these values are applied as step-level `provider` / `model` for the Finding Manager. They take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, workflow defaults, and resolved input provider/model. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
 
 ### Finding Contract parallel retry failure routing
 

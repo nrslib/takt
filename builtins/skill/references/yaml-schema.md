@@ -144,7 +144,7 @@ finding_contract:
     model: gpt-5.5
 ```
 
-指定値は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力より優先される。未指定時は通常の workflow step provider/model 解決を使う。
+指定値は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力より優先される。両方とも未指定の場合は通常の workflow step provider/model 解決を使う。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになる。
 
 ### Finding Contract parallel の invalid manager output rule
 

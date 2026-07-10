@@ -22,7 +22,7 @@ export function buildFindingManagerStep(input: {
     provider: providerIsDirect ? manager.provider : input.workflowProvider,
     providerSpecified: providerIsDirect,
     model: modelIsDirect ? manager.model : providerIsDirect ? undefined : input.workflowModel,
-    modelSpecified: modelIsDirect,
+    modelSpecified: modelIsDirect || providerIsDirect,
     instruction: manager.instruction,
     session: 'refresh',
     edit: false,

@@ -7,7 +7,14 @@ import {
 import type { ProviderType } from './types.js';
 import type { ProviderResolutionSource } from './provider-options-trace.js';
 
-export interface StepProviderModelInput {
+export interface ProviderModelResolutionContext {
+  provider?: ProviderTypeOrAuto;
+  model?: string;
+  providerRouting?: ProviderRoutingConfig;
+  personaProviders?: Record<string, PersonaProviderEntry>;
+}
+
+export interface StepProviderModelInput extends ProviderModelResolutionContext {
   step: Pick<WorkflowStep, 'provider' | 'model' | 'personaDisplayName'> & {
     name?: string;
     providerSpecified?: boolean;
@@ -15,10 +22,6 @@ export interface StepProviderModelInput {
     providerRoutingPersonaKey?: string;
     tags?: string[];
   };
-  provider?: ProviderTypeOrAuto;
-  model?: string;
-  providerRouting?: ProviderRoutingConfig;
-  personaProviders?: Record<string, PersonaProviderEntry>;
   /** Source layer of `provider` argument (engine-level fallback). */
   providerSource?: ProviderResolutionSource;
   /** Source layer of `model` argument (engine-level fallback). */
