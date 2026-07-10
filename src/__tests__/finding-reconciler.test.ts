@@ -45,6 +45,8 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     resolvedConflicts: [],
     waivedFindings: [],
     disputeNotes: [],
+    invalidatedFindings: [],
+    duplicateFindings: [],
     ...overrides,
   };
 }
@@ -506,110 +508,111 @@ describe('reconcileFindingLedger', () => {
     ]);
   });
 
-  it('should fail fast when a new finding groups raw findings with different familyTag values', () => {
-    expect(() =>
-      reconcileFindingLedger({
-        previousLedger: makeLedger({ nextId: 1 }),
-        rawFindings: [
-          makeRawFinding({ rawFindingId: 'raw-logic', familyTag: 'logic-error' }),
-          makeRawFinding({ rawFindingId: 'raw-scope', familyTag: 'scope-creep' }),
+  // familyTag は分類・検索ヒントに過ぎず、同一性の根拠にしない設計
+  // （Finding Contract 収束性改善 Phase A item 2）。以下3件は旧仕様の
+  // familyTag 不一致を fail-fast させるテストを、新仕様（許可）へ更新したもの。
+  it('should allow a new finding to group raw findings with different familyTag values', () => {
+    const ledger = reconcileFindingLedger({
+      previousLedger: makeLedger({ nextId: 1 }),
+      rawFindings: [
+        makeRawFinding({ rawFindingId: 'raw-logic', familyTag: 'logic-error' }),
+        makeRawFinding({ rawFindingId: 'raw-scope', familyTag: 'scope-creep' }),
+      ],
+      managerOutput: makeManagerOutput({
+        newFindings: [
+          {
+            rawFindingIds: ['raw-logic', 'raw-scope'],
+            title: 'Mixed family tags',
+            severity: 'high',
+          },
         ],
-        managerOutput: makeManagerOutput({
-          newFindings: [
-            {
-              rawFindingIds: ['raw-logic', 'raw-scope'],
-              title: 'Mixed family tags',
-              severity: 'high',
-            },
-          ],
-        }),
-        context: {
-          workflowName: 'peer-review',
-          stepName: 'peer-review',
-          runId: 'run-2',
-          timestamp: '2026-06-13T01:00:00.000Z',
-        },
       }),
-    ).toThrow('Cannot create a new finding from raw findings with different familyTag values: "logic-error" and "scope-creep"');
+      context: {
+        workflowName: 'peer-review',
+        stepName: 'peer-review',
+        runId: 'run-2',
+        timestamp: '2026-06-13T01:00:00.000Z',
+      },
+    });
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.findings[0]?.rawFindingIds).toEqual(['raw-logic', 'raw-scope']);
   });
 
-  it('should fail fast when a matched finding changes familyTag from previous evidence', () => {
+  it('should allow a matched finding to gain evidence with a different familyTag from previous evidence', () => {
     const previousRawFinding = makeRawFinding({
       rawFindingId: 'raw-old',
       familyTag: 'logic-error',
     });
 
-    expect(() =>
-      reconcileFindingLedger({
-        previousLedger: makeLedger({
-          nextId: 2,
-          rawFindings: [previousRawFinding],
-          findings: [
-            {
-              id: 'F-0001',
-              status: 'open',
-              lifecycle: 'new',
-              severity: 'high',
-              title: 'Existing issue',
-              reviewers: ['coding-reviewer'],
-              rawFindingIds: ['raw-old'],
-              firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-              lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-            },
-          ],
-        }),
-        rawFindings: [makeRawFinding({ rawFindingId: 'raw-current', familyTag: 'scope-creep' })],
-        managerOutput: makeManagerOutput({
-          matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
-        }),
-        context: {
-          workflowName: 'peer-review',
-          stepName: 'peer-review',
-          runId: 'run-2',
-          timestamp: '2026-06-13T01:00:00.000Z',
-        },
+    const ledger = reconcileFindingLedger({
+      previousLedger: makeLedger({
+        nextId: 2,
+        rawFindings: [previousRawFinding],
+        findings: [
+          {
+            id: 'F-0001',
+            status: 'open',
+            lifecycle: 'new',
+            severity: 'high',
+            title: 'Existing issue',
+            reviewers: ['coding-reviewer'],
+            rawFindingIds: ['raw-old'],
+            firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+            lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+          },
+        ],
       }),
-    ).toThrow('Cannot match raw findings with different familyTag values: "logic-error" and "scope-creep"');
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-current', familyTag: 'scope-creep' })],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+      }),
+      context: {
+        workflowName: 'peer-review',
+        stepName: 'peer-review',
+        runId: 'run-2',
+        timestamp: '2026-06-13T01:00:00.000Z',
+      },
+    });
+    expect(ledger.findings.find((f) => f.id === 'F-0001')?.rawFindingIds).toEqual(['raw-old', 'raw-current']);
   });
 
-  it('should fail fast when a reopened finding changes familyTag from previous evidence', () => {
+  it('should allow a reopened finding to gain evidence with a different familyTag from previous evidence', () => {
     const previousRawFinding = makeRawFinding({
       rawFindingId: 'raw-old',
       familyTag: 'logic-error',
     });
 
-    expect(() =>
-      reconcileFindingLedger({
-        previousLedger: makeLedger({
-          nextId: 2,
-          rawFindings: [previousRawFinding],
-          findings: [
-            {
-              id: 'F-0001',
-              status: 'resolved',
-              lifecycle: 'resolved',
-              severity: 'high',
-              title: 'Recurring issue',
-              reviewers: ['coding-reviewer'],
-              rawFindingIds: ['raw-old'],
-              firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-              lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
-              resolvedAt: '2026-06-13T00:30:00.000Z',
-            },
-          ],
-        }),
-        rawFindings: [makeRawFinding({ rawFindingId: 'raw-reopened', familyTag: 'scope-creep' })],
-        managerOutput: makeManagerOutput({
-          reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopened'], evidence: 'Still present.' }],
-        }),
-        context: {
-          workflowName: 'peer-review',
-          stepName: 'peer-review',
-          runId: 'run-3',
-          timestamp: '2026-06-13T02:00:00.000Z',
-        },
+    const ledger = reconcileFindingLedger({
+      previousLedger: makeLedger({
+        nextId: 2,
+        rawFindings: [previousRawFinding],
+        findings: [
+          {
+            id: 'F-0001',
+            status: 'resolved',
+            lifecycle: 'resolved',
+            severity: 'high',
+            title: 'Recurring issue',
+            reviewers: ['coding-reviewer'],
+            rawFindingIds: ['raw-old'],
+            firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+            lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+            resolvedAt: '2026-06-13T00:30:00.000Z',
+          },
+        ],
       }),
-    ).toThrow('Cannot reopen raw findings with different familyTag values: "logic-error" and "scope-creep"');
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-reopened', familyTag: 'scope-creep' })],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopened'], evidence: 'Still present.' }],
+      }),
+      context: {
+        workflowName: 'peer-review',
+        stepName: 'peer-review',
+        runId: 'run-3',
+        timestamp: '2026-06-13T02:00:00.000Z',
+      },
+    });
+    expect(ledger.findings.find((f) => f.id === 'F-0001')?.status).toBe('open');
   });
 
   it('should fail fast when manager output references an unknown finding id', () => {

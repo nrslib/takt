@@ -67,6 +67,8 @@ export interface FindingContractIntakeInput {
   ledgerStore: FindingLedgerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  /** raw admission validation（manager-runner.ts の cwd 引数を参照）に使う実行 cwd。 */
+  cwd: string;
   parentStep: WorkflowStep;
   stepIteration: number;
   subResults: FindingManagerSubStepResult[];
@@ -96,6 +98,7 @@ export async function ingestFindingContractResults(
     ledgerStore: input.ledgerStore,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
+    cwd: input.cwd,
     parentStep: input.parentStep,
     stepIteration: input.stepIteration,
     subResults: input.subResults,

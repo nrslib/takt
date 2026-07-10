@@ -106,7 +106,7 @@ describe('reviewer duty gating', () => {
     ).build();
 
     const section = extractFindingContractSection(instruction);
-    expect(section).toContain('kind "issue"');
+    expect(section).toContain('relation "new"');
     expect(section).not.toContain('resolution_confirmation');
     expect(section).not.toContain('waived');
   });

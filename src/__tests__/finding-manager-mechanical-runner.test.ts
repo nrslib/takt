@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerStore, RawFinding } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
@@ -13,6 +13,24 @@ vi.mock('../agents/agent-usecases.js', () => ({
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
+
+// raw admission validation（manager-runner.ts の cwd 引数）が実 fs を見るため、
+// このテストファイルが使う location（src/a.ts:10/11, src/b.ts:5/20, src/c.ts:1,
+// src/dup.ts:10）に対応する実ファイルを1つの共有 fixture ディレクトリへ用意する。
+const FIXTURE_CWD = mkdtempSync(join(tmpdir(), 'takt-findings-runner-fixtures-'));
+function writeFixtureFile(relativePath: string, lineCount: number): void {
+  const fullPath = join(FIXTURE_CWD, relativePath);
+  mkdirSync(dirname(fullPath), { recursive: true });
+  writeFileSync(fullPath, `${Array.from({ length: lineCount }, (_, index) => `// line ${index + 1}`).join('\n')}\n`);
+}
+writeFixtureFile('src/a.ts', 30);
+writeFixtureFile('src/b.ts', 30);
+writeFixtureFile('src/c.ts', 5);
+writeFixtureFile('src/dup.ts', 20);
+
+afterAll(() => {
+  rmSync(FIXTURE_CWD, { recursive: true, force: true });
+});
 
 function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
@@ -113,6 +131,7 @@ function makeHarness(ledger: FindingLedger): Harness {
       ledgerStore,
       optionsBuilder: optionsBuilder as never,
       stepExecutor: stepExecutor as never,
+      cwd: FIXTURE_CWD,
       parentStep,
       stepIteration: 2,
       subResults: [
@@ -556,6 +575,7 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
       ledgerStore,
       optionsBuilder: optionsBuilder as never,
       stepExecutor: stepExecutor as never,
+      cwd: FIXTURE_CWD,
       parentStep,
       stepIteration: 2,
       subResults: [
@@ -612,6 +632,11 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-findings-race-report-'));
     cleanupDirs.add(projectCwd);
     cleanupDirs.add(reportDir);
+    // raw admission validation は projectCwd を cwd として使うため、この
+    // テストが引用する location に対応する実ファイルを用意する。
+    mkdirSync(join(projectCwd, 'src'), { recursive: true });
+    writeFileSync(join(projectCwd, 'src/a.ts'), `${Array.from({ length: 15 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
+    writeFileSync(join(projectCwd, 'src/b.ts'), `${Array.from({ length: 25 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
 
     // workflow_call の並列子は親から継承した同一の FindingLedgerStore
     // インスタンスを共有する（WorkflowCallExecutor.ts の inheritedFindingContract
@@ -683,6 +708,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       ledgerStore: store,
       optionsBuilder: optionsBuilder as never,
       stepExecutor: stepExecutor as never,
+      cwd: projectCwd,
       parentStep,
       stepIteration: 1,
       subResults: [
@@ -736,17 +762,22 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     expect(ids.size).toBe(finalLedger.findings.length);
   });
 
-  it('Given two concurrent callers each deciding "new" for the SAME familyTag + location When both resolve their LLM call around the same time Then only one finding is created (no F-0001/F-0002 duplicate)', async () => {
-    // codex の再現ケース本体: 上のテストは意図的に異なる familyTag/location の
-    // 2件を使っているため、この競合を検出しない。ここでは両方の子が同じ
-    // familyTag + location を "new" と判断する状況を再現する。保存直前の
-    // 再照合で、後から critical section に入った側は先に保存された finding を
-    // 台帳上で検出し、"new" ではなく "same" として畳み込まれるべき
-    // （decision-assembly.ts の openFindingKeyIndex）。
+  it('Given two concurrent callers each deciding "new" for an IDENTICAL raw (same path, title and description) When both resolve their LLM call around the same time Then only one finding is created (no F-0001/F-0002 duplicate)', async () => {
+    // codex の再現ケース本体: 上のテストは意図的に異なる path/title の
+    // 2件を使っているため、この競合を検出しない。ここでは両方の子が内容の
+    // 完全一致する raw（path + 正規化タイトル + description が同じ。familyTag と
+    // 行番号は同一性の根拠にしない設計）を "new" と判断する状況を再現する。
+    // 保存直前の再照合で、後から critical section に入った側は先に保存された
+    // finding を台帳上で検出し、"new" ではなく "same" として畳み込まれるべき
+    // （decision-assembly.ts の openFindingKeyIndex。鍵は path+title+description の
+    // 完全一致 — path+title だけのリダイレクトは manager の new 判断を意味判断
+    // なしで覆す禁止マージだった: codex ブロッカー B3）。
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-findings-race-dup-project-'));
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-findings-race-dup-report-'));
     cleanupDirs.add(projectCwd);
     cleanupDirs.add(reportDir);
+    mkdirSync(join(projectCwd, 'src'), { recursive: true });
+    writeFileSync(join(projectCwd, 'src/dup.ts'), `${Array.from({ length: 15 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
 
     const store = createFindingLedgerStore({
       projectCwd,
@@ -807,6 +838,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
       ledgerStore: store,
       optionsBuilder: optionsBuilder as never,
       stepExecutor: stepExecutor as never,
+      cwd: projectCwd,
       parentStep,
       stepIteration: 1,
       subResults: [
@@ -830,19 +862,22 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         rawFindingId: 'i-1',
         familyTag: 'bug',
         severity: 'high',
-        title: 'Duplicate issue reported by child A',
+        title: 'Duplicate issue at src/dup.ts',
         location: 'src/dup.ts:10',
-        description: 'Reported by concurrent child A.',
+        description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         kind: 'issue',
       }),
       runCall('child-b', {
         rawFindingId: 'i-1',
-        familyTag: 'bug',
+        // familyTag と行番号が違っても、内容（path+title+description）が完全一致
+        // すれば同一性の索引に掛かる（familyTag は分類ヒントに過ぎず識別根拠では
+        // ないことの確認）。
+        familyTag: 'security',
         severity: 'high',
-        title: 'Duplicate issue reported by child B',
+        title: 'Duplicate issue at src/dup.ts',
         location: 'src/dup.ts:10',
-        description: 'Reported by concurrent child B.',
+        description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         kind: 'issue',
       }),
@@ -957,6 +992,7 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
       ledgerStore,
       optionsBuilder: optionsBuilder as never,
       stepExecutor: stepExecutor as never,
+      cwd: FIXTURE_CWD,
       parentStep,
       stepIteration: 2,
       subResults: [

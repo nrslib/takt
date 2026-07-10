@@ -5,9 +5,11 @@ import type {
   FindingManagerDecisions,
   FindingManagerOutput,
   RawFinding,
+  RawFindingRelation,
 } from './finding-types.js';
 import {
   RAW_FINDING_KINDS,
+  RAW_FINDING_RELATIONS,
   CONFLICT_DECISION_KINDS,
   DISPUTE_DECISION_KINDS,
   FINDING_CONFLICT_STATUSES,
@@ -69,9 +71,76 @@ export const FindingLedgerEntrySchema = z.object({
     evidence: nonEmptyString,
     recordedAt: FindingObservationSchema,
   }).strict()).optional(),
+  invalidatedAt: nonEmptyString.optional(),
+  invalidatedEvidence: nonEmptyString.optional(),
+  supersededByFindingId: nonEmptyString.optional(),
 }).strict();
 
-export const RawFindingSchema = z.object({
+/**
+ * Derives the authoritative `relation` from a parsed raw finding whose `relation`
+ * field may be absent (pre-existing data, or a schema predating this field).
+ * Backward compatibility rule: relation undefined + kind 'resolution_confirmation'
+ * -> 'resolution_confirmation'; relation undefined + kind 'issue'/undefined with
+ * targetFindingId set -> 'persists' (this is exactly how pre-relation ledgers
+ * recorded a re-report against an existing finding — real v3-r2 ledger data has
+ * numerous kind:'issue' raws with targetFindingId set, e.g. "This is a
+ * continuation of the issue tracked as F-0002"); relation undefined + kind
+ * 'issue'/undefined with no targetFindingId -> 'new'.
+ */
+function deriveRawFindingRelation(
+  kind: RawFinding['kind'],
+  relation: RawFindingRelation | undefined,
+  targetFindingId: string | undefined,
+): RawFindingRelation {
+  if (relation !== undefined) {
+    return relation;
+  }
+  if (kind === 'resolution_confirmation') {
+    return 'resolution_confirmation';
+  }
+  return targetFindingId !== undefined ? 'persists' : 'new';
+}
+
+interface RawFindingRelationFields {
+  kind?: RawFinding['kind'];
+  relation?: RawFindingRelation;
+  targetFindingId?: string;
+}
+
+/**
+ * Derives `relation` and validates the invariants from the feature spec in one
+ * pass: relation=new forbids targetFindingId; every other relation requires it;
+ * kind and relation must agree where both are present (kept for the transition
+ * period — relation is authoritative, kind is retained for callers that have not
+ * migrated). Shared by RawFindingSchema and ReviewerRawFindingSchema so the two
+ * wire shapes (manager-facing vs. reviewer-facing) can't drift.
+ */
+function resolveRawFindingRelation<T extends RawFindingRelationFields>(
+  value: T,
+  ctx: z.RefinementCtx,
+): T & { relation: RawFindingRelation } {
+  const relation = deriveRawFindingRelation(value.kind, value.relation, value.targetFindingId);
+  if (relation === 'new' && value.targetFindingId !== undefined) {
+    ctx.addIssue({ code: 'custom', message: '"new" raw findings must not set targetFindingId', path: ['targetFindingId'] });
+  }
+  if (relation !== 'new' && value.targetFindingId === undefined) {
+    ctx.addIssue({ code: 'custom', message: `"${relation}" raw findings require targetFindingId`, path: ['targetFindingId'] });
+  }
+  if (value.kind !== undefined) {
+    const kindImpliesConfirmation = value.kind === 'resolution_confirmation';
+    const relationIsConfirmation = relation === 'resolution_confirmation';
+    if (kindImpliesConfirmation !== relationIsConfirmation) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `kind "${value.kind}" is inconsistent with relation "${relation}"`,
+        path: ['relation'],
+      });
+    }
+  }
+  return { ...value, relation };
+}
+
+const RawFindingFieldsSchema = z.object({
   rawFindingId: nonEmptyString,
   stepName: nonEmptyString,
   reviewer: nonEmptyString,
@@ -84,10 +153,13 @@ export const RawFindingSchema = z.object({
   description: nonEmptyString,
   suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
   kind: z.enum(RAW_FINDING_KINDS).optional(),
+  relation: z.enum(RAW_FINDING_RELATIONS).optional(),
   targetFindingId: nonEmptyString.optional(),
 }).strict();
 
-export const ReviewerRawFindingSchema = z.object({
+export const RawFindingSchema = RawFindingFieldsSchema.transform(resolveRawFindingRelation);
+
+const ReviewerRawFindingFieldsSchema = z.object({
   rawFindingId: nonEmptyString,
   familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
@@ -98,10 +170,13 @@ export const ReviewerRawFindingSchema = z.object({
   description: nonEmptyString,
   suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
   kind: z.enum(RAW_FINDING_KINDS).optional(),
+  relation: z.enum(RAW_FINDING_RELATIONS).optional(),
   // 構造化出力の strict 様式では全プロパティが required になるため、
   // issue 行は空文字で埋める。空文字は未指定として扱う。
   targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
 }).strict();
+
+export const ReviewerRawFindingSchema = ReviewerRawFindingFieldsSchema.transform(resolveRawFindingRelation);
 
 export const FindingLedgerConflictSchema = z.object({
   id: nonEmptyString,
@@ -165,12 +240,23 @@ export const FindingManagerOutputSchema = z.object({
     reason: nonEmptyString,
     evidence: nonEmptyString,
   }).strict()).optional().default([]),
+  // 追加的（既存台帳 v1 の内部表現に対して後方互換）。既存呼び出しはこの2配列を
+  // 渡さないことがあるため default([]) で補う。
+  invalidatedFindings: z.array(z.object({
+    findingId: nonEmptyString,
+    evidence: nonEmptyString,
+  }).strict()).optional().default([]),
+  duplicateFindings: z.array(z.object({
+    canonicalFindingId: nonEmptyString,
+    duplicateFindingIds: z.array(nonEmptyString),
+    evidence: nonEmptyString,
+  }).strict()).optional().default([]),
 }).strict();
 
 // LLM に返させるのは判断だけ。8配列への組み立てと不変条件の強制は
 // decision-assembly.ts（コード側）が行う。findingId は same/resolved/reopened/
 // conflict でのみ必須なため、strict 様式の制約上は required に含めつつ、
-// 該当なし（new）は空文字で埋めさせて未指定として扱う。
+// 該当なし（new/unsupported）は空文字で埋めさせて未指定として扱う。
 export const FindingManagerRawDecisionSchema = z.object({
   rawFindingId: nonEmptyString,
   decision: z.enum(RAW_DECISION_KINDS),
@@ -191,16 +277,30 @@ export const FindingManagerConflictDecisionSchema = z.object({
   evidence: nonEmptyString,
 }).strict();
 
+/** Candidate eligibility (which findingId values may appear here) is enforced by decision-assembly.ts, not by this schema — see FindingManagerInvalidateDecision. */
+export const FindingManagerInvalidateDecisionSchema = z.object({
+  findingId: nonEmptyString,
+  evidence: nonEmptyString,
+}).strict();
+
+export const FindingManagerDuplicateDecisionSchema = z.object({
+  canonicalFindingId: nonEmptyString,
+  duplicateFindingIds: z.array(nonEmptyString).min(1),
+  evidence: nonEmptyString,
+}).strict();
+
 export const FindingManagerDecisionsSchema = z.object({
   rawDecisions: z.array(FindingManagerRawDecisionSchema),
   disputeDecisions: z.array(FindingManagerDisputeDecisionSchema),
   conflictDecisions: z.array(FindingManagerConflictDecisionSchema),
+  invalidateDecisions: z.array(FindingManagerInvalidateDecisionSchema).optional().default([]),
+  duplicateDecisions: z.array(FindingManagerDuplicateDecisionSchema).optional().default([]),
 }).strict();
 
 export const FindingManagerOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes'],
+  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes', 'invalidatedFindings', 'duplicateFindings'],
   properties: {
     matches: {
       type: 'array',
@@ -305,6 +405,31 @@ export const FindingManagerOutputJsonSchema = {
         },
       },
     },
+    invalidatedFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    duplicateFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['canonicalFindingId', 'duplicateFindingIds', 'evidence'],
+        properties: {
+          canonicalFindingId: { type: 'string', minLength: 1 },
+          duplicateFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
   },
 } as const;
 
@@ -318,7 +443,7 @@ export const FindingManagerOutputJsonSchema = {
 export const FindingManagerDecisionsJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['rawDecisions', 'disputeDecisions', 'conflictDecisions'],
+  required: ['rawDecisions', 'disputeDecisions', 'conflictDecisions', 'invalidateDecisions', 'duplicateDecisions'],
   properties: {
     rawDecisions: {
       type: 'array',
@@ -331,11 +456,11 @@ export const FindingManagerDecisionsJsonSchema = {
           rawFindingId: { type: 'string', minLength: 1 },
           decision: {
             enum: RAW_DECISION_KINDS,
-            description: 'same = matches an existing open finding. new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived finding reappeared. conflict = contradicts an existing finding.',
+            description: 'same = matches an existing open finding (familyTag and line-number differences alone are not disqualifying; judge by failure mode, trigger, impact, and required fix). new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived finding reappeared. conflict = contradicts an existing finding. unsupported = the raw finding explicitly referenced an existing finding (targetFindingId) as persists/reopened but the reference does not hold up; do not fall back to new.',
           },
           findingId: {
             type: 'string',
-            description: 'Ledger finding id. Required for same/resolved/reopened/conflict. Empty string for new.',
+            description: 'Ledger finding id. Required for same/resolved/reopened/conflict. Empty string for new/unsupported.',
           },
           evidence: { type: 'string', minLength: 1 },
         },
@@ -376,6 +501,33 @@ export const FindingManagerDecisionsJsonSchema = {
         },
       },
     },
+    invalidateDecisions: {
+      type: 'array',
+      description: 'One optional decision per finding id listed as an invalidation candidate in the prompt (the engine already deterministically verified its location fails). Leave empty when there are no candidates or you disagree with all of them. You cannot invalidate a finding that is not in the candidate list.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    duplicateDecisions: {
+      type: 'array',
+      description: 'Merge open findings that are the same underlying problem (same failure mode, trigger, impact, and fix) into one canonical finding. Leave empty when there are no duplicates among the open findings shown.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['canonicalFindingId', 'duplicateFindingIds', 'evidence'],
+        properties: {
+          canonicalFindingId: { type: 'string', minLength: 1 },
+          duplicateFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
   },
 } as const;
 
@@ -389,27 +541,31 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'kind', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
+        required: ['rawFindingId', 'kind', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
           kind: {
             enum: RAW_FINDING_KINDS,
-            description: 'issue = observed problem. resolution_confirmation = verified that an open ledger finding is fixed.',
+            description: 'Legacy field, kept for compatibility. issue = observed problem. resolution_confirmation = verified that an open ledger finding is fixed. Set relation instead; kind is derived from it (new/persists/reopened -> issue).',
+          },
+          relation: {
+            enum: RAW_FINDING_RELATIONS,
+            description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be empty). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required).',
           },
           targetFindingId: {
             type: 'string',
-            description: 'Ledger finding id being confirmed as resolved. Empty string for issue entries.',
+            description: 'Ledger finding id this entry refers to. Required for persists/reopened/resolution_confirmation. Empty string for new.',
           },
           familyTag: {
             type: 'string',
             minLength: 1,
-            description: 'Structured form of the Observed Findings family_tag value.',
+            description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
           },
           severity: { enum: FINDING_SEVERITIES },
           title: { type: 'string', minLength: 1 },
           location: {
             type: 'string',
-            description: 'file:line evidence. Empty string when not applicable.',
+            description: 'file:line evidence. Empty string when not applicable. The line number is evidence of where you currently observed the issue, not part of its identity.',
           },
           description: { type: 'string', minLength: 1 },
           suggestion: {

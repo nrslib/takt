@@ -183,6 +183,7 @@ export class StepExecutor {
       ledgerStore: this.deps.findingLedgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this,
+      cwd: this.deps.getCwd(),
       parentStep: input.step,
       stepIteration: input.stepIteration,
       // 単独ステップでは「レビュアー1件」を自分自身として渡す

@@ -6,6 +6,7 @@ export {
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   RAW_DECISION_KINDS,
+  RAW_FINDING_RELATIONS,
 } from '../../models/finding-types.js';
 
 export type {
@@ -23,6 +24,9 @@ export type {
   FindingManagerDecisions,
   FindingManagerDisputeDecision,
   FindingManagerDisputeNote,
+  FindingManagerDuplicateDecision,
+  FindingManagerInvalidateDecision,
+  FindingManagerInvalidatedFinding,
   FindingManagerMatch,
   FindingManagerNewFinding,
   FindingManagerOutput,
@@ -39,4 +43,5 @@ export type {
   FindingStatus,
   RawDecisionKind,
   RawFinding,
+  RawFindingRelation,
 } from '../../models/finding-types.js';

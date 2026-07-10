@@ -44,6 +44,8 @@ export function validateFindingManagerOutput(
       ...input.managerOutput,
       waivedFindings: input.managerOutput.waivedFindings ?? [],
       disputeNotes: input.managerOutput.disputeNotes ?? [],
+      invalidatedFindings: input.managerOutput.invalidatedFindings ?? [],
+      duplicateFindings: input.managerOutput.duplicateFindings ?? [],
     },
   };
   const context: ValidationContext = {
@@ -132,29 +134,15 @@ function validateRawFindingDecisionRefs(
   context: ValidationContext,
 ): string[] {
   const decisionRefs = collectRawFindingDecisionRefs(managerOutput);
-  const matchErrors = managerOutput.matches.flatMap((match, index) => {
-    const decision = `matches[${index}]`;
-    const finding = context.previousFindingsById.get(match.findingId);
-    return [
-      ...validateCurrentRawFindingIds(match.rawFindingIds, decision, context),
-      ...(finding === undefined ? [] : validateFindingFamilyTagCompatible(finding, match.rawFindingIds, 'match', decision, context)),
-    ];
-  });
-  const newFindingErrors = managerOutput.newFindings.flatMap((finding, index) => {
-    const decision = `newFindings[${index}]`;
-    return [
-      ...validateCurrentRawFindingIds(finding.rawFindingIds, decision, context),
-      ...validateCurrentRawFindingFamilyTags(finding.rawFindingIds, 'create a new finding from', decision, context),
-    ];
-  });
-  const reopenedErrors = managerOutput.reopenedFindings.flatMap((reopened, index) => {
-    const decision = `reopenedFindings[${index}]`;
-    const finding = context.previousFindingsById.get(reopened.findingId);
-    return [
-      ...validateCurrentRawFindingIds(reopened.rawFindingIds, decision, context),
-      ...(finding === undefined ? [] : validateFindingFamilyTagCompatible(finding, reopened.rawFindingIds, 'reopen', decision, context)),
-    ];
-  });
+  const matchErrors = managerOutput.matches.flatMap((match, index) => (
+    validateCurrentRawFindingIds(match.rawFindingIds, `matches[${index}]`, context)
+  ));
+  const newFindingErrors = managerOutput.newFindings.flatMap((finding, index) => (
+    validateCurrentRawFindingIds(finding.rawFindingIds, `newFindings[${index}]`, context)
+  ));
+  const reopenedErrors = managerOutput.reopenedFindings.flatMap((reopened, index) => (
+    validateCurrentRawFindingIds(reopened.rawFindingIds, `reopenedFindings[${index}]`, context)
+  ));
   const conflictErrors = managerOutput.conflicts.flatMap((conflict, index) => {
     const decision = `conflicts[${index}]`;
     return [
@@ -246,63 +234,6 @@ function validateCurrentRawFindingIds(
   ];
 }
 
-function getCurrentRawFindings(
-  rawFindingIds: readonly string[],
-  context: ValidationContext,
-): RawFinding[] {
-  return rawFindingIds
-    .map((rawFindingId) => context.currentRawFindingsById.get(rawFindingId))
-    .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined);
-}
-
-function validateCurrentRawFindingFamilyTags(
-  rawFindingIds: readonly string[],
-  action: string,
-  decision: string,
-  context: ValidationContext,
-): string[] {
-  const rawFindings = getCurrentRawFindings(rawFindingIds, context);
-  const [primary, ...rest] = rawFindings;
-  if (primary === undefined) {
-    return [];
-  }
-
-  return rest
-    .filter((rawFinding) => rawFinding.familyTag !== primary.familyTag)
-    .map((rawFinding) => (
-      `Cannot ${action} raw findings with different familyTag values: "${primary.familyTag}" and "${rawFinding.familyTag}" (${decision})`
-    ));
-}
-
-function validateFindingFamilyTagCompatible(
-  finding: FindingRecord,
-  currentRawFindingIds: readonly string[],
-  action: string,
-  decision: string,
-  context: ValidationContext,
-): string[] {
-  const missingPreviousRawFindingErrors = finding.rawFindingIds
-    .filter((rawFindingId) => !context.previousRawFindingsById.has(rawFindingId))
-    .map((rawFindingId) => `Finding "${finding.id}" references previous raw finding "${rawFindingId}" that is not in the ledger`);
-  const previousRawFindings = finding.rawFindingIds
-    .map((rawFindingId) => context.previousRawFindingsById.get(rawFindingId))
-    .filter((rawFinding): rawFinding is RawFinding => rawFinding !== undefined);
-  const currentRawFindings = getCurrentRawFindings(currentRawFindingIds, context);
-  const [primary, ...rest] = [...previousRawFindings, ...currentRawFindings];
-  if (primary === undefined) {
-    return missingPreviousRawFindingErrors;
-  }
-
-  return [
-    ...missingPreviousRawFindingErrors,
-    ...rest
-      .filter((rawFinding) => rawFinding.familyTag !== primary.familyTag)
-      .map((rawFinding) => (
-        `Cannot ${action} raw findings with different familyTag values: "${primary.familyTag}" and "${rawFinding.familyTag}" (${decision}, finding "${finding.id}")`
-      )),
-  ];
-}
-
 function validateFindingDecisionRefs(
   managerOutput: FindingManagerOutput,
   context: ValidationContext,
@@ -347,6 +278,8 @@ function validateFindingDecisionRefs(
     ...managerOutput.waivedFindings.map((waived) => waived.findingId),
     ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
     ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
+    ...managerOutput.invalidatedFindings.map((invalidated) => invalidated.findingId),
+    ...managerOutput.duplicateFindings.flatMap((duplicate) => duplicate.duplicateFindingIds),
   ]);
   // disputeNotes は matches / conflicts との併存を意図的に許す（同ラウンドで
   // 再観測されつつ異議が却下されるのは正常）。禁止するのは状態遷移との矛盾と、
@@ -375,8 +308,77 @@ function validateFindingDecisionRefs(
     ...conflictErrors,
     ...waivedErrors,
     ...disputeErrors,
+    ...validateInvalidatedFindings(managerOutput, context),
+    ...validateDuplicateFindings(managerOutput, context),
     ...validateFindingDecisionSets(managerOutput, context.previousFindingsById),
   ];
+}
+
+/**
+ * invalidatedFindings の最終防衛線。eligibility（engine が事前に確認した候補
+ * 集合か）は assembleManagerOutput 側の責務（cwd を持たないこの検証関数では
+ * 検証できない）。ここでは構造的な整合だけを見る: 既知の finding か、open か、
+ * 重複記録が無いか。
+ */
+function validateInvalidatedFindings(
+  managerOutput: FindingManagerOutput,
+  context: ValidationContext,
+): string[] {
+  const seen = new Set<string>();
+  return managerOutput.invalidatedFindings.flatMap((invalidated, index) => {
+    const decision = `invalidatedFindings[${index}]`;
+    const duplicateErrors = seen.has(invalidated.findingId)
+      ? [`Duplicate invalidate decision for finding "${invalidated.findingId}" in ${decision}`]
+      : [];
+    seen.add(invalidated.findingId);
+    return [
+      ...validateFindingDecision(invalidated.findingId, decision, 'invalidate', ['open'], context),
+      ...duplicateErrors,
+    ];
+  });
+}
+
+/**
+ * duplicateFindings の最終防衛線: canonical/duplicates が既知かつ open、
+ * 自己参照が無いこと、そして同一出力内で canonical と duplicate の役割が
+ * 食い違わない（連鎖・循環にならない）ことを検証する。同一 finding が複数の
+ * duplicateFindings エントリで duplicate 側に現れる重複は
+ * validateFindingDecisionSets（decision-rules.ts）が検出するため、ここでは
+ * 役割の食い違いだけを見る。
+ */
+function validateDuplicateFindings(
+  managerOutput: FindingManagerOutput,
+  context: ValidationContext,
+): string[] {
+  const canonicalIds = new Set(managerOutput.duplicateFindings.map((duplicate) => duplicate.canonicalFindingId));
+  const duplicateIds = new Set(managerOutput.duplicateFindings.flatMap((duplicate) => duplicate.duplicateFindingIds));
+
+  return managerOutput.duplicateFindings.flatMap((duplicate, index) => {
+    const decision = `duplicateFindings[${index}]`;
+    const selfReferenceErrors = duplicate.duplicateFindingIds.includes(duplicate.canonicalFindingId)
+      ? [`Canonical finding "${duplicate.canonicalFindingId}" cannot be its own duplicate in ${decision}`]
+      : [];
+    const canonicalErrors = [
+      ...validateFindingDecision(duplicate.canonicalFindingId, decision, 'use as canonical', ['open'], context),
+      ...(duplicateIds.has(duplicate.canonicalFindingId)
+        ? [`Finding "${duplicate.canonicalFindingId}" is used as both canonical and duplicate across duplicateFindings entries (cycle) in ${decision}`]
+        : []),
+    ];
+    const duplicateEntryErrors = duplicate.duplicateFindingIds.flatMap((duplicateFindingId, dupIndex) => {
+      const uniqueErrors = duplicate.duplicateFindingIds.indexOf(duplicateFindingId) !== dupIndex
+        ? [`Duplicate finding id "${duplicateFindingId}" repeated within ${decision}`]
+        : [];
+      const cycleErrors = canonicalIds.has(duplicateFindingId)
+        ? [`Finding "${duplicateFindingId}" is used as both canonical and duplicate across duplicateFindings entries (cycle) in ${decision}`]
+        : [];
+      return [
+        ...validateFindingDecision(duplicateFindingId, decision, 'supersede', ['open'], context),
+        ...uniqueErrors,
+        ...cycleErrors,
+      ];
+    });
+    return [...selfReferenceErrors, ...canonicalErrors, ...duplicateEntryErrors];
+  });
 }
 
 

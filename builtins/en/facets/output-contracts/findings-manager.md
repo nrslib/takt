@@ -52,14 +52,33 @@
       "decision": "resolve",
       "evidence": "Evidence that the conflict is adjudicated"
     }
+  ],
+  "invalidateDecisions": [
+    {
+      "findingId": "F-0012",
+      "evidence": "The finding's location does not correspond to any file in the reviewed code; the underlying claim has no basis"
+    }
+  ],
+  "duplicateDecisions": [
+    {
+      "canonicalFindingId": "F-0011",
+      "duplicateFindingIds": ["F-0017", "F-0018"],
+      "evidence": "All three describe the same distributed-lock cleanup gap; reviewers used different familyTag values and cited different lines for it"
+    }
   ]
 }
 ```
 
 Rules for `rawDecisions`:
 - One entry per raw finding listed in the prompt, no more, no fewer.
-- `findingId` is required for `same`, `resolved`, `reopened`, and `conflict`; leave it as an empty string for `new`.
+- `findingId` is required for `same`, `resolved`, `reopened`, and `conflict`; leave it as an empty string for `new` and `unsupported`.
+- `unsupported` is for a raw finding that explicitly referenced an existing finding (targetFindingId set) but the reference does not hold up; it creates no finding and changes nothing.
 - Return only your per-item judgment. Do not assemble the final ledger update (matching, grouping, conflict shape) yourself; the engine does that and enforces the ledger invariants.
+- familyTag and line-number differences are hints, not identity — judge `same` vs `new` by failure mode, trigger, impact, and required fix.
 
 Rules for `disputeDecisions` and `conflictDecisions`:
 - Leave both arrays empty when there is nothing to adjudicate (no "Disputed Findings" heading in the prior step response, or no active conflict in the ledger).
+
+Rules for `invalidateDecisions` and `duplicateDecisions`:
+- `invalidateDecisions`: only for finding ids the prompt lists as invalidation candidates (the engine already deterministically confirmed their location fails a check). Leave empty when there are no candidates or you disagree with all of them.
+- `duplicateDecisions`: for open findings that are the same underlying problem. Leave empty when you find no duplicates among the open findings shown.

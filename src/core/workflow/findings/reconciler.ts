@@ -179,49 +179,6 @@ function getRawFindings(rawFindings: readonly RawFinding[], rawFindingIds: reado
   });
 }
 
-function assertSameFamilyTag(rawFindings: readonly RawFinding[], action: string): void {
-  const [primary, ...rest] = rawFindings;
-  if (primary === undefined) {
-    throw new Error('At least one raw finding is required to validate familyTag');
-  }
-
-  for (const rawFinding of rest) {
-    if (rawFinding.familyTag !== primary.familyTag) {
-      throw new Error(
-        `Cannot ${action} raw findings with different familyTag values: "${primary.familyTag}" and "${rawFinding.familyTag}"`,
-      );
-    }
-  }
-}
-
-function getPreviousRawFindingsForFinding(input: {
-  finding: FindingRecord;
-  previousRawFindingsById: ReadonlyMap<string, RawFinding>;
-}): RawFinding[] {
-  return input.finding.rawFindingIds.map((rawFindingId) => {
-    const rawFinding = input.previousRawFindingsById.get(rawFindingId);
-    if (rawFinding === undefined) {
-      throw new Error(
-        `Finding "${input.finding.id}" references previous raw finding "${rawFindingId}" that is not in the ledger`,
-      );
-    }
-    return rawFinding;
-  });
-}
-
-function assertFindingFamilyTagCompatible(input: {
-  finding: FindingRecord;
-  previousRawFindingsById: ReadonlyMap<string, RawFinding>;
-  currentRawFindings: readonly RawFinding[];
-  action: string;
-}): void {
-  const previousRawFindings = getPreviousRawFindingsForFinding({
-    finding: input.finding,
-    previousRawFindingsById: input.previousRawFindingsById,
-  });
-  assertSameFamilyTag([...previousRawFindings, ...input.currentRawFindings], input.action);
-}
-
 function rawEvidenceFields(rawFindings: readonly RawFinding[]): Pick<FindingRecord, 'location' | 'description' | 'suggestion' | 'reviewers'> {
   const primary = rawFindings[0];
   if (primary === undefined) {
@@ -376,6 +333,8 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       ...input.managerOutput,
       waivedFindings: input.managerOutput.waivedFindings ?? [],
       disputeNotes: input.managerOutput.disputeNotes ?? [],
+      invalidatedFindings: input.managerOutput.invalidatedFindings ?? [],
+      duplicateFindings: input.managerOutput.duplicateFindings ?? [],
     },
   };
   const validation = validateFindingManagerOutput({
@@ -411,12 +370,6 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     const finding = updatedById.get(match.findingId)!;
     assertFindingStatus(finding, 'open', 'match');
     const matchedRawFindings = getRawFindings(input.rawFindings, match.rawFindingIds);
-    assertFindingFamilyTagCompatible({
-      finding,
-      previousRawFindingsById,
-      currentRawFindings: matchedRawFindings,
-      action: 'match',
-    });
     const evidence = rawEvidenceFields(matchedRawFindings);
     updatedById.set(match.findingId, {
       ...finding,
@@ -463,12 +416,6 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       throw new Error(`Cannot reopen finding "${finding.id}" because it is not resolved or waived`);
     }
     const reopenedRawFindings = getRawFindings(input.rawFindings, reopened.rawFindingIds);
-    assertFindingFamilyTagCompatible({
-      finding,
-      previousRawFindingsById,
-      currentRawFindings: reopenedRawFindings,
-      action: 'reopen',
-    });
     const evidence = rawEvidenceFields(reopenedRawFindings);
     const reopenedFinding = withoutResolutionFields(finding);
     updatedById.set(reopened.findingId, {
@@ -518,12 +465,60 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     });
   }
 
+  // invalidate はエンジンが decision-assembly.ts / manager-runner.ts で既に
+  // 決定的検証済みの候補だけを通してくる。critical でも invalidate 可能
+  // （waive とは異なりブロック対象にしない — 前提事実が成立しないという主張）。
+  for (const invalidated of input.managerOutput.invalidatedFindings) {
+    assertKnownFinding(knownFindingIds, invalidated.findingId);
+    const finding = updatedById.get(invalidated.findingId)!;
+    assertFindingStatus(finding, 'open', 'invalidate');
+    updatedById.set(invalidated.findingId, {
+      ...finding,
+      status: 'invalidated',
+      lifecycle: 'invalidated',
+      invalidatedAt: input.context.timestamp,
+      invalidatedEvidence: invalidated.evidence,
+    });
+  }
+
+  // duplicateDecisions: duplicate 側の rawFindingIds/reviewers/disputes を
+  // canonical へ統合し、duplicate を superseded にする。canonical 自身は
+  // open のまま（他の決定でこのラウンド中に状態が変わっていればそちらが優先）。
+  // resolved/waived への流用は無い — 「重複だった」は「修正済み」とは別の意味。
+  for (const duplicate of input.managerOutput.duplicateFindings) {
+    assertKnownFinding(knownFindingIds, duplicate.canonicalFindingId);
+    const canonical = updatedById.get(duplicate.canonicalFindingId)!;
+    let mergedRawFindingIds = canonical.rawFindingIds;
+    let mergedReviewers = canonical.reviewers;
+    let mergedDisputes = canonical.disputes;
+    for (const duplicateFindingId of duplicate.duplicateFindingIds) {
+      assertKnownFinding(knownFindingIds, duplicateFindingId);
+      const duplicateFinding = updatedById.get(duplicateFindingId)!;
+      assertFindingStatus(duplicateFinding, 'open', 'supersede');
+      mergedRawFindingIds = mergeRawFindingIds(mergedRawFindingIds, duplicateFinding.rawFindingIds);
+      mergedReviewers = Array.from(new Set([...mergedReviewers, ...duplicateFinding.reviewers]));
+      mergedDisputes = [...(mergedDisputes ?? []), ...(duplicateFinding.disputes ?? [])];
+      updatedById.set(duplicateFindingId, {
+        ...duplicateFinding,
+        status: 'superseded',
+        lifecycle: 'superseded',
+        supersededByFindingId: duplicate.canonicalFindingId,
+      });
+    }
+    updatedById.set(duplicate.canonicalFindingId, {
+      ...updatedById.get(duplicate.canonicalFindingId)!,
+      rawFindingIds: mergedRawFindingIds,
+      reviewers: mergedReviewers,
+      ...(mergedDisputes !== undefined && mergedDisputes.length > 0 ? { disputes: mergedDisputes } : {}),
+      lastSeen: observationFromContext(input.context),
+    });
+  }
+
   const newFindings: FindingRecord[] = input.managerOutput.newFindings.map((newFinding) => {
     assertKnownRawFindings(rawFindingIds, newFinding.rawFindingIds);
     markRawFindingIdsUsed(usedRawFindingIds, newFinding.rawFindingIds);
     const rawFinding = getRawFinding(input.rawFindings, newFinding.rawFindingIds);
     const newRawFindings = getRawFindings(input.rawFindings, newFinding.rawFindingIds);
-    assertSameFamilyTag(newRawFindings, 'create a new finding from');
     const id = formatFindingId(nextId);
     nextId += 1;
     return buildNewFinding({

@@ -8,13 +8,13 @@
 {{else}}Current finding ledger summary:
 {{/if}}{{ledgerSummary}}
 
-{{#if isReviewer}}- Report every issue you observe as structured raw findings with kind "issue" (empty targetFindingId).
+{{#if isReviewer}}- Report every fresh issue you observe as a structured raw finding with relation "new" (empty targetFindingId). The `kind` field is kept for backward compatibility; set `relation`, not just `kind`.
 {{/if}}{{#if reviewerHasOpenFindings}}- Each round, verify the open ledger findings that fall within your review scope.
-- When you have confirmed an open finding is fixed, report it as a raw finding with kind "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.
-- Do not re-report an open finding that is still unfixed; report a new issue only if it regressed or changed.
-{{/if}}{{#if reviewerHasWaivedFindings}}- Do not re-report findings listed as waived in the ledger summary. If you observe that a waiver premise no longer holds, report that observation as a new issue citing the waived finding id.
+- When you have confirmed an open finding is fixed, report it as a raw finding with relation "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.
+- Do not re-report an open finding that is still unfixed at the same location. If it is still happening but you're confirming it explicitly (e.g. it moved to a different line, or you want to record that it's still present rather than staying silent), report it with relation "persists" and the ledger finding id in targetFindingId — familyTag and line-number differences from the original report do not matter; cite the finding id. Report a fresh "new" issue only if it actually regressed into a different problem.
+{{/if}}{{#if reviewerHasWaivedFindings}}- Do not re-report findings listed as waived in the ledger summary. If you observe that a waiver premise no longer holds, report that observation with relation "reopened" and the waived finding id in targetFindingId.
 {{/if}}{{#if isReviewer}}- Use rawFindingId values that are unique within this response.
-- Copy each Observed Findings family_tag value into the structured familyTag field.
+- Copy each Observed Findings family_tag value into the structured familyTag field. It is a classification/search hint only; it does not determine whether a finding is the same as an existing one.
 - Return structured output matching this raw findings schema:
 {{rawFindingsJsonSchema}}
 {{/if}}{{#if canDispute}}- Before you act on a finding, check it against the current code. Fix it when it is valid and fixable with the operations you are allowed to perform. If the finding no longer matches reality (already fixed, or it cites structures that no longer exist), or it is valid but cannot be fixed with the operations you are allowed to perform (frozen public contract, external constraint, deliberate trade-off, or a remedy you are forbidden to perform), do NOT loop on it. State a dispute claim in your response under a "## Disputed Findings" heading, one entry per finding:

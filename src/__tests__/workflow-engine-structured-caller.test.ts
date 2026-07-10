@@ -27,6 +27,33 @@ import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
 
+// raw admission validation（manager-runner.ts の cwd 引数）が実 fs を見るため、
+// このテストファイル全体が引用する raw finding の location に対応する実ファイルを
+// テストの cwd（= projectCwd、findings ledger の base と同じ）へ用意する。
+const FINDING_LOCATION_FIXTURE_PATHS = [
+  'src/a.ts',
+  'src/core/workflow/engine/WorkflowCallExecutor.ts',
+  'src/core/workflow/evaluation/RuleEvaluator.ts',
+  'src/core/workflow/findings/manager-runner.ts',
+  'src/core/workflow/findings/reconciler.ts',
+  'src/current.ts',
+  'src/dup.ts',
+  'src/normal.ts',
+  'src/other.ts',
+  'src/secret.ts',
+  'src/loop-1.ts',
+  'src/loop-2.ts',
+] as const;
+
+function writeFindingLocationFixtures(dir: string): void {
+  const content = `${Array.from({ length: 300 }, (_, index) => `// line ${index + 1}`).join('\n')}\n`;
+  for (const relativePath of FINDING_LOCATION_FIXTURE_PATHS) {
+    const fullPath = join(dir, relativePath);
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, content);
+  }
+}
+
 function createTestTmpDir(): string {
   const dir = join(tmpdir(), `takt-engine-structured-${randomUUID()}`);
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'reports'), { recursive: true });
@@ -34,6 +61,7 @@ function createTestTmpDir(): string {
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'context', 'policy'), { recursive: true });
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses'), { recursive: true });
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'logs'), { recursive: true });
+  writeFindingLocationFixtures(dir);
   return dir;
 }
 
@@ -167,6 +195,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-recurrence',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'medium',
                 title: 'Possible recurrence',
@@ -198,6 +227,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -515,6 +545,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -536,6 +567,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               suggestion: 'Mask the token before logging.',
               kind: 'issue',
               targetFindingId: '',
+              relation: 'new',
             }],
           },
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
@@ -973,7 +1005,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            rawDecisions: [], disputeDecisions: [], conflictDecisions: [],
+            rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1325,7 +1357,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'done',
           content: '{}',
           structuredOutput: {
-            rawDecisions: [], disputeDecisions: [], conflictDecisions: [],
+            rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1441,6 +1473,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1474,6 +1507,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1519,6 +1553,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1599,7 +1634,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     };
     expect(ledger).toEqual(expect.objectContaining({
       workflowName: 'finding-parallel-engine-test',
-      nextId: 2,
+      nextId: 3,
     }));
     expect(ledger.rawFindings.map((finding) => finding.rawFindingId)).toEqual(
       expect.arrayContaining([
@@ -1612,11 +1647,17 @@ describe('WorkflowEngine structured caller defaults', () => {
       'security-review',
     ]);
     expect(ledger.rawFindings.map((finding) => finding.familyTag)).toEqual(['bug', 'bug']);
-    // 2 人のレビュアーが同じ familyTag・同じ場所を報告している。フィールド等価で
-    // 同一問題と決まるので、台帳には 1 件だけ立つ（重複した finding を作らない）。
-    expect(ledger.findings).toHaveLength(1);
+    // 2 人のレビュアーが同じ familyTag・同じ場所・同じタイトルを報告しているが、
+    // description（failure mode の記述）が異なる（Finding Contract 収束性改善
+    // Phase A item 5: familyTag・行番号だけでなく、path + タイトルの一致だけでも
+    // 自動マージしない。中身が異なる可能性がある本当に別の観測を、機械的に
+    // 1つへ畳んでしまうと逆に情報を失う）。台帳には別々の finding として2件立ち、
+    // 本当に重複だと manager が判断すれば後続ラウンドの duplicateDecisions
+    // （item 6）で統合できる。
+    expect(ledger.findings).toHaveLength(2);
     expect(ledger.findings.map((finding) => finding.reviewers)).toEqual([
-      ['architecture-review', 'security-review'],
+      ['architecture-review'],
+      ['security-review'],
     ]);
     expect(existsSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw', 'test-report-dir.reviewers.json'))).toBe(true);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
@@ -1687,6 +1728,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1801,6 +1843,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Rule evaluation ignores finding state',
@@ -1837,6 +1880,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -1862,6 +1906,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1960,6 +2005,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       ],
       disputeDecisions: [],
       conflictDecisions: [],
+      invalidateDecisions: [], duplicateDecisions: [],
     });
     expect(ledgerUpdated).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
@@ -2035,6 +2081,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'confirm-1',
                 kind: 'resolution_confirmation',
                 targetFindingId: 'F-0001',
+                relation: 'resolution_confirmation',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Existing issue',
@@ -2046,6 +2093,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-other',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'medium',
                 title: 'Same root cause elsewhere',
@@ -2073,6 +2121,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2228,6 +2277,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-still',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Existing issue persists',
@@ -2257,6 +2307,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               { findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/types.ts:94' },
             ],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2513,6 +2564,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Injected raw finding',
@@ -2560,6 +2612,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -2581,6 +2634,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:04.000Z'),
         };
@@ -2719,6 +2773,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-current',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'prompt-injection',
                 severity: 'high',
                 title: 'Current issue',
@@ -2758,6 +2813,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2912,6 +2968,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-normal-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Normal step raw finding should not be collected',
@@ -2983,6 +3040,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Manager provider override must survive synthesis',
@@ -3020,6 +3078,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3106,6 +3165,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Manager workflow fallback must survive synthesis',
@@ -3141,6 +3201,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3216,6 +3277,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Manager persona routing must survive synthesis',
@@ -3251,6 +3313,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3333,6 +3396,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                   rawFindingId: 'raw-architecture-1',
                   kind: 'issue',
                   targetFindingId: '',
+                  relation: 'new',
                   familyTag: 'bug',
                   severity: 'high',
                   title: 'Rule evaluation ignores finding state',
@@ -3382,6 +3446,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               ],
               disputeDecisions: [],
               conflictDecisions: [],
+              invalidateDecisions: [], duplicateDecisions: [],
             }),
             '```',
           ].join('\n'),
@@ -3485,6 +3550,7 @@ describe('WorkflowEngine structured caller defaults', () => {
                 rawFindingId: 'raw-architecture-1',
                 kind: 'issue',
                 targetFindingId: '',
+                relation: 'new',
                 familyTag: 'bug',
                 severity: 'high',
                 title: 'Child ledger write must reach the parent ledger',
@@ -3517,6 +3583,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             ],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date('2026-07-10T00:00:02.000Z'),
         };
@@ -3702,6 +3769,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date(),
         };
@@ -3725,6 +3793,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               suggestion: '',
               kind: 'issue',
               targetFindingId: '',
+              relation: 'new',
             }],
           },
           timestamp: new Date(),
@@ -3760,8 +3829,8 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(rawFindingIds).toContain('test-report-dir:child-a#1:review:1:review:raw-1');
     expect(rawFindingIds).toContain('test-report-dir:child-b#1:review:1:review:raw-1');
 
-    // familyTag + location が同一のため、保存直前の再照合（openFindingKeyIndex）
-    // で1件の finding に畳み込まれる。ただしその finding は両方の raw
+    // 内容（path+title+description）が完全一致するため、保存直前の再照合
+    // （openFindingKeyIndex）で1件の finding に畳み込まれる。ただしその finding は両方の raw
     // finding id を参照している（どちらも捨てられていない）。
     expect(persistedLedger.findings).toHaveLength(1);
     expect(persistedLedger.findings[0]?.rawFindingIds).toEqual(expect.arrayContaining(rawFindingIds));
@@ -3852,6 +3921,7 @@ describe('WorkflowEngine structured caller defaults', () => {
             rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
             disputeDecisions: [],
             conflictDecisions: [],
+            invalidateDecisions: [], duplicateDecisions: [],
           },
           timestamp: new Date(),
         };
@@ -3877,6 +3947,7 @@ describe('WorkflowEngine structured caller defaults', () => {
               suggestion: '',
               kind: 'issue',
               targetFindingId: '',
+              relation: 'new',
             }],
           },
           timestamp: new Date(),

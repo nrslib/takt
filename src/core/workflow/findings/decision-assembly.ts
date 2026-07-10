@@ -5,6 +5,8 @@ import type {
   FindingManagerConflict,
   FindingManagerDecisions,
   FindingManagerDisputeNote,
+  FindingManagerDuplicateDecision,
+  FindingManagerInvalidatedFinding,
   FindingManagerMatch,
   FindingManagerNewFinding,
   FindingManagerOutput,
@@ -19,14 +21,15 @@ import type {
 } from './types.js';
 import { FINDING_SEVERITIES } from '../../models/finding-types.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
+import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { FILE_LINE_EVIDENCE_PATTERN, hasDisputeClaimFor } from './manager-output-validation.js';
-import { buildFindingFamilyTags, mergeFindingManagerOutputs } from './mechanical-classification.js';
+import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
 import { formatConflictId } from './reconciler.js';
 
 /**
- * findings-manager が最終結果（8配列）を自力で組み立てると、台帳の不変条件
- * （open のものしか match/resolve できない、familyTag は一致していなければ
- * ならない等）を LLM が頭の中で守り切れず検証に落ちる（gpt-5.5 でも実測）。
+ * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
+ * （open のものしか match/resolve できない等）を LLM が頭の中で守り切れず検証に
+ * 落ちる（gpt-5.5 でも実測）。
  * このモジュールは LLM から「1件ごとの判断」だけを受け取り、組み立てと
  * 不変条件の強制をコードで行う。違反した決定は1件だけ不採用にし、理由を
  * 添えて返す。全体を無効にはしない（呼び出し元が不採用分だけ再問い合わせできる
@@ -60,6 +63,28 @@ export interface RejectedCarriedConflict {
   reason: string;
 }
 
+export interface RejectedInvalidateDecision {
+  findingId: string;
+  reason: string;
+}
+
+export interface RejectedDuplicateDecision {
+  canonicalFindingId: string;
+  duplicateFindingIds: string[];
+  reason: string;
+}
+
+/**
+ * raw finding 単位の audit-only 記録。'unsupported' 判定になった raw は
+ * finding を作らず対象 finding の状態も変えない（disputeNotes とは別の、
+ * raw 単位の記録として manager-runner.ts が検証レポートへ残す）。
+ */
+export interface UnsupportedRawDecision {
+  rawFindingId: string;
+  targetFindingId: string;
+  evidence: string;
+}
+
 export interface AssembleManagerOutputResult {
   output: FindingManagerOutput;
   rejectedRawDecisions: RejectedRawDecision[];
@@ -74,6 +99,10 @@ export interface AssembleManagerOutputResult {
    * （codex が共有 FindingLedgerStore の並列更新で再現）。
    */
   rejectedCarriedConflicts: RejectedCarriedConflict[];
+  rejectedInvalidateDecisions: RejectedInvalidateDecision[];
+  rejectedDuplicateDecisions: RejectedDuplicateDecision[];
+  /** Raw findings decided 'unsupported' this round. Excluded from the "unmentioned raw -> new finding" fallback by the caller (manager-runner.ts). */
+  unsupportedRawDecisions: UnsupportedRawDecision[];
 }
 
 export interface AssembleManagerOutputInput {
@@ -121,6 +150,19 @@ export interface AssembleManagerOutputInput {
    * 発火しない（codex が実行で再現）。
    */
   carriedFindingOnlyConflicts?: FindingManagerConflict[];
+  /**
+   * Finding ids the engine deterministically flagged as invalidation candidates
+   * (their stored location failed validateLocationAdmission against the
+   * reviewed code — see manager-runner.ts) before the manager was invoked. The
+   * manager's invalidateDecisions may only select from this set; the LLM's
+   * evidence alone never grants authority to invalidate a finding outside it.
+   * Defaults to empty (no candidates -> no invalidateDecisions can be accepted).
+   * The save-time re-assembly (manager-runner.ts's freshAssembly) passes the
+   * finding ids already present in the finalized managerOutput.invalidatedFindings,
+   * since those were vetted once already; freshAssembly only re-checks structural
+   * validity (still open, no same-round collision), not eligibility.
+   */
+  invalidLocationCandidateFindingIds?: ReadonlySet<string>;
 }
 
 interface GroupedFindingDecision {
@@ -164,17 +206,33 @@ function appendGroupedConflict(
 }
 
 /**
- * finding が既に持つ familyTag（台帳）と、この出力内で同じ finding に紐づけようと
- * している raw の familyTag が食い違っていないかを確認しながらコミットする。
- * 「台帳との整合」と「同一出力内での整合」を同じマップで一度に扱う。
+ * 機械的に畳んでよい「疑いようのない重複」の識別キー: 正規化した
+ * path + title + description の完全一致。familyTag と行番号は分類・検索
+ * ヒントに過ぎず同一性の根拠にしない（Finding Contract 収束性改善 Phase A）。
+ *
+ * description まで要求するのは、path + タイトルだけで畳むと、同じタイトル・
+ * 同じファイルだが failure mode が異なる本当に別の問題まで誤って1つに畳んで
+ * しまうため（禁止された「意味なし自動マージ」— codex 再現ブロッカー B3。
+ * 同ラウンド内 new+new のグルーピングと、保存直前の再照合で既存 open finding
+ * へ付け替えるリダイレクトの両方が、この同じ厳格キーを使う）。取りこぼした
+ * 本当の重複は manager が duplicateDecisions で後から統合できる（item 6）。
+ *
+ * 正規化は大小文字を保存する（normalizeFindingText: trim + 空白畳み込みのみ）。
+ * 小文字化すると `Wrong identifier PATH` と `Wrong identifier Path` のような
+ * 大小文字を区別する識別子への別指摘が「完全一致」扱いで誤統合される
+ * （codex 直接実行で再現）。大小文字の表記ゆれ程度の重複は manager が
+ * duplicateDecisions で意味判断のうえ統合すればよい。
  */
-/** raw / 台帳 finding 共通のグルーピングキー。場所は表記ゆれ（前後の空白）だけ吸収する。行番号が違えば別の問題として扱う。 */
-function findingGroupKey(familyTag: string, location: string | undefined): string {
-  return JSON.stringify([familyTag, (location ?? '').trim()]);
+function findingIdentityKey(path: string | undefined, title: string, description: string | undefined): string {
+  return JSON.stringify([
+    path ?? '',
+    normalizeFindingText(title),
+    description !== undefined ? normalizeFindingText(description) : '',
+  ]);
 }
 
 function newFindingGroupKey(raw: RawFinding): string {
-  return findingGroupKey(raw.familyTag, raw.location);
+  return findingIdentityKey(parseFindingLocation(raw.location)?.path, raw.title, raw.description);
 }
 
 /** FINDING_SEVERITIES は重い順。畳んだ finding は最も重い severity を採る。 */
@@ -183,27 +241,23 @@ function severityRank(severity: FindingSeverity): number {
 }
 
 /**
- * 保存直前の再照合（previousLedger が最新台帳のとき）で、同じ familyTag +
- * location を持つ open finding が既に台帳にあるかを引けるようにする。並列子が
- * 同じ問題を "new" と判断しても、他の子が直前に立てた finding をこの索引で
- * 検出し、"same" として畳み込む（重複作成の防止。codex 指摘の再現ケース:
- * 並列子2つが同じ familyTag + location を new と判断し、F-0001 と F-0002 が
- * 重複作成された）。フィールド等価で決まるため LLM の判断には委ねない。
+ * 保存直前の再照合（previousLedger が最新台帳のとき）で、内容が完全一致する
+ * open finding が既に台帳にあるかを引けるようにする。並列子が同一の raw を
+ * "new" と判断しても、他の子が直前に立てた finding をこの索引で検出し、
+ * "same" として畳み込む（重複作成の防止。codex 指摘の再現ケース: 並列子2つが
+ * 同じ問題を new と判断し、F-0001 と F-0002 が重複作成された）。キーは
+ * findingIdentityKey（path+title+description の完全一致）— path+title だけの
+ * リダイレクトは manager の明示的な new 判断を意味判断なしで same に付け替える
+ * 禁止マージだった（codex 再現ブロッカー B3）。完全同一の raw なら description
+ * も一致するため、並列子競合対策としてはこの厳格キーで引き続き成立する。
  */
-function buildOpenFindingKeyIndex(
-  previousLedger: FindingLedger,
-  familyTagsByFindingId: ReadonlyMap<string, Set<string>>,
-): Map<string, string> {
+function buildOpenFindingKeyIndex(previousLedger: FindingLedger): Map<string, string> {
   const index = new Map<string, string>();
   for (const finding of previousLedger.findings) {
     if (finding.status !== 'open') {
       continue;
     }
-    const [firstTag] = familyTagsByFindingId.get(finding.id) ?? [];
-    if (firstTag === undefined) {
-      continue;
-    }
-    const key = findingGroupKey(firstTag, finding.location);
+    const key = findingIdentityKey(parseFindingLocation(finding.location)?.path, finding.title, finding.description);
     if (!index.has(key)) {
       index.set(key, finding.id);
     }
@@ -211,27 +265,6 @@ function buildOpenFindingKeyIndex(
   return index;
 }
 
-function createFamilyTagGuard(
-  familyTagsByFindingId: ReadonlyMap<string, Set<string>>,
-): (findingId: string, familyTag: string) => string | undefined {
-  const committed = new Map<string, string>();
-  for (const [findingId, tags] of familyTagsByFindingId) {
-    const [firstTag] = tags;
-    if (firstTag !== undefined) {
-      committed.set(findingId, firstTag);
-    }
-  }
-  return (findingId, familyTag) => {
-    const committedTag = committed.get(findingId);
-    if (committedTag === undefined) {
-      committed.set(findingId, familyTag);
-      return undefined;
-    }
-    return committedTag === familyTag
-      ? undefined
-      : `Cannot link raw findings with different familyTag values: "${committedTag}" and "${familyTag}" (finding "${findingId}")`;
-  };
-}
 
 function assembleRawDecisions(input: {
   previousLedger: FindingLedger;
@@ -244,13 +277,12 @@ function assembleRawDecisions(input: {
   resolvedFindings: FindingManagerResolvedFinding[];
   reopenedFindings: FindingManagerReopenedFinding[];
   conflicts: FindingManagerConflict[];
+  unsupported: UnsupportedRawDecision[];
   rejected: RejectedRawDecision[];
 } {
   const rawById = new Map(input.residualRawFindings.map((raw) => [raw.rawFindingId, raw]));
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
-  const familyTagsByFindingId = buildFindingFamilyTags(input.previousLedger);
-  const checkFamilyTag = createFamilyTagGuard(familyTagsByFindingId);
-  const openFindingKeyIndex = buildOpenFindingKeyIndex(input.previousLedger, familyTagsByFindingId);
+  const openFindingKeyIndex = buildOpenFindingKeyIndex(input.previousLedger);
 
   const matchesByFindingId = new Map<string, GroupedFindingDecision>();
   const resolvedByFindingId = new Map<string, GroupedFindingDecision>();
@@ -258,6 +290,7 @@ function assembleRawDecisions(input: {
   const conflictsByFindingId = new Map<string, GroupedConflict>();
   const newFindings: FindingManagerNewFinding[] = [];
   const newFindingsByKey = new Map<string, FindingManagerNewFinding>();
+  const unsupported: UnsupportedRawDecision[] = [];
   const rejected: RejectedRawDecision[] = [];
   const seenRawFindingIds = new Set<string>();
 
@@ -278,6 +311,19 @@ function assembleRawDecisions(input: {
       continue;
     }
 
+    if (decision.decision === 'unsupported') {
+      if (decision.findingId !== undefined) {
+        reject(decision, '"unsupported" decisions must not reference a findingId; the target comes from the raw finding\'s own targetFindingId');
+        continue;
+      }
+      if (raw.targetFindingId === undefined) {
+        reject(decision, `Cannot mark raw finding "${raw.rawFindingId}" as unsupported because it has no targetFindingId`);
+        continue;
+      }
+      unsupported.push({ rawFindingId: raw.rawFindingId, targetFindingId: raw.targetFindingId, evidence: decision.evidence });
+      continue;
+    }
+
     if (decision.decision === 'new') {
       if (decision.findingId !== undefined) {
         reject(decision, '"new" decisions must not reference a findingId');
@@ -290,27 +336,37 @@ function assembleRawDecisions(input: {
         reject(decision, `Cannot create a new finding from raw finding "${raw.rawFindingId}" because it is a resolution_confirmation`);
         continue;
       }
-      const groupKey = newFindingGroupKey(raw);
-
+      // relation=persists/reopened の raw は既存 finding への明示参照であり、
+      // 新規 finding の根拠にはできない（codex 再現ブロッカー B2: 明示参照付き
+      // 再報告を manager が new へ倒すと、根拠不成立の再報告が新規 finding
+      // として台帳に混入する）。same / unsupported / （対象状態が合えば）
+      // reopened のいずれかを選ばせる。
+      const relation = effectiveRawFindingRelation(raw);
+      if (relation === 'persists' || relation === 'reopened') {
+        reject(decision, `Cannot create a new finding from raw finding "${raw.rawFindingId}" because it explicitly references finding "${raw.targetFindingId ?? '(unknown)'}" (relation "${relation}"); decide same, unsupported, or reopened (if the target state allows) instead`);
+        continue;
+      }
       // 台帳の再照合（保存直前の再読込等）では、LLM が判断した時点では存在
-      // しなかった open finding が既に同じ familyTag + location で立って
-      // いることがある（並列子が同じ問題を先に "new" と判断したケース）。
-      // LLM は他の子の直前の判断を知り得ないため、"new" ではなく "same" として
-      // 扱い、重複作成を避ける。
+      // しなかった open finding が既に同じ内容（path+title+description の完全
+      // 一致）で立っていることがある（並列子が同一の raw を先に "new" と判断
+      // したケース）。LLM は他の子の直前の判断を知り得ないため、"new" ではなく
+      // "same" として扱い、重複作成を避ける。キーは同ラウンド new+new の
+      // グルーピングと同一の findingIdentityKey — path+title だけのリダイレクトは
+      // manager の明示的な new 判断を覆す禁止マージだった（codex ブロッカー B3）。
+      const groupKey = newFindingGroupKey(raw);
       const existingOpenFindingId = openFindingKeyIndex.get(groupKey);
       if (existingOpenFindingId !== undefined) {
-        const familyTagError = checkFamilyTag(existingOpenFindingId, raw.familyTag);
-        if (familyTagError !== undefined) {
-          reject(decision, familyTagError);
-          continue;
-        }
         appendGroupedFindingDecision(matchesByFindingId, existingOpenFindingId, raw.rawFindingId, decision.evidence);
         continue;
       }
 
       // 同じラウンドで複数のレビュアーが同じ問題を報告することがある。
-      // 「同じ familyTag・同じ場所なら同じ問題」はフィールド等価で決まるので、
-      // LLM の判断に委ねずここで畳む。委ねると台帳に重複した finding が立つ。
+      // 「同じ path・同じ正規化タイトル・同じ description なら同じ問題」は
+      // フィールド等価で決まるので、LLM の判断に委ねずここで畳む。委ねると
+      // 台帳に重複した finding が立つ。description まで一致を要求するのは、
+      // path + タイトルだけで畳むと同タイトル・同ファイルの本当に別問題
+      // （failure mode 違い）まで誤って畳んでしまうため（item 5）。取りこぼした
+      // 本当の重複は manager が duplicateDecisions で後から統合できる（item 6）。
       const existing = newFindingsByKey.get(groupKey);
       if (existing !== undefined) {
         existing.rawFindingIds.push(raw.rawFindingId);
@@ -337,12 +393,6 @@ function assembleRawDecisions(input: {
     const finding = findingsById.get(findingId);
     if (finding === undefined) {
       reject(decision, `Unknown finding id "${findingId}"`);
-      continue;
-    }
-
-    const familyTagError = checkFamilyTag(findingId, raw.familyTag);
-    if (familyTagError !== undefined) {
-      reject(decision, familyTagError);
       continue;
     }
 
@@ -410,8 +460,157 @@ function assembleRawDecisions(input: {
     resolvedFindings: [...resolvedByFindingId.values()],
     reopenedFindings: [...reopenedByFindingId.values()],
     conflicts: [...conflictsByFindingId.values()],
+    unsupported,
     rejected,
   };
+}
+
+/**
+ * manager が invalidateDecisions で選んだ finding id を、engine が事前に
+ * 決定的検証で確認した候補集合（eligibleFindingIds）と照合してから適用する。
+ * LLM の evidence だけでは invalidate を成立させない — 候補集合そのものが
+ * cwd ベースの再検証（admission-validation.ts）を経ているため、ここでは
+ * 「候補に含まれるか」「finding が open か」「同ラウンドで他の決定と衝突しないか」
+ * だけを見る。
+ */
+function assembleInvalidateDecisions(input: {
+  previousLedger: FindingLedger;
+  decisions: FindingManagerDecisions['invalidateDecisions'];
+  eligibleFindingIds: ReadonlySet<string>;
+  transitionedFindingIds: ReadonlySet<string>;
+}): { invalidatedFindings: FindingManagerInvalidatedFinding[]; rejected: RejectedInvalidateDecision[] } {
+  const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
+  const invalidatedFindings: FindingManagerInvalidatedFinding[] = [];
+  const rejected: RejectedInvalidateDecision[] = [];
+  const seenFindingIds = new Set<string>();
+
+  for (const decision of input.decisions) {
+    if (seenFindingIds.has(decision.findingId)) {
+      rejected.push({ findingId: decision.findingId, reason: `Duplicate invalidate decision for finding id "${decision.findingId}"` });
+      continue;
+    }
+    seenFindingIds.add(decision.findingId);
+
+    const finding = findingsById.get(decision.findingId);
+    if (finding === undefined) {
+      rejected.push({ findingId: decision.findingId, reason: `Unknown finding id "${decision.findingId}"` });
+      continue;
+    }
+    if (finding.status !== 'open') {
+      rejected.push({ findingId: decision.findingId, reason: `Cannot invalidate finding "${decision.findingId}" because it is not open` });
+      continue;
+    }
+    if (!input.eligibleFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot invalidate finding "${decision.findingId}" because the engine did not confirm its location fails a deterministic check`,
+      });
+      continue;
+    }
+    if (input.transitionedFindingIds.has(decision.findingId)) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot invalidate finding "${decision.findingId}" because it also has a state transition in this output`,
+      });
+      continue;
+    }
+    invalidatedFindings.push({ findingId: decision.findingId, evidence: decision.evidence });
+  }
+
+  return { invalidatedFindings, rejected };
+}
+
+/**
+ * duplicateDecisions を構造的に検証してそのまま適用対象へ通す。canonical/
+ * duplicates はすべて previousLedger 上で open であること、自己参照が無いこと、
+ * 同ラウンド内で canonical/duplicate の役割が食い違わない（連鎖・循環にならない）
+ * ことを要求する。resolved/waived への流用は無い（この関数はそれらの状態を
+ * 一切変えない — 適用は reconciler.ts の superseded 遷移のみ）。
+ */
+function assembleDuplicateDecisions(input: {
+  previousLedger: FindingLedger;
+  decisions: FindingManagerDecisions['duplicateDecisions'];
+  transitionedFindingIds: ReadonlySet<string>;
+}): { duplicateFindings: FindingManagerDuplicateDecision[]; rejected: RejectedDuplicateDecision[] } {
+  const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
+  const duplicateFindings: FindingManagerDuplicateDecision[] = [];
+  const rejected: RejectedDuplicateDecision[] = [];
+  // このラウンドで既に canonical/duplicate の役割を持った finding id。
+  // 連鎖（A の canonical が別の decision で duplicate になる等）を防ぐ。
+  const roleByFindingId = new Map<string, 'canonical' | 'duplicate'>();
+
+  for (const decision of input.decisions) {
+    const reject = (reason: string): void => {
+      rejected.push({ canonicalFindingId: decision.canonicalFindingId, duplicateFindingIds: [...decision.duplicateFindingIds], reason });
+    };
+
+    const duplicateIds = new Set(decision.duplicateFindingIds);
+    if (duplicateIds.size !== decision.duplicateFindingIds.length) {
+      reject(`Duplicate finding ids repeated within the same decision for canonical "${decision.canonicalFindingId}"`);
+      continue;
+    }
+    if (duplicateIds.has(decision.canonicalFindingId)) {
+      reject(`Canonical finding "${decision.canonicalFindingId}" cannot be its own duplicate`);
+      continue;
+    }
+
+    const canonical = findingsById.get(decision.canonicalFindingId);
+    if (canonical === undefined) {
+      reject(`Unknown canonical finding id "${decision.canonicalFindingId}"`);
+      continue;
+    }
+    if (canonical.status !== 'open') {
+      reject(`Cannot use finding "${decision.canonicalFindingId}" as canonical because it is not open`);
+      continue;
+    }
+    if (input.transitionedFindingIds.has(decision.canonicalFindingId)) {
+      reject(`Cannot use finding "${decision.canonicalFindingId}" as canonical because it also has a state transition in this output`);
+      continue;
+    }
+    const existingCanonicalRole = roleByFindingId.get(decision.canonicalFindingId);
+    if (existingCanonicalRole === 'duplicate') {
+      reject(`Finding "${decision.canonicalFindingId}" is already a duplicate in this round; cannot also be a canonical (cycle)`);
+      continue;
+    }
+
+    const missingDuplicates = [...duplicateIds].filter((id) => !findingsById.has(id));
+    if (missingDuplicates.length > 0) {
+      reject(`Unknown duplicate finding id(s): ${missingDuplicates.join(', ')}`);
+      continue;
+    }
+    const notOpenDuplicates = [...duplicateIds].filter((id) => findingsById.get(id)?.status !== 'open');
+    if (notOpenDuplicates.length > 0) {
+      reject(`Cannot supersede finding(s) that are not open: ${notOpenDuplicates.join(', ')}`);
+      continue;
+    }
+    const transitionedDuplicates = [...duplicateIds].filter((id) => input.transitionedFindingIds.has(id));
+    if (transitionedDuplicates.length > 0) {
+      reject(`Cannot supersede finding(s) that also have a state transition in this output: ${transitionedDuplicates.join(', ')}`);
+      continue;
+    }
+    const cyclicDuplicates = [...duplicateIds].filter((id) => roleByFindingId.get(id) === 'canonical');
+    if (cyclicDuplicates.length > 0) {
+      reject(`Finding(s) already used as canonical in this round cannot also be superseded (cycle): ${cyclicDuplicates.join(', ')}`);
+      continue;
+    }
+    const alreadyClaimedDuplicates = [...duplicateIds].filter((id) => roleByFindingId.has(id));
+    if (alreadyClaimedDuplicates.length > 0) {
+      reject(`Finding(s) already assigned to another canonical in this round: ${alreadyClaimedDuplicates.join(', ')}`);
+      continue;
+    }
+
+    roleByFindingId.set(decision.canonicalFindingId, 'canonical');
+    for (const id of duplicateIds) {
+      roleByFindingId.set(id, 'duplicate');
+    }
+    duplicateFindings.push({
+      canonicalFindingId: decision.canonicalFindingId,
+      duplicateFindingIds: [...duplicateIds],
+      evidence: decision.evidence,
+    });
+  }
+
+  return { duplicateFindings, rejected };
 }
 
 function assembleDisputeDecisions(input: {
@@ -663,6 +862,8 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     resolvedConflicts: [],
     waivedFindings: [],
     disputeNotes: [],
+    invalidatedFindings: [],
+    duplicateFindings: [],
   };
 
   // 機械分類の結果が渡されたら、ここで raw decisions の組み立て結果と merge して
@@ -677,13 +878,36 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
   // waive/note との併存を禁止するのは状態遷移（resolved/reopened）だけ。matches とは
   // 別扱い: match されたまま waive を申告すること自体は正常だが、採用はしない
   // （下記 assembleDisputeDecisions が conflict + disputeNote へ変換する）。
-  const transitionedFindingIds = new Set([
+  const stateTransitionFindingIds = new Set([
     ...canonicalRaw.resolvedFindings.map((resolved) => resolved.findingId),
     ...canonicalRaw.reopenedFindings.map((reopened) => reopened.findingId),
   ]);
   const unresolvedEvidenceFindingIds = new Set([
     ...canonicalRaw.matches.map((match) => match.findingId),
     ...canonicalRaw.conflicts.flatMap((conflict) => conflict.findingIds),
+  ]);
+
+  // invalidate は resolved/reopened と同じラウンドで同じ finding を対象に
+  // できない（collectDecisionSets 参照）。duplicate（superseded 側）も同様。
+  // 両方とも先に確定させてから、以降の判断（dispute）の除外集合へ足し込む。
+  const invalidateResult = assembleInvalidateDecisions({
+    previousLedger: input.previousLedger,
+    decisions: input.decisions.invalidateDecisions,
+    eligibleFindingIds: input.invalidLocationCandidateFindingIds ?? new Set(),
+    transitionedFindingIds: stateTransitionFindingIds,
+  });
+  const withInvalidateTransitioned = new Set([
+    ...stateTransitionFindingIds,
+    ...invalidateResult.invalidatedFindings.map((invalidated) => invalidated.findingId),
+  ]);
+  const duplicateResult = assembleDuplicateDecisions({
+    previousLedger: input.previousLedger,
+    decisions: input.decisions.duplicateDecisions,
+    transitionedFindingIds: withInvalidateTransitioned,
+  });
+  const transitionedFindingIds = new Set([
+    ...withInvalidateTransitioned,
+    ...duplicateResult.duplicateFindings.flatMap((duplicate) => duplicate.duplicateFindingIds),
   ]);
 
   const disputeResult = assembleDisputeDecisions({
@@ -720,11 +944,16 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
       resolvedConflicts: conflictResult.resolvedConflicts,
       waivedFindings: disputeResult.waivedFindings,
       disputeNotes: disputeResult.disputeNotes,
+      invalidatedFindings: invalidateResult.invalidatedFindings,
+      duplicateFindings: duplicateResult.duplicateFindings,
     },
     rejectedRawDecisions: rawResult.rejected,
     rejectedDisputeDecisions: disputeResult.rejected,
     rejectedConflictDecisions: conflictResult.rejected,
     rejectedCarriedConflicts: carriedResult.rejected,
+    rejectedInvalidateDecisions: invalidateResult.rejected,
+    rejectedDuplicateDecisions: duplicateResult.rejected,
+    unsupportedRawDecisions: rawResult.unsupported,
   };
 }
 
@@ -745,9 +974,11 @@ export interface FlattenedManagerDecisions {
  * 再読込した最新の台帳へ適用し直す処理）のために存在する。1件の
  * rawFindingId につき1個の decision へ単純に開くだけでよい理由は、
  * assembleManagerOutput 側のグルーピング（同一 findingId への複数 raw の
- * マージ、新規指摘の familyTag + location 単位のグルーピング）が raw finding
+ * マージ、新規指摘の path + タイトル単位のグルーピング）が raw finding
  * 自体のフィールドと decisions の並び順だけで決まる決定的な処理であり、
  * 同じ並び順で再度流し込めば同じグルーピング結果を再現できるため。
+ * invalidateDecisions/duplicateDecisions は raw に紐づかない finding 単位の
+ * 判断なので、output.invalidatedFindings/duplicateFindings から1:1で復元する。
  *
  * conflicts は decision-assembly が生成したものだけを想定する（assembleRawDecisions
  * の 'conflict' 判断は常に単一 findingId を要求するため、findingIds は常に
@@ -819,8 +1050,19 @@ export function flattenManagerOutputToDecisions(output: FindingManagerOutput): F
     evidence: resolved.evidence,
   }));
 
+  const invalidateDecisions: FindingManagerDecisions['invalidateDecisions'] = output.invalidatedFindings.map((invalidated) => ({
+    findingId: invalidated.findingId,
+    evidence: invalidated.evidence,
+  }));
+
+  const duplicateDecisions: FindingManagerDecisions['duplicateDecisions'] = output.duplicateFindings.map((duplicate) => ({
+    canonicalFindingId: duplicate.canonicalFindingId,
+    duplicateFindingIds: [...duplicate.duplicateFindingIds],
+    evidence: duplicate.evidence,
+  }));
+
   return {
-    decisions: { rawDecisions, disputeDecisions, conflictDecisions },
+    decisions: { rawDecisions, disputeDecisions, conflictDecisions, invalidateDecisions, duplicateDecisions },
     carriedFindingOnlyConflicts,
   };
 }

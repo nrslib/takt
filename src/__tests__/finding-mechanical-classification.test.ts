@@ -53,11 +53,12 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   };
 }
 
-describe('classifyRawFindingsMechanically', () => {
+describe('classifyRawFindingsMechanically resolution confirmations (case 3)', () => {
   it('Given a resolution confirmation targeting an open finding When classified Then it lands in resolvedFindings without residual', () => {
     const raw = makeRawFinding({
       rawFindingId: 'raw-confirm',
       kind: 'resolution_confirmation',
+      relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
       description: 'Verified fixed at src/a.ts:10.',
     });
@@ -70,8 +71,8 @@ describe('classifyRawFindingsMechanically', () => {
 
   it('Given multiple confirmations for the same finding When classified Then rawFindingIds are merged into one entry', () => {
     const raws = [
-      makeRawFinding({ rawFindingId: 'raw-c1', kind: 'resolution_confirmation', targetFindingId: 'F-0001' }),
-      makeRawFinding({ rawFindingId: 'raw-c2', kind: 'resolution_confirmation', targetFindingId: 'F-0001' }),
+      makeRawFinding({ rawFindingId: 'raw-c1', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
+      makeRawFinding({ rawFindingId: 'raw-c2', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
     ];
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
     expect(result.output.resolvedFindings).toHaveLength(1);
@@ -79,7 +80,7 @@ describe('classifyRawFindingsMechanically', () => {
   });
 
   it('Given a confirmation targeting a missing finding When classified Then it goes to residual', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', targetFindingId: 'F-9999' });
+    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-9999' });
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
     expect(result.output.resolvedFindings).toEqual([]);
     expect(result.residualRawFindings).toEqual([raw]);
@@ -87,58 +88,125 @@ describe('classifyRawFindingsMechanically', () => {
 
   it('Given a confirmation targeting an already resolved finding When classified Then it goes to residual', () => {
     const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved' })] });
-    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', targetFindingId: 'F-0001' });
+    const raw = makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.residualRawFindings).toEqual([raw]);
   });
+});
 
-  it('Given an issue with exact location and familyTag match to one open finding When classified Then it lands in matches', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-issue', kind: 'issue', location: 'src/a.ts:10', familyTag: 'bug' });
+// item 4 case 2: explicit reference (relation=persists/reopened + targetFindingId).
+describe('classifyRawFindingsMechanically explicit reference (case 2)', () => {
+  it('Given relation "persists" with targetFindingId pointing at an open finding When classified Then it lands in matches without residual (F-0017-style)', () => {
+    // familyTag と行番号は識別に使わない設計の確認: familyTag もタイトルも
+    // 台帳の finding と異なるが、明示参照だけで機械 same になる。
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-persist',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      familyTag: 'race-condition',
+      location: 'src/a.ts:99',
+      title: 'A totally different-sounding title',
+      description: 'Still seeing the distributed lock cleanup gap, now at a different line.',
+    });
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
     expect(result.residualRawFindings).toEqual([]);
-    expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-issue'] }]);
+    expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-persist'] }]);
   });
 
-  it('Given an issue whose location matches but familyTag differs When classified Then it goes to residual', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-issue', kind: 'issue', location: 'src/a.ts:10', familyTag: 'security' });
-    const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
-    expect(result.output.matches).toEqual([]);
-    expect(result.residualRawFindings).toEqual([raw]);
-  });
-
-  it('Given an issue matching a resolved finding location When classified Then it goes to residual as a reopen candidate', () => {
+  it('Given relation "persists" with targetFindingId pointing at a non-open finding When classified Then it goes to residual', () => {
     const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved' })] });
-    const raw = makeRawFinding({ rawFindingId: 'raw-issue', kind: 'issue', location: 'src/a.ts:10' });
+    const raw = makeRawFinding({ rawFindingId: 'raw-persist', relation: 'persists', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
     expect(result.output.matches).toEqual([]);
     expect(result.residualRawFindings).toEqual([raw]);
   });
 
-  it('Given an issue matching two open findings at the same location and tag When classified Then it goes to residual', () => {
-    const ledger = makeLedger({
-      rawFindings: [
-        makeRawFinding({ rawFindingId: 'raw-e1', location: 'src/a.ts:10' }),
-        makeRawFinding({ rawFindingId: 'raw-e2', location: 'src/a.ts:10' }),
-      ],
-      findings: [
-        makeFinding({ id: 'F-0001', rawFindingIds: ['raw-e1'] }),
-        makeFinding({ id: 'F-0002', rawFindingIds: ['raw-e2'] }),
-      ],
-    });
-    const raw = makeRawFinding({ rawFindingId: 'raw-issue', kind: 'issue', location: 'src/a.ts:10' });
+  it('Given relation "persists" with targetFindingId pointing at an unknown finding When classified Then it goes to residual', () => {
+    const raw = makeRawFinding({ rawFindingId: 'raw-persist', relation: 'persists', targetFindingId: 'F-9999' });
+    const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
+    expect(result.residualRawFindings).toEqual([raw]);
+  });
+
+  it('Given relation "reopened" with targetFindingId pointing at a resolved finding When classified Then it still goes to residual (reopen always needs manager judgment)', () => {
+    // reopen はより重い状態遷移のため、対象状態が「正しく」resolved/waived で
+    // あっても機械では確定させない（保守的な原則）。
+    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    const raw = makeRawFinding({ rawFindingId: 'raw-reopen', relation: 'reopened', targetFindingId: 'F-0001' });
     const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+    expect(result.residualRawFindings).toEqual([raw]);
+  });
+});
+
+// item 4 case 1: exact duplicate raw content (normalized title/description/path/suggestion).
+describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () => {
+  it('Given a relation "new" raw whose title/description/path/suggestion exactly match an open finding\'s existing raw When classified Then it lands in matches', () => {
+    const existingRaw = makeRawFinding({
+      rawFindingId: 'raw-existing',
+      location: 'src/a.ts:10',
+      title: 'Handle is never closed',
+      description: 'The file handle opened at line 10 is never released.',
+      suggestion: 'Add a finally block that calls close().',
+    });
+    const ledger = makeLedger({ rawFindings: [existingRaw] });
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-dup',
+      relation: 'new',
+      familyTag: 'style', // familyTag differs — not part of the identity key.
+      location: 'src/a.ts:10',
+      title: 'Handle is never closed',
+      description: 'The file handle opened at line 10 is never released.',
+      suggestion: 'Add a finally block that calls close().',
+    });
+    const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+    expect(result.residualRawFindings).toEqual([]);
+    expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-dup'] }]);
+  });
+
+  // F-0016 の再現: 同じ familyTag・同じ行だが意味の異なる raw は、旧設計
+  // （familyTag + exact location の自動 same）では壊れた混成 finding に畳まれて
+  // いた。新設計は内容の完全一致でしか機械 same にしないため、意味が違う
+  // （description が異なる）raw は residual に落ちて manager へ送られる。
+  it('Given two raws with the same familyTag and location but different meaning When classified Then neither auto-merges and both go to residual (F-0016 regression guard)', () => {
+    const existingRaw = makeRawFinding({
+      rawFindingId: 'raw-existing',
+      familyTag: 'resource-leak',
+      location: 'src/a.ts:10',
+      title: 'Handle is never closed',
+      description: 'A specific file descriptor leak on the error path.',
+    });
+    const ledger = makeLedger({ rawFindings: [existingRaw] });
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-different-meaning',
+      relation: 'new',
+      familyTag: 'resource-leak',
+      location: 'src/a.ts:10',
+      title: 'Handle is never closed',
+      description: 'A distinct concern about goroutine cleanup, unrelated to the file descriptor leak.',
+    });
+    const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+    expect(result.output.matches).toEqual([]);
+    expect(result.output.newFindings).toEqual([]);
+    expect(result.residualRawFindings).toEqual([raw]);
+  });
+
+  it('Given a raw whose content matches a RESOLVED finding\'s raw (not open) When classified Then it goes to residual as a reopen candidate', () => {
+    const existingRaw = makeRawFinding({ rawFindingId: 'raw-existing', location: 'src/a.ts:10' });
+    const ledger = makeLedger({ rawFindings: [existingRaw], findings: [makeFinding({ status: 'resolved' })] });
+    const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', location: 'src/a.ts:10' });
+    const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+    expect(result.output.matches).toEqual([]);
     expect(result.residualRawFindings).toEqual([raw]);
   });
 
   it('Given an issue without location When classified Then it goes to residual', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-issue', kind: 'issue', location: undefined });
+    const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', location: undefined });
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
     expect(result.residualRawFindings).toEqual([raw]);
   });
 
   it('Given a fully mechanical round When validated with the real validator Then the output passes', () => {
     const raws = [
-      makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', targetFindingId: 'F-0001', description: 'Verified.' }),
+      makeRawFinding({ rawFindingId: 'raw-confirm', kind: 'resolution_confirmation', relation: 'resolution_confirmation', targetFindingId: 'F-0001', description: 'Verified.' }),
     ];
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
     const validation = validateFindingManagerOutput({
@@ -161,6 +229,8 @@ describe('mergeFindingManagerOutputs', () => {
       resolvedConflicts: [],
       waivedFindings: [],
       disputeNotes: [],
+      invalidatedFindings: [],
+      duplicateFindings: [],
       ...overrides,
     };
   }
@@ -197,13 +267,13 @@ describe('classifyRawFindingsMechanically conflicting signals', () => {
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirm',
       kind: 'resolution_confirmation',
+      relation: 'resolution_confirmation',
       targetFindingId: 'F-0001',
     });
     const reReport = makeRawFinding({
       rawFindingId: 'raw-issue',
-      kind: 'issue',
-      location: 'src/a.ts:10',
-      familyTag: 'bug',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
     });
     const result = classifyRawFindingsMechanically({
       previousLedger: makeLedger(),

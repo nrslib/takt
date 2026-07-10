@@ -74,6 +74,8 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
     rawDecisions: [],
     disputeDecisions: [],
     conflictDecisions: [],
+    invalidateDecisions: [],
+    duplicateDecisions: [],
     ...overrides,
   };
 }
@@ -267,7 +269,10 @@ describe('assembleManagerOutput raw decisions', () => {
     expect(result.rejectedRawDecisions[0]?.reason).toContain('is open');
   });
 
-  it('Given a raw with a familyTag that differs from the finding\'s existing familyTag When linked via "same" Then it is rejected', () => {
+  // familyTag は分類・検索ヒントに過ぎず同一性の根拠にしない設計（Finding
+  // Contract 収束性改善 Phase A item 2）。familyTag が食い違っていても manager
+  // が "same" と判断したなら採用する — 同一性の最終判断は manager の意味判断。
+  it('Given a raw with a familyTag that differs from the finding\'s existing familyTag When linked via "same" Then it is accepted (familyTag is not identity)', () => {
     const raw = makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'security' });
     const result = assembleManagerOutput({
       previousLedger: makeLedger(), // F-0001's existing raw ("raw-existing") has familyTag "bug"
@@ -276,14 +281,11 @@ describe('assembleManagerOutput raw decisions', () => {
         rawDecisions: [{ rawFindingId: 'raw-1', decision: 'same', findingId: 'F-0001', evidence: 'x' }],
       }),
     });
-    expect(result.output.matches).toEqual([]);
-    expect(result.rejectedRawDecisions).toHaveLength(1);
-    expect(result.rejectedRawDecisions[0]?.reason).toContain('familyTag');
+    expect(result.rejectedRawDecisions).toEqual([]);
+    expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-1'], evidence: 'x' }]);
   });
 
-  it('Given two raws with different familyTags decided "same" for the same finding When assembled Then the second is rejected', () => {
-    // 台帳にまだ familyTag の基準がない finding（rawFindingIds が空）を使い、
-    // 「台帳との不整合」ではなく「同一出力内での raw 同士の不整合」を検証する。
+  it('Given two raws with different familyTags decided "same" for the same finding When assembled Then both are accepted and merged', () => {
     const ledger = makeLedger({ findings: [makeFinding({ rawFindingIds: [] })] });
     const raws = [
       makeRawFinding({ rawFindingId: 'raw-a', familyTag: 'bug' }),
@@ -299,11 +301,9 @@ describe('assembleManagerOutput raw decisions', () => {
         ],
       }),
     });
+    expect(result.rejectedRawDecisions).toEqual([]);
     expect(result.output.matches).toHaveLength(1);
-    expect(result.output.matches[0]?.rawFindingIds).toEqual(['raw-a']);
-    expect(result.rejectedRawDecisions).toHaveLength(1);
-    expect(result.rejectedRawDecisions[0]?.rawFindingId).toBe('raw-b');
-    expect(result.rejectedRawDecisions[0]?.reason).toContain('familyTag');
+    expect(result.output.matches[0]?.rawFindingIds).toEqual(['raw-a', 'raw-b']);
   });
 
   it('Given the manager returns no decision at all for a residual raw finding When assembled with checkMissingDecisions Then it is rejected as missing (not silently dropped)', () => {
@@ -579,15 +579,18 @@ describe('assembleManagerOutput conflict decisions', () => {
   });
 });
 
+// identity は familyTag + location ではなく path + 正規化タイトルで決まる
+// （item 2: familyTag と行番号は分類・検索ヒントに過ぎない）。
 describe('assembleManagerOutput new-finding grouping', () => {
-  it('Given two reviewers reporting the same familyTag and location When assembled Then they collapse into one new finding', () => {
+  it('Given two reviewers reporting the same title and path (different familyTags) When assembled Then they collapse into one new finding', () => {
     const first = makeRawFinding({
       rawFindingId: 'raw-1', reviewer: 'architecture-review',
-      familyTag: 'resource-leak', location: 'src/a.ts:10', severity: 'medium', title: 'Leak',
+      familyTag: 'resource-leak', location: 'src/a.ts:10', severity: 'medium', title: 'Handle is never closed',
     });
     const second = makeRawFinding({
       rawFindingId: 'raw-2', reviewer: 'robustness-review',
-      familyTag: 'resource-leak', location: 'src/a.ts:10', severity: 'high', title: 'Handle is never closed',
+      // familyTag は違うが path + タイトルが一致するので機械的に畳む。
+      familyTag: 'type-mismatch', location: 'src/a.ts:11', severity: 'high', title: 'Handle is never closed',
     });
 
     const result = assembleManagerOutput({
@@ -596,7 +599,7 @@ describe('assembleManagerOutput new-finding grouping', () => {
       decisions: makeDecisions({
         rawDecisions: [
           { rawFindingId: 'raw-1', decision: 'new', evidence: 'src/a.ts:10' },
-          { rawFindingId: 'raw-2', decision: 'new', evidence: 'src/a.ts:10' },
+          { rawFindingId: 'raw-2', decision: 'new', evidence: 'src/a.ts:11' },
         ],
       }),
     });
@@ -604,13 +607,13 @@ describe('assembleManagerOutput new-finding grouping', () => {
     expect(result.rejectedRawDecisions).toEqual([]);
     expect(result.output.newFindings).toEqual([
       // 重い方の severity を採る。title は最初に観測したものを保つ。
-      { rawFindingIds: ['raw-1', 'raw-2'], title: 'Leak', severity: 'high' },
+      { rawFindingIds: ['raw-1', 'raw-2'], title: 'Handle is never closed', severity: 'high' },
     ]);
   });
 
-  it('Given the same familyTag at different locations When assembled Then they stay separate', () => {
-    const first = makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'resource-leak', location: 'src/a.ts:10' });
-    const second = makeRawFinding({ rawFindingId: 'raw-2', familyTag: 'resource-leak', location: 'src/b.ts:20' });
+  it('Given the same title at different paths When assembled Then they stay separate', () => {
+    const first = makeRawFinding({ rawFindingId: 'raw-1', location: 'src/a.ts:10', title: 'Leak' });
+    const second = makeRawFinding({ rawFindingId: 'raw-2', location: 'src/b.ts:20', title: 'Leak' });
 
     const result = assembleManagerOutput({
       previousLedger: makeLedger({ findings: [] }),
@@ -626,9 +629,9 @@ describe('assembleManagerOutput new-finding grouping', () => {
     expect(result.output.newFindings).toHaveLength(2);
   });
 
-  it('Given different familyTags at the same location When assembled Then they stay separate', () => {
-    const first = makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'resource-leak', location: 'src/a.ts:10' });
-    const second = makeRawFinding({ rawFindingId: 'raw-2', familyTag: 'type-mismatch', location: 'src/a.ts:10' });
+  it('Given different titles at the same path When assembled Then they stay separate', () => {
+    const first = makeRawFinding({ rawFindingId: 'raw-1', location: 'src/a.ts:10', title: 'Resource leak' });
+    const second = makeRawFinding({ rawFindingId: 'raw-2', location: 'src/a.ts:10', title: 'Type mismatch' });
 
     const result = assembleManagerOutput({
       previousLedger: makeLedger({ findings: [] }),
@@ -643,18 +646,144 @@ describe('assembleManagerOutput new-finding grouping', () => {
 
     expect(result.output.newFindings).toHaveLength(2);
   });
+
+  // B3 追補（codex 直接実行の再現）: 同一性キーの正規化は大小文字を保存する。
+  // 小文字化すると、大小文字を区別する識別子への別指摘（`PATH` と `Path`）が
+  // 「正規化後の完全一致」扱いで1件に誤統合される。
+  it('Given two "new" raws whose titles differ only by identifier case (PATH vs Path) When assembled Then they stay separate findings', () => {
+    const upper = makeRawFinding({
+      rawFindingId: 'raw-upper',
+      location: 'src/a.ts:10',
+      title: 'Wrong identifier PATH',
+      description: 'The code references the environment variable PATH incorrectly.',
+    });
+    const mixed = makeRawFinding({
+      rawFindingId: 'raw-mixed',
+      location: 'src/a.ts:10',
+      title: 'Wrong identifier Path',
+      description: 'The code references the environment variable Path incorrectly.',
+    });
+
+    const result = assembleManagerOutput({
+      previousLedger: makeLedger({ findings: [] }),
+      residualRawFindings: [upper, mixed],
+      decisions: makeDecisions({
+        rawDecisions: [
+          { rawFindingId: 'raw-upper', decision: 'new', evidence: 'src/a.ts:10' },
+          { rawFindingId: 'raw-mixed', decision: 'new', evidence: 'src/a.ts:10' },
+        ],
+      }),
+    });
+
+    expect(result.rejectedRawDecisions).toEqual([]);
+    expect(result.output.newFindings).toHaveLength(2);
+    expect(result.output.newFindings.map((finding) => finding.title).sort()).toEqual([
+      'Wrong identifier PATH',
+      'Wrong identifier Path',
+    ]);
+
+    // reconcile 後も2つの別 finding として残る。
+    const next = reconcileFindingLedger({
+      previousLedger: makeLedger({ findings: [], rawFindings: [], nextId: 1 }),
+      rawFindings: [upper, mixed],
+      managerOutput: result.output,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-11T00:00:00.000Z' },
+    });
+    expect(next.findings).toHaveLength(2);
+  });
+
+  // 既存 open finding へのリダイレクト側も同様: 大小文字だけ違う title は
+  // 「完全一致」ではないため、manager の new 判断は覆されない。
+  it('Given an existing open finding whose title differs only by identifier case When a raw is decided "new" Then it is not auto-redirected', () => {
+    const ledger = makeLedger({
+      findings: [makeFinding({
+        title: 'Wrong identifier PATH',
+        description: 'The code references the environment variable PATH incorrectly.',
+      })],
+    });
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-mixed',
+      location: 'src/a.ts:10',
+      title: 'Wrong identifier Path',
+      description: 'The code references the environment variable PATH incorrectly.',
+    });
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [raw],
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-mixed', decision: 'new', evidence: 'x' }],
+      }),
+    });
+
+    expect(result.rejectedRawDecisions).toEqual([]);
+    expect(result.output.matches).toEqual([]);
+    expect(result.output.newFindings).toHaveLength(1);
+  });
+
+  // item 5: 同タイトル・同一ファイルでも、実際には failure mode が異なる別問題
+  // なら manager は new を選べて誤マージされない。path + タイトルだけを
+  // グルーピングキーにすると、これを機械的に1つへ畳んでしまい情報が失われる。
+  it('Given the same title and path but genuinely different failure modes When both are decided "new" Then they stay separate (not auto-merged)', () => {
+    const first = makeRawFinding({
+      rawFindingId: 'raw-1',
+      location: 'src/a.ts:10',
+      title: 'Rule evaluation ignores finding state',
+      description: 'The rule evaluator never reads ledger.findings, so open findings never block.',
+    });
+    const second = makeRawFinding({
+      rawFindingId: 'raw-2',
+      location: 'src/a.ts:10',
+      title: 'Rule evaluation ignores finding state',
+      description: 'A completely different failure mode: the evaluator reads a stale cached ledger snapshot from a previous run.',
+    });
+
+    const result = assembleManagerOutput({
+      previousLedger: makeLedger({ findings: [] }),
+      residualRawFindings: [first, second],
+      decisions: makeDecisions({
+        rawDecisions: [
+          { rawFindingId: 'raw-1', decision: 'new', evidence: 'src/a.ts:10' },
+          { rawFindingId: 'raw-2', decision: 'new', evidence: 'src/a.ts:10' },
+        ],
+      }),
+    });
+
+    expect(result.rejectedRawDecisions).toEqual([]);
+    expect(result.output.newFindings).toHaveLength(2);
+
+    // B4: residual 化・assembly 通過だけでなく、reconcile 後の台帳でも manager の
+    // new 判断が覆されず、2つの別 finding として残ることまで固定する。
+    const next = reconcileFindingLedger({
+      previousLedger: makeLedger({ findings: [], rawFindings: [], nextId: 1 }),
+      rawFindings: [first, second],
+      managerOutput: result.output,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
+    });
+    expect(next.findings).toHaveLength(2);
+    expect(new Set(next.findings.flatMap((finding) => finding.rawFindingIds)).size).toBe(2);
+  });
 });
 
 describe('assembleManagerOutput "new" decisions reconciled against the ledger', () => {
-  it('Given an existing open finding in the ledger with the same familyTag and location When a raw is decided "new" Then it is redirected to a match instead of creating a duplicate finding', () => {
+  it('Given an existing open finding in the ledger with identical path, title and description When a raw is decided "new" Then it is redirected to a match instead of creating a duplicate finding', () => {
     // codex の再現ケース: 保存直前の再照合では previousLedger が最新台帳になる。
     // LLM が "new" と判断した時点では存在しなかった open finding (F-0001) が、
-    // 別の並列子によって直前に立てられているケース。これを弾かないと F-0001 と
-    // F-0002 が重複作成される。F-0001 は familyTag "bug" @ "src/a.ts:10"
-    // (makeLedger のデフォルト)。
-    const raw = makeRawFinding({ rawFindingId: 'raw-late', familyTag: 'bug', location: 'src/a.ts:10' });
+    // 別の並列子によって「同一の raw」から直前に立てられているケース。これを
+    // 弾かないと F-0001 と F-0002 が重複作成される。リダイレクトの鍵は
+    // path+title+description の完全一致（B3: path+title だけのリダイレクトは
+    // manager の new 判断を意味判断なしで覆す禁止マージ）。familyTag はあえて
+    // 違えて、識別に使われないことも併せて確認する。
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-late',
+      familyTag: 'security',
+      location: 'src/a.ts:10',
+      title: 'Existing issue',
+      description: 'The issue is present in the current review.',
+    });
     const result = assembleManagerOutput({
-      previousLedger: makeLedger(),
+      previousLedger: makeLedger({
+        findings: [makeFinding({ description: 'The issue is present in the current review.' })],
+      }),
       residualRawFindings: [raw],
       decisions: makeDecisions({
         rawDecisions: [{ rawFindingId: 'raw-late', decision: 'new', evidence: 'Reported independently by another reviewer.' }],
@@ -668,8 +797,8 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     ]);
   });
 
-  it('Given an existing open finding at a different location When a raw is decided "new" Then it still creates a new finding', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-late', familyTag: 'bug', location: 'src/other.ts:99' });
+  it('Given an existing open finding at a different path When a raw is decided "new" Then it still creates a new finding', () => {
+    const raw = makeRawFinding({ rawFindingId: 'raw-late', location: 'src/other.ts:99', title: 'Existing issue' });
     const result = assembleManagerOutput({
       previousLedger: makeLedger(), // F-0001 is at src/a.ts:10
       residualRawFindings: [raw],
@@ -683,10 +812,10 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(result.output.newFindings).toHaveLength(1);
   });
 
-  it('Given an existing open finding with the same location but a different familyTag When a raw is decided "new" Then it still creates a new finding', () => {
-    const raw = makeRawFinding({ rawFindingId: 'raw-late', familyTag: 'style', location: 'src/a.ts:10' });
+  it('Given an existing open finding with the same path but a different title When a raw is decided "new" Then it still creates a new finding', () => {
+    const raw = makeRawFinding({ rawFindingId: 'raw-late', location: 'src/a.ts:10', title: 'A different problem' });
     const result = assembleManagerOutput({
-      previousLedger: makeLedger(), // F-0001 has familyTag "bug" at the same location
+      previousLedger: makeLedger(), // F-0001 has title "Existing issue" at the same location
       residualRawFindings: [raw],
       decisions: makeDecisions({
         rawDecisions: [{ rawFindingId: 'raw-late', decision: 'new', evidence: 'x' }],
@@ -698,9 +827,20 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(result.output.newFindings).toHaveLength(1);
   });
 
-  it('Given an existing RESOLVED finding with the same familyTag and location When a raw is decided "new" Then it still creates a new finding (not redirected to a non-open finding)', () => {
-    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })] });
-    const raw = makeRawFinding({ rawFindingId: 'raw-late', familyTag: 'bug', location: 'src/a.ts:10' });
+  // B3: リダイレクトの鍵は path+title+description の完全一致。path+title が同じでも
+  // description（failure mode の記述）が違えば、manager の明示的な new 判断は
+  // 覆されない — path+title だけのリダイレクトは禁止された意味なし自動マージの
+  // 復活だった（codex 再現ブロッカー B3）。
+  it('Given an existing open finding with the same path and title but a different description When a raw is decided "new" Then the manager\'s new is preserved (no auto-redirect)', () => {
+    const ledger = makeLedger({
+      findings: [makeFinding({ description: 'A specific file descriptor leak on the error path.' })],
+    });
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-late',
+      location: 'src/a.ts:10',
+      title: 'Existing issue',
+      description: 'A distinct concern about goroutine cleanup, unrelated to the descriptor leak.',
+    });
     const result = assembleManagerOutput({
       previousLedger: ledger,
       residualRawFindings: [raw],
@@ -712,6 +852,78 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(result.rejectedRawDecisions).toEqual([]);
     expect(result.output.matches).toEqual([]);
     expect(result.output.newFindings).toHaveLength(1);
+  });
+
+  it('Given an existing RESOLVED finding with identical path, title and description When a raw is decided "new" Then it still creates a new finding (not redirected to a non-open finding)', () => {
+    const ledger = makeLedger({
+      findings: [makeFinding({
+        status: 'resolved',
+        lifecycle: 'resolved',
+        description: 'The issue is present in the current review.',
+      })],
+    });
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-late',
+      location: 'src/a.ts:10',
+      title: 'Existing issue',
+      description: 'The issue is present in the current review.',
+    });
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [raw],
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-late', decision: 'new', evidence: 'x' }],
+      }),
+    });
+
+    expect(result.rejectedRawDecisions).toEqual([]);
+    expect(result.output.matches).toEqual([]);
+    expect(result.output.newFindings).toHaveLength(1);
+  });
+
+  // B2: relation=persists/reopened（既存 finding への明示参照）の raw に対する
+  // manager の 'new' 判断は受理しない。明示参照付きの再報告を new へ倒すと、
+  // 根拠不成立の再報告が結局 finding を作ってしまう。
+  it('Given a relation "persists" raw with an explicit targetFindingId When the manager decides "new" Then the decision is rejected', () => {
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-persist',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      location: 'src/a.ts:22',
+    });
+    const result = assembleManagerOutput({
+      previousLedger: makeLedger(),
+      residualRawFindings: [raw],
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-persist', decision: 'new', evidence: 'Looks new to me.' }],
+      }),
+    });
+
+    expect(result.output.newFindings).toEqual([]);
+    expect(result.rejectedRawDecisions).toHaveLength(1);
+    expect(result.rejectedRawDecisions[0]?.rawFindingId).toBe('raw-persist');
+    expect(result.rejectedRawDecisions[0]?.reason).toContain('explicitly references');
+    expect(result.rejectedRawDecisions[0]?.reason).toContain('unsupported');
+  });
+
+  it('Given a relation "reopened" raw with an explicit targetFindingId When the manager decides "new" Then the decision is rejected', () => {
+    const ledger = makeLedger({ findings: [makeFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    const raw = makeRawFinding({
+      rawFindingId: 'raw-reopen',
+      relation: 'reopened',
+      targetFindingId: 'F-0001',
+    });
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [raw],
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-reopen', decision: 'new', evidence: 'x' }],
+      }),
+    });
+
+    expect(result.output.newFindings).toEqual([]);
+    expect(result.rejectedRawDecisions).toHaveLength(1);
+    expect(result.rejectedRawDecisions[0]?.reason).toContain('explicitly references');
   });
 
   // takt-bench v3-r2 の再現。あるレビュアーが F-0001 の修正を確認し、別のレビュアーが

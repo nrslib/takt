@@ -32,6 +32,25 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         title: finding.title,
         waiver: finding.waivers?.at(-1),
       })),
+    // 監査可視化（codex ブロッカー B5）: invalidated（前提事実の不成立を
+    // エンジンが検証済み）と superseded（重複として canonical へ統合済み）は
+    // ブロッキング対象外だが、「消えた」のではなく「こう裁定された」ことが
+    // サマリから追えるようにする。既存キーの形式は変えない（追加のみ）。
+    invalidated: ledger.findings
+      .filter((finding) => finding.status === 'invalidated')
+      .map((finding) => ({
+        id: finding.id,
+        severity: finding.severity,
+        title: finding.title,
+        evidence: finding.invalidatedEvidence,
+      })),
+    superseded: ledger.findings
+      .filter((finding) => finding.status === 'superseded')
+      .map((finding) => ({
+        id: finding.id,
+        title: finding.title,
+        supersededBy: finding.supersededByFindingId,
+      })),
     conflicts: ledger.conflicts.map((conflict) => ({
       id: conflict.id,
       status: conflict.status,
@@ -58,6 +77,12 @@ export function renderFindingLedgerReportSummary(ledger: FindingLedger): string 
         reason: finding.waivers?.at(-1)?.reason,
         evidence: finding.waivers?.at(-1)?.evidence,
       })),
+    invalidatedFindingIds: ledger.findings
+      .filter((finding) => finding.status === 'invalidated')
+      .map((finding) => finding.id),
+    supersededFindingIds: ledger.findings
+      .filter((finding) => finding.status === 'superseded')
+      .map((finding) => finding.id),
     conflictIds: ledger.conflicts.map((conflict) => conflict.id),
   }, null, 2);
 }
@@ -101,6 +126,14 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
     },
     waived: {
       count: ledger.findings.filter((finding) => finding.status === 'waived').length,
+    },
+    // 監査可視化のみ（codex ブロッカー B5）。gate 条件は open/conflicts のまま
+    // 変えない — count を公開するだけで、既存ルール式の意味は変わらない。
+    invalidated: {
+      count: ledger.findings.filter((finding) => finding.status === 'invalidated').length,
+    },
+    superseded: {
+      count: ledger.findings.filter((finding) => finding.status === 'superseded').length,
     },
     conflicts: {
       count: activeConflicts.length,

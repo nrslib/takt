@@ -15,7 +15,9 @@ export type DecisionCategory =
   | 'resolvedFindings'
   | 'reopenedFindings'
   | 'waivedFindings'
-  | 'conflicts';
+  | 'conflicts'
+  | 'invalidatedFindings'
+  | 'supersededFindings';
 
 /**
  * 同じ finding が2つの決定に現れてよい組み合わせ。
@@ -67,6 +69,17 @@ export function collectDecisionSets(
   for (const conflict of managerOutput.conflicts) {
     for (const findingId of new Set(conflict.findingIds)) {
       add(findingId, 'conflicts');
+    }
+  }
+  for (const invalidated of managerOutput.invalidatedFindings) {
+    add(invalidated.findingId, 'invalidatedFindings');
+  }
+  // duplicateFindings.canonicalFindingId is intentionally excluded: the
+  // canonical finding stays open and may legitimately also receive a match/
+  // conflict/etc. this round. Only the duplicate (loser) side becomes terminal.
+  for (const duplicate of managerOutput.duplicateFindings) {
+    for (const findingId of new Set(duplicate.duplicateFindingIds)) {
+      add(findingId, 'supersededFindings');
     }
   }
   return sets;

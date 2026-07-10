@@ -55,6 +55,8 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     resolvedConflicts: [],
     waivedFindings: [],
     disputeNotes: [],
+    invalidatedFindings: [],
+    duplicateFindings: [],
     ...overrides,
   };
 }
@@ -809,7 +811,10 @@ describe('validateFindingManagerOutput', () => {
     });
   });
 
-  it('should reject raw findings with different familyTag values before reconciliation', () => {
+  // familyTag は分類・検索ヒントに過ぎず、同一性の根拠にしない設計
+  // （Finding Contract 収束性改善 Phase A item 2）。新規 finding を familyTag が
+  // 異なる raw findings から作ることは禁止しない。
+  it('should accept new findings grouping raw findings with different familyTag values', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
       rawFindings: [
@@ -825,12 +830,7 @@ describe('validateFindingManagerOutput', () => {
       }),
     });
 
-    expect(result).toEqual({
-      ok: false,
-      errors: [
-        'Cannot create a new finding from raw findings with different familyTag values: "bug" and "security" (newFindings[0])',
-      ],
-    });
+    expect(result).toEqual({ ok: true });
   });
 });
 

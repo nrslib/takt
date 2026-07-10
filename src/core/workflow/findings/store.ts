@@ -49,6 +49,28 @@ export interface FindingManagerValidationAttemptReport {
   validationErrors: string[];
 }
 
+/** Raw finding rejected before ever reaching mechanical classification / the manager: its location failed a deterministic admission check (path does not exist / line out of range). Audit trail for hallucinated-location raws (see admission-validation.ts). */
+export interface RawAdmissionRejectionReport {
+  rawFindingId: string;
+  location: string;
+  reason: string;
+}
+
+/** Raw finding decided 'unsupported': it explicitly referenced an existing finding but the reference did not hold up. No finding is created or changed; kept for audit only (see decision-assembly.ts's UnsupportedRawDecision). */
+export interface UnsupportedRawFindingReport {
+  rawFindingId: string;
+  targetFindingId: string;
+  evidence: string;
+}
+
+/** Raw finding whose rejected decision could not be forced to a new finding because it explicitly references an existing finding (relation persists/reopened). Dropped from this round; kept for audit only (see manager-runner.ts's forceUnresolvedRawDecisionsAsNew). */
+export interface DroppedExplicitReferenceRawFindingReport {
+  rawFindingId: string;
+  relation: string;
+  targetFindingId?: string;
+  reason: string;
+}
+
 export interface FindingManagerValidationReport {
   version: 1;
   runId: string;
@@ -57,6 +79,9 @@ export interface FindingManagerValidationReport {
   ledgerUpdated: boolean;
   finalErrors: string[];
   attempts: FindingManagerValidationAttemptReport[];
+  rawAdmissionRejections?: RawAdmissionRejectionReport[];
+  unsupportedRawFindings?: UnsupportedRawFindingReport[];
+  droppedExplicitReferenceRawFindings?: DroppedExplicitReferenceRawFindingReport[];
 }
 
 function resolveInside(baseDir: string, path: string): string {

@@ -878,6 +878,7 @@ export class ParallelRunner {
       contract: this.deps.findingContract,
       workflowProvider: this.deps.workflowProvider,
       workflowModel: this.deps.workflowModel,
+      cwd: this.deps.getCwd(),
       ledgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this.deps.stepExecutor,

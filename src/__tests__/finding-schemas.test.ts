@@ -89,7 +89,7 @@ describe('finding schemas', () => {
     expect(RawFindingsOutputJsonSchema.properties.rawFindings.items.properties.familyTag).toEqual({
       type: 'string',
       minLength: 1,
-      description: 'Structured form of the Observed Findings family_tag value.',
+      description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
     });
   });
 });

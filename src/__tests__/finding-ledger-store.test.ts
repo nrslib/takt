@@ -194,8 +194,10 @@ describe('FindingLedgerStore', () => {
 
     expect(firstPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.json'));
     expect(secondPath).toBe(join(projectCwd, '.takt/findings/raw/run-1.reviewers.2.json'));
-    expect(JSON.parse(readFileSync(firstPath, 'utf-8'))).toEqual([rawFinding]);
-    expect(JSON.parse(readFileSync(secondPath, 'utf-8'))).toEqual([{ ...rawFinding, rawFindingId: 'raw-2' }]);
+    // parseRawFindings derives relation from kind for backward-compatible input (item 3).
+    const expectedRawFinding = { ...rawFinding, relation: 'new' };
+    expect(JSON.parse(readFileSync(firstPath, 'utf-8'))).toEqual([expectedRawFinding]);
+    expect(JSON.parse(readFileSync(secondPath, 'utf-8'))).toEqual([{ ...expectedRawFinding, rawFindingId: 'raw-2' }]);
   });
 
   it('should reject symlinked ledger files before writing outside the projectCwd', () => {
