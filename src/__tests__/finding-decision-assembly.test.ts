@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { assembleManagerOutput } from '../core/workflow/findings/decision-assembly.js';
+import { assembleManagerOutput, flattenManagerOutputToDecisions } from '../core/workflow/findings/decision-assembly.js';
+import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
+import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import type {
   FindingLedger,
   FindingLedgerConflict,
@@ -652,5 +654,140 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(result.rejectedRawDecisions).toEqual([]);
     expect(result.output.matches).toEqual([]);
     expect(result.output.newFindings).toHaveLength(1);
+  });
+
+  // takt-bench v3-r2 の再現。あるレビュアーが F-0001 の修正を確認し、別のレビュアーが
+  // 同じ familyTag の問題が別の行に残っていると報告した。両立しうる観測なので、
+  // 出力全体を捨てずに open を維持し、衝突として記録しなければならない。
+  // 以前は「1 finding = 1 決定」違反で台帳が更新されず reviewers ↔ fix が回り続けた。
+  it('Given the same open finding is decided both "same" and "resolved" When assembling Then it stays matched and the confirmation becomes a conflict', () => {
+    const ledger = makeLedger();
+    const stillPresent = makeRawFinding({
+      rawFindingId: 'raw-still-present',
+      familyTag: 'bug',
+      location: 'src/a.ts:22',
+      title: 'Same defect remains at another line',
+    });
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      familyTag: 'bug',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      title: 'F-0001 looks fixed',
+    });
+
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [stillPresent, confirmation],
+      decisions: makeDecisions({
+        rawDecisions: [
+          { rawFindingId: 'raw-still-present', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' },
+          { rawFindingId: 'raw-confirmation', decision: 'resolved', findingId: 'F-0001', evidence: 'src/a.ts:10' },
+        ],
+      }),
+    });
+
+    expect(result.rejectedRawDecisions).toEqual([]);
+    expect(result.output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.output.conflicts).toHaveLength(1);
+    expect(result.output.conflicts[0]?.findingIds).toEqual(['F-0001']);
+    expect(result.output.conflicts[0]?.rawFindingIds).toEqual(['raw-confirmation']);
+  });
+
+  it('Given a "same"/"resolved" collision When the assembled output is validated and reconciled Then the ledger keeps the finding open and records the conflict', () => {
+    const ledger = makeLedger();
+    const stillPresent = makeRawFinding({ rawFindingId: 'raw-still-present', familyTag: 'bug', location: 'src/a.ts:22' });
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      familyTag: 'bug',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    const rawFindings = [stillPresent, confirmation];
+
+    const { output } = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: rawFindings,
+      decisions: makeDecisions({
+        rawDecisions: [
+          { rawFindingId: 'raw-still-present', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' },
+          { rawFindingId: 'raw-confirmation', decision: 'resolved', findingId: 'F-0001', evidence: 'src/a.ts:10' },
+        ],
+      }),
+    });
+
+    const validation = validateFindingManagerOutput({ previousLedger: ledger, rawFindings, managerOutput: output });
+    expect(validation).toEqual({ ok: true });
+
+    const next = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings,
+      managerOutput: output,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
+    });
+
+    expect(next.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('open');
+    expect(next.conflicts).toHaveLength(1);
+    expect(next.conflicts[0]?.findingIds).toEqual(['F-0001']);
+  });
+
+  // manager-runner は保存直前に flattenManagerOutputToDecisions() で決定へ逆変換し、
+  // 最新台帳へ再適用する（並列 workflow_call の lost update 対策）。衝突を conflict へ
+  // 畳んだ出力がこの往復で崩れると、保存時に不変条件違反で落ちる。
+  it('Given a collision-resolved output When flattened and reassembled Then it stays stable', () => {
+    const ledger = makeLedger();
+    const stillPresent = makeRawFinding({ rawFindingId: 'raw-still-present', familyTag: 'bug', location: 'src/a.ts:22' });
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      familyTag: 'bug',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    const rawFindings = [stillPresent, confirmation];
+
+    const first = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: rawFindings,
+      decisions: makeDecisions({
+        rawDecisions: [
+          { rawFindingId: 'raw-still-present', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' },
+          { rawFindingId: 'raw-confirmation', decision: 'resolved', findingId: 'F-0001', evidence: 'src/a.ts:10' },
+        ],
+      }),
+    });
+
+    const second = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: rawFindings,
+      decisions: flattenManagerOutputToDecisions(first.output),
+    });
+
+    expect(second.rejectedRawDecisions).toEqual([]);
+    expect(second.output).toEqual(first.output);
+    expect(validateFindingManagerOutput({ previousLedger: ledger, rawFindings, managerOutput: second.output })).toEqual({ ok: true });
+  });
+
+  it('Given a resolution_confirmation raw is decided "new" When assembling Then only that decision is rejected', () => {
+    const ledger = makeLedger();
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      familyTag: 'bug',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [confirmation],
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-confirmation', decision: 'new', evidence: 'src/a.ts:10' }],
+      }),
+    });
+
+    expect(result.output.newFindings).toEqual([]);
+    expect(result.rejectedRawDecisions).toHaveLength(1);
+    expect(result.rejectedRawDecisions[0]?.rawFindingId).toBe('raw-confirmation');
+    expect(result.rejectedRawDecisions[0]?.reason).toContain('resolution_confirmation');
   });
 });

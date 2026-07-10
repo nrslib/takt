@@ -443,7 +443,33 @@ describe('validateFindingManagerOutput', () => {
     });
   });
 
-  it('should reject a findingId referenced by multiple decision categories', () => {
+  it('should reject a findingId referenced by multiple state-changing decisions', () => {
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding(), confirmation],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirmation'], evidence: 'Fixed.' }],
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]',
+      ],
+    });
+  });
+
+  // conflicts は他の決定「について」述べるメタ決定。ここを単一決定検査に含めると、
+  // 「match と resolve が衝突している」ことを記録する行為自体が違反になり、
+  // 矛盾した観測を台帳へ書けなくなる（実測: 台帳が凍り reviewers ↔ fix が回り続けた）。
+  it('should accept a findingId referenced by both a match and a conflict', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
       rawFindings: [makeRawFinding()],
@@ -453,12 +479,7 @@ describe('validateFindingManagerOutput', () => {
       }),
     });
 
-    expect(result).toEqual({
-      ok: false,
-      errors: [
-        'Finding id "F-0001" appears in multiple manager decisions: matches[0] and conflicts[0]',
-      ],
-    });
+    expect(result).toEqual({ ok: true });
   });
 
   it('should reject unknown rawFindingId references in current raw-finding decisions', () => {

@@ -243,6 +243,13 @@ function assembleRawDecisions(input: {
         reject(decision, '"new" decisions must not reference a findingId');
         continue;
       }
+      // 修正確認の raw を新規指摘の根拠にはできない。ここで弾かないと最終検証
+      // （validateConfirmationRefsOnlyInResolutions）まで生き延び、そこでは
+      // 1件の違反が出力全体を無効化する。1件だけ不採用にして再問い合わせに乗せる。
+      if (raw.kind === 'resolution_confirmation') {
+        reject(decision, `Cannot create a new finding from raw finding "${raw.rawFindingId}" because it is a resolution_confirmation`);
+        continue;
+      }
       const groupKey = newFindingGroupKey(raw);
 
       // 台帳の再照合（保存直前の再読込等）では、LLM が判断した時点では存在
@@ -331,6 +338,31 @@ function assembleRawDecisions(input: {
       case 'conflict':
         appendGroupedConflict(conflictsByFindingId, findingId, raw.rawFindingId, decision.evidence);
         break;
+    }
+  }
+
+  // 同じ finding に「まだ在る」(same) と「直った」(resolved) が同時に付くことがある。
+  // どちらも status === 'open' を要求するため、この2つだけが衝突しうる。
+  // 実測（takt-bench v3-r2）: 台帳 F-0002（同期 FS 操作 @ :137）の修正確認と、
+  // 同じ familyTag の残存指摘（@ :149）が同一ラウンドで届いた。どちらもレビュアーの
+  // 正当な観測で、矛盾は現実の側にある（部分的にしか直っていない）。
+  //
+  // ここで解消しないと「1 finding = 1 決定」の不変条件違反として出力全体が
+  // 捨てられ、台帳が更新されないまま reviewers ↔ fix が永久に回る。
+  // 未修正の証拠を優先して open に留め、修正確認は conflict として記録する
+  // （manager 指示の「迷ったら open を維持」と同じ向き）。
+  for (const [findingId, resolved] of resolvedByFindingId) {
+    if (!matchesByFindingId.has(findingId)) {
+      continue;
+    }
+    resolvedByFindingId.delete(findingId);
+    for (const rawFindingId of resolved.rawFindingIds) {
+      appendGroupedConflict(
+        conflictsByFindingId,
+        findingId,
+        rawFindingId,
+        `Resolution confirmation conflicts with evidence that finding "${findingId}" still persists in the same round`,
+      );
     }
   }
 

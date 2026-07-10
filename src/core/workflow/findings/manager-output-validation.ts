@@ -399,9 +399,9 @@ function collectFindingDecisionRefs(managerOutput: FindingManagerOutput): Findin
       decision: `waivedFindings[${index}]`,
       findingId: waived.findingId,
     })),
-    ...managerOutput.conflicts.flatMap((conflict, index) => (
-      Array.from(new Set(conflict.findingIds)).map((findingId) => ({ decision: `conflicts[${index}]`, findingId }))
-    )),
+    // conflicts は他の決定「について」述べるメタ決定なので、この検査から除く。
+    // 含めると「match と resolve が衝突している」ことを conflict として記録する
+    // 行為自体が「1 finding = 1 決定」違反になり、衝突の逃げ道が塞がる。
   ];
 }
 

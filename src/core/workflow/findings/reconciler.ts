@@ -134,11 +134,10 @@ function assertFindingIdsHaveSingleDecision(managerOutput: FindingManagerOutput)
     }
     seenDisputeIds.add(note.findingId);
   }
+  // conflicts は他の決定「について」述べるメタ決定なので、単一決定の検査には
+  // 含めない（同じ finding が match されつつ conflict として記録されるのは正常）。
   for (const conflict of managerOutput.conflicts) {
     assertUniqueIds(conflict.findingIds, 'finding id');
-    for (const findingId of conflict.findingIds) {
-      markFindingIdDecision(usedFindingDecisions, findingId, 'conflict');
-    }
   }
 }
 
