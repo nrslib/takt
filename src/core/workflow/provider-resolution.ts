@@ -48,6 +48,11 @@ export interface WorkflowCallProviderModelOutput {
 
 export interface LoopMonitorJudgeProviderModelInput {
   judge: Pick<LoopMonitorJudge, 'provider' | 'model' | 'modelSpecified'>;
+  /**
+   * judge ステップ自身の通常解決結果（provider_routing.* / persona_providers.loop-judge を含む）。
+   * 省略時は judge.provider / judge.model の直接指定のみを見る（呼び出し側の互換パス）。
+   */
+  judgeProviderInfo?: StepProviderModelOutput;
   triggeringProviderInfo: StepProviderModelOutput;
 }
 
@@ -214,23 +219,55 @@ export function resolveWorkflowCallProviderModel(
   return { provider, model };
 }
 
+/**
+ * judge の provider/model が「明示指定された」とみなせる解決経路。
+ * ここに無い経路（'workflow' 既定・engine/CLI/config 由来のフォールバックなど）は
+ * 「指定なし」として扱い、トリガー元へフォールバックする対象になる。
+ */
+const EXPLICIT_JUDGE_PROVIDER_SOURCES: ReadonlySet<ProviderResolutionSource> = new Set([
+  'step',
+  'provider_routing.steps',
+  'provider_routing.tags',
+  'provider_routing.personas',
+  'persona_providers',
+]);
+
+function isExplicitJudgeSource(source: ProviderResolutionSource | undefined): boolean {
+  return source !== undefined && EXPLICIT_JUDGE_PROVIDER_SOURCES.has(source);
+}
+
 export function resolveLoopMonitorJudgeProviderModel(
   input: LoopMonitorJudgeProviderModelInput,
 ): LoopMonitorJudgeProviderModelOutput {
-  const judgeProviderIsDirect = input.judge.provider !== undefined;
-  const judgeModelIsDirect = input.judge.modelSpecified === true
-    || (input.judge.model !== undefined && input.judge.modelSpecified !== false);
+  // judgeProviderInfo が渡されない呼び出し（既存の単体テストなど）は、judge.provider /
+  // judge.model の直接指定だけを見る従来どおりの経路にフォールバックする。
+  const judgeInfo: StepProviderModelOutput = input.judgeProviderInfo ?? {
+    provider: input.judge.provider,
+    model: input.judge.model,
+    providerSource: input.judge.provider !== undefined ? 'step' : undefined,
+    modelSource: (input.judge.modelSpecified === true
+      || (input.judge.model !== undefined && input.judge.modelSpecified !== false))
+      ? 'step'
+      : undefined,
+  };
 
-  const provider = judgeProviderIsDirect
-    ? input.judge.provider
-    : input.triggeringProviderInfo.provider;
-  const providerSource = judgeProviderIsDirect ? 'step' : input.triggeringProviderInfo.providerSource;
-  const model = judgeModelIsDirect
-    ? input.judge.model
-    : (judgeProviderIsDirect ? undefined : input.triggeringProviderInfo.model);
-  const modelSource = judgeModelIsDirect || judgeProviderIsDirect
-    ? 'step'
-    : input.triggeringProviderInfo.modelSource;
+  // judge 側に provider_routing.* / persona_providers.loop-judge を含む明示指定が
+  // 何も無い場合だけ、トリガー元（ループを踏んだステップ）の解決済み provider を引き継ぐ。
+  // これを既定にすると「実装した本人が自分のループの健全性を判定する」ことになり監視が
+  // 機能しない（実測: coder の qwen3-coder-next が 4 回とも「健全」と判定し 56 周・9 時間走った）。
+  const providerIsExplicit = isExplicitJudgeSource(judgeInfo.providerSource);
+  const provider = providerIsExplicit ? judgeInfo.provider : input.triggeringProviderInfo.provider;
+  const providerSource = providerIsExplicit ? judgeInfo.providerSource : input.triggeringProviderInfo.providerSource;
+
+  // provider だけ明示されて model が明示されていない場合、トリガー元の model は引き継がない。
+  // provider=codex なのに model=opencode/... のような破綻した組み合わせを避けるため。
+  const modelIsExplicit = isExplicitJudgeSource(judgeInfo.modelSource);
+  const model = modelIsExplicit
+    ? judgeInfo.model
+    : (providerIsExplicit ? undefined : input.triggeringProviderInfo.model);
+  const modelSource = modelIsExplicit
+    ? judgeInfo.modelSource
+    : (providerIsExplicit ? judgeInfo.providerSource : input.triggeringProviderInfo.modelSource);
 
   return {
     provider,
