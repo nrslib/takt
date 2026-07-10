@@ -30,7 +30,8 @@ import type { AutoRoutingAiRouter } from '../../agents/auto-routing-usecase.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
-import type { FindingLedger } from '../models/finding-types.js';
+import type { FindingContractConfig, FindingLedger } from '../models/finding-types.js';
+import type { FindingLedgerStore } from './findings/store.js';
 
 import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
 export type {
@@ -362,6 +363,27 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /**
+   * workflow_call の親から継承する Finding Contract。
+   * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
+   * fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
+   * ledgerStore は親と同一インスタンスを渡す。ledger_path / raw_findings_path は
+   * ワークフロー名に紐づくため、子が自前で store を作り直すと親の
+   * when(findings.*) と別の台帳を見てしまう。
+   */
+  inheritedFindingContract?: {
+    contract: FindingContractConfig;
+    ledgerStore: FindingLedgerStore;
+  };
+  /**
+   * workflow_call の呼び出しスタックを表す名前空間。raw finding id にこの値を
+   * 混ぜることで、親の parallel から同じ子ワークフローを複数同時に呼んだ場合の
+   * id 衝突を防ぐ。子エンジンは同じ親の runPaths.slug（= runId）を継承するため、
+   * 呼び出し元ステップ名で区別しないと2子の raw finding id が完全に一致し、
+   * 片方が他方の台帳エントリを上書きしてしまう。トップレベルの走行では
+   * undefined のままにし、既存の raw finding id の形を変えない。
+   */
+  findingCallNamespace?: string;
 }
 
 export interface WorkflowTraceTaskMetadata {

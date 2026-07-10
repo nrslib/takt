@@ -4,6 +4,7 @@ import { createAutoRoutingAiRouter } from '../../../agents/auto-routing-usecase.
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
+  FindingContractConfig,
   WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePoint,
@@ -83,6 +84,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly sharedRuntime: WorkflowSharedRuntimeState;
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
   private readonly findingLedgerStore?: FindingLedgerStore;
+  private readonly findingContract?: FindingContractConfig;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -149,13 +151,22 @@ export class WorkflowEngine extends EventEmitter {
     validateWorkflowConfig(this.config, this.options);
 
     this.state = createInitialState(this.config, this.options);
-    if (this.config.findingContract) {
-      this.findingLedgerStore = createFindingLedgerStore({
+    // workflow_call の親から継承した Finding Contract があればそれを優先する。
+    // 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
+    // fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
+    // 自前 finding_contract と継承の同時指定は WorkflowValidator で設定エラーに
+    // しているため、ここでは「継承 or 自前」のどちらか一方だけが来る前提で良い。
+    this.findingContract = this.options.inheritedFindingContract?.contract ?? this.config.findingContract;
+    if (this.findingContract) {
+      // 継承時は親と同一の FindingLedgerStore インスタンスをそのまま使う。
+      // ledger_path / raw_findings_path はワークフロー名に紐づくため、子が
+      // 自前で store を作り直すと親の when(findings.*) と別の台帳を見てしまう。
+      this.findingLedgerStore = this.options.inheritedFindingContract?.ledgerStore ?? createFindingLedgerStore({
         projectCwd: this.projectCwd,
         reportDir: this.runPaths.reportsAbs,
         workflowName: this.config.name,
-        ledgerPath: this.config.findingContract.ledgerPath,
-        rawFindingsPath: this.config.findingContract.rawFindingsPath,
+        ledgerPath: this.findingContract.ledgerPath,
+        rawFindingsPath: this.findingContract.rawFindingsPath,
       });
       this.refreshFindingsState();
       this.findingLedgerStore.createRunCopy();
@@ -184,6 +195,7 @@ export class WorkflowEngine extends EventEmitter {
       },
       setActiveResumePoint: this.setActiveResumePoint.bind(this),
       refreshFindingsState: this.refreshFindingsState.bind(this),
+      findingContract: this.findingContract,
       findingLedgerStore: this.findingLedgerStore,
       updatePersonaSession: this.updatePersonaSession.bind(this),
       resolveNextStepFromDone: this.resolveNextStepFromDone.bind(this),

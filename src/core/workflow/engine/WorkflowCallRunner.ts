@@ -1,12 +1,14 @@
 import { resolveEffectiveProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
   AgentResponse,
+  FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
+import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { resolveWorkflowCallProviderModel, toConcreteProvider } from '../provider-resolution.js';
 import {
@@ -63,6 +65,11 @@ interface WorkflowCallRunnerDeps {
     task: string,
     options: WorkflowEngineOptions,
   ) => WorkflowCallChildEngine;
+  /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
+  findingContract?: FindingContractConfig;
+  findingLedgerStore?: FindingLedgerStore;
+  /** workflow_call 完了後、子が書き込んだ台帳を親の state.findings へ反映する。 */
+  refreshFindingsState: () => void;
 }
 
 export class WorkflowCallRunner {

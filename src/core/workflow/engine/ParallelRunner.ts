@@ -12,7 +12,6 @@ import type {
   AgentResponse,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
-  WorkflowConfig,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { isWorkflowCallStep } from '../step-kind.js';
@@ -38,13 +37,13 @@ import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type { FindingContractConfig } from '../../models/types.js';
 import type { FindingLedgerStore } from '../findings/store.js';
+import { RawFindingsStructuredOutput, type FindingManagerRunResult } from '../findings/manager-runner.js';
 import {
-  RawFindingsStructuredOutput,
-  type FindingManagerRunResult,
-  runFindingManagerForParallelStep,
-} from '../findings/manager-runner.js';
+  ingestFindingContractResults,
+  selectInvalidManagerOutputRuleIndex,
+  withFindingContractStructuredOutput,
+} from '../findings/contract-intake.js';
 import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
-import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
@@ -137,13 +136,13 @@ export interface ParallelRunnerDeps {
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
-  readonly workflowProvider?: WorkflowConfig['provider'];
-  readonly workflowModel?: WorkflowConfig['model'];
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
   readonly updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   readonly setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
   readonly getRunId: () => string;
+  /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
+  readonly getFindingCallNamespace: () => string;
   readonly runQualityGates: (options: {
     qualityGates: WorkflowStep['qualityGates'];
     projectRoot: string;
@@ -277,7 +276,7 @@ export class ParallelRunner {
             throw new Error(`Unsupported parallel sub-step kind for "${subStep.name}"`);
           }
 
-          const executableSubStep = this.withFindingContractStructuredOutput(subStep, findingLedgerCopyPath);
+          const executableSubStep = withFindingContractStructuredOutput(subStep, findingLedgerCopyPath);
           const subRuntime = routedProviderInfoByStep.has(subStep.name)
             ? {
                 ...runtime,
@@ -867,30 +866,32 @@ export class ParallelRunner {
     if (!this.deps.findingContract) {
       return undefined;
     }
-    if (!this.deps.findingLedgerStore) {
+    const ledgerStore = this.deps.findingLedgerStore;
+    if (!ledgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
-    const result = await runFindingManagerForParallelStep({
+    return ingestFindingContractResults({
       contract: this.deps.findingContract,
-      workflowProvider: this.deps.workflowProvider,
-      workflowModel: this.deps.workflowModel,
-      ledgerStore: this.deps.findingLedgerStore,
+      ledgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this.deps.stepExecutor,
       parentStep: step,
       stepIteration,
       subResults,
-      workflowName: this.deps.getWorkflowName(),
+      // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
+      // workflow_call の子が親の台帳を継承した場合、この engine 自身の
+      // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
+      // ledger.workflowName が親の台帳と食い違い、次回 load/save で
+      // assertLedgerWorkflowName が例外を投げる。
+      workflowName: ledgerStore.workflowName,
       runId: this.deps.getRunId(),
+      callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
       ledgerCopyPath,
       priorStepResponseText,
+      refreshFindingsState: this.deps.refreshFindingsState,
+      emitEvent: this.deps.emitEvent,
     });
-    if (result.status === 'updated') {
-      this.deps.refreshFindingsState();
-      this.deps.emitEvent('findings:ledger', result.ledger);
-    }
-    return result;
   }
 
   private emitSubStepRoutingDecisionEvents(subResults: ParallelSubStepResult[], iteration: number): void {
@@ -949,22 +950,6 @@ export class ParallelRunner {
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
     return renderFindingLedgerReportSummary(this.deps.findingLedgerStore.loadLedger());
-  }
-
-  private withFindingContractStructuredOutput(
-    subStep: AgentWorkflowStep,
-    ledgerCopyPath: string | undefined,
-  ): AgentWorkflowStep {
-    if (!ledgerCopyPath) {
-      return subStep;
-    }
-    if (subStep.structuredOutput) {
-      throw new Error(`Step "${subStep.name}" cannot combine finding_contract raw findings with structured_output`);
-    }
-    return {
-      ...subStep,
-      structuredOutput: RawFindingsStructuredOutput,
-    };
   }
 
   private buildParallelLoggerOptions(
@@ -1061,7 +1046,7 @@ export class ParallelRunner {
       'Ledger was not updated.',
     ].join('\n');
 
-    const matchedRuleIndex = this.selectInvalidManagerOutputRuleIndex(options.step);
+    const matchedRuleIndex = selectInvalidManagerOutputRuleIndex(options.step);
     const response: AgentResponse = {
       persona: options.step.name,
       status: 'done',
@@ -1085,30 +1070,6 @@ export class ParallelRunner {
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
       providerInfo: options.providerInfo,
     };
-  }
-
-  private selectInvalidManagerOutputRuleIndex(step: WorkflowStep): number {
-    const rules = step.rules;
-    if (!rules) {
-      throw new Error(`Invalid finding_contract step "${step.name}": missing invalid manager output rule`);
-    }
-
-    const needReplanIndex = rules.findIndex((rule) => isNonAiReturnValueRule(rule, 'need_replan'));
-    if (needReplanIndex >= 0) {
-      return needReplanIndex;
-    }
-
-    const needsFixIndex = rules.findIndex((rule) => isNonAiReturnValueRule(rule, 'needs_fix'));
-    if (needsFixIndex >= 0) {
-      return needsFixIndex;
-    }
-
-    const fixIndex = rules.findIndex((rule) => !rule.isAiCondition && rule.next === 'fix');
-    if (fixIndex >= 0) {
-      return fixIndex;
-    }
-
-    throw new Error(`Invalid finding_contract step "${step.name}": missing invalid manager output rule`);
   }
 
   private collectTerminalResults(results: ParallelSubStepResult[]): ParallelSubStepResult[] {

@@ -18,8 +18,26 @@ const PRIVATE_FILE_MODE = 0o600;
 const READ_ONLY_PRIVATE_FILE_MODE = 0o400;
 
 export interface FindingLedgerStore {
+  /**
+   * この store が束縛する台帳の正準ワークフロー名。workflow_call の子が親から
+   * store を継承した場合も親の名前のまま変わらない。ledger.json の
+   * workflowName スタンプ（reconcile 時）はこの値と一致させる必要がある。
+   * 一致しないと assertLedgerWorkflowName が次回の save/load で例外を投げる。
+   */
+  workflowName: string;
   loadLedger: () => FindingLedger;
   saveLedger: (ledger: FindingLedger) => void;
+  /**
+   * 「読み込み → 更新関数 → 保存」を排他区間で行う。workflow_call の並列子
+   * エンジンが同じ store インスタンス（親から継承した台帳）を共有する場合、
+   * 各子が「最初に読んだ台帳」を基準に非同期処理後に保存すると後勝ちで
+   * 一方の更新が消える（lost update）。呼び出し元は非同期処理（LLM 呼び出し等）
+   * を済ませたあとにこの API を呼び、mutator には同期処理だけを渡すこと
+   * （mutator の中で await すると、直列化の意味がなくなる）。
+   * 同一プロセス内の Promise チェーンによる直列化であり、複数プロセスからの
+   * 同時更新はこの直列化の対象外（現状の設計外）。
+   */
+  updateLedger: (mutator: (current: FindingLedger) => FindingLedger) => Promise<FindingLedger>;
   createRunCopy: () => string;
   saveRawFindings: (runId: string, stepName: string, rawFindings: RawFinding[]) => string;
   saveManagerValidationReport: (report: FindingManagerValidationReport) => string;
@@ -170,16 +188,38 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
   const copyPath = resolveInside(options.reportDir, 'findings-ledger.json');
   const rawFindingsDir = resolveInside(ledgerRoot, options.rawFindingsPath);
 
+  const loadLedgerImpl = (): FindingLedger => {
+    return readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
+  };
+  const saveLedgerImpl = (ledger: FindingLedger): void => {
+    assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
+    assertLedgerIdAllocationInvariant(ledger);
+    prepareWritableFilePath(ledgerRoot, ledgerPath);
+    writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
+    chmodSync(ledgerPath, PRIVATE_FILE_MODE);
+  };
+
+  // 同一プロセス内の呼び出しを直列化するための Promise チェーン。
+  // updateLedger は「このチェーンの末尾に自分の臨界区間を継ぎ足し、前の
+  // 呼び出しが終わるまで自分の読み込みを始めない」ことで排他を実現する。
+  let updateQueue: Promise<unknown> = Promise.resolve();
+
   return {
-    loadLedger: () => {
-      return readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
-    },
-    saveLedger: (ledger) => {
-      assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
-      assertLedgerIdAllocationInvariant(ledger);
-      prepareWritableFilePath(ledgerRoot, ledgerPath);
-      writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), { encoding: 'utf-8', mode: PRIVATE_FILE_MODE });
-      chmodSync(ledgerPath, PRIVATE_FILE_MODE);
+    workflowName: options.workflowName,
+    loadLedger: loadLedgerImpl,
+    saveLedger: saveLedgerImpl,
+    updateLedger: (mutator) => {
+      const critical = updateQueue.then(() => {
+        const current = loadLedgerImpl();
+        const next = mutator(current);
+        saveLedgerImpl(next);
+        return next;
+      });
+      // キューの継続は失敗で止めない（この呼び出しの失敗は呼び出し元へ
+      // critical 経由でそのまま伝播する）。失敗を握りつぶさずに繋ぐと、
+      // 1回の失敗で以降の全ての updateLedger 呼び出しが解決しなくなる。
+      updateQueue = critical.catch(() => undefined);
+      return critical;
     },
     createRunCopy: () => {
       const ledger = readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);

@@ -1,5 +1,6 @@
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import type {
+  FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowMaxSteps,
@@ -11,6 +12,7 @@ import type {
   ProviderRoutingConfig,
   ProviderRoutingEntry,
 } from '../../models/config-types.js';
+import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
@@ -123,6 +125,11 @@ interface WorkflowCallExecutorDeps {
     personaSessions: Map<string, string>;
   };
   setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
+  /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
+  findingContract?: FindingContractConfig;
+  findingLedgerStore?: FindingLedgerStore;
+  /** workflow_call 完了後、子が書き込んだ台帳を親の state.findings へ反映する。 */
+  refreshFindingsState: () => void;
 }
 
 interface ExecuteWorkflowCallRequest {
@@ -151,6 +158,35 @@ export type WorkflowCallExecutionResult = WorkflowState & {
 
 export class WorkflowCallExecutor {
   constructor(private readonly deps: WorkflowCallExecutorDeps) {}
+
+  /**
+   * raw finding id 用の呼び出し名前空間を組み立てる。子エンジンは
+   * reportDirName（= runId）を親からそのまま継承するため、親の parallel から
+   * 同じ子ワークフローを複数同時に呼ぶと2子の runId が一致し、findings
+   * manager-runner.ts の normalizeRawFindingId が生成する raw finding id が
+   * 完全に衝突する（実測: parentStepName / stepIteration / subStepName /
+   * rawFindingId のいずれも子ワークフロー内では同一になるため）。
+   * 呼び出し元ステップ名（parallel の子ステップ間で一意）を積み上げることで
+   * 衝突を避ける。親が既に名前空間を持つ場合（さらに深い入れ子）は連結する。
+   * トップレベルの走行では親の名前空間が undefined のため、この関数は常に
+   * 呼ばれるが、その戻り値は options.findingCallNamespace としてのみ子へ渡り、
+   * 親自身が undefined のままなら raw finding id の形は変わらない。
+   *
+   * ステップ名だけでは、同じ workflow_call ステップがループで再実行された
+   * ケースを区別できない。子エンジンはループのたびに新規生成され
+   * stepIterations が空から始まるため、子の最初のレビューは常に
+   * stepIteration=1 になる。ステップ名・parentStepName・stepIteration・
+   * subStepName が全て一致すれば、ローカルの raw finding id が同じ場合に
+   * 正規化後の id も完全に一致し、後勝ちで前回の raw finding が台帳から
+   * 消える。buildWorkflowCallNamespace() と同じ「親のこの呼び出し時点の
+   * イテレーション」（this.deps.state.iteration）をステップ名に組み合わせ、
+   * ループの各回を区別する。
+   */
+  private buildFindingCallNamespace(step: WorkflowCallStep): string {
+    const parentNamespace = this.deps.getOptions().findingCallNamespace;
+    const segment = `${step.name}#${this.deps.state.iteration}`;
+    return parentNamespace ? `${parentNamespace}/${segment}` : segment;
+  }
 
   private buildWorkflowCallNamespace(step: WorkflowCallStep, childWorkflow: WorkflowConfig): string[] {
     const baseNamespace = this.deps.getOptions().runPathNamespace ?? [];
@@ -235,6 +271,11 @@ export class WorkflowCallExecutor {
       this.deps.state.personaSessions.set(sessionKey, sessionId);
     }
     this.deps.setActiveResumePoint(step, this.deps.state.iteration);
+    // 子が Finding Contract の台帳（親と共有）へ書き込んでいても、iteration /
+    // session の同期だけでは親の state.findings は古いまま。親の
+    // when(findings.*) ルールが子の取り込み結果を見られるよう、ここで
+    // ParallelRunner の manager 実行後と同じ再読込を行う。
+    this.deps.refreshFindingsState();
   }
 
   async execute(
@@ -284,11 +325,25 @@ export class WorkflowCallExecutor {
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
       runPathNamespace: this.buildWorkflowCallNamespace(request.step, request.childWorkflow),
+      findingCallNamespace: this.buildFindingCallNamespace(request.step),
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
         ...this.deps.resumeStackPrefix,
         buildWorkflowResumePointEntry(parentConfig, request.step.name, 'workflow_call'),
       ],
+      // 親の Finding Contract を子エンジンへ継承する。継承しないと子の
+      // parallel レビューが出す raw findings が台帳に入らず、fix に届かないまま
+      // reviewers ↔ fix が回り続ける（実測: 56周・9時間）。子が自前の
+      // finding_contract も持つ場合は WorkflowValidator が設定エラーで落とす
+      // ため、ここでは無条件に継承値を渡してよい。
+      ...(this.deps.findingContract !== undefined && this.deps.findingLedgerStore !== undefined
+        ? {
+            inheritedFindingContract: {
+              contract: this.deps.findingContract,
+              ledgerStore: this.deps.findingLedgerStore,
+            },
+          }
+        : {}),
     });
 
     this.relayChildEvents(childEngine);

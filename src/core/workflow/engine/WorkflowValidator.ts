@@ -10,7 +10,6 @@ import { validateProviderModelRequirements } from '../provider-model-requirement
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
 import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
-import { buildFindingManagerStep } from '../findings/manager-step.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -35,8 +34,8 @@ function validateFindingsRuleContract(
   }
 }
 
-function validateFindingContractParallelStructuredOutput(config: WorkflowConfig): void {
-  if (!config.findingContract) {
+function validateFindingContractParallelStructuredOutput(config: WorkflowConfig, findingContractEnabled: boolean): void {
+  if (!findingContractEnabled) {
     return;
   }
   for (const step of config.steps) {
@@ -50,32 +49,71 @@ function validateFindingContractParallelStructuredOutput(config: WorkflowConfig)
   }
 }
 
-function validateFindingContractManagerProviderModel(config: WorkflowConfig, options: WorkflowEngineOptions): void {
-  const findingContract = config.findingContract;
-  if (!findingContract) {
+/**
+ * output_contracts.report[].format が "*-finding-contract" 命名規約の facet を
+ * 参照しているのに、そのワークフローで Finding Contract が有効でない
+ * （自前の finding_contract も、workflow_call 親からの継承もない）場合を
+ * 実行前に落とす。この形式のレビュー指摘は raw findings として台帳に
+ * 取り込まれる前提で書かれており、台帳が無いと取り込み経路自体が存在せず、
+ * 指摘が黙って捨てられて fix に届かない（final-gate が単独ステップのまま
+ * この形式で出力していたケースで reviewers ↔ fix が56周・9時間回った実測がある）。
+ */
+function collectFindingContractFormatViolations(
+  config: WorkflowConfig,
+): Array<{ stepName: string; format: string }> {
+  const violations: Array<{ stepName: string; format: string }> = [];
+  const collectFromStep = (step: WorkflowStep, label: string): void => {
+    for (const contract of step.outputContracts ?? []) {
+      if (contract.formatRef?.endsWith('-finding-contract') === true) {
+        violations.push({ stepName: label, format: contract.formatRef });
+      }
+    }
+    for (const subStep of step.parallel ?? []) {
+      collectFromStep(subStep, `${label}.${subStep.name}`);
+    }
+  };
+  for (const step of config.steps) {
+    collectFromStep(step, step.name);
+  }
+  return violations;
+}
+
+function validateFindingContractOutputFormatRequiresContract(
+  config: WorkflowConfig,
+  findingContractEnabled: boolean,
+): void {
+  if (findingContractEnabled) {
     return;
   }
-  const managerStep = buildFindingManagerStep({
-    contract: findingContract,
-    workflowProvider: config.provider,
-    workflowModel: config.model,
-  });
-  const providerInfo = resolveStepProviderModel({
-    step: managerStep,
-    provider: options.provider,
-    providerSource: options.providerSource,
-    model: options.model,
-    modelSource: options.modelSource,
-    providerRouting: options.providerRouting,
-    personaProviders: options.personaProviders,
-  });
-  validateProviderModelRequirements(
-    providerInfo.provider,
-    providerInfo.model,
-    {
-      modelFieldName: 'Configuration error: finding_contract.manager.model',
-    },
+  const violations = collectFindingContractFormatViolations(config);
+  if (violations.length === 0) {
+    return;
+  }
+  const detail = violations.map((v) => `step "${v.stepName}" uses format "${v.format}"`).join(', ');
+  throw new Error(
+    `Configuration error: workflow "${config.name}" has no finding_contract (own or inherited via workflow_call), `
+    + `but ${detail} which requires a Finding Contract ledger to ingest its raw findings`,
   );
+}
+
+/**
+ * 子ワークフローが自前の finding_contract を持ちながら、workflow_call の親からも
+ * 継承している場合を設定エラーで落とす。ledger_path / raw_findings_path は
+ * ワークフロー名に紐づくため、暗黙に両方を許すと子は自分の台帳へ、親の
+ * when(findings.open.count == 0) 等は親の台帳へ、と別々の台帳を見てしまう。
+ */
+function validateFindingContractInheritanceConflict(
+  config: WorkflowConfig,
+  options: WorkflowEngineOptions,
+): void {
+  if (config.findingContract !== undefined && options.inheritedFindingContract !== undefined) {
+    throw new Error(
+      `Configuration error: workflow "${config.name}" declares its own finding_contract while also being called `
+      + 'as a workflow_call subworkflow that inherits a finding_contract from its parent; a workflow cannot combine '
+      + 'both because ledger_path/raw_findings_path are keyed by workflow name and the parent\'s when(findings.*) '
+      + 'rules would end up observing a different ledger than the child writes to',
+    );
+  }
 }
 
 function validateAgentStepProviderModel(
@@ -156,8 +194,8 @@ function hasInvalidManagerOutputRule(rules: readonly WorkflowRule[] | undefined)
   return rules.some(isInvalidManagerOutputRule);
 }
 
-function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig): void {
-  if (!config.findingContract) {
+function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig, findingContractEnabled: boolean): void {
+  if (!findingContractEnabled) {
     return;
   }
   for (const step of config.steps) {
@@ -210,10 +248,18 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   ) {
     throw new Error('Configuration error: provider: auto requires auto_routing configuration');
   }
-  validateFindingContractParallelStructuredOutput(config);
-  validateFindingContractManagerProviderModel(config, options);
-  validateFindingContractInvalidManagerOutputRules(config);
+  // 子ワークフローが自前の finding_contract を持たず、workflow_call の親から
+  // 継承しているだけのケースも「Finding Contract 有効」として扱う。継承した
+  // 契約は ParallelRunner の raw findings 自動付与・manager 起動をそのまま
+  // 動かすため（WorkflowEngineSetup 経由で effective contract を渡す）、
+  // ここでの検証もランタイムと同じ判定基準を使わないと validate 時は素通り
+  // したのに実行時に落ちる、という食い違いが生まれる。
+  const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
+  validateFindingContractParallelStructuredOutput(config, findingContractEnabled);
+  validateFindingContractInvalidManagerOutputRules(config, findingContractEnabled);
   validateParallelSubStepNamesUnique(config);
+  validateFindingContractInheritanceConflict(config, options);
+  validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);
@@ -238,7 +284,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         throw new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`);
       }
       validateFindingsRuleContract(
-        config.findingContract !== undefined,
+        findingContractEnabled,
         rule,
         `Invalid rule in step "${step.name}"`,
       );
@@ -255,7 +301,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       );
       for (const rule of subStep.rules ?? []) {
         validateFindingsRuleContract(
-          config.findingContract !== undefined,
+          findingContractEnabled,
           rule,
           `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
         );
@@ -274,7 +320,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         throw new Error(`Invalid loop_monitor judge rule: target step "${rule.next}" does not exist`);
       }
       validateFindingsRuleContract(
-        config.findingContract !== undefined,
+        findingContractEnabled,
         rule,
         'Invalid loop_monitor judge rule',
       );
@@ -291,8 +337,27 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
+    // 実行時（LoopMonitorJudgeRunner）と同じ優先順位で検証するため、judge ステップ自身の
+    // 通常解決（provider_routing.* / persona_providers.loop-judge を含む）も同じ
+    // resolveStepProviderModel で取ってから合成する。routing キーは実行時に生成される
+    // judge ステップ（_loop_judge_<cycle> / providerRoutingPersonaKey: 'loop-judge'）と揃える。
+    const judgeStepProviderInfo = resolveStepProviderModel({
+      step: {
+        name: `_loop_judge_${monitor.cycle.join('_')}`,
+        provider: monitor.judge.provider,
+        model: monitor.judge.model,
+        modelSpecified: monitor.judge.modelSpecified,
+        personaDisplayName: 'loop-judge',
+        providerRoutingPersonaKey: 'loop-judge',
+      },
+      provider: options.provider,
+      model: options.model,
+      providerRouting: options.providerRouting,
+      personaProviders: options.personaProviders,
+    });
     const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
       judge: monitor.judge,
+      judgeProviderInfo: judgeStepProviderInfo,
       triggeringProviderInfo,
     });
     validateProviderModelRequirements(

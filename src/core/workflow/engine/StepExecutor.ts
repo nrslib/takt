@@ -9,9 +9,11 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
+  AgentWorkflowStep,
   WorkflowStep,
   WorkflowState,
   AgentResponse,
+  FindingContractConfig,
   Language,
   FallbackContext,
   WorkflowResumePointEntry,
@@ -48,6 +50,14 @@ import type {
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
+import { getWorkflowStepKind } from '../step-kind.js';
+import type { FindingLedgerStore } from '../findings/store.js';
+import type { FindingManagerRunResult } from '../findings/manager-runner.js';
+import {
+  ingestFindingContractResults,
+  selectInvalidManagerOutputRuleIndex,
+  withFindingContractStructuredOutput,
+} from '../findings/contract-intake.js';
 
 const log = createLogger('step-executor');
 
@@ -71,6 +81,14 @@ export interface StepExecutorDeps {
   readonly detectRuleIndex: (content: string, stepName: string) => number;
   readonly structuredCaller: StructuredCaller;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
+  /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
+  readonly findingContract?: FindingContractConfig;
+  readonly findingLedgerStore?: FindingLedgerStore;
+  readonly refreshFindingsState: () => void;
+  readonly emitEvent: (event: string, ...args: unknown[]) => void;
+  readonly getRunId: () => string;
+  /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
+  readonly getFindingCallNamespace: () => string;
   readonly onPhaseStart?: (
     step: WorkflowStep,
     phase: 1 | 2 | 3,
@@ -133,6 +151,104 @@ export class StepExecutor {
       step,
       false,
     );
+  }
+
+  /**
+   * 単独ステップの Finding Contract 取り込み対象かどうかを判定する。
+   * 対象になるのは、台帳（自前 or workflow_call 親からの継承）が有効で、かつ
+   * このステップの output_contracts.report[].formatRef が `*-finding-contract`
+   * 命名規約に従っている場合だけ。
+   *
+   * 以前は ParallelRunner だけが findings-manager を起動していたため、この
+   * 形式を使う単独ステップは取り込み経路が無く、指摘が黙って捨てられていた
+   * （WorkflowValidator は台帳があれば単独ステップでのこの形式を許すが、
+   * 実行時に反映する経路自体が欠けていた）。
+   */
+  private resolveFindingContractIntakeStep(step: WorkflowStep): AgentWorkflowStep | undefined {
+    if (!this.deps.findingContract) {
+      return undefined;
+    }
+    if (getWorkflowStepKind(step) !== 'agent') {
+      return undefined;
+    }
+    const hasFindingContractFormat = (step.outputContracts ?? []).some(
+      (entry) => entry.formatRef?.endsWith('-finding-contract') === true,
+    );
+    return hasFindingContractFormat ? (step as AgentWorkflowStep) : undefined;
+  }
+
+  private async ingestFindingContractForNormalStep(input: {
+    step: AgentWorkflowStep;
+    stepIteration: number;
+    response: AgentResponse;
+    ledgerCopyPath: string;
+    priorStepResponseText: string | undefined;
+  }): Promise<FindingManagerRunResult> {
+    if (!this.deps.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
+    }
+    return ingestFindingContractResults({
+      contract: this.deps.findingContract!,
+      ledgerStore: this.deps.findingLedgerStore,
+      optionsBuilder: this.deps.optionsBuilder,
+      stepExecutor: this,
+      parentStep: input.step,
+      stepIteration: input.stepIteration,
+      // 単独ステップでは「レビュアー1件」を自分自身として渡す
+      // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
+      subResults: [{ subStep: input.step, response: input.response }],
+      // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
+      // workflow_call の子が親の台帳を継承した場合、この engine 自身の
+      // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
+      // ledger.workflowName が親の台帳と食い違う（ParallelRunner と同じ理由）。
+      workflowName: this.deps.findingLedgerStore.workflowName,
+      runId: this.deps.getRunId(),
+      callNamespace: this.deps.getFindingCallNamespace(),
+      timestamp: new Date().toISOString(),
+      ledgerCopyPath: input.ledgerCopyPath,
+      priorStepResponseText: input.priorStepResponseText,
+      refreshFindingsState: this.deps.refreshFindingsState,
+      emitEvent: this.deps.emitEvent,
+    });
+  }
+
+  private buildFindingManagerInvalidOutputResult(input: {
+    step: WorkflowStep;
+    state: WorkflowState;
+    stepIteration: number;
+    instruction: string;
+    providerInfo: StepRunResult['providerInfo'];
+    managerResult: Extract<FindingManagerRunResult, { status: 'invalid_manager_output' }>;
+  }): StepRunResult {
+    const content = [
+      `Finding manager output remained semantically invalid after ${input.managerResult.retryCount} retry.`,
+      '',
+      'Validation errors:',
+      ...input.managerResult.errors.map((error) => `- ${error}`),
+      '',
+      `Validation report: ${input.managerResult.reportPath}`,
+      'Ledger was not updated.',
+    ].join('\n');
+
+    const matchedRuleIndex = selectInvalidManagerOutputRuleIndex(input.step);
+    const response: AgentResponse = {
+      persona: input.step.name,
+      status: 'done',
+      content,
+      timestamp: new Date(),
+      ...(matchedRuleIndex !== undefined ? { matchedRuleIndex, matchedRuleMethod: 'auto_select' } : {}),
+    };
+
+    input.state.stepOutputs.set(input.step.name, response);
+    input.state.lastOutput = response;
+    this.persistPreviousResponseSnapshot(input.state, input.step.name, input.stepIteration, response.content);
+    this.emitStepReports(input.step);
+
+    return {
+      response,
+      instruction: input.instruction,
+      providerInfo: input.providerInfo,
+    };
   }
 
   private writeSnapshot(
@@ -587,10 +703,34 @@ export class StepExecutor {
     const stepIteration = prebuiltInstruction
       ? state.stepIterations.get(step.name) ?? 1
       : incrementStepIteration(state, step.name);
-    const instruction = prebuiltInstruction ?? this.buildInstruction(step, stepIteration, state, task, maxSteps);
-    const phase1Instruction = this.buildPhase1Instruction(instruction, step, runtime);
-    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime);
-    const sessionKey = buildSessionKey(step, providerInfo.provider);
+
+    // Finding Contract の単独ステップ取り込み。対象なら raw findings の構造化
+    // 出力を強制し、Phase 1 の結果をルール評価の前に台帳へ反映する
+    // （ParallelRunner の findingLedgerCopyPath 準備と同じタイミング）。
+    const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
+    const findingContractContext = findingContractIntakeStep
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(findingContractIntakeStep, true)
+      : undefined;
+    const executableStep = findingContractIntakeStep && findingContractContext
+      ? withFindingContractStructuredOutput(findingContractIntakeStep, findingContractContext.ledgerCopyPath)
+      : step;
+    // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
+    // manager に渡すため、Phase 1 実行で lastOutput が上書きされる前に捕捉する
+    // （ParallelRunner の priorStepResponseText 捕捉と同じタイミング）。
+    const priorStepResponseText = state.lastOutput?.content;
+
+    const instruction = prebuiltInstruction ?? this.buildInstruction(
+      executableStep,
+      stepIteration,
+      state,
+      task,
+      maxSteps,
+      undefined,
+      findingContractContext,
+    );
+    const phase1Instruction = this.buildPhase1Instruction(instruction, executableStep, runtime);
+    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(executableStep, runtime);
+    const sessionKey = buildSessionKey(executableStep, providerInfo.provider);
     log.debug('Running step', {
       step: step.name,
       persona: step.persona ?? '(none)',
@@ -608,8 +748,8 @@ export class StepExecutor {
       phase: 1,
       sequence: 1,
     });
-    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
-    await compactSessionBeforePhase1(step, baseAgentOptions);
+    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(executableStep, runtime);
+    await compactSessionBeforePhase1(executableStep, baseAgentOptions);
     const agentOptions = {
       ...baseAgentOptions,
       onPromptResolved: (promptParts: PhasePromptParts) => {
@@ -622,7 +762,7 @@ export class StepExecutor {
       enabled: this.deps.observabilityEnabled?.() === true,
       runId: this.deps.getObservabilityRunId?.(),
       workflowName: this.deps.getWorkflowName(),
-      step,
+      step: executableStep,
       iteration: state.iteration,
       phase: 1,
       phaseName: 'execute',
@@ -632,13 +772,13 @@ export class StepExecutor {
       sanitizeText: this.deps.sanitizeObservabilityText,
       providerInfo,
       getPromptParts: () => resolvedPromptParts,
-    }, () => executeAgent(step.persona, phase1Instruction, agentOptions), (result) => ({
+    }, () => executeAgent(executableStep.persona, phase1Instruction, agentOptions), (result) => ({
       status: result.status,
       content: result.content,
       error: result.error,
       providerUsage: result.providerUsage,
     }));
-    response = this.normalizeStructuredOutput(step, response, runtime);
+    response = this.normalizeStructuredOutput(executableStep, response, runtime);
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
     }
@@ -672,6 +812,29 @@ export class StepExecutor {
       state.lastOutput = response;
       this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
       return { response, instruction: phase1Instruction, providerInfo };
+    }
+
+    // Finding Contract の取り込みはルール評価の前に行う。when(findings.*) の
+    // ガードがこの回の取り込み結果を見る必要があるため
+    // （ParallelRunner が manager 実行後にルール評価する構成と同じ）。
+    if (findingContractIntakeStep && findingContractContext) {
+      const managerResult = await this.ingestFindingContractForNormalStep({
+        step: findingContractIntakeStep,
+        stepIteration,
+        response,
+        ledgerCopyPath: findingContractContext.ledgerCopyPath,
+        priorStepResponseText,
+      });
+      if (managerResult.status === 'invalid_manager_output') {
+        return this.buildFindingManagerInvalidOutputResult({
+          step,
+          state,
+          stepIteration,
+          instruction: phase1Instruction,
+          providerInfo,
+          managerResult,
+        });
+      }
     }
 
     response = await this.applyPostExecutionPhases(

@@ -70,7 +70,10 @@ export function normalizeOutputContracts(
       throw new Error(`Failed to resolve output contract order "${entry.order}" for report "${entry.name}"`);
     }
 
-    return { name: entry.name, useJudge: entry.use_judge ?? true, format, order };
+    // formatRef は解決前の facet 参照名を保持する。format は本文へ解決済みのため、
+    // "*-finding-contract" 命名規約の検証（WorkflowValidator の fail-fast チェック）
+    // はこちらでしか行えない。
+    return { name: entry.name, useJudge: entry.use_judge ?? true, format, formatRef: entry.format, order };
   });
 
   return result.length > 0 ? result : undefined;

@@ -1,6 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowConfig, WorkflowRule } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
+import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+
+function createFakeLedgerStore(): FindingLedgerStore {
+  return {
+    workflowName: 'fake',
+    loadLedger: () => ({
+      version: 1,
+      workflowName: 'fake',
+      nextId: 1,
+      updatedAt: new Date().toISOString(),
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    }),
+    saveLedger: () => {},
+    updateLedger: (mutator) => Promise.resolve(mutator({
+      version: 1,
+      workflowName: 'fake',
+      nextId: 1,
+      updatedAt: new Date().toISOString(),
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    })),
+    createRunCopy: () => '/tmp/fake-ledger-copy.json',
+    saveRawFindings: () => '/tmp/fake-raw-findings.json',
+    saveManagerValidationReport: () => '/tmp/fake-validation-report.json',
+  };
+}
 
 function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
   return {
@@ -869,5 +898,191 @@ describe('validateWorkflowConfig', () => {
       projectCwd: process.cwd(),
       workflowCallResolver: () => null,
     })).toThrow(message);
+  });
+
+  describe('finding_contract scope for output_contracts and workflow_call inheritance', () => {
+    it('fails fast when a step uses a *-finding-contract report format but the workflow has no finding_contract', () => {
+      const workflow = createWorkflow({
+        steps: [
+          {
+            name: 'plan',
+            persona: 'planner',
+            personaDisplayName: 'planner',
+            edit: false,
+            instruction: '{task}',
+            passPreviousResponse: true,
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+            outputContracts: [
+              { name: 'plan.md', format: 'plan-review-body', formatRef: 'plan-review-finding-contract' },
+            ],
+          },
+        ],
+      });
+
+      expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+        /has no finding_contract \(own or inherited via workflow_call\).*step "plan" uses format "plan-review-finding-contract"/s,
+      );
+    });
+
+    it('fails fast when a parallel sub-step uses a *-finding-contract report format but the workflow has no finding_contract', () => {
+      const workflow = createWorkflow({
+        initialStep: 'reviewers',
+        steps: [
+          {
+            name: 'reviewers',
+            personaDisplayName: 'reviewers',
+            instruction: 'review',
+            parallel: [
+              {
+                name: 'final-gate',
+                persona: 'merge-readiness-reviewer',
+                personaDisplayName: 'merge-readiness-reviewer',
+                edit: false,
+                instruction: 'review',
+                passPreviousResponse: true,
+                rules: [{ condition: 'approved' }],
+                outputContracts: [
+                  { name: 'merge-readiness-review.md', format: 'body', formatRef: 'merge-readiness-review-finding-contract' },
+                ],
+              },
+            ],
+            rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+          },
+        ],
+      });
+
+      expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+        /step "reviewers\.final-gate" uses format "merge-readiness-review-finding-contract"/,
+      );
+    });
+
+    it('accepts a *-finding-contract report format when the workflow declares its own finding_contract', () => {
+      const workflow = createWorkflow({
+        findingContract: {
+          ledgerPath: '.takt/findings/peer-review.json',
+          rawFindingsPath: '.takt/findings/raw',
+          manager: {
+            persona: 'findings-manager',
+            instruction: 'findings-manager',
+            outputContract: 'findings-manager',
+          },
+        },
+        steps: [
+          {
+            name: 'plan',
+            persona: 'planner',
+            personaDisplayName: 'planner',
+            edit: false,
+            instruction: '{task}',
+            passPreviousResponse: true,
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+            outputContracts: [
+              { name: 'plan.md', format: 'plan-review-body', formatRef: 'plan-review-finding-contract' },
+            ],
+          },
+        ],
+      });
+
+      expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+    });
+
+    it('accepts a *-finding-contract report format when a finding_contract is inherited from a workflow_call parent', () => {
+      const workflow = createWorkflow({
+        steps: [
+          {
+            name: 'plan',
+            persona: 'planner',
+            personaDisplayName: 'planner',
+            edit: false,
+            instruction: '{task}',
+            passPreviousResponse: true,
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+            outputContracts: [
+              { name: 'plan.md', format: 'plan-review-body', formatRef: 'plan-review-finding-contract' },
+            ],
+          },
+        ],
+      });
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        inheritedFindingContract: {
+          contract: {
+            ledgerPath: '.takt/findings/peer-review.json',
+            rawFindingsPath: '.takt/findings/raw',
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+        },
+      })).not.toThrow();
+    });
+
+    it('accepts findings.* rules when a finding_contract is inherited from a workflow_call parent', () => {
+      const workflow = createWorkflow({
+        steps: [
+          {
+            name: 'plan',
+            persona: 'planner',
+            personaDisplayName: 'planner',
+            edit: false,
+            instruction: '{task}',
+            passPreviousResponse: true,
+            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+          },
+        ],
+      });
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        inheritedFindingContract: {
+          contract: {
+            ledgerPath: '.takt/findings/peer-review.json',
+            rawFindingsPath: '.takt/findings/raw',
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+        },
+      })).not.toThrow();
+    });
+
+    it('fails fast when a workflow declares its own finding_contract while also inheriting one from a workflow_call parent', () => {
+      const workflow = createWorkflow({
+        findingContract: {
+          ledgerPath: '.takt/findings/own.json',
+          rawFindingsPath: '.takt/findings/own/raw',
+          manager: {
+            persona: 'findings-manager',
+            instruction: 'findings-manager',
+            outputContract: 'findings-manager',
+          },
+        },
+      });
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        inheritedFindingContract: {
+          contract: {
+            ledgerPath: '.takt/findings/parent.json',
+            rawFindingsPath: '.takt/findings/parent/raw',
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+        },
+      })).toThrow(
+        /declares its own finding_contract while also being called as a workflow_call subworkflow that inherits/,
+      );
+    });
   });
 });

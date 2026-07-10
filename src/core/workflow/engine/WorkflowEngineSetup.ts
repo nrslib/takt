@@ -3,6 +3,7 @@ import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
+  FindingContractConfig,
   WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePoint,
@@ -51,6 +52,8 @@ interface WorkflowEngineSetupParams {
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
   refreshFindingsState: () => void;
+  /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
+  findingContract?: FindingContractConfig;
   findingLedgerStore?: FindingLedgerStore;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
@@ -138,7 +141,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     _step: WorkflowStep,
     includeRawFindingsSchema: boolean,
   ): FindingContractInstructionContext | undefined => {
-    if (!params.config.findingContract) {
+    if (!params.findingContract) {
       return undefined;
     }
     if (!params.findingLedgerStore) {
@@ -194,6 +197,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     detectRuleIndex: params.detectRuleIndex,
     structuredCaller: params.structuredCaller,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
+    findingContract: params.findingContract,
+    findingLedgerStore: params.findingLedgerStore,
+    refreshFindingsState: params.refreshFindingsState,
+    emitEvent: params.emitEvent,
+    getRunId: () => params.runPaths.slug,
+    getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     ...phaseRelay,
   });
 
@@ -213,6 +222,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     emit: params.emitEvent,
     resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
     createEngine: params.createEngine,
+    findingContract: params.findingContract,
+    findingLedgerStore: params.findingLedgerStore,
+    refreshFindingsState: params.refreshFindingsState,
   });
 
   const parallelRunner = new ParallelRunner({
@@ -231,14 +243,13 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     structuredCaller: params.structuredCaller,
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
-    findingContract: params.config.findingContract,
-    workflowProvider: params.config.provider,
-    workflowModel: params.config.model,
+    findingContract: params.findingContract,
     findingLedgerStore: params.findingLedgerStore,
     getWorkflowCallRunner: () => workflowCallRunner,
     updateMaxSteps: params.updateMaxSteps,
     setActiveResumePoint: params.setActiveResumePoint,
     getRunId: () => params.runPaths.slug,
+    getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     runQualityGates,
     ...phaseRelay,
   });

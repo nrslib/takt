@@ -94,6 +94,12 @@ export interface WorkflowStructuredOutput {
 export interface OutputContractItem {
   name: string;
   format: string;
+  /**
+   * 解決前の format 参照名（facet ref）。`format` は facet 本文へ解決済みの
+   * テキストになるため、"*-finding-contract" 命名規約を検証したい呼び出し元
+   * （WorkflowValidator の fail-fast チェックなど）はこちらを見る。
+   */
+  formatRef?: string;
   useJudge?: boolean;
   order?: string;
 }
