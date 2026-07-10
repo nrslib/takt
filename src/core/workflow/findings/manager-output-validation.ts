@@ -5,6 +5,7 @@ import type {
   FindingRecord,
   RawFinding,
 } from './types.js';
+import { validateFindingDecisionSets } from './decision-rules.js';
 
 export type FindingManagerValidationResult =
   | { ok: true }
@@ -30,11 +31,6 @@ interface ValidationContext {
 interface RawFindingDecisionRef {
   decision: string;
   rawFindingId: string;
-}
-
-interface FindingDecisionRef {
-  decision: string;
-  findingId: string;
 }
 
 export function validateFindingManagerOutput(
@@ -311,7 +307,6 @@ function validateFindingDecisionRefs(
   managerOutput: FindingManagerOutput,
   context: ValidationContext,
 ): string[] {
-  const decisionRefs = collectFindingDecisionRefs(managerOutput);
   const matchErrors = managerOutput.matches.flatMap((match, index) => (
     validateFindingDecision(match.findingId, `matches[${index}]`, 'match', ['open'], context)
   ));
@@ -380,41 +375,12 @@ function validateFindingDecisionRefs(
     ...conflictErrors,
     ...waivedErrors,
     ...disputeErrors,
-    ...validateDuplicateFindingDecisionRefs(decisionRefs),
+    ...validateFindingDecisionSets(managerOutput, context.previousFindingsById),
   ];
 }
 
-function collectFindingDecisionRefs(managerOutput: FindingManagerOutput): FindingDecisionRef[] {
-  return [
-    ...managerOutput.matches.map((match, index) => ({ decision: `matches[${index}]`, findingId: match.findingId })),
-    ...managerOutput.resolvedFindings.map((resolved, index) => ({
-      decision: `resolvedFindings[${index}]`,
-      findingId: resolved.findingId,
-    })),
-    ...managerOutput.reopenedFindings.map((reopened, index) => ({
-      decision: `reopenedFindings[${index}]`,
-      findingId: reopened.findingId,
-    })),
-    ...managerOutput.waivedFindings.map((waived, index) => ({
-      decision: `waivedFindings[${index}]`,
-      findingId: waived.findingId,
-    })),
-    // conflicts は他の決定「について」述べるメタ決定なので、この検査から除く。
-    // 含めると「match と resolve が衝突している」ことを conflict として記録する
-    // 行為自体が「1 finding = 1 決定」違反になり、衝突の逃げ道が塞がる。
-  ];
-}
 
-function validateDuplicateFindingDecisionRefs(refs: readonly FindingDecisionRef[]): string[] {
-  return refs.flatMap((ref, index) => {
-    const previousRef = refs.slice(0, index).find((candidate) => (
-      candidate.findingId === ref.findingId && candidate.decision !== ref.decision
-    ));
-    return previousRef === undefined
-      ? []
-      : [`Finding id "${ref.findingId}" appears in multiple manager decisions: ${previousRef.decision} and ${ref.decision}`];
-  });
-}
+
 
 function validateFindingDecision(
   findingId: string,

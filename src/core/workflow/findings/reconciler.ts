@@ -35,7 +35,12 @@ function formatFindingId(nextId: number): string {
   return `F-${String(nextId).padStart(4, '0')}`;
 }
 
-function formatConflictId(conflict: { findingIds: readonly string[]; rawFindingIds: readonly string[] }): string {
+/**
+ * conflict の同一性は参照する finding id 集合（無ければ raw finding id 集合）で決まる
+ * 決定的なハッシュ。decision-assembly.ts の assembleConflictDecions も同じキーで
+ * 「今ラウンド再生成される conflict」を判定するため export する。
+ */
+export function formatConflictId(conflict: { findingIds: readonly string[]; rawFindingIds: readonly string[] }): string {
   const ids = conflict.findingIds.length > 0 ? conflict.findingIds : conflict.rawFindingIds;
   const signature = [...ids].sort().join('\0');
   const hash = createHash('sha256').update(signature).digest('hex').slice(0, 12).toUpperCase();
@@ -88,56 +93,6 @@ function markRawFindingIdsUsed(usedRawFindingIds: Set<string>, rawFindingIds: re
       throw new Error(`Raw finding id "${rawFindingId}" is referenced by multiple manager decisions`);
     }
     usedRawFindingIds.add(rawFindingId);
-  }
-}
-
-function markFindingIdDecision(
-  usedFindingDecisions: Map<string, string>,
-  findingId: string,
-  decision: string,
-): void {
-  const previousDecision = usedFindingDecisions.get(findingId);
-  if (previousDecision !== undefined) {
-    throw new Error(
-      `Finding id "${findingId}" appears in multiple manager decisions: ${previousDecision} and ${decision}`,
-    );
-  }
-  usedFindingDecisions.set(findingId, decision);
-}
-
-function assertFindingIdsHaveSingleDecision(managerOutput: FindingManagerOutput): void {
-  const usedFindingDecisions = new Map<string, string>();
-  for (const match of managerOutput.matches) {
-    markFindingIdDecision(usedFindingDecisions, match.findingId, 'match');
-  }
-  for (const resolved of managerOutput.resolvedFindings) {
-    markFindingIdDecision(usedFindingDecisions, resolved.findingId, 'resolve');
-  }
-  for (const reopened of managerOutput.reopenedFindings) {
-    markFindingIdDecision(usedFindingDecisions, reopened.findingId, 'reopen');
-  }
-  for (const waived of managerOutput.waivedFindings) {
-    markFindingIdDecision(usedFindingDecisions, waived.findingId, 'waive');
-  }
-  const transitioned = new Set([
-    ...managerOutput.waivedFindings.map((waived) => waived.findingId),
-    ...managerOutput.resolvedFindings.map((resolved) => resolved.findingId),
-    ...managerOutput.reopenedFindings.map((reopened) => reopened.findingId),
-  ]);
-  const seenDisputeIds = new Set<string>();
-  for (const note of managerOutput.disputeNotes) {
-    if (transitioned.has(note.findingId)) {
-      throw new Error(`Cannot record a dispute on "${note.findingId}" because it also has a state transition in this output`);
-    }
-    if (seenDisputeIds.has(note.findingId)) {
-      throw new Error(`Duplicate dispute note for finding "${note.findingId}"`);
-    }
-    seenDisputeIds.add(note.findingId);
-  }
-  // conflicts は他の決定「について」述べるメタ決定なので、単一決定の検査には
-  // 含めない（同じ finding が match されつつ conflict として記録されるのは正常）。
-  for (const conflict of managerOutput.conflicts) {
-    assertUniqueIds(conflict.findingIds, 'finding id');
   }
 }
 
@@ -442,7 +397,6 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
   ]));
   const knownFindingIds = new Set(previousById.keys());
   const currentRawFindingsById = new Map(input.rawFindings.map((finding) => [finding.rawFindingId, finding]));
-  assertFindingIdsHaveSingleDecision(input.managerOutput);
   let nextId = input.previousLedger.nextId;
   const usedRawFindingIds = new Set<string>();
 

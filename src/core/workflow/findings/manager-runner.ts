@@ -7,7 +7,7 @@ import {
   parseReviewerRawFindings,
 } from './schemas.js';
 import { reconcileFindingLedger } from './reconciler.js';
-import { classifyRawFindingsMechanically, mergeFindingManagerOutputs } from './mechanical-classification.js';
+import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import {
   assembleManagerOutput,
   flattenManagerOutputToDecisions,
@@ -400,13 +400,22 @@ function describeRejections(assembly: AssembleManagerOutputResult): string[] {
     ...assembly.rejectedConflictDecisions.map((r) => (
       `conflictDecisions: conflict "${r.conflictId}" (${r.decision}) rejected: ${r.reason}`
     )),
+    ...assembly.rejectedCarriedConflicts.map((r) => (
+      `carriedConflicts: conflict "${r.conflictId}" (findings: ${r.findingIds.join(', ')}) rejected: ${r.reason}`
+    )),
   ];
 }
 
 function hasAnyRejection(assembly: AssembleManagerOutputResult): boolean {
+  // rejectedCarriedConflicts を含めても再問い合わせの発火条件は変わらない:
+  // carriedFindingOnlyConflicts を渡すのは保存直前の freshAssembly だけで、
+  // そこは retry しない経路（staleRejections として検証レポートに残すだけ）。
+  // 初回組み立て（firstAssembly / secondAssembly）は carried を渡さないため、
+  // この項が true になることはない。
   return assembly.rejectedRawDecisions.length > 0
     || assembly.rejectedDisputeDecisions.length > 0
-    || assembly.rejectedConflictDecisions.length > 0;
+    || assembly.rejectedConflictDecisions.length > 0
+    || assembly.rejectedCarriedConflicts.length > 0;
 }
 
 /** ラウンド1の採用分（不採用でなかった決定）だけを残す。ラウンド2の再問い合わせ結果と合成するために使う。 */
@@ -480,6 +489,11 @@ async function runManagerWithSemanticRetry(input: {
     // 1件も無いものを rejection にする（manager が rawDecisions: [] を返す等、
     // 契約を守らなかったケースを再問い合わせに乗せるため）。
     checkMissingDecisions: true,
+    // mechanicalOutput を渡し、merge → canonicalize 済みの出力を材料に
+    // waive/note・conflict の裁定まで assembleManagerOutput の中で完結させる
+    // （呼び出し元で別途 mergeFindingManagerOutputs するとその裁定が
+    // 機械分類の resolvedFindings を知らないまま行われてしまう）。
+    mechanicalOutput: input.mechanicalOutput,
   });
 
   const finalizeValidation = (managerOutput: FindingManagerOutput): FindingManagerValidationResult => (
@@ -494,7 +508,7 @@ async function runManagerWithSemanticRetry(input: {
   );
 
   if (!hasAnyRejection(firstAssembly)) {
-    const managerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, firstAssembly.output);
+    const managerOutput = firstAssembly.output;
     return { managerOutput, validation: finalizeValidation(managerOutput), invalidAttempts: [] };
   }
 
@@ -531,13 +545,13 @@ async function runManagerWithSemanticRetry(input: {
     // （firstAssembly と同じ理由）。stillRejected → forceUnresolvedRawDecisionsAsNew
     // の既存経路に自然に乗る。
     checkMissingDecisions: true,
+    mechanicalOutput: input.mechanicalOutput,
   });
 
   const stillRejected = hasAnyRejection(secondAssembly);
-  const finalAssembledOutput = stillRejected
+  const managerOutput = stillRejected
     ? forceUnresolvedRawDecisionsAsNew(secondAssembly, input.residualRawFindings)
     : secondAssembly.output;
-  const managerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, finalAssembledOutput);
 
   return {
     managerOutput,
@@ -654,10 +668,15 @@ export async function runFindingManagerForStep(
   // 直列化区間の中で LLM を呼び直すと排他の意味が失われるため）。
   let staleRejections: string[] = [];
   const nextLedger = await input.ledgerStore.updateLedger((freshLedger) => {
+    // waive 変換由来の conflict（rawFindingIds: []）は raw decisions へ復元できない
+    // ため、flatten が持ち越し分として返す。渡し忘れると初回組み立てで作った
+    // conflict がこの往復で消える。
+    const { decisions, carriedFindingOnlyConflicts } = flattenManagerOutputToDecisions(managerOutput);
     const freshAssembly = assembleManagerOutput({
       previousLedger: freshLedger,
       residualRawFindings: rawFindings,
-      decisions: flattenManagerOutputToDecisions(managerOutput),
+      decisions,
+      carriedFindingOnlyConflicts,
       priorStepResponseText: input.priorStepResponseText,
     });
     staleRejections = describeRejections(freshAssembly);

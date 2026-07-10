@@ -301,12 +301,20 @@ describe('validateFindingManagerOutput', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('should reject a waive combined with another decision for the same finding', () => {
+  // waive は「修正せずにブロッキング対象から外す」決定なので、finding を閉じる
+  // 他の決定（resolve / reopen）とは併存できない。match との併存は別扱い
+  // （修正不能な指摘は再観測され続けるため。ALLOWED_DECISION_PAIRS 参照）。
+  it('should reject a waive combined with a resolution for the same finding', () => {
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),
-      rawFindings: [makeRawFinding()],
+      rawFindings: [makeRawFinding(), confirmation],
       managerOutput: makeManagerOutput({
-        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirmation'], evidence: 'Fixed.' }],
         waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
       }),
       priorStepResponseText: CLAIM,
@@ -458,15 +466,17 @@ describe('validateFindingManagerOutput', () => {
       }),
     });
 
+    // decision-rules.ts の判定は finding ごとの決定カテゴリ集合で行うため、
+    // 発生源（何番目の決定か）ではなくカテゴリ名でメッセージが決まる。
     expect(result).toEqual({
       ok: false,
       errors: [
-        'Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]',
+        'Finding id "F-0001" appears in multiple manager decisions: matches and resolvedFindings',
       ],
     });
   });
 
-  // conflicts は他の決定「について」述べるメタ決定。ここを単一決定検査に含めると、
+  // conflicts は他の決定「について」述べるメタ決定。match と併存できないと、
   // 「match と resolve が衝突している」ことを記録する行為自体が違反になり、
   // 矛盾した観測を台帳へ書けなくなる（実測: 台帳が凍り reviewers ↔ fix が回り続けた）。
   it('should accept a findingId referenced by both a match and a conflict', () => {
@@ -480,6 +490,125 @@ describe('validateFindingManagerOutput', () => {
     });
 
     expect(result).toEqual({ ok: true });
+  });
+
+  // closed だった finding の再発報告と、それと矛盾する修正確認が同じラウンドで
+  // 届く場合。reopen して conflict を active に戻すのは安全（open と conflict の
+  // 両方がゲートを塞ぐため、ゲート開放の危険もない）。
+  it('should accept a conflict on a finding that is also reopened in the same output', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'resolved';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'], evidence: 'Reappeared.' }],
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: [], description: 'Conflicting decision.' }],
+      }),
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  // conflicts だけを付けて finding を closed のまま残すと、`findings.open.count == 0`
+  // しか見ないワークフローではゲートが開く。同じ出力で reopen していない限り拒否する。
+  it('should reject a conflict referencing a finding that is closed before this round without reopening it', () => {
+    const ledger = makeLedger();
+    ledger.findings[0]!.status = 'waived';
+    const result = validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: [], description: 'Reviewer still reports this waived finding.' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'conflicts[0] references finding "F-0001" with status "waived"; the same output must reopen it',
+    );
+  });
+
+  // finding を閉じた上で conflict を active のまま残すと、conflict の裁定結果が
+  // finding の状態へ反映されないままゲートが開く。match との併存だけを許す。
+  it('should reject a conflict on a finding that is also resolved', () => {
+    const confirmation = makeRawFinding({
+      rawFindingId: 'raw-confirmation',
+      kind: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding(), confirmation],
+      managerOutput: makeManagerOutput({
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirmation'], evidence: 'Fixed.' }],
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: ['raw-current'], description: 'Conflicting decision.' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: resolvedFindings and conflicts',
+    );
+  });
+
+  it('should reject a conflict on a finding that is also waived', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen contract', evidence: 'src/types.ts:94' }],
+        conflicts: [{ findingIds: ['F-0001'], rawFindingIds: ['raw-current'], description: 'Conflicting decision.' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/types.ts:94',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: waivedFindings and conflicts',
+    );
+  });
+
+  // reconciler の conflict ID は finding ID 由来で1つに潰れ、後の description が
+  // 前の description を上書きする。同じ finding を指す conflict は1件だけにする。
+  it('should reject two conflicts referencing the same finding', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        conflicts: [
+          { findingIds: ['F-0001'], rawFindingIds: ['raw-current'], description: 'First.' },
+          { findingIds: ['F-0001'], rawFindingIds: [], description: 'Second.' },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: conflicts and conflicts',
+    );
+  });
+
+  // match + waive はもう有効な組み合わせではない: decision-assembly.ts の
+  // assembleManagerOutput が、レビュアーが再観測している（match された）finding
+  // への waive を conflict + disputeNote へ変換するため、正しく組み立てられた
+  // 出力に match と waive が同時に現れることはない。ここ（最終防衛線）に両方が
+  // 残っている場合は不変条件違反として拒否する。
+  it('should reject a findingId referenced by both a match and a waiver', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [makeRawFinding()],
+      managerOutput: makeManagerOutput({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-current'] }],
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen contract', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/types.ts:94',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors).toContain(
+      'Finding id "F-0001" appears in multiple manager decisions: matches and waivedFindings',
+    );
   });
 
   it('should reject unknown rawFindingId references in current raw-finding decisions', () => {

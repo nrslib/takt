@@ -735,7 +735,10 @@ describe('reconcileFindingLedger', () => {
           timestamp: '2026-06-13T01:00:00.000Z',
         },
       }),
-    ).toThrow('Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]');
+    // decision-rules.ts の判定は finding ごとの決定カテゴリ集合で行うため、
+    // 発生源（何番目の決定か）ではなくカテゴリ名（matches/resolvedFindings）で
+    // メッセージが決まる。
+    ).toThrow('Finding id "F-0001" appears in multiple manager decisions: matches and resolvedFindings');
   });
 
   it('should mark an existing open finding as resolved via a current resolution confirmation', () => {

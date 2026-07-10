@@ -1,3 +1,4 @@
+import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import type { FindingLedger, FindingLedgerEntry, FindingManagerOutput, RawFinding } from './types.js';
 
 /**
@@ -137,11 +138,19 @@ function mergeByFindingId<T extends { findingId: string; rawFindingIds: string[]
 }
 
 /** 機械分類の結果と LLM manager の結果を統合する。findingId 重複は rawFindingIds を合併する。 */
+/**
+ * 機械分類の結果と LLM 判断の組み立て結果を1つの出力へ束ねる。
+ *
+ * 束ねた直後に canonicalize する。resolution_confirmation は機械分類が処理して
+ * resolvedFindings に入り、同じ finding への残存指摘は LLM 側の matches に入るため、
+ * 「1 finding = 1 決定」を破る衝突はこの merge で初めて生まれる（実測: takt-bench
+ * v3-r2 の台帳凍結）。組み立て側だけを直しても本番経路は直らない。
+ */
 export function mergeFindingManagerOutputs(
   base: FindingManagerOutput,
   extra: FindingManagerOutput,
 ): FindingManagerOutput {
-  return {
+  return canonicalizeFindingManagerOutput({
     matches: mergeByFindingId(base.matches, extra.matches),
     newFindings: [...base.newFindings, ...extra.newFindings],
     resolvedFindings: mergeByFindingId(base.resolvedFindings, extra.resolvedFindings),
@@ -150,5 +159,5 @@ export function mergeFindingManagerOutputs(
     resolvedConflicts: [...base.resolvedConflicts, ...extra.resolvedConflicts],
     waivedFindings: [...base.waivedFindings, ...extra.waivedFindings],
     disputeNotes: [...base.disputeNotes, ...extra.disputeNotes],
-  };
+  });
 }

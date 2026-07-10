@@ -103,13 +103,15 @@ describe('WorkflowEngine structured caller defaults', () => {
   });
 
   async function runInvalidManagerRetryFailureWithRules(rules: WorkflowRule[]) {
-    // F-0001 は open で開始する。今ラウンドで confirm-1（resolution_confirmation）が
-    // targetFindingId 経由で機械的に resolved へ分類される一方、manager は別の raw
-    // （raw-other、同じ root cause の再報告）を根拠に同じ F-0001 を matches へ
-    // 対応づける。組み立て単体では正当（decision-assembly は previousLedger 上の
-    // F-0001 がまだ open であることしか見ない）だが、機械分類と統合すると
-    // 同一 finding が matches と resolvedFindings の両方に現れ、最終防衛線
-    // （validateFindingManagerOutput）でしか検出できない invalid_manager_output になる。
+    // F-0001 は前ラウンドで既に resolved（closed）。今ラウンドで reviewer が
+    // 別の raw（raw-recurrence, issue kind）を報告し、manager がそれを根拠に
+    // 同じ F-0001 へ conflict を立てるが、reopen はしない。decision-assembly の
+    // 'conflict' raw decision は finding の status を一切見ない（match/resolved/
+    // reopened と違い状態遷移ではなく「他決定について述べるメタ決定」だから）ため
+    // 個別には不採用にならず、再問い合わせは起きない。最終防衛線
+    // （validateFindingManagerOutput の validateConflictStatusInvariant）だけが
+    // 「closed な finding を conflict が参照するなら同じ出力で reopen していなければ
+    // ならない」を検出できる、decision-assembly では塞げない cross-layer の穴。
     const initialLedger = {
       version: 1,
       workflowName: 'finding-manager-rule-variant-test',
@@ -118,8 +120,8 @@ describe('WorkflowEngine structured caller defaults', () => {
       findings: [
         {
           id: 'F-0001',
-          status: 'open',
-          lifecycle: 'new',
+          status: 'resolved',
+          lifecycle: 'resolved',
           severity: 'high',
           title: 'Existing issue',
           location: 'src/a.ts:10',
@@ -127,6 +129,8 @@ describe('WorkflowEngine structured caller defaults', () => {
           rawFindingIds: ['raw-existing'],
           firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
           lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          resolvedAt: '2026-06-13T00:15:00.000Z',
+          resolvedEvidence: 'Fixed in a previous round.',
         },
       ],
       rawFindings: [
@@ -156,30 +160,19 @@ describe('WorkflowEngine structured caller defaults', () => {
         return {
           persona: 'architecture-reviewer',
           status: 'done',
-          content: 'Two findings reported.',
+          content: 'One finding reported.',
           structuredOutput: {
             rawFindings: [
               {
-                rawFindingId: 'confirm-1',
-                kind: 'resolution_confirmation',
-                targetFindingId: 'F-0001',
-                familyTag: 'bug',
-                severity: 'high',
-                title: 'Existing issue',
-                location: 'src/a.ts:10',
-                description: 'Verified the fix at src/a.ts:10.',
-                suggestion: '',
-              },
-              {
-                rawFindingId: 'raw-other',
+                rawFindingId: 'raw-recurrence',
                 kind: 'issue',
                 targetFindingId: '',
                 familyTag: 'bug',
                 severity: 'medium',
-                title: 'Same root cause elsewhere',
+                title: 'Possible recurrence',
                 location: 'src/other.ts:5',
-                description: 'A different symptom of the same bug.',
-                suggestion: 'Investigate the shared root cause.',
+                description: 'Looks like the same bug resurfaced elsewhere.',
+                suggestion: 'Re-check the previous fix.',
               },
             ],
           },
@@ -191,7 +184,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           systemPrompt: 'system',
           userInstruction: instruction,
         });
-        const residualRawId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-other/)?.[0] ?? '';
+        const residualRawId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-recurrence/)?.[0] ?? '';
         if (residualRawId.length === 0) {
           throw new Error(`expected normalized raw finding id in manager instruction: ${instruction}`);
         }
@@ -201,7 +194,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           content: 'manager output',
           structuredOutput: {
             rawDecisions: [
-              { rawFindingId: residualRawId, decision: 'same', findingId: 'F-0001', evidence: 'Same root cause as F-0001.' },
+              { rawFindingId: residualRawId, decision: 'conflict', findingId: 'F-0001', evidence: 'Contradicts the prior resolution of F-0001.' },
             ],
             disputeDecisions: [],
             conflictDecisions: [],
@@ -1972,17 +1965,26 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
   });
 
-  it('manager 決定と機械分類の結果が矛盾するなら retry を挟まず ledger 非更新で制御失敗を返す', async () => {
-    // F-0001 は open で開始する。confirm-1（resolution_confirmation）は機械分類で
-    // F-0001 を resolved に落とす一方、manager は別の raw（raw-other）を根拠に
-    // 同じ F-0001 を matches へ対応づける。decision-assembly 単体では正当（
-    // previousLedger 上の F-0001 はまだ open）だが、機械分類との統合後は同一
-    // finding が matches と resolvedFindings の両方に現れ、最終防衛線
-    // （validateFindingManagerOutput）でしか検出できない。decision-assembly 自体は
-    // 何も不採用にしていないため、再問い合わせの対象がなく retry は起きない。
+  // 正方向テスト（旧: 上の negative ケースと全く同じ入力だった）。
+  // F-0001 は open で開始する。confirm-1（resolution_confirmation）は機械分類で
+  // F-0001 を resolved に落とす一方、manager は別の raw（raw-other）を根拠に
+  // 同じ F-0001 へ conflict を立てる。runFindingManagerForStep が
+  // assembleManagerOutput に mechanicalOutput を渡すようになったことで、
+  // merge → canonicalize が LLM 呼び出しの直後・裁定より前に走るようになり、
+  // 「match/resolve と conflict の衝突」を canonicalize が畳んで
+  // 「finding は open のまま、conflict だけが active で残る」正当な出力になる。
+  // 以前はこの canonicalize が manager-runner.ts 側の遅い merge でしか走らず、
+  // decision-assembly 自身は機械分類の結果を知らないまま出力を確定させて
+  // いたため、最終防衛線（validateFindingManagerOutput）でしか検出できない
+  // matches+resolvedFindings 衝突として invalid_manager_output になっていた
+  // （このテストは元々その負のケースだった。直後の "retry を挟まず..." 系
+  // テストは、decision-assembly が個々には拒否できない別の cross-layer の穴
+  // （closed な finding を conflict が参照するのに reopen しない）へ書き換えて
+  // 負のケースとしての検証を継続している）。
+  it('manager 決定と機械分類の結果が canonicalize で畳めるなら ledger を更新して conflict を記録する', async () => {
     const initialLedger = {
       version: 1,
-      workflowName: 'finding-manager-retry-failure-test',
+      workflowName: 'finding-manager-canonicalize-merge-test',
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
       findings: [
@@ -2067,7 +2069,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           content: 'manager output',
           structuredOutput: {
             rawDecisions: [
-              { rawFindingId: residualRawId, decision: 'same', findingId: 'F-0001', evidence: 'Same root cause as F-0001.' },
+              { rawFindingId: residualRawId, decision: 'conflict', findingId: 'F-0001', evidence: 'Reviewers disagree about F-0001.' },
             ],
             disputeDecisions: [],
             conflictDecisions: [],
@@ -2077,7 +2079,191 @@ describe('WorkflowEngine structured caller defaults', () => {
       });
 
     const config: WorkflowConfig = {
-      name: 'finding-manager-retry-failure-test',
+      name: 'finding-manager-canonicalize-merge-test',
+      maxSteps: 3,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'architecture-review',
+              persona: 'architecture-reviewer',
+              instruction: 'Review architecture.',
+              rules: [makeRule('when(true)', 'COMPLETE')],
+            }),
+          ],
+          // findings.open.bySeverity.high > 0 のようなルールを先に置くと、F-0001
+          // が open のまま（severity high）残ること自体で 'fix' に流れてしまい、
+          // conflicts.count のルールが選ばれたことを検証できなくなる。ここでは
+          // conflicts.count > 0 だけを見るルールにする。
+          rules: [
+            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
+            makeRule('when(findings.open.count == 0)', 'COMPLETE'),
+          ],
+        }),
+        makeStep({
+          name: 'fix',
+          persona: 'coder',
+          instruction: 'Fix.',
+          rules: [makeRule('when(true)', 'COMPLETE')],
+        }),
+      ],
+    };
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    engine.on('findings:ledger', ledgerUpdated);
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReasons.push(reason);
+    });
+
+    const result = await engine.run();
+
+    expect(abortReasons).toEqual([]);
+    expect(result.status).toBe('completed');
+    expect(result.returnValue).toBe('need_replan');
+    // findings.conflicts.count > 0 のルール（index 0）が通常の条件評価で選ばれる
+    // （'auto_select' は when() の確定的な一致にも使われるラベルであり、
+    // invalid_manager_output の迂回選択（selectInvalidManagerOutputRuleIndex）
+    // 専用ではない。ここでの区別点は validation report が作られていないことと
+    // manager 呼び出しが1回だけであることで担保する）。
+    expect(result.stepOutputs.get('reviewers')?.matchedRuleIndex).toBe(0);
+    expect(result.stepOutputs.has('fix')).toBe(false);
+
+    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+      findings: Array<{ id: string; status: string }>;
+      conflicts: Array<{ status: string; findingIds: string[] }>;
+    };
+    const f0001 = ledger.findings.find((finding) => finding.id === 'F-0001');
+    expect(f0001?.status).toBe('open');
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]?.status).toBe('active');
+    expect(ledger.conflicts[0]?.findingIds).toEqual(['F-0001']);
+
+    // 検証に一度も失敗していないため report ファイルは作られない。
+    const validationReportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'findings-manager-validation.reviewers.json');
+    expect(existsSync(validationReportPath)).toBe(false);
+
+    expect(ledgerUpdated).toHaveBeenCalledTimes(1);
+    // reviewer 1回 + manager 1回（不採用が無いため retry なし）。
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  // match + waive の本番 updateLedger 往復。waive 変換で作る conflict は
+  // rawFindingIds が空で、manager-runner.ts は保存直前に必ず flatten →
+  // freshAssembly を通すため、持ち越し（carriedFindingOnlyConflicts）が無いと
+  // 初回組み立てで作った conflict が保存時に消える（codex が実行で再現。
+  // finding は open のままだが conflicts.count > 0 のルールが発火しなかった）。
+  // 実 FindingLedgerStore を通す経路で、保存後の台帳に active conflict が
+  // 残ることを固定する。
+  it('match+waive の waive は本番の保存往復を経ても conflict + dispute note として台帳に残る', async () => {
+    const initialLedger = {
+      version: 1,
+      workflowName: 'finding-manager-waive-roundtrip-test',
+      nextId: 2,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/a.ts:10',
+          reviewers: ['architecture-review'],
+          rawFindingIds: ['raw-existing'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+      rawFindings: [
+        {
+          rawFindingId: 'raw-existing',
+          stepName: 'reviewers',
+          reviewer: 'architecture-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/a.ts:10',
+          description: 'Existing issue body.',
+        },
+      ],
+      conflicts: [],
+    };
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings'), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(initialLedger, null, 2), 'utf-8');
+    const ledgerUpdated = vi.fn();
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        return {
+          persona: 'architecture-reviewer',
+          status: 'done',
+          content: 'One finding reported.',
+          structuredOutput: {
+            rawFindings: [
+              // location を F-0001（src/a.ts:10）とずらし、機械分類に消費させず
+              // residual として manager へ渡す。
+              {
+                rawFindingId: 'raw-still',
+                kind: 'issue',
+                targetFindingId: '',
+                familyTag: 'bug',
+                severity: 'high',
+                title: 'Existing issue persists',
+                location: 'src/a.ts:22',
+                description: 'The same defect remains at another line.',
+                suggestion: '',
+              },
+            ],
+          },
+          timestamp: new Date('2026-06-13T00:00:01.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (_persona, instruction) => {
+        const residualRawId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-still/)?.[0] ?? '';
+        if (residualRawId.length === 0) {
+          throw new Error(`expected normalized raw finding id in manager instruction: ${instruction}`);
+        }
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: 'manager output',
+          structuredOutput: {
+            rawDecisions: [
+              { rawFindingId: residualRawId, decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' },
+            ],
+            disputeDecisions: [
+              { findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/types.ts:94' },
+            ],
+            conflictDecisions: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      });
+
+    const config: WorkflowConfig = {
+      name: 'finding-manager-waive-roundtrip-test',
       maxSteps: 3,
       initialStep: 'reviewers',
       findingContract: {
@@ -2103,15 +2289,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             }),
           ],
           rules: [
-            makeRule('when(findings.open.bySeverity.high > 0)', 'fix'),
-            makeRule('ai("Invalid manager output can be fixed by code changes")', 'fix', {
-              isAiCondition: true,
-              aiConditionText: 'Invalid manager output can be fixed by code changes',
-            }),
-            {
-              condition: 'when(findings.conflicts.count > 0)',
-              returnValue: 'need_replan',
-            },
+            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
+            makeRule('when(findings.open.count == 0)', 'COMPLETE'),
           ],
         }),
         makeStep({
@@ -2122,11 +2301,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         }),
       ],
     };
-    const reviewersStep = config.steps[0];
-    if (!reviewersStep) {
-      throw new Error('reviewers step is required');
-    }
-    const originalReviewerRules = JSON.stringify(reviewersStep.rules);
     const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
@@ -2141,30 +2315,32 @@ describe('WorkflowEngine structured caller defaults', () => {
 
     const result = await engine.run();
 
-    const validationReportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'findings-manager-validation.reviewers.json');
-    const validationReport = JSON.parse(readFileSync(validationReportPath, 'utf-8')) as {
-      retryCount: number;
-      ledgerUpdated: boolean;
-      finalErrors: string[];
-      attempts: Array<{ managerOutput: unknown; validationErrors: string[] }>;
-    };
     expect(abortReasons).toEqual([]);
-    expect(result.stepOutputs.get('reviewers')?.matchedRuleIndex).toBe(2);
-    expect(result.stepOutputs.get('reviewers')?.matchedRuleMethod).toBe('auto_select');
-    expect(result.stepOutputs.has('fix')).toBe(false);
     expect(result.status).toBe('completed');
+    // finding は open のまま + active conflict が残るため conflicts.count > 0 が選ばれる。
     expect(result.returnValue).toBe('need_replan');
-    expect(JSON.stringify(reviewersStep.rules)).toBe(originalReviewerRules);
-    expect(JSON.parse(readFileSync(ledgerPath, 'utf-8'))).toEqual(initialLedger);
-    expect(validationReport).toEqual(expect.objectContaining({
-      retryCount: 1,
-      ledgerUpdated: false,
-      finalErrors: ['Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]'],
-    }));
-    // decision-assembly はこの矛盾を検出できない（機械分類の結果を知らない）ため、
-    // 不採用が発生せず再問い合わせは行われない。attempts は空のまま。
-    expect(validationReport.attempts).toEqual([]);
-    expect(ledgerUpdated).not.toHaveBeenCalled();
+    expect(result.stepOutputs.get('reviewers')?.matchedRuleIndex).toBe(0);
+    expect(result.stepOutputs.has('fix')).toBe(false);
+
+    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+      findings: Array<{ id: string; status: string; waivers?: unknown[]; disputes?: unknown[] }>;
+      conflicts: Array<{ status: string; findingIds: string[]; rawFindingIds: string[] }>;
+    };
+    const f0001 = ledger.findings.find((finding) => finding.id === 'F-0001');
+    // waive は採用されず open のまま。異議は disputes として記録される。
+    expect(f0001?.status).toBe('open');
+    expect(f0001?.waivers).toBeUndefined();
+    expect(f0001?.disputes).toHaveLength(1);
+    // 保存直前の flatten → freshAssembly 往復を経ても conflict が消えない。
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]?.status).toBe('active');
+    expect(ledger.conflicts[0]?.findingIds).toEqual(['F-0001']);
+    expect(ledger.conflicts[0]?.rawFindingIds).toEqual([]);
+
+    const validationReportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'findings-manager-validation.reviewers.json');
+    expect(existsSync(validationReportPath)).toBe(false);
+
+    expect(ledgerUpdated).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
