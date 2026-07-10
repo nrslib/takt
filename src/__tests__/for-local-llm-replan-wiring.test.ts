@@ -77,7 +77,18 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     const antipatternNexts = antipatternMonitor!.judge!.rules.map((rule) => rule.next);
     expect(antipatternNexts).toEqual(['ai-antipattern-review-1st', 'reviewers']);
 
-    for (const monitor of monitors.filter((m) => !m.cycle.includes('plan') && !m.cycle.includes('ai-antipattern-review-1st'))) {
+    // ai-antipattern-fix ⇄ ai-antipattern-no-fix の相互遷移（fix の rules に
+    // next: ai-antipattern-no-fix が2本、no-fix の rules に next: ai-antipattern-fix
+    // が1本）は実在する。この判定すれ違いが無監視だと max_steps まで回るため、
+    // review-1st⇄fix と同じ threshold・judge 構成で監視する（PR #1017 CodeRabbit 指摘）。
+    const arbitrationMonitor = monitors.find((monitor) => monitor.cycle.includes('ai-antipattern-no-fix'));
+    expect(arbitrationMonitor).toBeDefined();
+    expect(arbitrationMonitor!.cycle).toEqual(['ai-antipattern-fix', 'ai-antipattern-no-fix']);
+    expect(arbitrationMonitor!.threshold).toBe(antipatternMonitor!.threshold);
+    expect(arbitrationMonitor!.judge!.persona).toBe('supervisor');
+    expect(arbitrationMonitor!.judge!.rules.map((rule) => rule.next)).toEqual(['ai-antipattern-review-1st', 'reviewers']);
+
+    for (const monitor of monitors.filter((m) => !m.cycle.includes('plan') && !m.cycle.includes('ai-antipattern-review-1st') && !m.cycle.includes('ai-antipattern-no-fix'))) {
       const nexts = monitor.judge!.rules.map((rule) => rule.next);
       expect(nexts).toContain('plan');
       expect(nexts[nexts.length - 1]).toBe('ABORT');

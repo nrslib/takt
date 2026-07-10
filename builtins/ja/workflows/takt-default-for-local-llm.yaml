@@ -30,6 +30,18 @@ loop_monitors:
         - condition: 非生産的（改善なし）
           next: reviewers
   - cycle:
+      - ai-antipattern-fix
+      - ai-antipattern-no-fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-ai-antipattern-fix
+      rules:
+        - condition: 健全（進捗あり）
+          next: ai-antipattern-review-1st
+        - condition: 非生産的（改善なし）
+          next: reviewers
+  - cycle:
       - plan
       - write_tests
       - implement
