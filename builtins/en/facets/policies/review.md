@@ -122,6 +122,7 @@ If tool output is unreadable, re-read using a reliable method before making any 
 | Output contains garbled text or encoding anomalies | Recognize the corruption, then re-read using an alternative method (open the file directly, specify line numbers for the target section) before judging |
 | Search command did not find the target code | Read the specific lines of the file directly to confirm absence before raising an issue. Search failure does not equal code absence |
 | Re-raising a prior finding without re-checking actual code | Must read current code before marking as persists. Do not re-raise from memory of the prior review |
+| A verification task did not actually run the target work due to caching, skipping, or missing configuration | Do not count it as passing evidence. Record what was actually executed separately from what remains unverified |
 
 ## Writing Specific Feedback
 
@@ -282,7 +283,7 @@ The review target is the entire cumulative diff from the task's starting point (
 
 - In the fix ↔ review loop, recompute the diff from the base every time and evaluate the whole. Do not move the baseline to the latest fix
 - The base is the merge-base with the integration branch, or the starting point recorded in `plan` / `order`. Do not treat only the "changes" section of `Previous Response` as the diff
-- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile against them every time
+- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests, environment-dependent tool-generated diffs — version stamps, re-serialization, order-only rewrites) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile against them every time and confirm their causal link to the request
 - Track finding states (new / persists / resolved) on a fixed baseline. Do not narrow the diff scope and conclude "it is no longer in the diff"
 
 ### Referring to Primary Sources
