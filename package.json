@@ -12,7 +12,7 @@
     "takt-mcp": "./dist/app/mcp/index.js"
   },
   "scripts": {
-    "build": "tsc && mkdir -p dist/shared/prompts/en dist/shared/prompts/ja dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
+    "build": "tsc && mkdir -p dist/shared/prompts/en/parts dist/shared/prompts/ja/parts dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/prompts/en/parts/*.md dist/shared/prompts/en/parts/ && cp src/shared/prompts/ja/parts/*.md dist/shared/prompts/ja/parts/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
     "watch": "tsc --watch",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",

@@ -4,6 +4,8 @@ When no ledger is available, use reports in the Report Directory and fix the iss
 **Fix principles:**
 - When a finding includes a "suggested fix", follow it rather than inventing your own workaround
 - Fix the target code directly. Do not deflect findings by adding tests or documentation instead
+- When a ledger is available: if a finding contradicts the current code, or cannot be fixed with the operations you are allowed to perform, do not pretend to fix it. State a formal dispute under `## Disputed Findings` with evidence (follow the format in the Finding Contract instructions). A dispute is pending adjudication — it does not mean resolved or waived. The finding stays open until the findings manager accepts the dispute. Critical findings are never cleared by dispute
+- When no ledger is available, the dispute mechanism does not exist, so do not use it. For findings you cannot fix, do not claim you fixed them; note them as blockers in the work results
 
 **Report reference policy:**
 - When a parseable Finding Contract ledger summary / `findings-ledger.json` is available, use the consolidated ledger as the single authoritative source for deciding what to fix.
@@ -14,14 +16,16 @@ When no ledger is available, use reports in the Report Directory and fix the iss
 - Past iteration reports are saved as `{filename}.{timestamp}` in the same directory (e.g., `architect-review.md.20260304T123456Z`). For each report, run Glob with a `{report-name}.*` pattern, read up to 2 files in descending timestamp order, and understand persists / reopened trends before starting fixes.
 
 **Completion criteria (all must be satisfied):**
-- All open findings in this iteration (`new` / `persists` / `reopened`) have been fixed
-- Potential occurrences of the same `family_tag` have been fixed simultaneously (no partial fixes that cause recurrence)
-- At least one regression test per `family_tag` has been added (mandatory for config-contract and boundary-check findings)
+- When a ledger is available: every open finding in this iteration (`new` / `persists` / `reopened`) has been either fixed or disputed under `## Disputed Findings` with evidence. These are the only two valid outcomes; leave no finding in neither state
+- When no ledger is available: every finding you could fix has been fixed, and findings you could not fix are noted as blockers in the work results rather than claimed as fixed
+- For findings you fixed, potential occurrences of the same `family_tag` have been fixed simultaneously (no partial fixes that cause recurrence)
+- For findings you fixed where the code defect can be verified by an automated test at the appropriate layer, at least one regression test per `family_tag` has been added (mandatory for config-contract and boundary-check findings). When a meaningful automated test cannot be created, state the reason and the verification steps taken (commands run and results) in the work results. Do not satisfy this criterion with a meta-test such as asserting a file exists. Do not write tests for findings you disputed
 - Findings with the same `family_tag` from multiple reviewers have been merged and addressed as one fix
 
 **Important**: After fixing, run the build (type check) and tests.
 
 **Required output (include headings)**
+If you disputed any findings, include `## Disputed Findings` (follow the format in the Finding Contract instructions).
 ## Work results
 - {Summary of actions taken}
 ## Changes made

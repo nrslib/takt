@@ -217,7 +217,7 @@ export class StepExecutor {
       return instruction;
     }
 
-    return loadTemplate('structured_json_schema_instruction', 'en', {
+    return loadTemplate('parts/structured_json_schema_instruction', 'en', {
       instruction,
       schemaJson: JSON.stringify(step.structuredOutput.schema, null, 2),
     });

@@ -5,6 +5,7 @@
  */
 
 import type { AgentResponse, FallbackContext, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
+import { loadTemplate } from '../../../shared/prompts/index.js';
 
 export interface FindingContractInstructionContext {
   ledgerCopyPath: string;
@@ -105,6 +106,18 @@ export function buildEditRule(edit: boolean | undefined, language: Language): st
 
 type GitRulePhase = 'phase1' | 'phase2';
 
+/**
+ * git 操作の禁止ルール。文面は src/shared/prompts/{en,ja}/parts/git_rules.md にある。
+ *
+ * phase1 だけに載る「index の状態を根拠に指摘を立てるな」は、隣の「git add を実行するな」
+ * が**行為**の禁止でしかなく、指摘を立てる**判断**を禁じていなかったために足した（#1012）。
+ * TAKT が stage/commit を管理する実行では、実際にステージするのはワークフロー成功後の
+ * stageAndCommit() だけなので、「未追跡だからコミットせよ」という指摘はそれ自身が
+ * ブロックしている成功に依存し、coder には構造的に閉じられない。
+ *
+ * 禁止は index の状態に限る。.gitignore の誤設定や意図しない削除など、git の状態が
+ * 正当な証拠になる場合まで潰さない。
+ */
 export function buildGitRules(
   allowGitCommit: boolean | undefined,
   language: Language,
@@ -113,24 +126,5 @@ export function buildGitRules(
   if (allowGitCommit === true) {
     return '';
   }
-
-  if (language === 'ja') {
-    const rules = [
-      '- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
-      '- **git push を実行しないでください。** プッシュもシステムが自動で行います。',
-    ];
-    if (phase === 'phase1') {
-      rules.push('- **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。');
-    }
-    return rules.join('\n');
-  }
-
-  const rules = [
-    '- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
-    '- **Do NOT run git push.** Pushes are also handled automatically by the system.',
-  ];
-  if (phase === 'phase1') {
-    rules.push('- **Do NOT run git add.** Staging is also handled automatically by the system. Untracked files (`??`) are normal.');
-  }
-  return rules.join('\n');
+  return loadTemplate('parts/git_rules', language, { isPhase1: phase === 'phase1' }).trimEnd();
 }
