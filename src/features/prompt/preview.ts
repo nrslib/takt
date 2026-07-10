@@ -26,8 +26,6 @@ import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
-type PreviewProviderResolution = ProviderModelResolutionContext;
-
 function printStepExecutionMetadata(step: WorkflowStep): void {
   if (step.sessionKey) {
     console.log(`Session key: ${sanitizeTerminalText(step.sessionKey)}`);
@@ -44,7 +42,7 @@ function formatConfiguredValue(value: string | undefined): string {
   return value === undefined ? 'not configured' : sanitizeTerminalText(value);
 }
 
-function resolvePreviewProviderResolution(cwd: string): PreviewProviderResolution {
+function resolvePreviewProviderResolution(cwd: string): ProviderModelResolutionContext {
   return resolveWorkflowConfigValues(
     cwd,
     ['provider', 'model', 'personaProviders', 'providerRouting'],
@@ -53,7 +51,7 @@ function resolvePreviewProviderResolution(cwd: string): PreviewProviderResolutio
 
 function resolveFindingManagerProviderModel(
   config: WorkflowConfig,
-  resolution: PreviewProviderResolution,
+  resolution: ProviderModelResolutionContext,
 ): ReturnType<typeof resolveStepProviderModel> | undefined {
   if (!config.findingContract) {
     return undefined;
@@ -73,7 +71,7 @@ function resolveFindingManagerProviderModel(
 
 function printFindingContractMetadata(
   config: WorkflowConfig,
-  resolution: PreviewProviderResolution,
+  resolution: ProviderModelResolutionContext,
 ): void {
   const manager = config.findingContract?.manager;
   if (!manager) {
