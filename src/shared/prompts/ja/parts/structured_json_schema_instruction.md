@@ -6,7 +6,9 @@
 {{instruction}}
 
 次の JSON schema に一致する fenced JSON block をちょうど1つ返してください:
+
 ```json
 {{schemaJson}}
 ```
+
 JSON block の前後に余計なテキストを含めないでください。

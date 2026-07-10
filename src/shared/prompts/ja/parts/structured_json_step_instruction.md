@@ -6,7 +6,9 @@
 {{baseInstruction}}
 
 次の形の fenced JSON block をちょうど1つ返してください:
+
 ```json
 {"step": 1}
 ```
+
 JSON block の前後に余計なテキストを含めないでください。
