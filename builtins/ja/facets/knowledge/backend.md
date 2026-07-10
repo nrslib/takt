@@ -62,6 +62,7 @@ data class Order(
 | Controller から Repository を直接参照 | REJECT。UseCase層を経由 |
 | ドメイン層から外向きの依存（DB, HTTP等） | REJECT |
 | adapter 間の直接依存（inbound → outbound） | REJECT |
+| application / domain 層の型や識別子が、HTTP request/response、endpoint、status code 等のプロトコル固有の意味を持つ | REJECT。境界でユースケースの概念へ変換する。ドメイン上の語彙として Request 等を含むだけなら違反ではない |
 
 ## API層設計（Controller）
 

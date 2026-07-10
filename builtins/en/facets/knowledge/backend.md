@@ -62,6 +62,7 @@ data class Order(
 | Controller directly referencing Repository | REJECT. Must go through UseCase layer |
 | Outward dependencies from domain layer (DB, HTTP, etc.) | REJECT |
 | Direct dependencies between adapters (inbound → outbound) | REJECT |
+| Types or identifiers in the application/domain layer carry protocol-specific meaning such as HTTP request/response, endpoint, or status code | REJECT. Translate them into use-case concepts at the boundary. A domain term that happens to contain words such as Request is not itself a violation |
 
 ## API Layer Design (Controller)
 
