@@ -69,7 +69,15 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     expect(replanNexts).toContain('plan');
     expect(replanNexts[replanNexts.length - 1]).toBe('ABORT');
 
-    for (const monitor of monitors.filter((m) => !m.cycle.includes('plan'))) {
+    // ai-antipattern-review-1st ⇄ ai-antipattern-fix は行き詰まっても reviewers へ委ねる設計。
+    // ここは実装直後の自己レビューに過ぎず、plan への再計画や ABORT は
+    // 下流の reviewers/fix・reviewers/final-gate/fix 監視が最終的に担うため持たない。
+    const antipatternMonitor = monitors.find((monitor) => monitor.cycle.includes('ai-antipattern-review-1st'));
+    expect(antipatternMonitor).toBeDefined();
+    const antipatternNexts = antipatternMonitor!.judge!.rules.map((rule) => rule.next);
+    expect(antipatternNexts).toEqual(['ai-antipattern-review-1st', 'reviewers']);
+
+    for (const monitor of monitors.filter((m) => !m.cycle.includes('plan') && !m.cycle.includes('ai-antipattern-review-1st'))) {
       const nexts = monitor.judge!.rules.map((rule) => rule.next);
       expect(nexts).toContain('plan');
       expect(nexts[nexts.length - 1]).toBe('ABORT');

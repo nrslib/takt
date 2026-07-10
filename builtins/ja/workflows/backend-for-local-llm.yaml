@@ -18,6 +18,18 @@ workflow_config:
 
 loop_monitors:
   - cycle:
+      - ai-antipattern-review-1st
+      - ai-antipattern-fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-ai-antipattern-fix
+      rules:
+        - condition: 健全（進捗あり）
+          next: ai-antipattern-review-1st
+        - condition: 非生産的（改善なし）
+          next: reviewers
+  - cycle:
       - plan
       - write_tests
       - implement
@@ -140,9 +152,72 @@ steps:
     instruction: implement
     rules:
       - condition: 実装完了
-        next: reviewers
+        next: ai-antipattern-review-1st
       - condition: 実装を進められない（環境問題・情報不足）
         next: plan
+
+  # 本流の backend.yaml と同じ工程。観点別の並列レビューへ渡す前に、
+  # 実装直後の AI 特有の問題を自分で潰す。弱いモデルほどここで拾える。
+  - name: ai-antipattern-review-1st
+    tags:
+      - review
+    edit: false
+    persona: ai-antipattern-reviewer
+    policy:
+      - review
+      - ai-antipattern
+    provider_options:
+      extends: review-readonly
+    instruction: ai-antipattern-review
+    rules:
+      - condition: AI特有の問題なし
+        next: reviewers
+      - condition: AI特有の問題あり
+        next: ai-antipattern-fix
+    output_contracts:
+      report:
+        - name: ai-antipattern-review-1st.md
+          format: ai-antipattern-review
+
+  - name: ai-antipattern-fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    session: refresh
+    knowledge:
+      - backend
+      - architecture
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction: ai-antipattern-fix
+    rules:
+      - condition: AI問題の修正完了
+        next: ai-antipattern-review-1st
+      - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
+        next: ai-antipattern-no-fix
+      - condition: 判断できない、情報不足
+        next: ai-antipattern-no-fix
+
+  - name: ai-antipattern-no-fix
+    tags:
+      - review
+    edit: false
+    persona: architecture-reviewer
+    policy: review
+    provider_options:
+      extends: review-files
+    instruction: arbitrate
+    rules:
+      - condition: ai-antipattern-review-1stの指摘が妥当（修正すべき）
+        next: ai-antipattern-fix
+      - condition: ai-antipattern-fixの判断が妥当（修正不要）
+        next: reviewers
 
   - name: reviewers
     tags:
@@ -232,23 +307,66 @@ steps:
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
+  # takt-default（merge-readiness-final-gate サブワークフロー）と同じく並列にする。
+  # supervise が新規・継続・解消を突き合わせないと、merge-readiness が毎周同じ指摘を
+  # 新規として出し直し、reviewers → final-gate → fix が閉じない（実測: 56 周・9 時間）。
   - name: final-gate
     tags:
       - review
       - final-gate
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    pass_previous_response: false
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review-finding-contract
+    parallel:
+      - name: merge-readiness-review
+        tags:
+          - review
+          - final-gate
+          - merge-readiness
+        edit: false
+        persona: merge-readiness-reviewer
+        policy: review
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: review-merge-readiness
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: merge-readiness-review.md
+              format: merge-readiness-review-finding-contract
+
+      - name: supervise
+        tags:
+          - review
+          - final-gate
+          - supervise
+        edit: false
+        persona: supervisor
+        policy: review
+        knowledge:
+          - backend
+          - architecture
+        provider_options:
+          extends: review-readonly
+        pass_previous_response: false
+        instruction: supervise
+        rules:
+          - condition: approved
+          - condition: needs_fix
+          - condition: need_replan
+        output_contracts:
+          report:
+            - name: supervisor-validation.md
+              format: supervisor-validation
+            - name: summary.md
+              format: summary
+              use_judge: false
     rules:
-      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+      - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
-      - condition: needs_fix && when(findings.conflicts.count == 0)
+      - condition: any("need_replan") && when(findings.conflicts.count == 0)
+        next: plan
+      - condition: any("needs_fix") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix

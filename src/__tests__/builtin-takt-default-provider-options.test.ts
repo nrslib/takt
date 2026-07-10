@@ -316,17 +316,30 @@ describe('builtin takt-default provider_options refs', () => {
         aggregateGuardCondition: 'findings.conflicts.count == 0',
       });
 
+      // final-gate は merge-readiness-review と supervise の parallel。単独ステップだと
+      // Finding Contract の取り込みが並列親でしか動かず、merge-readiness の指摘が
+      // 台帳に載らず fix に届かない（reviewers と同じ aggregate 形の rules になる）。
       const mergeReadiness = normalized.steps.find((step) => step.name === 'final-gate');
       expect(mergeReadiness?.rules).toEqual([
-        // タグ && findings の複合は condition（タグ文）+ guardCondition に分解される
         expect.objectContaining({
-          condition: 'approved',
-          guardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+          isAggregateCondition: true,
+          aggregateType: 'all',
+          aggregateConditionText: 'approved',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
           next: 'COMPLETE',
         }),
         expect.objectContaining({
-          condition: 'needs_fix',
-          guardCondition: 'findings.conflicts.count == 0',
+          isAggregateCondition: true,
+          aggregateType: 'any',
+          aggregateConditionText: 'need_replan',
+          aggregateGuardCondition: 'findings.conflicts.count == 0',
+          next: 'plan',
+        }),
+        expect.objectContaining({
+          isAggregateCondition: true,
+          aggregateType: 'any',
+          aggregateConditionText: 'needs_fix',
+          aggregateGuardCondition: 'findings.conflicts.count == 0',
           next: 'fix',
         }),
         expect.objectContaining({
@@ -402,11 +415,12 @@ describe('builtin takt-default provider_options refs', () => {
         const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
         const gateRules = finalGate?.rules ?? [];
         expect(gateRules.map((rule) => rule.next), name).toEqual([
-          'COMPLETE', 'fix', 'fix', 'fix', 'ABORT',
+          'COMPLETE', 'plan', 'fix', 'fix', 'fix', 'ABORT',
         ]);
         expect(gateRules[0], name).toMatchObject({
-          condition: 'approved',
-          guardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+          isAggregateCondition: true,
+          aggregateType: 'all',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
         });
       }
     });
@@ -442,11 +456,12 @@ describe('builtin takt-default provider_options refs', () => {
         const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
         const gateRules = finalGate?.rules ?? [];
         expect(gateRules.map((rule) => rule.next), name).toEqual([
-          'COMPLETE', 'fix', 'fix', 'fix', 'ABORT',
+          'COMPLETE', 'plan', 'fix', 'fix', 'fix', 'ABORT',
         ]);
         expect(gateRules[0], name).toMatchObject({
-          condition: 'approved',
-          guardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+          isAggregateCondition: true,
+          aggregateType: 'all',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
         });
       }
     });
@@ -454,8 +469,9 @@ describe('builtin takt-default provider_options refs', () => {
       const workflow = loadBuiltinWorkflow(locale, 'takt-default-for-local-llm.yaml');
       const reviewers = workflow.steps?.find((step) => step.name === 'reviewers')?.parallel ?? [];
       const finalGate = workflow.steps?.find((step) => step.name === 'final-gate');
+      const mergeReadinessChild = finalGate?.parallel?.find((step) => step.name === 'merge-readiness-review');
       const reviewerFormats = outputFormats(reviewers);
-      const formats = outputFormats([...reviewers, ...(finalGate ? [finalGate] : [])]);
+      const formats = outputFormats([...reviewers, ...(mergeReadinessChild ? [mergeReadinessChild] : [])]);
 
       const expectedReviewerContracts = [
         'architecture-review',

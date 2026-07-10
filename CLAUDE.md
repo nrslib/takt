@@ -194,6 +194,20 @@ builtins/               Bundled defaults (read from dist/ at runtime)
 - Session logs at `.takt/logs/{sessionId}.jsonl`.
 - Use `--provider mock` to exercise the engine without calling a real API.
 
+### Observing what OpenCode actually sends
+
+OpenCode's default system prompt is not readable from the binary, and neither `session.messages()` nor `opencode debug agent <name>` exposes the prompt that reaches the model. The only reliable way is to point OpenCode at a local OpenAI-compatible endpoint and record the request body. `prompt-evals/sdk-prompt-capture.mjs` does this: it defines a `probe` provider via `config.provider.<id>.options.baseURL`, sends one prompt, and writes every captured request to JSON.
+
+Facts established with it (re-verify before relying on them — OpenCode changes):
+
+- The composed system prompt is `agent.prompt` (or OpenCode's default when `prompt` is omitted) **plus** the user's `~/.claude/CLAUDE.md`, **plus** the skills section, **plus** `config.instructions` files. All four are concatenated into a single `system` message.
+- `~/.claude/CLAUDE.md` is injected whether or not `agent.prompt` is set. For benchmarks this means the operator's personal config is part of the measured conditions.
+- `config.instructions: string[]` (typed on `Config` in `@opencode-ai/sdk/v2`) appends file contents near the end, after the CLAUDE.md block. It is a supported way to add guidance without replacing OpenCode's default prompt.
+- Each prompt triggers **two** provider requests: a thread-title generation call using `small_model`, then the real one. Capture tooling that grabs the first request measures the title generator.
+- TAKT's `opencode_agent_prompt.md` (~8.5k chars) is OpenCode's default (~9k chars, excluding injections) with two removals: the `ls`-tool few-shot examples become `{{listFilesMethod}}`, and the line recommending the `Task` tool is dropped. #892 originally deleted the whole `# Proactiveness` and `# Tool usage policy` sections to eliminate those references, which starved weak models of OpenCode's own tool guidance; both sections are restored. The prompt is English-only — `client.ts` always loads `'en'`, so there is no `ja` copy.
+
+Do not use `opencode run` (the CLI) as a measurement instrument. It intermittently hangs before session creation with no log output. TAKT uses `createOpencode` from the SDK, so the CLI's behavior says nothing about production.
+
 ## House conventions (from AGENTS.md / CONTRIBUTING.md)
 
 - Prefer simple code over defensive fallback-heavy logic.
