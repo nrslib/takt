@@ -214,4 +214,155 @@ describe('initializeSession assistant provider resolution', () => {
     expect(ctx.providerType).toBe('cursor');
     expect(ctx.model).toBeUndefined();
   });
+
+  // REQ-1011-1: instruct persona routes through takt_providers.assistant
+  it('should resolve takt_providers.assistant for instruct persona when top-level provider differs', () => {
+    // Given: top-level cursor + assistant claude-sdk (Issue #1011 scenario)
+    mockResolveConfigValues.mockReturnValue({
+      language: 'en',
+      provider: 'cursor',
+      model: 'composer-2.5',
+    });
+    mockResolveAssistantConfigLayers.mockReturnValue({
+      local: {
+        provider: 'cursor',
+        model: 'composer-2.5',
+        taktProviders: {
+          assistant: {
+            provider: 'claude-sdk',
+            model: 'claude-sonnet-5',
+          },
+        },
+      },
+      global: {},
+    });
+
+    // When
+    const ctx = initializeSession('/project', 'instruct');
+
+    // Then: assistant provider/model win over top-level
+    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
+    expect(mockGetProvider).toHaveBeenCalledWith('claude-sdk');
+    expect(ctx.providerType).toBe('claude-sdk');
+    expect(ctx.model).toBe('claude-sonnet-5');
+    expect(ctx.personaName).toBe('instruct');
+  });
+
+  // REQ-1011-2: retry persona routes through takt_providers.assistant
+  it('should resolve takt_providers.assistant for retry persona when top-level provider differs', () => {
+    // Given: top-level cursor + assistant claude-sdk (Issue #1011 scenario)
+    mockResolveConfigValues.mockReturnValue({
+      language: 'en',
+      provider: 'cursor',
+      model: 'composer-2.5',
+    });
+    mockResolveAssistantConfigLayers.mockReturnValue({
+      local: {
+        provider: 'cursor',
+        model: 'composer-2.5',
+        taktProviders: {
+          assistant: {
+            provider: 'claude-sdk',
+            model: 'claude-sonnet-5',
+          },
+        },
+      },
+      global: {},
+    });
+
+    // When
+    const ctx = initializeSession('/project', 'retry');
+
+    // Then: assistant provider/model win over top-level
+    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
+    expect(mockGetProvider).toHaveBeenCalledWith('claude-sdk');
+    expect(ctx.providerType).toBe('claude-sdk');
+    expect(ctx.model).toBe('claude-sonnet-5');
+    expect(ctx.personaName).toBe('retry');
+  });
+
+  // REQ-1011-3: instruct falls back to top-level when assistant is unset
+  it('should fallback to top-level provider/model for instruct when assistant is unset', () => {
+    // Given: no takt_providers.assistant
+    mockResolveConfigValues.mockReturnValue({
+      language: 'en',
+      provider: 'cursor',
+      model: 'composer-2.5',
+    });
+    mockResolveAssistantConfigLayers.mockReturnValue({
+      local: {
+        provider: 'cursor',
+        model: 'composer-2.5',
+      },
+      global: {},
+    });
+
+    // When
+    const ctx = initializeSession('/project', 'instruct');
+
+    // Then: assistant resolution path is used, then falls back to top-level
+    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
+    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
+    expect(ctx.providerType).toBe('cursor');
+    expect(ctx.model).toBe('composer-2.5');
+  });
+
+  // REQ-1011-3: retry falls back to top-level when assistant is unset
+  it('should fallback to top-level provider/model for retry when assistant is unset', () => {
+    // Given: no takt_providers.assistant
+    mockResolveConfigValues.mockReturnValue({
+      language: 'en',
+      provider: 'cursor',
+      model: 'composer-2.5',
+    });
+    mockResolveAssistantConfigLayers.mockReturnValue({
+      local: {
+        provider: 'cursor',
+        model: 'composer-2.5',
+      },
+      global: {},
+    });
+
+    // When
+    const ctx = initializeSession('/project', 'retry');
+
+    // Then: assistant resolution path is used, then falls back to top-level
+    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
+    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
+    expect(ctx.providerType).toBe('cursor');
+    expect(ctx.model).toBe('composer-2.5');
+  });
+
+  // REQ-1011-NEG: persona-interactive stays on top-level (out of scope for #1011)
+  it('should keep top-level provider/model for persona-interactive even when assistant is set', () => {
+    // Given: assistant differs from top-level
+    mockResolveConfigValues.mockReturnValue({
+      language: 'en',
+      provider: 'cursor',
+      model: 'composer-2.5',
+    });
+    mockResolveAssistantConfigLayers.mockReturnValue({
+      local: {
+        provider: 'cursor',
+        model: 'composer-2.5',
+        taktProviders: {
+          assistant: {
+            provider: 'claude-sdk',
+            model: 'claude-sonnet-5',
+          },
+        },
+      },
+      global: {},
+    });
+
+    // When
+    const ctx = initializeSession('/project', 'persona-interactive');
+
+    // Then: top-level wins; assistant layers are not consulted
+    expect(mockResolveAssistantConfigLayers).not.toHaveBeenCalled();
+    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
+    expect(ctx.providerType).toBe('cursor');
+    expect(ctx.model).toBe('composer-2.5');
+    expect(ctx.personaName).toBe('persona-interactive');
+  });
 });

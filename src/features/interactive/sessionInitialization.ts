@@ -14,7 +14,8 @@ export function initializeSession(
 ): SessionContext {
   const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
   const lang = globalConfig.language === 'ja' ? 'ja' : 'en';
-  const resolvedProviderModel = personaName === 'interactive'
+  const usesAssistantProvider = ['interactive', 'instruct', 'retry'].includes(personaName);
+  const resolvedProviderModel = usesAssistantProvider
     ? resolveAssistantProviderModelFromConfig(
       resolveAssistantConfigLayers(cwd),
       assistantCliOverrides,
