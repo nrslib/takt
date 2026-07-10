@@ -83,4 +83,28 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
       expect(nexts[nexts.length - 1]).toBe('ABORT');
     }
   });
+
+  // 既定のセッションキーは persona 由来（session-key.ts）のため、同じ persona
+  // "ai-antipattern-reviewer" を使う ai-antipattern-review-1st と、並列
+  // reviewers 配下の Finding Contract 版 ai-antipattern-review が同一セッションを
+  // 共有してしまっていた（native StructuredOutput の成功履歴混線の原因）。
+  // 明示的な session_key で切り離したことを固定する。
+  it.each(DEV_WORKFLOWS)('should isolate ai-antipattern-review sessions from the -1st step when %s is loaded', (name) => {
+    languageState.value = lang;
+    const workflow = loadWorkflow(name, process.cwd());
+    expect(workflow).toBeDefined();
+
+    const firstPass = workflow!.steps.find((step) => step.name === 'ai-antipattern-review-1st');
+    expect(firstPass).toBeDefined();
+    expect(firstPass!.sessionKey).toBe('ai-antipattern-review-1st');
+
+    const reviewers = workflow!.steps.find((step) => step.name === 'reviewers');
+    expect(reviewers).toBeDefined();
+    const findingContractReview = reviewers!.parallel?.find((step) => step.name === 'ai-antipattern-review');
+    expect(findingContractReview).toBeDefined();
+    expect(findingContractReview!.sessionKey).toBe('ai-antipattern-review-finding-contract');
+
+    // 別々のキーである（同一セッションに退化していない）ことも明示する
+    expect(findingContractReview!.sessionKey).not.toBe(firstPass!.sessionKey);
+  });
 });

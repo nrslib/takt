@@ -158,6 +158,7 @@ steps:
   # Mirrors takt-default's draft phase: clear AI-specific issues right after
   # implementation, before the perspective reviewers run. Weak models need this.
   - name: ai-antipattern-review-1st
+    session_key: ai-antipattern-review-1st
     tags:
       - review
     edit: false
@@ -241,6 +242,7 @@ steps:
               format: architecture-review-finding-contract
 
       - name: ai-antipattern-review
+        session_key: ai-antipattern-review-finding-contract
         tags:
           - review
         edit: false

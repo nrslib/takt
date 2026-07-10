@@ -43,7 +43,7 @@ import { providerSupportsStructuredOutput } from '../../../infra/providers/provi
 import { resolveReportHandles } from '../instruction/report-handles.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import { loadTemplate } from '../../../shared/prompts/index.js';
+import { buildStructuredJsonSchemaInstruction } from '../../../shared/prompts/index.js';
 import type {
   StructuredOutputFailureReason,
   StructuredOutputNormalizerRegistry,
@@ -339,10 +339,7 @@ export class StepExecutor {
       return instruction;
     }
 
-    return loadTemplate('parts/structured_json_schema_instruction', 'en', {
-      instruction,
-      schemaJson: JSON.stringify(step.structuredOutput.schema, null, 2),
-    });
+    return buildStructuredJsonSchemaInstruction(instruction, step.structuredOutput.schema, 'en');
   }
 
   normalizeStructuredOutput(

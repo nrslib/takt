@@ -158,6 +158,7 @@ steps:
   # takt-default の draft フェーズ相当。観点別の並列レビューへ渡す前に、
   # 実装直後の AI 特有の問題を自分で潰す。弱いモデルほどここで拾える。
   - name: ai-antipattern-review-1st
+    session_key: ai-antipattern-review-1st
     tags:
       - review
     edit: false
@@ -241,6 +242,7 @@ steps:
               format: architecture-review-finding-contract
 
       - name: ai-antipattern-review
+        session_key: ai-antipattern-review-finding-contract
         tags:
           - review
         edit: false

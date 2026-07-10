@@ -42,6 +42,15 @@ import {
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
 import { InvalidToolArgumentLoopDetector, ToolErrorBudgetDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
+import {
+  buildFormatlessStructuredPrompt,
+  createStructuredOutputRecoveryState,
+  degradeToFormatless,
+  planStructuredOutputAttempt,
+  recoverStaleSession,
+  shouldDegradeToFormatless,
+  shouldRecoverStaleSession,
+} from './structured-output-recovery.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import { isSensitiveKeyName, sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
@@ -926,11 +935,16 @@ export class OpenCodeClient {
   ): Promise<AgentResponse> {
     // native format（StructuredOutput ツール）をモデルが呼ばない個体が
     // あるため、その失敗を検出したら format なし（手書き JSON + 下流の
-    // 是正リトライ）へフォールバックする。
-    let disableNativeStructuredOutput = false;
-    // フォールバック（format なし再試行）は transient 再試行の予算とは別枠で
-    // 1回だけ確保する: 先行の transient エラーで予算を使い切っていても、
-    // 最終試行の format 失敗から救済できるようにする。
+    // 是正リトライ）へフォールバックする。劣化後は汚染されたセッションを
+    // 引きずらないよう fresh session を強制する（structured-output-recovery.ts）。
+    let recoveryState = createStructuredOutputRecoveryState(options.outputSchema !== undefined);
+    // call() の最初から resume を意図していたかどうか。attempt ごとに変わる
+    // sessionId（劣化/救済で fresh に切り替わる）とは別に、呼び出し元の意図を
+    // 固定値として持つ必要がある。
+    const hasInitialSessionId = options.sessionId !== undefined;
+    // フォールバック（format なし再試行 / stale session 救済）は transient
+    // 再試行の予算とは別枠で、それぞれ1回だけ確保する: 先行の transient
+    // エラーで予算を使い切っていても、最終試行の失敗から救済できるようにする。
     let maxAttempts = OPENCODE_RETRY_MAX_ATTEMPTS;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -941,7 +955,8 @@ export class OpenCodeClient {
       let diagRef: StreamDiagnostics | undefined;
       let release: (() => void) | undefined;
       let opencodeApiClient: OpencodeClient | undefined;
-      let sessionId: string | undefined = options.sessionId;
+      const attemptPlan = planStructuredOutputAttempt(recoveryState, hasInitialSessionId);
+      let sessionId: string | undefined = attemptPlan.sessionMode === 'fresh' ? undefined : options.sessionId;
       let promptCompletion: Promise<unknown> | undefined;
       let promptCompletionWait: Promise<void> | undefined;
       let promptError: string | undefined;
@@ -1091,6 +1106,12 @@ export class OpenCodeClient {
           allowedTools: options.allowedTools,
           promptTools,
         });
+        // native format 劣化後の attempt は、structured_json_schema_instruction
+        // でスキーマと fenced JSON 契約・StructuredOutput 禁止を明示したプロンプトへ
+        // 包み直す。この attempt は session も fresh 強制済み（attemptPlan 参照）。
+        const promptText = attemptPlan.structuredMode === 'formatless' && options.outputSchema !== undefined
+          ? buildFormatlessStructuredPrompt(prompt, options.outputSchema)
+          : prompt;
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
@@ -1101,10 +1122,10 @@ export class OpenCodeClient {
           ...(options.systemPrompt !== undefined ? { system: options.systemPrompt } : {}),
           // ネイティブ構造化出力: OpenCode がスキーマのキー構造を強制する
           // （enum 等の値制約までは保証されないため、下流のスキーマ検証は維持）。
-          ...(options.outputSchema !== undefined && !disableNativeStructuredOutput
+          ...(attemptPlan.structuredMode === 'native' && options.outputSchema !== undefined
             ? { format: { type: 'json_schema' as const, schema: options.outputSchema, retryCount: 2 } }
             : {}),
-          parts: [{ type: 'text' as const, text: prompt }],
+          parts: [{ type: 'text' as const, text: promptText }],
         };
         const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];
         promptCompletion = opencodeApiClient.session.promptAsync(promptPayloadForSdk, {
@@ -1123,11 +1144,15 @@ export class OpenCodeClient {
         let success = true;
         let capturedStructuredOutput: Record<string, unknown> | undefined;
         let failureMessage = '';
+        // UnavailableToolLoopDetector が閾値到達で発火した際に、その呼び出しが
+        // 狙っていたツール名を残す。stale StructuredOutput recovery の対象判定
+        // （呼ばれたツールが正確に StructuredOutput か）に使う。
+        let unavailableLoopToolName: string | undefined;
         const state = createStreamTrackingState();
         const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
         const invalidArgumentLoopDetector = new InvalidToolArgumentLoopDetector();
         const toolErrorBudgetDetector = new ToolErrorBudgetDetector();
-        const echoState = { remainingPrompts: buildPromptEchoCandidates(prompt, options.systemPrompt) };
+        const echoState = { remainingPrompts: buildPromptEchoCandidates(promptText, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
 
@@ -1239,6 +1264,9 @@ export class OpenCodeClient {
                   rejection.tool,
                   rejection.error,
                 );
+                if (unavailableError !== undefined) {
+                  unavailableLoopToolName = rejection.tool;
+                }
                 const invalidArgumentError = invalidArgumentLoopDetector.observe(
                   toolPart.callID || toolPart.id,
                   rejection.tool,
@@ -1571,27 +1599,44 @@ export class OpenCodeClient {
             emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
             return rateLimitedResponse;
           }
-          const lowerMessage = message.toLowerCase();
           // Failures that point at the native json_schema request itself: a
           // model that never emits the StructuredOutput tool ("did not produce
           // structured output"), or a gateway/model that rejects the json_schema
           // response format outright (surfaced as an upstream request error).
-          // These fall back to formatless structured output; generic transient
-          // errors (transport/network) must not, or they would burn the one-shot
-          // fallback budget before a real format failure arrives.
-          const isNativeStructuredOutputFailure =
-            lowerMessage.includes('did not produce structured output')
-            || lowerMessage.includes('upstream request failed');
-          if (
-            options.outputSchema !== undefined
-            && !disableNativeStructuredOutput
-            && isNativeStructuredOutputFailure
-          ) {
-            // Fall back to formatless structured output once — hand-written JSON
-            // validated by the downstream correction retry — before giving up.
-            disableNativeStructuredOutput = true;
+          // These fall back to formatless structured output in a fresh session —
+          // resuming the same session would let the model keep "remembering" the
+          // native tool it just failed to use. Generic transient errors
+          // (transport/network) must not trigger this, or they would burn the
+          // one-shot fallback budget before a real format failure arrives.
+          if (shouldDegradeToFormatless(recoveryState, message)) {
+            recoveryState = degradeToFormatless(recoveryState);
             maxAttempts = Math.max(maxAttempts, attempt + 1);
-            log.info('Native structured output failed; retrying without json_schema format', { agentType, attempt, message });
+            log.debug('OpenCode native structured output failed; degrading to formatless prompt in a fresh session', {
+              agentType,
+              previousAttempt: attempt,
+              previousSessionId: activeSessionId,
+              message,
+            });
+            await this.waitForRetryDelay(attempt, options.abortSignal);
+            continue;
+          }
+
+          // A resumed session can carry native StructuredOutput success history
+          // from an earlier (unrelated) step. When this attempt does not request
+          // structured output at all (plain) but the model still calls the now-
+          // unavailable StructuredOutput tool until the loop detector fires,
+          // that is stale session memory, not a real failure of this request —
+          // retry the same prompt once in a fresh session instead of failing
+          // the step outright.
+          if (shouldRecoverStaleSession(recoveryState, attemptPlan, unavailableLoopToolName)) {
+            recoveryState = recoverStaleSession(recoveryState);
+            maxAttempts = Math.max(maxAttempts, attempt + 1);
+            log.debug('OpenCode resumed session called a stale StructuredOutput tool; retrying prompt in a fresh session', {
+              agentType,
+              previousAttempt: attempt,
+              previousSessionId: activeSessionId,
+              tool: unavailableLoopToolName,
+            });
             await this.waitForRetryDelay(attempt, options.abortSignal);
             continue;
           }
@@ -1603,6 +1648,18 @@ export class OpenCodeClient {
             continue;
           }
 
+          if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed) {
+            log.debug('OpenCode structured output recovery attempt finished', {
+              agentType,
+              attempt,
+              sessionId: activeSessionId,
+              nativeDegraded: recoveryState.nativeDegraded,
+              staleSessionRecoveryUsed: recoveryState.staleSessionRecoveryUsed,
+              outcome: 'error',
+              message,
+            });
+          }
+
           emitResult(options.onStream, false, message, activeSessionId);
           return {
             persona: agentType,
@@ -1612,6 +1669,17 @@ export class OpenCodeClient {
             timestamp: new Date(),
             sessionId: activeSessionId,
           };
+        }
+
+        if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed) {
+          log.debug('OpenCode structured output recovery attempt finished', {
+            agentType,
+            attempt,
+            sessionId: activeSessionId,
+            nativeDegraded: recoveryState.nativeDegraded,
+            staleSessionRecoveryUsed: recoveryState.staleSessionRecoveryUsed,
+            outcome: 'success',
+          });
         }
 
         const trimmed = content.trim();
