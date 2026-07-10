@@ -3008,23 +3008,18 @@ describe('WorkflowEngine structured caller defaults', () => {
         expect(options?.resolvedProvider).toBe('codex');
         expect(options?.resolvedModel).toBe('gpt-5.5');
         expect(options?.outputSchema).toBeUndefined();
+        // manager は decisions（判断のみ）を返す。new finding の title/severity は
+        // raw finding 自身から決まる（decision-assembly.ts 参照）。
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [
-              {
-                rawFindingIds: [rawFindingId],
-                title: 'Manager provider override must survive synthesis',
-                severity: 'high',
-              },
+            rawDecisions: [
+              { rawFindingId, decision: 'new', findingId: '', evidence: 'No related finding exists yet.' },
             ],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3135,23 +3130,17 @@ describe('WorkflowEngine structured caller defaults', () => {
         expect(persona).toBe('findings-manager');
         expect(options?.resolvedProvider).toBe('codex');
         expect(options?.resolvedModel).toBe('gpt-5.5');
+        // manager は decisions（判断のみ）を返す（decision-assembly.ts 参照）。
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [
-              {
-                rawFindingIds: [rawFindingId],
-                title: 'Manager workflow fallback must survive synthesis',
-                severity: 'high',
-              },
+            rawDecisions: [
+              { rawFindingId, decision: 'new', findingId: '', evidence: 'No related finding exists yet.' },
             ],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -3251,23 +3240,17 @@ describe('WorkflowEngine structured caller defaults', () => {
         expect(persona).toBe('findings-manager');
         expect(options?.resolvedProvider).toBe('codex');
         expect(options?.resolvedModel).toBe('gpt-5.5');
+        // manager は decisions（判断のみ）を返す（decision-assembly.ts 参照）。
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [
-              {
-                rawFindingIds: [rawFindingId],
-                title: 'Manager persona routing must survive synthesis',
-                severity: 'high',
-              },
+            rawDecisions: [
+              { rawFindingId, decision: 'new', findingId: '', evidence: 'No related finding exists yet.' },
             ],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };

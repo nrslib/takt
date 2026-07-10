@@ -8,7 +8,7 @@
  * この形式を許すが、取り込み経路自体が無かった）。
  */
 
-import type { AgentWorkflowStep, FindingContractConfig, WorkflowStep } from '../../models/types.js';
+import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig, WorkflowStep } from '../../models/types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
@@ -22,6 +22,9 @@ import type { FindingLedgerStore } from './store.js';
 
 export interface FindingContractIntakeInput {
   contract: FindingContractConfig;
+  /** manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
+  workflowProvider?: WorkflowConfig['provider'];
+  workflowModel?: WorkflowConfig['model'];
   ledgerStore: FindingLedgerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
@@ -49,6 +52,8 @@ export async function ingestFindingContractResults(
 ): Promise<FindingManagerRunResult> {
   const result = await runFindingManagerForStep({
     contract: input.contract,
+    workflowProvider: input.workflowProvider,
+    workflowModel: input.workflowModel,
     ledgerStore: input.ledgerStore,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,

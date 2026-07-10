@@ -10,6 +10,7 @@ import type {
   AgentWorkflowStep,
   WorkflowState,
   AgentResponse,
+  WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
@@ -136,6 +137,9 @@ export interface ParallelRunnerDeps {
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
+  /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
+  readonly workflowProvider?: WorkflowConfig['provider'];
+  readonly workflowModel?: WorkflowConfig['model'];
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
   readonly updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
@@ -872,6 +876,8 @@ export class ParallelRunner {
     }
     return ingestFindingContractResults({
       contract: this.deps.findingContract,
+      workflowProvider: this.deps.workflowProvider,
+      workflowModel: this.deps.workflowModel,
       ledgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this.deps.stepExecutor,

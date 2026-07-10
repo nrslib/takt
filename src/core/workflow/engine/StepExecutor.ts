@@ -16,6 +16,7 @@ import type {
   FindingContractConfig,
   Language,
   FallbackContext,
+  WorkflowConfig,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, RuntimeStepResolution, StepRunResult } from '../types.js';
@@ -83,6 +84,9 @@ export interface StepExecutorDeps {
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   readonly findingContract?: FindingContractConfig;
+  /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
+  readonly workflowProvider?: WorkflowConfig['provider'];
+  readonly workflowModel?: WorkflowConfig['model'];
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
@@ -189,6 +193,8 @@ export class StepExecutor {
     }
     return ingestFindingContractResults({
       contract: this.deps.findingContract!,
+      workflowProvider: this.deps.workflowProvider,
+      workflowModel: this.deps.workflowModel,
       ledgerStore: this.deps.findingLedgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this,

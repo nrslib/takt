@@ -1,11 +1,11 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
-import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowStep } from '../../models/types.js';
+import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowConfig, WorkflowStep } from '../../models/types.js';
 import {
-  FindingManagerDecisionsJsonSchema,
   RawFindingsOutputJsonSchema,
   parseFindingManagerDecisions,
   parseReviewerRawFindings,
 } from './schemas.js';
+import { buildFindingManagerStep } from './manager-step.js';
 import { reconcileFindingLedger } from './reconciler.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import {
@@ -37,6 +37,13 @@ export interface FindingManagerSubStepResult {
 
 interface RunFindingManagerForStepInput {
   contract: FindingContractConfig;
+  /**
+   * manager の provider/model 未指定時の fallback。優先順位は
+   * finding_contract.manager の直接指定 → workflow provider/model →
+   * provider_routing.personas / persona_providers（buildFindingManagerStep 参照）。
+   */
+  workflowProvider?: WorkflowConfig['provider'];
+  workflowModel?: WorkflowConfig['model'];
   ledgerStore: FindingLedgerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
@@ -64,10 +71,7 @@ interface RunFindingManagerForStepInput {
 }
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
-// v2: LLM が返すのは 8 配列の最終結果ではなく、raw finding / disputed finding /
-// conflict 1件ごとの「判断」だけ（FindingManagerDecisionsJsonSchema）。組み立てと
-// 不変条件の強制は decision-assembly.ts が行う。
-export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v2';
+export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 export const RawFindingsStructuredOutput = {
   schemaRef: RAW_FINDINGS_SCHEMA_REF,
   schema: RawFindingsOutputJsonSchema,
@@ -161,23 +165,6 @@ function extractStructuredRawFindings(input: {
         stepName: result.subStep.name,
       }));
     });
-}
-
-function buildManagerStep(contract: FindingContractConfig): AgentWorkflowStep {
-  return {
-    kind: 'agent',
-    name: 'findings-manager',
-    persona: contract.manager.persona,
-    personaDisplayName: contract.manager.personaDisplayName ?? contract.manager.persona,
-    personaPath: contract.manager.personaPath,
-    instruction: contract.manager.instruction,
-    session: 'refresh',
-    edit: false,
-    structuredOutput: {
-      schemaRef: FINDING_MANAGER_SCHEMA_REF,
-      schema: FindingManagerDecisionsJsonSchema,
-    },
-  };
 }
 
 /**
@@ -582,7 +569,11 @@ export async function runFindingManagerForStep(
     callNamespace: input.callNamespace,
   });
   const rawFindingsPath = input.ledgerStore.saveRawFindings(input.runId, input.parentStep.name, rawFindings);
-  const managerStep = buildManagerStep(input.contract);
+  const managerStep = buildFindingManagerStep({
+    contract: input.contract,
+    workflowProvider: input.workflowProvider,
+    workflowModel: input.workflowModel,
+  });
   const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
 
   // フィールド等価で確定する raw（解消確認・open 指摘への完全一致）はコードで

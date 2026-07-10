@@ -10,6 +10,7 @@ import { validateProviderModelRequirements } from '../provider-model-requirement
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
 import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
+import { buildFindingManagerStep } from '../findings/manager-step.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -47,6 +48,41 @@ function validateFindingContractParallelStructuredOutput(config: WorkflowConfig,
       }
     }
   }
+}
+
+/**
+ * findings-manager は実行時に合成されるステップで、config.steps の走査
+ * （validateAgentStepProviderModel）に現れない。実行時（manager-runner.ts）と
+ * 同じ buildFindingManagerStep で合成した形を同じ resolveStepProviderModel で
+ * 解決し、provider/model の要件（例: opencode は model 必須）を実行前に検証する。
+ * ここで検証しないと、validate は素通りしたのに manager 起動時に初めて落ちる。
+ */
+function validateFindingContractManagerProviderModel(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  const findingContract = config.findingContract;
+  if (!findingContract) {
+    return;
+  }
+  const managerStep = buildFindingManagerStep({
+    contract: findingContract,
+    workflowProvider: config.provider,
+    workflowModel: config.model,
+  });
+  const providerInfo = resolveStepProviderModel({
+    step: managerStep,
+    provider: options.provider,
+    providerSource: options.providerSource,
+    model: options.model,
+    modelSource: options.modelSource,
+    providerRouting: options.providerRouting,
+    personaProviders: options.personaProviders,
+  });
+  validateProviderModelRequirements(
+    providerInfo.provider,
+    providerInfo.model,
+    {
+      modelFieldName: 'Configuration error: finding_contract.manager.model',
+    },
+  );
 }
 
 /**
@@ -256,6 +292,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   // したのに実行時に落ちる、という食い違いが生まれる。
   const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
   validateFindingContractParallelStructuredOutput(config, findingContractEnabled);
+  validateFindingContractManagerProviderModel(config, options);
   validateFindingContractInvalidManagerOutputRules(config, findingContractEnabled);
   validateParallelSubStepNamesUnique(config);
   validateFindingContractInheritanceConflict(config, options);
