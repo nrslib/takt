@@ -492,6 +492,21 @@ takt repertoire remove @{owner}/{repo}
 
 同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `~/.takt/workflows/` → builtin です。
 
+### takt telemetry
+
+オートルーティング（`provider: auto`）が使うローカルのルーティングイベント記録を管理します。決定は `.takt/events/` に NDJSON としてローカル書き込みされ、TAKT がアップロードすることはありません。
+
+```bash
+# ローカルのルーティングイベント記録の状態を表示
+takt telemetry status
+
+# ローカルのルーティングイベント記録を有効化
+takt telemetry enable
+
+# ローカルのルーティングイベント記録を無効化
+takt telemetry disable
+```
+
 ### takt purge
 
 古いアナリティクスイベントファイルを削除します。

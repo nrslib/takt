@@ -274,6 +274,33 @@ model: gpt-5.5       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
 
+TAKT にステップごとの provider/model 選択を任せる場合は、`provider: auto` を設定して `auto_routing` の candidates を定義します。
+
+```yaml
+provider: auto
+auto_routing:
+  strategy: balanced   # cost, balanced, or performance
+  router:
+    provider: claude-sdk
+    model: claude-haiku-4-5-20251001
+  candidates:
+    - name: coding
+      description: Implementation, tests, debugging, and refactoring
+      provider: codex
+      model: gpt-5
+      cost_tier: medium
+    - name: lightweight
+      description: Formatting and small mechanical edits
+      provider: claude-sdk
+      model: claude-haiku-4-5-20251001
+      cost_tier: low
+  rules:
+    tags:
+      implementation: coding
+```
+
+オートルーティングの決定は `.takt/events/` に NDJSON としてローカル書き込みされます。TAKT がルーティング決定をアップロードすることはありません。ローカル記録はデフォルトで有効で、`telemetry.routing_decisions` で設定でき、`takt telemetry status|enable|disable` で確認・変更できます。
+
 API Key を直接使う場合は、CLI のインストールは不要です（Claude、Codex、OpenCode が対象）。
 
 ```bash

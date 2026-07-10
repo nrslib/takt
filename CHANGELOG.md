@@ -6,6 +6,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.51.0] - 2026-07-11
+
+### Added
+
+- Auto-routing: `provider: auto` (#921, #964). TAKT can now choose the provider/model per step. Configure an `auto_routing` block with a `strategy` (`cost`, `balanced`, or `performance`), a lightweight `router` model that classifies each step, and named `candidates` (provider + model + `cost_tier`); `rules.tags` can pin a step tag to a candidate deterministically. Routing decisions are recorded locally as NDJSON under `.takt/events/` — nothing is uploaded — and local recording can be controlled via `telemetry.routing_decisions` or `takt telemetry status|enable|disable`.
+- Image attachments in exec input (#934, #936). While editing the exec input line, `/paste-image` or `Ctrl+V` attaches a clipboard image on macOS, and OSC 1337 inline images from compatible terminals are also accepted. TAKT inserts an `[Image #N]` placeholder; referencing it in an Assistant message or `/go` note sends the image with that request, and `/go` copies referenced images into the generated task spec. PNG, JPEG, GIF, and WebP are supported with a 10 MiB limit; providers without native image input receive the attachment as a local path reference in the prompt.
+- `session: compact` mode (#994, #995). Steps and parallel sub-steps can now set `session: compact` to resume the saved persona session and ask the provider to compact it before Phase 1, keeping long-running personas within context limits. Compaction runs only before Phase 1; providers without a compaction capability continue unchanged, and a compaction failure logs a warning and continues with the uncompressed session.
+- Finding Contract manager provider/model (#970, #1008). `finding_contract.manager` now accepts dedicated `provider` / `model` fields for the synthetic Finding Manager step. When set, they take priority over `provider_routing`, deprecated `persona_providers`, workflow defaults, and the resolved input provider/model.
+
+### Changed
+
+- Finding Manager mechanical classification (#1007). Decidable raw findings — resolution confirmations and exact location+familyTag matches against open findings — are now classified in code, so the manager LLM only sees the residual judgment calls (with a slimmed ledger). When there are no residuals and no dispute claims, the LLM call is skipped entirely. In live benches the manager had been the largest token consumer, carrying ~200 KB ledgers every round.
+- `implement` dead ends now route to `plan` (re-planning) instead of ABORT in the `for-local-llm` family (#1009), matching what `write_tests` and `fix` already did. ABORT remains reserved for loop-monitor verdicts, unclear requirements, and review conflicts.
+- Bundled SDKs updated: `@openai/codex-sdk` 0.144.1 and `@anthropic-ai/claude-agent-sdk` 0.3.206 (#1015). The bundled Codex CLI now knows the GPT-5.6 model family (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`), so these can be specified as `model` on the codex provider.
+
+### Fixed
+
+- OpenCode silent-timeout autopsy classifies provider 429s as `rate_limited` (#985, #1010). The OpenCode server retries provider 429s internally without emitting `session.error`, so a rate-limited session looked like a zero-progress stall and the idle watchdog aborted it without engaging the engine's rate-limit backoff. On an idle-timeout abort, TAKT now inspects the session's last assistant message (with a 5-second budget) and returns 429-class errors as `rate_limited`.
+- The Finding Contract dispute route now works with `language: ja`, and index-state findings are prevented (#1012, #1014). The FC instructions were English-only, which starved the ja dispute entry point; prose is now localized while machine-matched tokens (`## Disputed Findings`, field names) stay English. The coder persona's "reviewer findings are absolute — never argue" stance, which suppressed legitimate disputes, was rewritten into an evidence discipline. Git rules now forbid treating index/staging state as evidence, preventing unsatisfiable "commit this file" findings in TAKT-managed runs.
+- Stale findings are covered end to end in the dispute route (#993). Dispute guidance now covers findings that contradict the current code (verify against reality, dispute with fresh file:line evidence), and the review-fix loop judge treats fixes-landed-but-findings-persist as a findings-side deadlock that re-planning plus dispute can break, instead of aborting.
+- Overnight hardening from live bench operations (#999). Partial `provider_profiles` in user config now overlay the per-provider defaults instead of replacing the whole map; `edit: true` supplies the `edit` permission floor so an editing step can never run with a read-only tool map; a per-call tool error budget (25, no resets) stops degenerate loops that rotate tool names; and a per-call cap on assistant message cycles stops pure text-fragment spin loops.
+
+### Internal
+
+- Facet guidance clarified: output contracts and boundaries (#1013), actor and auth knowledge (#1004), declarative validation (#1000), exception translation boundaries (#998), MCP worktree/autoPr descriptions (#997).
+
 ## [0.50.0] - 2026-07-06
 
 ### Added

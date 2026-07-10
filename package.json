@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.50.0",
+  "version": "0.51.0",
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
