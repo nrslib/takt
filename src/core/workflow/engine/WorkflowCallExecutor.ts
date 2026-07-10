@@ -25,6 +25,7 @@ import type {
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
 } from '../types.js';
+import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
 
 export type WorkflowCallSessionUpdates = ReadonlyMap<string, string | undefined>;
 export interface WorkflowCallIsolatedStateSync {
@@ -296,7 +297,7 @@ export class WorkflowCallExecutor {
     })
       ? options.autoStrategyOverride
       : undefined;
-    const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, {
+    const childOptions: WorkflowEngineOptions = {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
@@ -344,7 +345,16 @@ export class WorkflowCallExecutor {
             },
           }
         : {}),
-    });
+    };
+    // 子が継承する Finding Contract の manager provider/model を、子を実際に
+    // 構築する前に検証する。子ワークフローの workflow provider/model は親と
+    // 異なりうるため、WorkflowValidator の同じチェックを子の config + 継承
+    // 契約入り options に対してもう一度行わないと、不正な組み合わせが素通り
+    // したまま manager 起動時に初めて失敗する（WorkflowValidator.ts はここで
+    // 検証済みの childOptions を再利用する）。
+    validateFindingContractManagerProviderModel(request.childWorkflow, childOptions);
+
+    const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
 
     this.relayChildEvents(childEngine);
     const childResult = await childEngine.runWithResult();

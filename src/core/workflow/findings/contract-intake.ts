@@ -11,6 +11,7 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig, WorkflowStep } from '../../models/types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
+import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 import {
   RawFindingsStructuredOutput,
@@ -19,6 +20,44 @@ import {
   type FindingManagerSubStepResult,
 } from './manager-runner.js';
 import type { FindingLedgerStore } from './store.js';
+
+/**
+ * ある単独ステップが Finding Contract の取り込み対象かどうかを判定する。
+ * 対象になるのは、台帳（自前 or workflow_call 親からの継承）が有効で、かつ
+ * このステップの output_contracts.report[].formatRef が `*-finding-contract`
+ * 命名規約に従っている場合だけ。
+ *
+ * 以前は ParallelRunner だけが findings-manager を起動していたため、この
+ * 形式を使う単独ステップは取り込み経路が無く、指摘が黙って捨てられていた
+ * （WorkflowValidator は台帳があれば単独ステップでのこの形式を許すが、
+ * 実行時に反映する経路自体が欠けていた）。
+ *
+ * StepExecutor（実行時に findings-manager を起動するかどうか）と
+ * workflowPreview（preview に findings-manager を出すかどうか）の両方が
+ * この述語を共有することで、実行時とプレビューの判定を一致させる。
+ *
+ * 「通常の agent ステップ」限定。system / workflow_call に加え、parallel /
+ * arpeggio / team_leader を持つステップも対象外（isDelegatedWorkflowStep）。
+ * これらは実行時に WorkflowEngineStepCoordinator が専用 Runner へ分岐し、
+ * StepExecutor.runNormalStep（manager 起動経路）を通らない。スキーマ上は
+ * team_leader / arpeggio も output_contracts に *-finding-contract を書けるが、
+ * 実行時に manager が起動しない以上、preview に出すと嘘になる。
+ */
+export function resolveFindingContractIntakeStep(
+  step: WorkflowStep,
+  findingContract: FindingContractConfig | undefined,
+): AgentWorkflowStep | undefined {
+  if (!findingContract) {
+    return undefined;
+  }
+  if (isDelegatedWorkflowStep(step)) {
+    return undefined;
+  }
+  const hasFindingContractFormat = (step.outputContracts ?? []).some(
+    (entry) => entry.formatRef?.endsWith('-finding-contract') === true,
+  );
+  return hasFindingContractFormat ? (step as AgentWorkflowStep) : undefined;
+}
 
 export interface FindingContractIntakeInput {
   contract: FindingContractConfig;

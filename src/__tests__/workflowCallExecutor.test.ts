@@ -75,6 +75,20 @@ const FAKE_FINDING_CONTRACT: FindingContractConfig = {
   },
 };
 
+const FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER: FindingContractConfig = {
+  ledgerPath: '.takt/findings/peer-review.json',
+  rawFindingsPath: '.takt/findings/raw',
+  manager: {
+    persona: 'findings-manager',
+    instruction: 'findings-manager',
+    outputContract: 'findings-manager',
+    // opencode は model 必須。manager.provider を直接指定すると workflow の
+    // provider/model フォールバックが働かなくなる（buildFindingManagerStep 参照）
+    // ため、この組み合わせは常に不正になる。
+    provider: 'opencode',
+  },
+};
+
 describe('WorkflowCallExecutor', () => {
   it('child engine の実行オーケストレーションと state 同期を担当する', async () => {
     const parentConfig = {
@@ -566,5 +580,128 @@ describe('WorkflowCallExecutor', () => {
     }, { syncParentState: true });
 
     expect(refreshFindingsState).toHaveBeenCalledTimes(1);
+  });
+
+  it('子が継承した finding_contract.manager の provider/model が不正なとき、子 engine を作る前に fail-fast する', async () => {
+    const parentConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 10,
+      steps: [],
+    } as WorkflowConfig;
+    // 子ワークフロー自体は自前の finding_contract を持たない（親から継承するだけ）。
+    const childConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 10,
+      steps: [{ name: 'review' }],
+    } as WorkflowConfig;
+    const step = {
+      name: 'delegate',
+      call: 'child',
+      personaDisplayName: 'delegate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const state = makeState(parentConfig.name, 'running', 2);
+
+    const createEngine = vi.fn();
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd: '/tmp/project',
+        reportDirName: 'run',
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => '/tmp/project',
+      projectCwd: '/tmp/project',
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'run',
+      } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine,
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+      findingContract: FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER,
+      findingLedgerStore: createFakeLedgerStore(),
+    });
+
+    await expect(executor.execute({
+      step,
+      childWorkflow: childConfig,
+      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      parentProviderOptions: undefined,
+      personaProviders: undefined,
+    }, { syncParentState: true })).rejects.toThrow(/provider 'opencode' requires model/);
+
+    expect(createEngine).not.toHaveBeenCalled();
+  });
+
+  it('子が継承した finding_contract.manager の provider/model が有効なときは従来どおり子 engine を作る', async () => {
+    const parentConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 10,
+      steps: [],
+    } as WorkflowConfig;
+    const childConfig = {
+      name: 'child',
+      initialStep: 'review',
+      maxSteps: 10,
+      steps: [{ name: 'review' }],
+    } as WorkflowConfig;
+    const step = {
+      name: 'delegate',
+      call: 'child',
+      personaDisplayName: 'delegate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const state = makeState(parentConfig.name, 'running', 2);
+    const childState = makeState(childConfig.name, 'completed', 3);
+    childState.lastOutput = makeResponse({ content: 'child complete' });
+
+    const childEngine = createChildEngine({ state: childState });
+    const createEngine = vi.fn().mockReturnValue(childEngine);
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd: '/tmp/project',
+        reportDirName: 'run',
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => '/tmp/project',
+      projectCwd: '/tmp/project',
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      runPaths: {
+        slug: 'run',
+      } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine,
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+      findingContract: FAKE_FINDING_CONTRACT,
+      findingLedgerStore: createFakeLedgerStore(),
+    });
+
+    const result = await executor.execute({
+      step,
+      childWorkflow: childConfig,
+      childProviderInfo: { provider: 'mock', model: 'test-model' },
+      parentProviderOptions: undefined,
+      personaProviders: undefined,
+    }, { syncParentState: true });
+
+    expect(result.status).toBe('completed');
+    expect(createEngine).toHaveBeenCalledTimes(1);
   });
 });

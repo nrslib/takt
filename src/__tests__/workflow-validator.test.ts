@@ -1084,5 +1084,50 @@ describe('validateWorkflowConfig', () => {
         /declares its own finding_contract while also being called as a workflow_call subworkflow that inherits/,
       );
     });
+
+    it('fails fast when finding_contract.manager uses opencode without a model and the contract is inherited from a workflow_call parent', () => {
+      const workflow = createWorkflow();
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        provider: 'claude',
+        inheritedFindingContract: {
+          contract: {
+            ledgerPath: '.takt/findings/peer-review.json',
+            rawFindingsPath: '.takt/findings/raw',
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+              provider: 'opencode',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+        },
+      })).toThrow(/provider 'opencode' requires model/);
+    });
+
+    it('accepts a valid finding_contract.manager provider/model inherited from a workflow_call parent', () => {
+      const workflow = createWorkflow();
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        provider: 'claude',
+        inheritedFindingContract: {
+          contract: {
+            ledgerPath: '.takt/findings/peer-review.json',
+            rawFindingsPath: '.takt/findings/raw',
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+              provider: 'codex',
+              model: 'gpt-5.5',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+        },
+      })).not.toThrow();
+    });
   });
 });

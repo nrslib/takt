@@ -56,9 +56,20 @@ function validateFindingContractParallelStructuredOutput(config: WorkflowConfig,
  * 同じ buildFindingManagerStep で合成した形を同じ resolveStepProviderModel で
  * 解決し、provider/model の要件（例: opencode は model 必須）を実行前に検証する。
  * ここで検証しないと、validate は素通りしたのに manager 起動時に初めて落ちる。
+ *
+ * 対象の finding_contract は自前（config.findingContract）だけでなく
+ * workflow_call 親からの継承（options.inheritedFindingContract）も含む
+ * （WorkflowEngine が実際に使う有効な契約と同じ判定基準。findingContractEnabled
+ * と同じ式）。継承分をここで見ないと、子の workflow provider/model では
+ * manager が成立しない構成が validate を素通りし、manager 起動時に初めて落ちる。
+ *
+ * WorkflowCallExecutor が子 engine を組み立てる際、この関数を子の config と
+ * 継承契約入り options に対して明示的に呼び、子の実行前に fail-fast する
+ * （createEngine は単体テストではモックされるため、子 WorkflowEngine の
+ * コンストラクタが暗黙に行う検証には頼れない）。
  */
-function validateFindingContractManagerProviderModel(config: WorkflowConfig, options: WorkflowEngineOptions): void {
-  const findingContract = config.findingContract;
+export function validateFindingContractManagerProviderModel(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  const findingContract = config.findingContract ?? options.inheritedFindingContract?.contract;
   if (!findingContract) {
     return;
   }

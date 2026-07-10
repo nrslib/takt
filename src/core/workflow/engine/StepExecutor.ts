@@ -51,11 +51,11 @@ import type {
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
-import { getWorkflowStepKind } from '../step-kind.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import type { FindingManagerRunResult } from '../findings/manager-runner.js';
 import {
   ingestFindingContractResults,
+  resolveFindingContractIntakeStep,
   selectInvalidManagerOutputRuleIndex,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
@@ -159,26 +159,11 @@ export class StepExecutor {
 
   /**
    * 単独ステップの Finding Contract 取り込み対象かどうかを判定する。
-   * 対象になるのは、台帳（自前 or workflow_call 親からの継承）が有効で、かつ
-   * このステップの output_contracts.report[].formatRef が `*-finding-contract`
-   * 命名規約に従っている場合だけ。
-   *
-   * 以前は ParallelRunner だけが findings-manager を起動していたため、この
-   * 形式を使う単独ステップは取り込み経路が無く、指摘が黙って捨てられていた
-   * （WorkflowValidator は台帳があれば単独ステップでのこの形式を許すが、
-   * 実行時に反映する経路自体が欠けていた）。
+   * 述語の実体は contract-intake.ts の resolveFindingContractIntakeStep
+   * （workflowPreview.ts と共有）。
    */
   private resolveFindingContractIntakeStep(step: WorkflowStep): AgentWorkflowStep | undefined {
-    if (!this.deps.findingContract) {
-      return undefined;
-    }
-    if (getWorkflowStepKind(step) !== 'agent') {
-      return undefined;
-    }
-    const hasFindingContractFormat = (step.outputContracts ?? []).some(
-      (entry) => entry.formatRef?.endsWith('-finding-contract') === true,
-    );
-    return hasFindingContractFormat ? (step as AgentWorkflowStep) : undefined;
+    return resolveFindingContractIntakeStep(step, this.deps.findingContract);
   }
 
   private async ingestFindingContractForNormalStep(input: {
