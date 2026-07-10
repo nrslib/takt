@@ -30,7 +30,8 @@ function emptyManagerOutput(): FindingManagerOutput {
   };
 }
 
-function buildFindingFamilyTags(ledger: FindingLedger): Map<string, Set<string>> {
+/** ledger 上の finding ごとに、既存 rawFindingIds が持つ familyTag 集合を引けるようにする。decision-assembly.ts のファミリータグ整合性チェックでも再利用する。 */
+export function buildFindingFamilyTags(ledger: FindingLedger): Map<string, Set<string>> {
   const rawById = new Map(ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
   const tags = new Map<string, Set<string>>();
   for (const finding of ledger.findings) {

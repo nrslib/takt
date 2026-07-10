@@ -2,15 +2,19 @@ import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import type {
   FindingLedger,
+  FindingManagerDecisions,
   FindingManagerOutput,
   RawFinding,
 } from './finding-types.js';
 import {
   RAW_FINDING_KINDS,
+  CONFLICT_DECISION_KINDS,
+  DISPUTE_DECISION_KINDS,
   FINDING_CONFLICT_STATUSES,
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
+  RAW_DECISION_KINDS,
 } from './finding-types.js';
 
 const nonEmptyString = z.string().min(1);
@@ -163,6 +167,36 @@ export const FindingManagerOutputSchema = z.object({
   }).strict()).optional().default([]),
 }).strict();
 
+// LLM に返させるのは判断だけ。8配列への組み立てと不変条件の強制は
+// decision-assembly.ts（コード側）が行う。findingId は same/resolved/reopened/
+// conflict でのみ必須なため、strict 様式の制約上は required に含めつつ、
+// 該当なし（new）は空文字で埋めさせて未指定として扱う。
+export const FindingManagerRawDecisionSchema = z.object({
+  rawFindingId: nonEmptyString,
+  decision: z.enum(RAW_DECISION_KINDS),
+  findingId: z.string().optional().transform((value) => (value ? value : undefined)),
+  evidence: nonEmptyString,
+}).strict();
+
+export const FindingManagerDisputeDecisionSchema = z.object({
+  findingId: nonEmptyString,
+  decision: z.enum(DISPUTE_DECISION_KINDS),
+  reason: nonEmptyString,
+  evidence: nonEmptyString,
+}).strict();
+
+export const FindingManagerConflictDecisionSchema = z.object({
+  conflictId: nonEmptyString,
+  decision: z.enum(CONFLICT_DECISION_KINDS),
+  evidence: nonEmptyString,
+}).strict();
+
+export const FindingManagerDecisionsSchema = z.object({
+  rawDecisions: z.array(FindingManagerRawDecisionSchema),
+  disputeDecisions: z.array(FindingManagerDisputeDecisionSchema),
+  conflictDecisions: z.array(FindingManagerConflictDecisionSchema),
+}).strict();
+
 export const FindingManagerOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -274,6 +308,77 @@ export const FindingManagerOutputJsonSchema = {
   },
 } as const;
 
+/**
+ * findings-manager が実際に返す structured output。FindingManagerOutputJsonSchema
+ * （8配列を自力で組み立てる旧形式、台帳の内部表現として残置）とは異なり、
+ * raw finding 1件・disputed finding 1件・conflict 1件ごとの「判断」だけを問う。
+ * 組み立てと不変条件の強制は decision-assembly.ts が行うため、弱いモデルでも
+ * 出力すべき形が単純になる。
+ */
+export const FindingManagerDecisionsJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['rawDecisions', 'disputeDecisions', 'conflictDecisions'],
+  properties: {
+    rawDecisions: {
+      type: 'array',
+      description: 'Exactly one decision per residual raw finding listed in the prompt.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rawFindingId', 'decision', 'findingId', 'evidence'],
+        properties: {
+          rawFindingId: { type: 'string', minLength: 1 },
+          decision: {
+            enum: RAW_DECISION_KINDS,
+            description: 'same = matches an existing open finding. new = no related finding exists yet. resolved = confirms an existing open finding is fixed. reopened = a previously resolved/waived finding reappeared. conflict = contradicts an existing finding.',
+          },
+          findingId: {
+            type: 'string',
+            description: 'Ledger finding id. Required for same/resolved/reopened/conflict. Empty string for new.',
+          },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    disputeDecisions: {
+      type: 'array',
+      description: 'One decision per finding id claimed in the "Disputed Findings" heading of the prior step response. Empty if there is no such heading.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'decision', 'reason', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          decision: {
+            enum: DISPUTE_DECISION_KINDS,
+            description: 'waive = approve the dispute and remove the finding from the blocking set. note = reject the dispute and keep the finding open.',
+          },
+          reason: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    conflictDecisions: {
+      type: 'array',
+      description: 'One decision per active conflict in the previous ledger. Empty if there is no active conflict.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['conflictId', 'decision', 'evidence'],
+        properties: {
+          conflictId: { type: 'string', minLength: 1 },
+          decision: {
+            enum: CONFLICT_DECISION_KINDS,
+            description: 'resolve = the conflict is adjudicated. keep = the conflict is still unresolved.',
+          },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  },
+} as const;
+
 export const RawFindingsOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -331,4 +436,8 @@ export function parseReviewerRawFindings(value: unknown): Array<z.infer<typeof R
 
 export function parseFindingManagerOutput(value: unknown): FindingManagerOutput {
   return FindingManagerOutputSchema.parse(value);
+}
+
+export function parseFindingManagerDecisions(value: unknown): FindingManagerDecisions {
+  return FindingManagerDecisionsSchema.parse(value);
 }

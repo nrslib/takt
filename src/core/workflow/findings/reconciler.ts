@@ -17,6 +17,18 @@ interface ReconcileFindingLedgerInput {
   managerOutput: FindingManagerOutput;
   context: FindingReconcileContext;
   priorStepResponseText?: string;
+  /**
+   * 保存直前の再照合（最新台帳に対する assembleManagerOutput の再実行）で
+   * 項目単位で不採用になった raw finding id の集合。「決定で言及されなかった
+   * raw は新規 finding にする」フォールバック（下記 unmentionedNewFindings）の
+   * 対象から除外する。除外しないと、項目単位で不採用にした決定がこの
+   * フォールバックで結局 new finding になり、不採用の意味が消える
+   * （codex 指摘: 最新台帳との再照合で "same" が不採用になった raw が、未言及
+   * フォールバックで新規 finding に変換されていた）。除外した raw の理由は
+   * 呼び出し元（manager-runner.ts）が invalidAttempts / saveManagerValidationReport
+   * に記録する。
+   */
+  excludedFromUnmentionedFallbackRawFindingIds?: ReadonlySet<string>;
 }
 
 function formatFindingId(nextId: number): string {
@@ -581,10 +593,14 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     context: input.context,
   });
 
+  const excludedFromUnmentionedFallback = input.excludedFromUnmentionedFallbackRawFindingIds ?? new Set<string>();
   const unmentionedNewFindings = input.rawFindings
     // 解消確認は問題の観測ではないため、未言及でも新規 finding にしない。
     .filter((rawFinding) => rawFinding.kind !== 'resolution_confirmation')
     .filter((rawFinding) => !usedRawFindingIds.has(rawFinding.rawFindingId))
+    // 項目単位で不採用になった raw も未言及フォールバックの対象から外す
+    // （呼び出し元の理由は invalidAttempts / saveManagerValidationReport に残る）。
+    .filter((rawFinding) => !excludedFromUnmentionedFallback.has(rawFinding.rawFindingId))
     .map((rawFinding) => {
       const id = formatFindingId(nextId);
       nextId += 1;

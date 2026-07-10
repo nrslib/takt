@@ -68,8 +68,11 @@ export function validateFindingManagerOutput(
 }
 
 
-/** path-like token + 行番号（例: src/types.ts:94）。裸の「word:1」は通さない。 */
-const FILE_LINE_EVIDENCE_PATTERN = /[^\s:]+\.[A-Za-z0-9_]+:\d+/;
+/**
+ * path-like token + 行番号（例: src/types.ts:94）。裸の「word:1」は通さない。
+ * decision-assembly.ts の waive 項目単位チェックでも同じ粒度で使うため export する。
+ */
+export const FILE_LINE_EVIDENCE_PATTERN = /[^\s:]+\.[A-Za-z0-9_]+:\d+/;
 
 /**
  * 直前ステップ応答から「Disputed Findings」見出し配下のブロックを抜き出し、
@@ -91,7 +94,13 @@ export function hasDisputeClaimsHeading(priorStepResponseText: string | undefine
     .some((line) => /^#{1,6}\s.*disputed findings/i.test(line.trim()));
 }
 
-function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId: string): boolean {
+/**
+ * 対象 finding ID の claim entry が「Disputed Findings」見出し配下にあり、かつ
+ * その同一 entry 内に file:line 証跡があるかを判定する。decision-assembly.ts の
+ * waive 項目単位チェックが、最終防衛線（本ファイルの validateFindingDecisionRefs）
+ * と同じ粒度で不採用判定できるよう export する。
+ */
+export function hasDisputeClaimFor(priorStepResponseText: string | undefined, findingId: string): boolean {
   if (priorStepResponseText === undefined) {
     return false;
   }

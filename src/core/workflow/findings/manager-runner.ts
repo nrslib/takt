@@ -1,14 +1,23 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
-import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowConfig, WorkflowStep } from '../../models/types.js';
+import type { AgentResponse, AgentWorkflowStep, FindingContractConfig, WorkflowStep } from '../../models/types.js';
 import {
+  FindingManagerDecisionsJsonSchema,
   RawFindingsOutputJsonSchema,
-  parseFindingManagerOutput,
+  parseFindingManagerDecisions,
   parseReviewerRawFindings,
 } from './schemas.js';
 import { reconcileFindingLedger } from './reconciler.js';
 import { classifyRawFindingsMechanically, mergeFindingManagerOutputs } from './mechanical-classification.js';
+import {
+  assembleManagerOutput,
+  flattenManagerOutputToDecisions,
+  type AssembleManagerOutputResult,
+  type RejectedConflictDecision,
+  type RejectedDisputeDecision,
+  type RejectedRawDecision,
+} from './decision-assembly.js';
 import type { FindingLedgerStore, FindingManagerValidationAttemptReport } from './store.js';
-import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
+import type { FindingLedger, FindingManagerDecisions, FindingManagerOutput, RawFinding } from './types.js';
 import {
   hasDisputeClaimsHeading,
   validateFindingManagerOutput,
@@ -19,27 +28,35 @@ import type { StepExecutor } from '../engine/StepExecutor.js';
 import type { StepProviderInfo } from '../types.js';
 import { renderFencedJsonBlock } from '../instruction/fenced-json.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
-import { buildFindingManagerStep } from './manager-step.js';
-
-export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
+import { isWorkflowCallStep } from '../step-kind.js';
 
 export interface FindingManagerSubStepResult {
   subStep: WorkflowStep;
   response: AgentResponse;
 }
 
-interface RunFindingManagerForParallelStepInput {
+interface RunFindingManagerForStepInput {
   contract: FindingContractConfig;
-  workflowProvider?: WorkflowConfig['provider'];
-  workflowModel?: WorkflowConfig['model'];
   ledgerStore: FindingLedgerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
   parentStep: WorkflowStep;
   stepIteration: number;
+  /**
+   * レビュアー1件ごとの結果。並列ステップでは複数要素、単独ステップでは
+   * 要素1件（そのステップ自身）を渡す。extractStructuredRawFindings はどちらも
+   * 同じ形で扱う。
+   */
   subResults: FindingManagerSubStepResult[];
   workflowName: string;
   runId: string;
+  /**
+   * raw finding id 衝突対策の呼び出し名前空間。workflow_call の子エンジンは
+   * runId（= 親の runPaths.slug）をそのまま継承するため、親の parallel から
+   * 同じ子ワークフローを複数同時に呼ぶと2子の runId が一致してしまう。
+   * トップレベルの走行では空文字列（既存の raw finding id の形を変えない）。
+   */
+  callNamespace: string;
   timestamp: string;
   ledgerCopyPath?: string;
   /** Response text of the step that ran before the reviewers (usually the coder's fix report, which may contain dispute claims). */
@@ -47,6 +64,10 @@ interface RunFindingManagerForParallelStepInput {
 }
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
+// v2: LLM が返すのは 8 配列の最終結果ではなく、raw finding / disputed finding /
+// conflict 1件ごとの「判断」だけ（FindingManagerDecisionsJsonSchema）。組み立てと
+// 不変条件の強制は decision-assembly.ts が行う。
+export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v2';
 export const RawFindingsStructuredOutput = {
   schemaRef: RAW_FINDINGS_SCHEMA_REF,
   schema: RawFindingsOutputJsonSchema,
@@ -76,9 +97,18 @@ function normalizeRawFindingId(input: {
   parentStepName: string;
   subStepName: string;
   rawFindingId: string;
+  callNamespace: string;
 }): string {
   return [
     input.runId,
+    // callNamespace は workflow_call の呼び出し元ステップ名を積み上げた文字列。
+    // 親の parallel から同じ子ワークフローを複数同時に呼ぶと、子ごとの
+    // runId/parentStepName/stepIteration/subStepName/rawFindingId が全て
+    // 一致し得るため、呼び出し元を区別するこの要素が無いと衝突する
+    // （実測: WorkflowCallExecutor が子へ reportDirName=親の runPaths.slug を
+    // 渡すため、2子の runId は常に同一）。トップレベルの走行では空文字列
+    // なので、この要素は join から除外され、既存の id 形式のまま。
+    ...(input.callNamespace ? [input.callNamespace] : []),
     input.parentStepName,
     String(input.stepIteration),
     input.subStepName,
@@ -91,35 +121,63 @@ function extractStructuredRawFindings(input: {
   runId: string;
   stepIteration: number;
   parentStepName: string;
+  callNamespace: string;
 }): RawFinding[] {
-  return input.subResults.flatMap((result) => {
-    const structuredOutput = result.response.structuredOutput;
-    // raw findings は Finding Contract の契約入力。欠落や不正 shape を
-    // 空扱いすると台帳に指摘が残らず findings.open.count == 0 のゲートが
-    // 誤って通るため、黙って捨てず fail-fast する。
-    if (structuredOutput === undefined) {
-      throw new Error(
-        `Finding contract reviewer "${result.subStep.name}" returned no structured output; raw findings are required`,
-      );
-    }
-    if (!Array.isArray(structuredOutput.rawFindings)) {
-      throw new Error(
-        `Finding contract reviewer "${result.subStep.name}" returned structured output without a rawFindings array`,
-      );
-    }
-    return parseReviewerRawFindings(structuredOutput.rawFindings).map((rawFinding) => ({
-      ...rawFinding,
-      reviewer: result.subStep.name,
-      rawFindingId: normalizeRawFindingId({
-        runId: input.runId,
-        parentStepName: input.parentStepName,
-        stepIteration: input.stepIteration,
-        subStepName: result.subStep.name,
-        rawFindingId: rawFinding.rawFindingId,
-      }),
-      stepName: result.subStep.name,
-    }));
-  });
+  return input.subResults
+    // workflow_call サブステップは raw findings を返さない（AgentResponse に
+    // structuredOutput を持たない）。子ワークフローが自前の Finding Contract
+    // （継承 or 自前）を持つ場合、指摘は子の中で既に台帳へ取り込まれている
+    // 前提のため、ここでは "取り込み済み" として除外する。除外しないと
+    // 「raw findings が無い」という別の欠落と区別できず、fail-fast エラーに
+    // なってしまう（現状の builtin ワークフローに該当構成は無いが、将来
+    // parallel の子に workflow_call を混ぜても壊れないようにする）。
+    .filter((result) => !isWorkflowCallStep(result.subStep))
+    .flatMap((result) => {
+      const structuredOutput = result.response.structuredOutput;
+      // raw findings は Finding Contract の契約入力。欠落や不正 shape を
+      // 空扱いすると台帳に指摘が残らず findings.open.count == 0 のゲートが
+      // 誤って通るため、黙って捨てず fail-fast する。
+      if (structuredOutput === undefined) {
+        throw new Error(
+          `Finding contract reviewer "${result.subStep.name}" returned no structured output; raw findings are required`,
+        );
+      }
+      if (!Array.isArray(structuredOutput.rawFindings)) {
+        throw new Error(
+          `Finding contract reviewer "${result.subStep.name}" returned structured output without a rawFindings array`,
+        );
+      }
+      return parseReviewerRawFindings(structuredOutput.rawFindings).map((rawFinding) => ({
+        ...rawFinding,
+        reviewer: result.subStep.name,
+        rawFindingId: normalizeRawFindingId({
+          runId: input.runId,
+          parentStepName: input.parentStepName,
+          stepIteration: input.stepIteration,
+          subStepName: result.subStep.name,
+          rawFindingId: rawFinding.rawFindingId,
+          callNamespace: input.callNamespace,
+        }),
+        stepName: result.subStep.name,
+      }));
+    });
+}
+
+function buildManagerStep(contract: FindingContractConfig): AgentWorkflowStep {
+  return {
+    kind: 'agent',
+    name: 'findings-manager',
+    persona: contract.manager.persona,
+    personaDisplayName: contract.manager.personaDisplayName ?? contract.manager.persona,
+    personaPath: contract.manager.personaPath,
+    instruction: contract.manager.instruction,
+    session: 'refresh',
+    edit: false,
+    structuredOutput: {
+      schemaRef: FINDING_MANAGER_SCHEMA_REF,
+      schema: FindingManagerDecisionsJsonSchema,
+    },
+  };
 }
 
 /**
@@ -253,26 +311,47 @@ function buildManagerInstruction(input: {
   });
 }
 
+/**
+ * 不採用になった決定だけを列挙し、その項目だけの再判断を求める。全体を作り直させると
+ * 「最終結果を自力で組み立てる」問題に逆戻りするため、対象を不採用分に絞る。
+ */
 function buildManagerRetryInstruction(input: {
   originalInstruction: string;
-  validationErrors: readonly string[];
-  managerOutput: FindingManagerOutput;
+  residualRawFindings: readonly RawFinding[];
+  rejectedRawDecisions: readonly RejectedRawDecision[];
+  rejectedDisputeDecisions: readonly RejectedDisputeDecision[];
+  rejectedConflictDecisions: readonly RejectedConflictDecision[];
 }): string {
+  const rawById = new Map(input.residualRawFindings.map((raw) => [raw.rawFindingId, raw]));
+  const rejectedRawBlock = input.rejectedRawDecisions.map((rejected) => [
+    `- rawFindingId: ${rejected.rawFindingId}`,
+    `  previous decision: ${rejected.decision}`,
+    `  rejected because: ${rejected.reason}`,
+    `  raw finding: ${JSON.stringify(rawById.get(rejected.rawFindingId))}`,
+  ].join('\n'));
+  const rejectedDisputeBlock = input.rejectedDisputeDecisions.map((rejected) => [
+    `- findingId: ${rejected.findingId}`,
+    `  previous decision: ${rejected.decision}`,
+    `  rejected because: ${rejected.reason}`,
+  ].join('\n'));
+  const rejectedConflictBlock = input.rejectedConflictDecisions.map((rejected) => [
+    `- conflictId: ${rejected.conflictId}`,
+    `  previous decision: ${rejected.decision}`,
+    `  rejected because: ${rejected.reason}`,
+  ].join('\n'));
+
   return [
     input.originalInstruction,
     '',
-    '## Previous manager output was semantically invalid',
-    'Validation errors:',
-    ...input.validationErrors.map((error) => `- ${error}`),
-    '',
-    'Invalid manager output:',
-    renderFencedJsonBlock(input.managerOutput),
-    '',
-    'Return a corrected manager output. Each raw finding must appear in exactly one manager decision, referenced finding ids must exist in the previous ledger, and state transitions must be valid.',
+    '## Some previous decisions were rejected',
+    'The engine rejected the decisions listed below because they violated ledger invariants. Return decisions ONLY for these items (same rawDecisions/disputeDecisions/conflictDecisions shape as before). Do not repeat decisions for items not listed here; those were already accepted.',
+    ...(rejectedRawBlock.length > 0 ? ['', '### Rejected raw decisions', ...rejectedRawBlock] : []),
+    ...(rejectedDisputeBlock.length > 0 ? ['', '### Rejected dispute decisions', ...rejectedDisputeBlock] : []),
+    ...(rejectedConflictBlock.length > 0 ? ['', '### Rejected conflict decisions', ...rejectedConflictBlock] : []),
   ].join('\n');
 }
 
-function parseManagerOutput(response: AgentResponse): FindingManagerOutput {
+function parseManagerDecisions(response: AgentResponse): FindingManagerDecisions {
   if (response.status !== 'done') {
     const detail = response.error ?? response.content;
     throw new Error(`Finding manager failed with status "${response.status}": ${detail}`);
@@ -281,7 +360,7 @@ function parseManagerOutput(response: AgentResponse): FindingManagerOutput {
   if (typeof output !== 'object' || output == null || Array.isArray(output)) {
     throw new Error('Finding manager output must be an object');
   }
-  return parseFindingManagerOutput(output);
+  return parseFindingManagerDecisions(output);
 }
 
 function buildManagerAgentOptions(
@@ -302,17 +381,83 @@ async function runManagerAttempt(input: {
   instruction: string;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
-}): Promise<FindingManagerOutput> {
+}): Promise<FindingManagerDecisions> {
   const phase1Instruction = input.stepExecutor.buildPhase1Instruction(input.instruction, input.managerStep);
   const agentOptions = buildManagerAgentOptions(input.optionsBuilder, input.managerStep);
   const rawResponse = await executeAgent(input.managerStep.persona, phase1Instruction, agentOptions);
   const response = input.stepExecutor.normalizeStructuredOutput(input.managerStep, rawResponse);
-  return parseManagerOutput(response);
+  return parseManagerDecisions(response);
+}
+
+function describeRejections(assembly: AssembleManagerOutputResult): string[] {
+  return [
+    ...assembly.rejectedRawDecisions.map((r) => (
+      `rawDecisions: raw finding "${r.rawFindingId}" (${r.decision}) rejected: ${r.reason}`
+    )),
+    ...assembly.rejectedDisputeDecisions.map((r) => (
+      `disputeDecisions: finding "${r.findingId}" (${r.decision}) rejected: ${r.reason}`
+    )),
+    ...assembly.rejectedConflictDecisions.map((r) => (
+      `conflictDecisions: conflict "${r.conflictId}" (${r.decision}) rejected: ${r.reason}`
+    )),
+  ];
+}
+
+function hasAnyRejection(assembly: AssembleManagerOutputResult): boolean {
+  return assembly.rejectedRawDecisions.length > 0
+    || assembly.rejectedDisputeDecisions.length > 0
+    || assembly.rejectedConflictDecisions.length > 0;
+}
+
+/** ラウンド1の採用分（不採用でなかった決定）だけを残す。ラウンド2の再問い合わせ結果と合成するために使う。 */
+function keepAcceptedDecisions(
+  decisions: FindingManagerDecisions,
+  assembly: AssembleManagerOutputResult,
+): FindingManagerDecisions {
+  const rejectedRawIds = new Set(assembly.rejectedRawDecisions.map((r) => r.rawFindingId));
+  const rejectedDisputeIds = new Set(assembly.rejectedDisputeDecisions.map((r) => r.findingId));
+  const rejectedConflictIds = new Set(assembly.rejectedConflictDecisions.map((r) => r.conflictId));
+  return {
+    rawDecisions: decisions.rawDecisions.filter((d) => !rejectedRawIds.has(d.rawFindingId)),
+    disputeDecisions: decisions.disputeDecisions.filter((d) => !rejectedDisputeIds.has(d.findingId)),
+    conflictDecisions: decisions.conflictDecisions.filter((d) => !rejectedConflictIds.has(d.conflictId)),
+  };
+}
+
+/**
+ * 再問い合わせ後もなお不採用の raw decision は、情報を捨てないため new finding として
+ * 扱う（機械分類・reconciler の「未言及 raw は new」フォールバックと同じ思想）。
+ * dispute/conflict の不採用分は、対象が既存の台帳エントリ（対象は変化しない）なので
+ * 単に反映しない（何もしない = 現状維持）。
+ *
+ * ただし kind が resolution_confirmation の raw は new に倒せない。
+ * manager-output-validation.ts の validateConfirmationRefsOnlyInResolutions が
+ * 「Resolution confirmation ... cannot be cited as issue evidence」で newFindings
+ * への混入を拒否するため、ここで forcedNewFindings に含めると最終検証で
+ * invalid_manager_output に落ち、再問い合わせで直った他の決定まで道連れで
+ * 台帳に反映されなくなる（実測: 既に resolved 済みの finding を再度 resolved と
+ * 判断するケースで再現）。resolution_confirmation はここでは採用せず、
+ * invalidAttempts / saveManagerValidationReport の記録だけに残して捨てる。
+ */
+function forceUnresolvedRawDecisionsAsNew(
+  assembly: AssembleManagerOutputResult,
+  residualRawFindings: readonly RawFinding[],
+): FindingManagerOutput {
+  const rawById = new Map(residualRawFindings.map((raw) => [raw.rawFindingId, raw]));
+  const forcedNewFindings = assembly.rejectedRawDecisions
+    .map((rejected) => rawById.get(rejected.rawFindingId))
+    .filter((raw): raw is RawFinding => raw !== undefined && raw.kind !== 'resolution_confirmation')
+    .map((raw) => ({ rawFindingIds: [raw.rawFindingId], title: raw.title, severity: raw.severity }));
+  return {
+    ...assembly.output,
+    newFindings: [...assembly.output.newFindings, ...forcedNewFindings],
+  };
 }
 
 async function runManagerWithSemanticRetry(input: {
   previousLedger: FindingLedger;
   rawFindings: RawFinding[];
+  residualRawFindings: RawFinding[];
   mechanicalOutput: FindingManagerOutput;
   managerStep: AgentWorkflowStep;
   instruction: string;
@@ -320,66 +465,98 @@ async function runManagerWithSemanticRetry(input: {
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
   priorStepResponseText?: string;
 }): Promise<ValidatedManagerOutputRun> {
-  // 検証は「機械分類 + LLM 分類」を統合した最終形に対して行う。
-  // 全 raw finding の網羅性は統合後でしか成立しないため。
-  const firstAgentOutput = await runManagerAttempt({
+  const firstDecisions = await runManagerAttempt({
     managerStep: input.managerStep,
     instruction: input.instruction,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
   });
-  const firstManagerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, firstAgentOutput);
-  const firstValidation = validateFindingManagerOutput({
+  const firstAssembly = assembleManagerOutput({
     previousLedger: input.previousLedger,
-    rawFindings: input.rawFindings,
-    managerOutput: firstManagerOutput,
+    residualRawFindings: input.residualRawFindings,
+    decisions: firstDecisions,
     priorStepResponseText: input.priorStepResponseText,
+    // manager の応答そのものの検証: 残余 raw finding のうち decision が
+    // 1件も無いものを rejection にする（manager が rawDecisions: [] を返す等、
+    // 契約を守らなかったケースを再問い合わせに乗せるため）。
+    checkMissingDecisions: true,
   });
-  if (firstValidation.ok) {
-    return { managerOutput: firstManagerOutput, validation: firstValidation, invalidAttempts: [] };
+
+  const finalizeValidation = (managerOutput: FindingManagerOutput): FindingManagerValidationResult => (
+    // 組み立て時の不変条件チェックを通過していれば通常はここも通る。ここは
+    // decision-assembly でカバーしきれない残余ケースのための最終防衛線。
+    validateFindingManagerOutput({
+      previousLedger: input.previousLedger,
+      rawFindings: input.rawFindings,
+      managerOutput,
+      priorStepResponseText: input.priorStepResponseText,
+    })
+  );
+
+  if (!hasAnyRejection(firstAssembly)) {
+    const managerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, firstAssembly.output);
+    return { managerOutput, validation: finalizeValidation(managerOutput), invalidAttempts: [] };
   }
 
-  const firstAttempt = {
+  const firstAttempt: FindingManagerValidationAttemptReport = {
     attempt: 1,
-    managerOutput: firstManagerOutput,
-    validationErrors: firstValidation.errors,
+    managerOutput: firstDecisions,
+    validationErrors: describeRejections(firstAssembly),
   };
-  const retryAgentOutput = await runManagerAttempt({
+
+  const retryDecisions = await runManagerAttempt({
     managerStep: input.managerStep,
     instruction: buildManagerRetryInstruction({
       originalInstruction: input.instruction,
-      validationErrors: firstValidation.errors,
-      managerOutput: firstAgentOutput,
+      residualRawFindings: input.residualRawFindings,
+      rejectedRawDecisions: firstAssembly.rejectedRawDecisions,
+      rejectedDisputeDecisions: firstAssembly.rejectedDisputeDecisions,
+      rejectedConflictDecisions: firstAssembly.rejectedConflictDecisions,
     }),
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
   });
-  const retryManagerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, retryAgentOutput);
-  const retryValidation = validateFindingManagerOutput({
+  const acceptedFirstDecisions = keepAcceptedDecisions(firstDecisions, firstAssembly);
+  const combinedDecisions: FindingManagerDecisions = {
+    rawDecisions: [...acceptedFirstDecisions.rawDecisions, ...retryDecisions.rawDecisions],
+    disputeDecisions: [...acceptedFirstDecisions.disputeDecisions, ...retryDecisions.disputeDecisions],
+    conflictDecisions: [...acceptedFirstDecisions.conflictDecisions, ...retryDecisions.conflictDecisions],
+  };
+  const secondAssembly = assembleManagerOutput({
     previousLedger: input.previousLedger,
-    rawFindings: input.rawFindings,
-    managerOutput: retryManagerOutput,
+    residualRawFindings: input.residualRawFindings,
+    decisions: combinedDecisions,
     priorStepResponseText: input.priorStepResponseText,
+    // 再問い合わせ後もなお欠落したままの raw を rejection として検出する
+    // （firstAssembly と同じ理由）。stillRejected → forceUnresolvedRawDecisionsAsNew
+    // の既存経路に自然に乗る。
+    checkMissingDecisions: true,
   });
 
+  const stillRejected = hasAnyRejection(secondAssembly);
+  const finalAssembledOutput = stillRejected
+    ? forceUnresolvedRawDecisionsAsNew(secondAssembly, input.residualRawFindings)
+    : secondAssembly.output;
+  const managerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, finalAssembledOutput);
+
   return {
-    managerOutput: retryManagerOutput,
-    validation: retryValidation,
-    invalidAttempts: retryValidation.ok
-      ? [firstAttempt]
-      : [
+    managerOutput,
+    validation: finalizeValidation(managerOutput),
+    invalidAttempts: stillRejected
+      ? [
         firstAttempt,
         {
           attempt: 1 + FINDING_MANAGER_MAX_SEMANTIC_RETRIES,
-          managerOutput: retryManagerOutput,
-          validationErrors: retryValidation.errors,
+          managerOutput: retryDecisions,
+          validationErrors: describeRejections(secondAssembly),
         },
-      ],
+      ]
+      : [firstAttempt],
   };
 }
 
-export async function runFindingManagerForParallelStep(
-  input: RunFindingManagerForParallelStepInput,
+export async function runFindingManagerForStep(
+  input: RunFindingManagerForStepInput,
 ): Promise<FindingManagerRunResult> {
   const previousLedger = input.ledgerStore.loadLedger();
   const ledgerCopyPath = input.ledgerCopyPath ?? input.ledgerStore.createRunCopy();
@@ -388,13 +565,10 @@ export async function runFindingManagerForParallelStep(
     runId: input.runId,
     stepIteration: input.stepIteration,
     parentStepName: input.parentStep.name,
+    callNamespace: input.callNamespace,
   });
   const rawFindingsPath = input.ledgerStore.saveRawFindings(input.runId, input.parentStep.name, rawFindings);
-  const managerStep = buildFindingManagerStep({
-    contract: input.contract,
-    workflowProvider: input.workflowProvider,
-    workflowModel: input.workflowModel,
-  });
+  const managerStep = buildManagerStep(input.contract);
   const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
 
   // フィールド等価で確定する raw（解消確認・open 指摘への完全一致）はコードで
@@ -423,6 +597,7 @@ export async function runFindingManagerForParallelStep(
     ({ managerOutput, validation, invalidAttempts } = await runManagerWithSemanticRetry({
       previousLedger,
       rawFindings,
+      residualRawFindings: mechanical.residualRawFindings,
       mechanicalOutput: mechanical.output,
       managerStep,
       instruction,
@@ -463,20 +638,51 @@ export async function runFindingManagerForParallelStep(
     };
   }
 
-  const nextLedger = reconcileFindingLedger({
-    priorStepResponseText: input.priorStepResponseText,
-    previousLedger,
-    rawFindings,
-    managerOutput,
-    context: {
-      workflowName: input.workflowName,
-      stepName: input.parentStep.name,
-      runId: input.runId,
-      timestamp: input.timestamp,
-    },
+  // ここまでの LLM 呼び出し・組み立て・検証は previousLedger（この関数の
+  // 冒頭で読んだスナップショット）を基準に行った。だが並列 workflow_call の
+  // 子エンジンが同じ store（親から継承した台帳）を共有する場合、この間に
+  // 別の子が台帳を更新している可能性がある。previousLedger のまま保存すると
+  // 後勝ちで他方の更新を消してしまう（実測: 2子が同時に台帳更新→片方の
+  // findings が消失）。updateLedger で「保存直前に再読込した台帳」に対して
+  // 組み立てをもう一度行い、そのまま同じ排他区間で保存する。
+  //
+  // managerOutput（mechanical ∪ LLM 判断の組み立て済み8配列）を decisions へ
+  // 逆変換して assembleManagerOutput をもう一度通すのは、raw finding と
+  // finding id を指す判断そのものは再読込後の台帳に対しても意味を持つため。
+  // 再読込後に前提が崩れた決定（例: 既に他の子が resolved にした finding への
+  // same）は、既存の項目単位の不採用として扱う（ここでは再問い合わせしない。
+  // 直列化区間の中で LLM を呼び直すと排他の意味が失われるため）。
+  let staleRejections: string[] = [];
+  const nextLedger = await input.ledgerStore.updateLedger((freshLedger) => {
+    const freshAssembly = assembleManagerOutput({
+      previousLedger: freshLedger,
+      residualRawFindings: rawFindings,
+      decisions: flattenManagerOutputToDecisions(managerOutput),
+      priorStepResponseText: input.priorStepResponseText,
+    });
+    staleRejections = describeRejections(freshAssembly);
+    // 最新台帳との再照合で項目単位で不採用になった raw は、reconciler の
+    // 「決定で言及されなかった raw finding は新規 finding にする」フォールバック
+    // にも回さない。回すと不採用の意味が消え、この raw が結局 new finding として
+    // 台帳に紛れ込む（reconcileFindingLedger 側のコメント参照）。
+    const staleRejectedRawFindingIds = new Set(
+      freshAssembly.rejectedRawDecisions.map((rejected) => rejected.rawFindingId),
+    );
+    return reconcileFindingLedger({
+      priorStepResponseText: input.priorStepResponseText,
+      previousLedger: freshLedger,
+      rawFindings,
+      managerOutput: freshAssembly.output,
+      excludedFromUnmentionedFallbackRawFindingIds: staleRejectedRawFindingIds,
+      context: {
+        workflowName: input.workflowName,
+        stepName: input.parentStep.name,
+        runId: input.runId,
+        timestamp: input.timestamp,
+      },
+    });
   });
-  input.ledgerStore.saveLedger(nextLedger);
-  if (invalidAttempts.length > 0) {
+  if (invalidAttempts.length > 0 || staleRejections.length > 0) {
     input.ledgerStore.saveManagerValidationReport({
       version: 1,
       runId: input.runId,
@@ -484,7 +690,16 @@ export async function runFindingManagerForParallelStep(
       retryCount: FINDING_MANAGER_MAX_SEMANTIC_RETRIES,
       ledgerUpdated: true,
       finalErrors: [],
-      attempts: invalidAttempts,
+      attempts: staleRejections.length > 0
+        ? [
+          ...invalidAttempts,
+          {
+            attempt: invalidAttempts.length + 1,
+            managerOutput,
+            validationErrors: staleRejections,
+          },
+        ]
+        : invalidAttempts,
     });
   }
   return {

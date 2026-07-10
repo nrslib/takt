@@ -7,6 +7,7 @@ import {
 } from '../core/models/finding-types.js';
 import {
   FindingLifecycleSchema,
+  FindingManagerDecisionsJsonSchema,
   FindingManagerOutputJsonSchema,
   FindingSeveritySchema,
   FindingStatusSchema,
@@ -27,6 +28,14 @@ describe('finding schemas', () => {
     expect(managerProperties.reopenedFindings.items.required).toEqual(Object.keys(managerProperties.reopenedFindings.items.properties));
     expect(managerProperties.conflicts.items.required).toEqual(Object.keys(managerProperties.conflicts.items.properties));
     expect(managerProperties.resolvedConflicts.items.required).toEqual(Object.keys(managerProperties.resolvedConflicts.items.properties));
+  });
+
+  it('keeps strict JSON Schema object properties listed in required for the manager decisions schema', () => {
+    const decisionsProperties = FindingManagerDecisionsJsonSchema.properties;
+    expect(FindingManagerDecisionsJsonSchema.required).toEqual(Object.keys(decisionsProperties));
+    expect(decisionsProperties.rawDecisions.items.required).toEqual(Object.keys(decisionsProperties.rawDecisions.items.properties));
+    expect(decisionsProperties.disputeDecisions.items.required).toEqual(Object.keys(decisionsProperties.disputeDecisions.items.properties));
+    expect(decisionsProperties.conflictDecisions.items.required).toEqual(Object.keys(decisionsProperties.conflictDecisions.items.properties));
   });
 
   it('uses finding type constants for schema enum values', () => {

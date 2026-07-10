@@ -170,6 +170,49 @@ export interface FindingManagerOutput {
   disputeNotes: FindingManagerDisputeNote[];
 }
 
+// FindingManagerOutput（上記）は台帳の内部表現として残すが、LLM に直接組み立てさせる
+// のはやめる。8配列すべてを一貫した不変条件を守りながら自力で組み立てさせると、
+// gpt-5.5 のような十分に強いモデルでも検証に落ちる（takt-bench v2 で実測: 7 走行全滅、
+// "not open" / "familyTag mismatch" / "conflict is not active" 等）。LLM には
+// raw finding 1件・disputed finding 1件・conflict 1件ごとの「判断」だけを返させ、
+// 8配列への組み立てと不変条件の強制はコード（decision-assembly.ts）が担う。
+export const RAW_DECISION_KINDS = ['same', 'new', 'resolved', 'reopened', 'conflict'] as const;
+export type RawDecisionKind = typeof RAW_DECISION_KINDS[number];
+
+export const DISPUTE_DECISION_KINDS = ['waive', 'note'] as const;
+export type DisputeDecisionKind = typeof DISPUTE_DECISION_KINDS[number];
+
+export const CONFLICT_DECISION_KINDS = ['resolve', 'keep'] as const;
+export type ConflictDecisionKind = typeof CONFLICT_DECISION_KINDS[number];
+
+export interface FindingManagerRawDecision {
+  rawFindingId: string;
+  decision: RawDecisionKind;
+  /** Ledger finding id. Required for same/resolved/reopened/conflict; absent for new. */
+  findingId?: string;
+  evidence: string;
+}
+
+export interface FindingManagerDisputeDecision {
+  findingId: string;
+  decision: DisputeDecisionKind;
+  reason: string;
+  evidence: string;
+}
+
+export interface FindingManagerConflictDecision {
+  conflictId: string;
+  decision: ConflictDecisionKind;
+  evidence: string;
+}
+
+/** LLM が返す「判断だけ」の出力。組み立て・不変条件の強制は decision-assembly.ts が行う。 */
+export interface FindingManagerDecisions {
+  rawDecisions: FindingManagerRawDecision[];
+  disputeDecisions: FindingManagerDisputeDecision[];
+  conflictDecisions: FindingManagerConflictDecision[];
+}
+
 export interface FindingReconcileContext {
   workflowName: string;
   stepName: string;

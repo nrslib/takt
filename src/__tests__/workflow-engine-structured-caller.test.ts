@@ -103,13 +103,44 @@ describe('WorkflowEngine structured caller defaults', () => {
   });
 
   async function runInvalidManagerRetryFailureWithRules(rules: WorkflowRule[]) {
+    // F-0001 は open で開始する。今ラウンドで confirm-1（resolution_confirmation）が
+    // targetFindingId 経由で機械的に resolved へ分類される一方、manager は別の raw
+    // （raw-other、同じ root cause の再報告）を根拠に同じ F-0001 を matches へ
+    // 対応づける。組み立て単体では正当（decision-assembly は previousLedger 上の
+    // F-0001 がまだ open であることしか見ない）だが、機械分類と統合すると
+    // 同一 finding が matches と resolvedFindings の両方に現れ、最終防衛線
+    // （validateFindingManagerOutput）でしか検出できない invalid_manager_output になる。
     const initialLedger = {
       version: 1,
       workflowName: 'finding-manager-rule-variant-test',
-      nextId: 1,
+      nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
-      findings: [],
-      rawFindings: [],
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/a.ts:10',
+          reviewers: ['architecture-review'],
+          rawFindingIds: ['raw-existing'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+      rawFindings: [
+        {
+          rawFindingId: 'raw-existing',
+          stepName: 'reviewers',
+          reviewer: 'architecture-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/a.ts:10',
+          description: 'Existing issue body.',
+        },
+      ],
       conflicts: [],
     };
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
@@ -125,64 +156,58 @@ describe('WorkflowEngine structured caller defaults', () => {
         return {
           persona: 'architecture-reviewer',
           status: 'done',
-          content: 'Architecture issue found.',
+          content: 'Two findings reported.',
           structuredOutput: {
             rawFindings: [
               {
-                rawFindingId: 'raw-architecture-1',
+                rawFindingId: 'confirm-1',
+                kind: 'resolution_confirmation',
+                targetFindingId: 'F-0001',
+                familyTag: 'bug',
+                severity: 'high',
+                title: 'Existing issue',
+                location: 'src/a.ts:10',
+                description: 'Verified the fix at src/a.ts:10.',
+                suggestion: '',
+              },
+              {
+                rawFindingId: 'raw-other',
                 kind: 'issue',
                 targetFindingId: '',
                 familyTag: 'bug',
-                severity: 'high',
-                title: 'Rule evaluation ignores finding state',
-                location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
-                description: 'The parent rule must see the consolidated ledger.',
-                suggestion: 'Run the findings manager before parent rule evaluation.',
+                severity: 'medium',
+                title: 'Same root cause elsewhere',
+                location: 'src/other.ts:5',
+                description: 'A different symptom of the same bug.',
+                suggestion: 'Investigate the shared root cause.',
               },
             ],
           },
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
         };
       })
-      .mockResolvedValueOnce({
-        persona: 'findings-manager',
-        status: 'done',
-        content: 'manager output',
-        structuredOutput: {
-          matches: [],
-          newFindings: [
-            {
-              rawFindingIds: ['missing-raw-id'],
-              title: 'Unmatched raw finding',
-              severity: 'high',
-            },
-          ],
-          resolvedFindings: [],
-          reopenedFindings: [],
-          conflicts: [],
-          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
-        },
-        timestamp: new Date('2026-06-13T00:00:02.000Z'),
-      })
-      .mockResolvedValueOnce({
-        persona: 'findings-manager',
-        status: 'done',
-        content: 'manager output',
-        structuredOutput: {
-          matches: [],
-          newFindings: [
-            {
-              rawFindingIds: ['missing-raw-id'],
-              title: 'Unmatched raw finding',
-              severity: 'high',
-            },
-          ],
-          resolvedFindings: [],
-          reopenedFindings: [],
-          conflicts: [],
-          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
-        },
-        timestamp: new Date('2026-06-13T00:00:03.000Z'),
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        const residualRawId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-other/)?.[0] ?? '';
+        if (residualRawId.length === 0) {
+          throw new Error(`expected normalized raw finding id in manager instruction: ${instruction}`);
+        }
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: 'manager output',
+          structuredOutput: {
+            rawDecisions: [
+              { rawFindingId: residualRawId, decision: 'same', findingId: 'F-0001', evidence: 'Same root cause as F-0001.' },
+            ],
+            disputeDecisions: [],
+            conflictDecisions: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
       })
       .mockImplementationOnce(async (_persona, instruction, options) => {
         options?.onPromptResolved?.({
@@ -455,6 +480,134 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.stepOutputs.has('fix')).toBe(true);
     expect(existsSync(join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'findings-ledger.json'))).toBe(true);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  it('parallel を使わない単独ステップの finding_contract 出力が台帳に取り込まれ、同じ回のルール評価が反映を見る', async () => {
+    // codex 指摘2の再現ケース: 以前は ParallelRunner だけが findings-manager を
+    // 起動していたため、`*-finding-contract` 形式の output_contracts を持つ
+    // 単独ステップ（parallel を使わないレビューステップ）の raw findings は
+    // 台帳へ取り込まれる経路が無く、指摘が黙って捨てられていた。ここでは
+    // review ステップ自体は parallel を持たず、その Phase 1 が返す raw
+    // findings が同じステップ実行の中で台帳へ反映され、直後のルール評価
+    // （when(findings.open.bySeverity.high > 0)）がそれを見て fix へ
+    // 遷移することを確認する。
+    const ledgerPath = getAuthoritativeLedgerPath(cwd);
+    mkdirSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings'), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify({
+      version: 1,
+      workflowName: 'solo-finding-contract-test',
+      nextId: 1,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      findings: [],
+      rawFindings: [],
+      conflicts: [],
+    }), 'utf-8');
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      if (persona === 'findings-manager') {
+        // manager の指示文には raw findings の JSON ブロックが埋め込まれる。
+        // 実際の rawFindingId は run/step/iteration を合成した値になるため、
+        // ハードコードせず指示文から抽出する。
+        const match = /"rawFindingId":\s*"([^"]+)"/.exec(instruction);
+        const rawFindingId = match?.[1];
+        if (rawFindingId === undefined) {
+          throw new Error('Test setup error: rawFindingId not found in manager instruction');
+        }
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
+            disputeDecisions: [],
+            conflictDecisions: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
+      }
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"rawFindings"')) {
+        return {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'Review report body.',
+          structuredOutput: {
+            rawFindings: [{
+              rawFindingId: 'raw-1',
+              familyTag: 'security',
+              severity: 'high',
+              title: 'Secret is logged',
+              location: 'src/secret.ts:12',
+              description: 'The code logs a token.',
+              suggestion: 'Mask the token before logging.',
+              kind: 'issue',
+              targetFindingId: '',
+            }],
+          },
+          timestamp: new Date('2026-06-13T00:00:01.000Z'),
+        };
+      }
+      return {
+        persona: 'agent',
+        status: 'done',
+        content: 'ok',
+        timestamp: new Date('2026-06-13T00:00:03.000Z'),
+      };
+    });
+
+    const config: WorkflowConfig = {
+      name: 'solo-finding-contract-test',
+      maxSteps: 3,
+      initialStep: 'review',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review.',
+          // parallel を使わない単独ステップ。format が *-finding-contract
+          // 命名規約に従っていることが取り込みのトリガーになる。
+          outputContracts: [
+            { name: 'review.md', format: 'resolved facet body', formatRef: 'review-finding-contract' },
+          ],
+          rules: [
+            makeRule('when(findings.open.count == 0)', 'COMPLETE'),
+            makeRule('when(findings.open.bySeverity.high > 0)', 'fix'),
+          ],
+        }),
+        makeStep({
+          name: 'fix',
+          persona: 'coder',
+          instruction: 'Fix.',
+          rules: [makeRule('when(true)', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const result = await new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    }).run();
+
+    expect(result.status).toBe('completed');
+    // review 自身のルール評価が、同じ回で取り込んだ findings を見て fix へ
+    // 遷移している（取り込みがルール評価より後だと COMPLETE のまま止まる）。
+    expect(result.stepOutputs.has('fix')).toBe(true);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+
+    const persistedLedger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as { findings: Array<{ title: string; status: string }> };
+    expect(persistedLedger.findings.some((f) => f.title === 'Secret is logged' && f.status === 'open')).toBe(true);
   });
 
   it('projectCwd 側の ledger を rule 評価の正本として信頼する', async () => {
@@ -821,13 +974,13 @@ describe('WorkflowEngine structured caller defaults', () => {
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (schemaText.includes('"matches"')) {
+      if (schemaText.includes('"rawDecisions"')) {
         return {
           persona: 'findings-manager',
           status: 'done',
           content: '{}',
           structuredOutput: {
-            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            rawDecisions: [], disputeDecisions: [], conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1173,13 +1326,13 @@ describe('WorkflowEngine structured caller defaults', () => {
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (schemaText.includes('"matches"')) {
+      if (schemaText.includes('"rawDecisions"')) {
         return {
           persona: 'findings-manager',
           status: 'done',
           content: '{}',
           structuredOutput: {
-            matches: [], newFindings: [], resolvedFindings: [], reopenedFindings: [], conflicts: [], resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            rawDecisions: [], disputeDecisions: [], conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1358,23 +1511,21 @@ describe('WorkflowEngine structured caller defaults', () => {
         expect(options?.sessionId).toBeUndefined();
         expect(options?.permissionMode).toBe('readonly');
         expect(options?.allowedTools).toEqual([]);
+        // manager は raw finding 1件ごとにしか判断できず、未採番の "new" 同士を
+        // 1つの finding へ束ねる判断はできない（採番前の finding には対応づけ先が
+        // ない）。2人のレビュアーが同じ問題を報告しても、この設計では別々の
+        // finding として起票される。
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [
-              {
-                rawFindingIds: [architectureRawId, securityRawId],
-                title: 'Rule evaluation ignores finding state',
-                severity: 'high',
-              },
+            rawDecisions: [
+              { rawFindingId: architectureRawId, decision: 'new', findingId: '', evidence: 'Reported by architecture review.' },
+              { rawFindingId: securityRawId, decision: 'new', findingId: '', evidence: 'Reported by security review.' },
             ],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1468,7 +1619,12 @@ describe('WorkflowEngine structured caller defaults', () => {
       'security-review',
     ]);
     expect(ledger.rawFindings.map((finding) => finding.familyTag)).toEqual(['bug', 'bug']);
-    expect(ledger.findings[0]?.reviewers).toEqual(['architecture-review', 'security-review']);
+    // 2 人のレビュアーが同じ familyTag・同じ場所を報告している。フィールド等価で
+    // 同一問題と決まるので、台帳には 1 件だけ立つ（重複した finding を作らない）。
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.findings.map((finding) => finding.reviewers)).toEqual([
+      ['architecture-review', 'security-review'],
+    ]);
     expect(existsSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw', 'test-report-dir.reviewers.json'))).toBe(true);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
   });
@@ -1491,10 +1647,10 @@ describe('WorkflowEngine structured caller defaults', () => {
         persona: 'findings-manager',
         status: 'done' as const,
         content: 'manager output',
-        structuredOutput: { matches: [] },
+        structuredOutput: { rawDecisions: [] },
         timestamp: new Date('2026-06-13T00:00:03.000Z'),
       },
-      expectedReason: 'requires structured_output for provider "claude": $.newFindings is required',
+      expectedReason: 'requires structured_output for provider "claude": $.disputeDecisions is required',
     },
   ])('findings manager が $name を返した場合は ledger 更新と親 rule 評価に進まない', async ({ managerResponse, expectedReason }) => {
     const initialLedger = {
@@ -1675,29 +1831,19 @@ describe('WorkflowEngine structured caller defaults', () => {
         if (firstManagerRawId.length === 0) {
           throw new Error(`expected normalized raw finding id in manager instruction: ${instruction}`);
         }
+        // 同じ raw finding を rawDecisions に2回載せてしまう（境界壊れの典型例）。
+        // decision-assembly は最初の1件だけ採用し、2件目を "Duplicate decision" として不採用にする。
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [
-              {
-                rawFindingIds: [firstManagerRawId],
-                title: 'Rule evaluation ignores finding state',
-                severity: 'high',
-              },
+            rawDecisions: [
+              { rawFindingId: firstManagerRawId, decision: 'new', findingId: '', evidence: 'First observation.' },
+              { rawFindingId: firstManagerRawId, decision: 'new', findingId: '', evidence: 'Restated the same raw finding twice by mistake.' },
             ],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [
-              {
-                findingIds: [],
-                rawFindingIds: [firstManagerRawId],
-                description: 'The same raw finding was also placed in conflicts.',
-              },
-            ],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -1712,24 +1858,17 @@ describe('WorkflowEngine structured caller defaults', () => {
         expect(options?.sessionId).toBeUndefined();
         expect(instruction).toContain('Raw findings:');
         expect(instruction).toContain(firstManagerRawId);
-        expect(instruction).toContain(`Raw finding id "${firstManagerRawId}"`);
+        expect(instruction).toContain(`- rawFindingId: ${firstManagerRawId}`);
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [
-              {
-                rawFindingIds: [firstManagerRawId],
-                title: 'Rule evaluation ignores finding state',
-                severity: 'high',
-              },
+            rawDecisions: [
+              { rawFindingId: firstManagerRawId, decision: 'new', findingId: '', evidence: 'Confirmed single new finding.' },
             ],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -1817,40 +1956,61 @@ describe('WorkflowEngine structured caller defaults', () => {
       finalErrors: [],
     }));
     expect(validationReport.attempts[0]?.validationErrors).toEqual([
-      `Raw finding id "${firstManagerRawId}" appears in multiple manager decisions: newFindings[0] and conflicts[0]`,
+      `rawDecisions: raw finding "${firstManagerRawId}" (new) rejected: Duplicate decision for raw finding id "${firstManagerRawId}"`,
     ]);
     expect(validationReport.attempts[0]?.managerOutput).toEqual({
-      matches: [],
-      newFindings: [
-        {
-          rawFindingIds: [firstManagerRawId],
-          title: 'Rule evaluation ignores finding state',
-          severity: 'high',
-        },
+      // parseFindingManagerDecisions は空文字の findingId を未指定として
+      // transform で落とすため、'new' 決定に findingId キーは残らない。
+      rawDecisions: [
+        { rawFindingId: firstManagerRawId, decision: 'new', evidence: 'First observation.' },
+        { rawFindingId: firstManagerRawId, decision: 'new', evidence: 'Restated the same raw finding twice by mistake.' },
       ],
-      resolvedFindings: [],
-      reopenedFindings: [],
-      conflicts: [
-        {
-          findingIds: [],
-          rawFindingIds: [firstManagerRawId],
-          description: 'The same raw finding was also placed in conflicts.',
-        },
-      ],
-      resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+      disputeDecisions: [],
+      conflictDecisions: [],
     });
     expect(ledgerUpdated).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
   });
 
-  it('retry 後も semantic invalid なら ledger 非更新で制御失敗を返す', async () => {
+  it('manager 決定と機械分類の結果が矛盾するなら retry を挟まず ledger 非更新で制御失敗を返す', async () => {
+    // F-0001 は open で開始する。confirm-1（resolution_confirmation）は機械分類で
+    // F-0001 を resolved に落とす一方、manager は別の raw（raw-other）を根拠に
+    // 同じ F-0001 を matches へ対応づける。decision-assembly 単体では正当（
+    // previousLedger 上の F-0001 はまだ open）だが、機械分類との統合後は同一
+    // finding が matches と resolvedFindings の両方に現れ、最終防衛線
+    // （validateFindingManagerOutput）でしか検出できない。decision-assembly 自体は
+    // 何も不採用にしていないため、再問い合わせの対象がなく retry は起きない。
     const initialLedger = {
       version: 1,
       workflowName: 'finding-manager-retry-failure-test',
-      nextId: 1,
+      nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
-      findings: [],
-      rawFindings: [],
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/a.ts:10',
+          reviewers: ['architecture-review'],
+          rawFindingIds: ['raw-existing'],
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+      rawFindings: [
+        {
+          rawFindingId: 'raw-existing',
+          stepName: 'reviewers',
+          reviewer: 'architecture-review',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/a.ts:10',
+          description: 'Existing issue body.',
+        },
+      ],
       conflicts: [],
     };
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
@@ -1866,64 +2026,54 @@ describe('WorkflowEngine structured caller defaults', () => {
         return {
           persona: 'architecture-reviewer',
           status: 'done',
-          content: 'Architecture issue found.',
+          content: 'Two findings reported.',
           structuredOutput: {
             rawFindings: [
               {
-                rawFindingId: 'raw-architecture-1',
+                rawFindingId: 'confirm-1',
+                kind: 'resolution_confirmation',
+                targetFindingId: 'F-0001',
+                familyTag: 'bug',
+                severity: 'high',
+                title: 'Existing issue',
+                location: 'src/a.ts:10',
+                description: 'Verified the fix at src/a.ts:10.',
+                suggestion: '',
+              },
+              {
+                rawFindingId: 'raw-other',
                 kind: 'issue',
                 targetFindingId: '',
                 familyTag: 'bug',
-                severity: 'high',
-                title: 'Rule evaluation ignores finding state',
-                location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
-                description: 'The parent rule must see the consolidated ledger.',
-                suggestion: 'Run the findings manager before parent rule evaluation.',
+                severity: 'medium',
+                title: 'Same root cause elsewhere',
+                location: 'src/other.ts:5',
+                description: 'A different symptom of the same bug.',
+                suggestion: 'Investigate the shared root cause.',
               },
             ],
           },
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
         };
       })
-      .mockResolvedValueOnce({
-        persona: 'findings-manager',
-        status: 'done',
-        content: 'manager output',
-        structuredOutput: {
-          matches: [],
-          newFindings: [
-            {
-              rawFindingIds: ['missing-raw-id'],
-              title: 'Unmatched raw finding',
-              severity: 'high',
-            },
-          ],
-          resolvedFindings: [],
-          reopenedFindings: [],
-          conflicts: [],
-          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
-        },
-        timestamp: new Date('2026-06-13T00:00:02.000Z'),
-      })
-      .mockResolvedValueOnce({
-        persona: 'findings-manager',
-        status: 'done',
-        content: 'manager output',
-        structuredOutput: {
-          matches: [],
-          newFindings: [
-            {
-              rawFindingIds: ['missing-raw-id'],
-              title: 'Unmatched raw finding',
-              severity: 'high',
-            },
-          ],
-          resolvedFindings: [],
-          reopenedFindings: [],
-          conflicts: [],
-          resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
-        },
-        timestamp: new Date('2026-06-13T00:00:03.000Z'),
+      .mockImplementationOnce(async (_persona, instruction) => {
+        const residualRawId = instruction.match(/[^"\s]+:reviewers:\d+:architecture-review:raw-other/)?.[0] ?? '';
+        if (residualRawId.length === 0) {
+          throw new Error(`expected normalized raw finding id in manager instruction: ${instruction}`);
+        }
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: 'manager output',
+          structuredOutput: {
+            rawDecisions: [
+              { rawFindingId: residualRawId, decision: 'same', findingId: 'F-0001', evidence: 'Same root cause as F-0001.' },
+            ],
+            disputeDecisions: [],
+            conflictDecisions: [],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.000Z'),
+        };
       });
 
     const config: WorkflowConfig = {
@@ -2009,44 +2159,13 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(validationReport).toEqual(expect.objectContaining({
       retryCount: 1,
       ledgerUpdated: false,
-      finalErrors: ['Unknown raw finding id "missing-raw-id" in newFindings[0]'],
+      finalErrors: ['Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]'],
     }));
-    expect(validationReport.attempts).toHaveLength(2);
-    expect(validationReport.attempts.map((attempt) => attempt.managerOutput)).toEqual([
-      {
-        matches: [],
-        newFindings: [
-          {
-            rawFindingIds: ['missing-raw-id'],
-            title: 'Unmatched raw finding',
-            severity: 'high',
-          },
-        ],
-        resolvedFindings: [],
-        reopenedFindings: [],
-        conflicts: [],
-        resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
-      },
-      {
-        matches: [],
-        newFindings: [
-          {
-            rawFindingIds: ['missing-raw-id'],
-            title: 'Unmatched raw finding',
-            severity: 'high',
-          },
-        ],
-        resolvedFindings: [],
-        reopenedFindings: [],
-        conflicts: [],
-        resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
-      },
-    ]);
-    expect(validationReport.attempts[1]?.validationErrors).toEqual([
-      'Unknown raw finding id "missing-raw-id" in newFindings[0]',
-    ]);
+    // decision-assembly はこの矛盾を検出できない（機械分類の結果を知らない）ため、
+    // 不採用が発生せず再問い合わせは行われない。attempts は空のまま。
+    expect(validationReport.attempts).toEqual([]);
     expect(ledgerUpdated).not.toHaveBeenCalled();
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
   it('retry 後も semantic invalid なら needs_fix return rule を自動選択する', async () => {
@@ -2068,7 +2187,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.stepOutputs.has('fix')).toBe(false);
     expect(JSON.parse(readFileSync(ledgerPath, 'utf-8'))).toEqual(initialLedger);
     expect(ledgerUpdated).not.toHaveBeenCalled();
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -2097,7 +2216,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       expect(result.stepOutputs.has('fix')).toBe(false);
       expect(JSON.parse(readFileSync(ledgerPath, 'utf-8'))).toEqual(initialLedger);
       expect(ledgerUpdated).not.toHaveBeenCalled();
-      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -2118,7 +2237,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.stepOutputs.get('fix')?.content).toBe('fixed');
     expect(JSON.parse(readFileSync(ledgerPath, 'utf-8'))).toEqual(initialLedger);
     expect(ledgerUpdated).not.toHaveBeenCalled();
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
   });
 
   it('semantic invalid 用の該当 parent rule がない finding_contract parallel workflow を設定エラーにする', () => {
@@ -2252,23 +2371,19 @@ describe('WorkflowEngine structured caller defaults', () => {
         if (currentRawId.length === 0) {
           throw new Error(`expected normalized raw finding id in manager instruction: ${instruction.slice(instruction.indexOf('Raw findings:'))}`);
         }
+        // 注入された raw finding の指示に従い、issue kind の raw を根拠に F-0001 を
+        // 誤って resolved にしようとする。decision-assembly は resolved を
+        // resolution_confirmation kind の raw だけに限定しており、この決定は不採用になる。
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [],
-            resolvedFindings: [
-              {
-                findingId: 'F-0001',
-                rawFindingIds: [currentRawId],
-                evidence: 'The issue is fixed.',
-              },
+            rawDecisions: [
+              { rawFindingId: currentRawId, decision: 'resolved', findingId: 'F-0001', evidence: 'The issue is fixed.' },
             ],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
         };
@@ -2278,19 +2393,18 @@ describe('WorkflowEngine structured caller defaults', () => {
           systemPrompt: 'system',
           userInstruction: instruction,
         });
-        expect(instruction).toContain('Resolved finding "F-0001"');
+        expect(instruction).toContain(`Cannot resolve finding "F-0001"`);
         expect(instruction).toContain(currentRawId);
         return {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [{ findingId: 'F-0001', rawFindingIds: [currentRawId], evidence: 'The issue still appears.' }],
-            newFindings: [],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            rawDecisions: [
+              { rawFindingId: currentRawId, decision: 'same', findingId: 'F-0001', evidence: 'The issue still appears.' },
+            ],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:04.000Z'),
         };
@@ -2441,7 +2555,12 @@ describe('WorkflowEngine structured caller defaults', () => {
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
         };
       })
-      .mockImplementationOnce(async (_persona, instruction, options) => {
+      // mockImplementationOnce ではなく mockImplementation（キューを使い切った
+      // 後の既定応答）にする: manager が residual raw に decision を1件も
+      // 返さない（rawDecisions: []）ことは、修正後は rejection として扱われ
+      // 再問い合わせが1回入るため、この応答が2回目（そしてそれ以降）にも
+      // 使われる必要がある。
+      .mockImplementation(async (_persona, instruction, options) => {
         options?.onPromptResolved?.({
           systemPrompt: 'system',
           userInstruction: instruction,
@@ -2460,12 +2579,9 @@ describe('WorkflowEngine structured caller defaults', () => {
           status: 'done',
           content: 'manager output',
           structuredOutput: {
-            matches: [],
-            newFindings: [],
-            resolvedFindings: [],
-            reopenedFindings: [],
-            conflicts: [],
-            resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+            rawDecisions: [],
+            disputeDecisions: [],
+            conflictDecisions: [],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -2521,7 +2637,15 @@ describe('WorkflowEngine structured caller defaults', () => {
     };
     expect(result.status).toBe('completed');
     expect(ledger.findings).toContainEqual(expect.objectContaining({ id: 'F-0001', status: 'open' }));
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    // manager が raw-current に decision を返さないまま（rawDecisions: []）で
+    // 押し通そうとしても、注入文はどちらの manager 呼び出しの instruction にも
+    // 漏れず、かつ再問い合わせでも決定が欠落したままなら raw-current
+    // （issue kind）は情報を捨てないため new として強制採用される
+    // （forceUnresolvedRawDecisionsAsNew）。F-0001 自身は raw-current の
+    // 対象ではないため、注入の有無にかかわらず open のまま変化しない。
+    expect(ledger.findings).toContainEqual(expect.objectContaining({ status: 'open', title: 'Current issue' }));
+    // reviewer 1回 + manager 2回（初回 + 欠落分の再問い合わせ1回）。
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
   });
 
   it('finding_contract の parallel reviewer は旧 findings キーを raw findings として扱わない', async () => {
@@ -3086,7 +3210,7 @@ describe('WorkflowEngine structured caller defaults', () => {
         if (architectureRawId === undefined) {
           throw new Error(`expected normalized raw finding id in manager instruction: ${instruction.slice(instruction.indexOf('Raw findings:'))}`);
         }
-        expect(instruction).toContain('"newFindings"');
+        expect(instruction).toContain('"rawDecisions"');
         expect(options?.outputSchema).toBeUndefined();
         return {
           persona: 'findings-manager',
@@ -3094,18 +3218,11 @@ describe('WorkflowEngine structured caller defaults', () => {
           content: [
             '```json',
             JSON.stringify({
-              matches: [],
-              newFindings: [
-                {
-                  rawFindingIds: [architectureRawId],
-                  title: 'Rule evaluation ignores finding state',
-                  severity: 'high',
-                },
+              rawDecisions: [
+                { rawFindingId: architectureRawId, decision: 'new', findingId: '', evidence: 'No related open finding.' },
               ],
-              resolvedFindings: [],
-              reopenedFindings: [],
-              conflicts: [],
-              resolvedConflicts: [], waivedFindings: [], disputeNotes: [],
+              disputeDecisions: [],
+              conflictDecisions: [],
             }),
             '```',
           ].join('\n'),
@@ -3187,5 +3304,452 @@ describe('WorkflowEngine structured caller defaults', () => {
       }),
     );
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+  });
+
+  it('workflow_call の子は親の finding_contract を継承し、台帳への書き込みが親の state.findings に反映される', async () => {
+    // 子が自前の finding_contract を持たないケース。継承しないと子の parallel
+    // レビューが出す raw findings は台帳に入る先を持たず、指摘が黙って捨てられ、
+    // fix に届かないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        return {
+          persona: 'architecture-reviewer',
+          status: 'done',
+          content: 'Architecture issue found.',
+          structuredOutput: {
+            rawFindings: [
+              {
+                rawFindingId: 'raw-architecture-1',
+                kind: 'issue',
+                targetFindingId: '',
+                familyTag: 'bug',
+                severity: 'high',
+                title: 'Child ledger write must reach the parent ledger',
+                location: 'src/core/workflow/engine/WorkflowCallExecutor.ts:236',
+                description: 'The child writes findings but the parent never re-reads them.',
+                suggestion: 'Refresh parent state.findings after workflow_call completes.',
+              },
+            ],
+          },
+          timestamp: new Date('2026-07-10T00:00:01.000Z'),
+        };
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        // manager instruction embeds the normalized rawFindingId; extract it so the
+        // mocked manager output references a rawFindingId that actually exists in
+        // this run's batch (otherwise semantic validation would reject it and retry).
+        const match = instruction.match(/"rawFindingId":\s*"([^"]+)"/);
+        const rawFindingId = match?.[1] ?? 'unresolved-raw-finding-id';
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: 'manager output',
+          structuredOutput: {
+            rawDecisions: [
+              { rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' },
+            ],
+            disputeDecisions: [],
+            conflictDecisions: [],
+          },
+          timestamp: new Date('2026-07-10T00:00:02.000Z'),
+        };
+      });
+
+    const childConfig: WorkflowConfig = {
+      name: 'child-inherits-finding-contract',
+      subworkflow: { callable: true },
+      maxSteps: 3,
+      initialStep: 'reviewers',
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'architecture-review',
+              persona: 'architecture-reviewer',
+              instruction: 'Review architecture.',
+              rules: [makeRule('when(true)', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('when(findings.open.count == 0)', 'COMPLETE'),
+            // needs_fix は non-AI return value ルールとして、finding_contract
+            // parallel parent に必須の「invalid manager output ルール」も兼ねる。
+            { condition: 'when(findings.open.count > 0)', returnValue: 'needs_fix' },
+          ],
+        }),
+      ],
+    };
+
+    const parentConfig: WorkflowConfig = {
+      name: 'parent-inherits-finding-contract',
+      maxSteps: 3,
+      initialStep: 'delegate',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child-inherits-finding-contract',
+          personaDisplayName: 'delegate',
+          instruction: '',
+          passPreviousResponse: true,
+          rules: [{ condition: 'needs_fix', next: 'COMPLETE' }],
+        },
+      ],
+    };
+
+    const engine = new WorkflowEngine(parentConfig, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      workflowCallResolver: () => childConfig,
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('completed');
+    // 子が inherited ledgerStore へ書き込んだ finding が、workflow_call 完了後
+    // 親の state.findings（refreshFindingsState 経由）へ反映されている。
+    expect(result.findings?.open.count).toBe(1);
+    expect(JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8'))).toEqual(
+      expect.objectContaining({
+        // 継承した場合、台帳の workflowName は親のものになる（親と子が別々の
+        // 台帳を見ないよう、ledgerPath/rawFindingsPath は親のワークフロー名に
+        // 紐づいたまま単一の台帳として扱われる）。
+        workflowName: 'parent-inherits-finding-contract',
+        nextId: 2,
+      }),
+    );
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+  });
+
+  it('親の parallel から同じ子ワークフローを2つ同時に呼ぶと、raw finding id が呼び出し名前空間で区別され、どちらの raw finding も台帳に残る', async () => {
+    // codex 指摘の再現ケース: WorkflowCallExecutor は子エンジンへ
+    // reportDirName（= 親の runPaths.slug）をそのまま渡すため、親の parallel
+    // から同じ子ワークフローを2つ同時に呼ぶと、両方の子の runId が完全に
+    // 一致する。子ワークフローの構造（ステップ名・イテレーション）も同一なので、
+    // レビュアーが偶然同じローカル rawFindingId（ここでは両方とも "raw-1"）を
+    // 割り当てると、正規化後の raw finding id が完全に衝突し、後勝ちで片方の
+    // raw finding が台帳から上書きされて消える
+    // （mergeRawFindingDetails は rawFindingId をキーにした Map で合成するため）。
+    // findingCallNamespace（呼び出し元の workflow_call サブステップ名）を
+    // id に混ぜることで区別する。
+    const childConfig: WorkflowConfig = {
+      name: 'child-parallel-collision',
+      subworkflow: { callable: true },
+      maxSteps: 3,
+      initialStep: 'review',
+      steps: [
+        makeStep({
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review.',
+          outputContracts: [
+            { name: 'review.md', format: 'body', formatRef: 'review-finding-contract' },
+          ],
+          rules: [makeRule('when(true)', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const parentConfig: WorkflowConfig = {
+      name: 'parent-parallel-workflow-call-collision',
+      maxSteps: 3,
+      initialStep: 'fanout',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'fanout',
+          persona: 'orchestrator',
+          instruction: 'Fan out to two identical child workflows.',
+          parallel: [
+            {
+              name: 'child-a',
+              kind: 'workflow_call',
+              call: 'child-parallel-collision',
+              personaDisplayName: 'child-a',
+              instruction: '',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+            {
+              name: 'child-b',
+              kind: 'workflow_call',
+              call: 'child-parallel-collision',
+              personaDisplayName: 'child-b',
+              instruction: '',
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [
+            makeRule('all("COMPLETE")', 'COMPLETE', {
+              isAggregateCondition: true,
+              aggregateType: 'all',
+              aggregateConditionText: 'COMPLETE',
+            }),
+            // finding_contract を持つ parallel parent には invalid manager
+            // output ルールが必須（WorkflowValidator）。この経路では
+            // raw findings が空（workflow_call サブステップは除外される）のため
+            // 実際には発火しないが、静的検証を満たすために必要。
+            { condition: 'when(findings.open.count > 0)', returnValue: 'needs_fix' },
+          ],
+        }),
+      ],
+    };
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      if (persona === 'findings-manager') {
+        // manager instruction には正規化済みの rawFindingId が埋め込まれる。
+        // ハードコードせず指示文から抽出することで、2子どちらの呼び出しにも
+        // そのまま対応できる。
+        const match = /"rawFindingId":\s*"([^"]+)"/.exec(instruction);
+        const rawFindingId = match?.[1];
+        if (rawFindingId === undefined) {
+          throw new Error('Test setup error: rawFindingId not found in manager instruction');
+        }
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
+            disputeDecisions: [],
+            conflictDecisions: [],
+          },
+          timestamp: new Date(),
+        };
+      }
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"rawFindings"')) {
+        // 2子とも同じレビュー内容・同じローカル rawFindingId ("raw-1") を
+        // 報告する。衝突の再現条件そのもの。
+        return {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'Duplicate review report body.',
+          structuredOutput: {
+            rawFindings: [{
+              rawFindingId: 'raw-1',
+              familyTag: 'bug',
+              severity: 'high',
+              title: 'Parallel workflow_call duplicate finding',
+              location: 'src/dup.ts:10',
+              description: 'Reported independently by two parallel workflow_call children.',
+              suggestion: '',
+              kind: 'issue',
+              targetFindingId: '',
+            }],
+          },
+          timestamp: new Date(),
+        };
+      }
+      return { persona: 'agent', status: 'done', content: 'ok', timestamp: new Date() };
+    });
+
+    const engine = new WorkflowEngine(parentConfig, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      workflowCallResolver: () => childConfig,
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+
+    const persistedLedger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+      findings: Array<{ title: string; status: string; rawFindingIds: string[] }>;
+      rawFindings: Array<{ rawFindingId: string }>;
+    };
+    const rawFindingIds = persistedLedger.rawFindings.map((r) => r.rawFindingId);
+
+    // 呼び出し名前空間（workflow_call サブステップ名 + 呼び出しイテレーション）
+    // により、2子の raw finding id は別々になる。衝突していれば重複排除で
+    // 1件しか残らない。"#1" は呼び出し時点の親イテレーション（この走行では
+    // fanout ステップが最初の1ステップのため1）。
+    expect(new Set(rawFindingIds).size).toBe(2);
+    expect(rawFindingIds).toContain('test-report-dir:child-a#1:review:1:review:raw-1');
+    expect(rawFindingIds).toContain('test-report-dir:child-b#1:review:1:review:raw-1');
+
+    // familyTag + location が同一のため、保存直前の再照合（openFindingKeyIndex）
+    // で1件の finding に畳み込まれる。ただしその finding は両方の raw
+    // finding id を参照している（どちらも捨てられていない）。
+    expect(persistedLedger.findings).toHaveLength(1);
+    expect(persistedLedger.findings[0]?.rawFindingIds).toEqual(expect.arrayContaining(rawFindingIds));
+  });
+
+  it('同じ workflow_call ステップがループで再実行されても、別イテレーションの raw finding id は衝突せず、台帳に別々の raw finding として残る', async () => {
+    // 指摘: buildFindingCallNamespace() はステップ名しか名前空間に含めていない
+    // ため、同じ workflow_call ステップがループで再実行されると区別できない。
+    // 子エンジンはループのたびに新規生成され stepIterations が空から始まるため、
+    // 子の最初のレビューは常に stepIteration=1 になる。ローカルの
+    // rawFindingId が2回とも同じであれば、正規化後の id も完全に一致し、
+    // 2回目が1回目を上書きして台帳から消えていた。
+    // buildWorkflowCallNamespace() と同じ「呼び出し時点の親イテレーション」を
+    // 名前空間に混ぜることで区別する。
+    const childConfig: WorkflowConfig = {
+      name: 'child-loop-collision',
+      subworkflow: { callable: true },
+      maxSteps: 3,
+      initialStep: 'review',
+      steps: [
+        makeStep({
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review.',
+          outputContracts: [
+            { name: 'review.md', format: 'body', formatRef: 'review-finding-contract' },
+          ],
+          // workflow_call ステップの rule は子の returnValue（もしくは終端
+          // 'COMPLETE'/'ABORT'）とのリテラル一致でしか解決されない
+          // （WorkflowEngineStepCoordinator.resolveTransitionFromDone は
+          // response.matchedRuleIndex しか見ない。when() の全段階評価
+          // （RuleEvaluator）は通常ステップ専用で workflow_call には通らない）。
+          // そのためループの継続/終了を判断する when(findings.open.count...)
+          // は子のこのステップ側に置き、親へは returnValue という単純な
+          // 文字列トークンで伝える。
+          rules: [
+            { condition: 'when(findings.open.count == 1)', returnValue: 'needs_fix' },
+            { condition: 'when(findings.open.count >= 2)', returnValue: 'loop_complete' },
+          ],
+        }),
+      ],
+    };
+
+    const parentConfig: WorkflowConfig = {
+      name: 'parent-workflow-call-loop-collision',
+      maxSteps: 10,
+      initialStep: 'delegate',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'child-loop-collision',
+          personaDisplayName: 'delegate',
+          instruction: '',
+          // 子の returnValue が "needs_fix"（1周目）なら自分自身へループ、
+          // "loop_complete"（2周目）なら完了する。
+          rules: [
+            { condition: 'needs_fix', next: 'delegate' },
+            { condition: 'loop_complete', next: 'COMPLETE' },
+          ],
+        }),
+      ],
+    };
+
+    let reviewCallCount = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      if (persona === 'findings-manager') {
+        const match = /"rawFindingId":\s*"([^"]+)"/.exec(instruction);
+        const rawFindingId = match?.[1];
+        if (rawFindingId === undefined) {
+          throw new Error('Test setup error: rawFindingId not found in manager instruction');
+        }
+        return {
+          persona: 'findings-manager',
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            rawDecisions: [{ rawFindingId, decision: 'new', findingId: '', evidence: 'No related open finding.' }],
+            disputeDecisions: [],
+            conflictDecisions: [],
+          },
+          timestamp: new Date(),
+        };
+      }
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"rawFindings"')) {
+        reviewCallCount += 1;
+        // ループの2回とも同じローカル rawFindingId ("raw-1") を返す。ローカル id
+        // の再利用が衝突対策の再現条件そのもの（対象箇所は別々にして、2件とも
+        // 実際に別の finding として残ることを検証しやすくする）。
+        return {
+          persona: 'reviewer',
+          status: 'done',
+          content: `Loop review report body #${reviewCallCount}.`,
+          structuredOutput: {
+            rawFindings: [{
+              rawFindingId: 'raw-1',
+              familyTag: 'bug',
+              severity: 'high',
+              title: `Loop workflow_call finding #${reviewCallCount}`,
+              location: `src/loop-${reviewCallCount}.ts:1`,
+              description: 'Reported across separate loop iterations of the same workflow_call step.',
+              suggestion: '',
+              kind: 'issue',
+              targetFindingId: '',
+            }],
+          },
+          timestamp: new Date(),
+        };
+      }
+      return { persona: 'agent', status: 'done', content: 'ok', timestamp: new Date() };
+    });
+
+    const engine = new WorkflowEngine(parentConfig, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      workflowCallResolver: () => childConfig,
+    });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('completed');
+
+    const persistedLedger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+      findings: Array<{ title: string; status: string; rawFindingIds: string[] }>;
+      rawFindings: Array<{ rawFindingId: string }>;
+    };
+    const rawFindingIds = persistedLedger.rawFindings.map((r) => r.rawFindingId);
+
+    // 修正前は両方とも "test-report-dir:delegate:review:1:review:raw-1" に
+    // 正規化され、2回目が1回目を上書きして台帳から消えていた。呼び出し
+    // イテレーションが名前空間に含まれるため、ループの2回は別々の raw
+    // finding id になり、どちらも台帳に残る。
+    expect(new Set(rawFindingIds).size).toBe(2);
+    expect(persistedLedger.rawFindings).toHaveLength(2);
+    expect(persistedLedger.findings).toHaveLength(2);
   });
 });
