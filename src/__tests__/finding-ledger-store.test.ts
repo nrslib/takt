@@ -324,6 +324,59 @@ describe('FindingLedgerStore', () => {
     }));
   });
 
+  it('should apply updateLedger against the ledger already on disk, not a stale in-memory copy', async () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    store.saveLedger(makeLedger());
+
+    // ディスク上の台帳を直接書き換える（別の呼び出し元による更新を模す）。
+    // updateLedger の mutator が受け取るのは「呼び出し時点で再読込した」台帳
+    // でなければならない。
+    const externallyUpdatedLedger = { ...makeLedger(), nextId: 5 };
+    writeFileSync(
+      join(projectCwd, '.takt/findings/peer-review.json'),
+      JSON.stringify(externallyUpdatedLedger),
+      'utf-8',
+    );
+
+    const result = await store.updateLedger((current) => ({ ...current, nextId: current.nextId + 1 }));
+
+    expect(result.nextId).toBe(6);
+    expect(store.loadLedger().nextId).toBe(6);
+  });
+
+  it('should serialize concurrent callers so neither increment is lost (no lost update)', async () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createFindingLedgerStore({
+      projectCwd,
+      reportDir,
+      workflowName: 'peer-review',
+      ledgerPath: '.takt/findings/peer-review.json',
+      rawFindingsPath: '.takt/findings/raw',
+    });
+    store.saveLedger(makeLedger());
+
+    // workflow_call の並列子エンジンを模す: 各呼び出し元は「非同期処理
+    // （LLM 呼び出し等）を終えたあとに updateLedger を呼ぶ」。旧実装
+    // （呼び出し元が非同期処理の前に読んでおいた台帳をそのまま使って保存する
+    // 方式）だと、片方の保存がもう片方の保存を上書きして加算が1回分消える。
+    const callerA = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return store.updateLedger((current) => ({ ...current, nextId: current.nextId + 1 }));
+    })();
+    const callerB = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return store.updateLedger((current) => ({ ...current, nextId: current.nextId + 1 }));
+    })();
+
+    const [resultA, resultB] = await Promise.all([callerA, callerB]);
+
+    expect(store.loadLedger().nextId).toBe(4);
+    expect([resultA.nextId, resultB.nextId].sort()).toEqual([3, 4]);
+  });
+
   it('should save manager validation reports under the run report directory', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');
