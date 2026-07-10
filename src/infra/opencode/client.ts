@@ -7,6 +7,8 @@
 
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AgentResponse } from '../../core/models/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
@@ -41,6 +43,7 @@ import {
 } from './OpenCodeStreamHandler.js';
 import { InvalidToolArgumentLoopDetector, ToolErrorBudgetDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { isSensitiveKeyName, sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 export type { OpenCodeCallOptions } from './types.js';
 
@@ -65,6 +68,45 @@ function extractEventSessionId(event: OpenCodeStreamEvent): string | undefined {
   return undefined;
 }
 
+/**
+ * 失敗したツール呼び出しの引数（state.input）をログへ残す前にマスクする。
+ * bash の command、edit の内容、認証ヘッダーなどの機密情報がそのまま
+ * debug ログに残り得るため（未加工での出力を指摘された）。
+ *
+ * このログの目的は「モデルが引数をどう壊したか」を後から特定すること
+ * （実測: qwen が read に offset: "290.0" という文字列を、edit に
+ * filepaath という誤字キーを渡していた）。JSON.stringify で丸ごと
+ * 文字列化するとキー名・値の型が読みにくくなるため、オブジェクト構造は
+ * 保ったまま文字列値だけを sanitizeSensitiveText() でマスクする
+ * （ParallelRunner.ts と同じ関数を使う）。
+ *
+ * ただし sanitizeSensitiveText() はテキスト中の「キー名: 値」という並びを
+ * 正規表現で検出する実装のため、値を単独の文字列として渡すとキーの文脈が
+ * 失われ、{ password: "hunter2" } や { Authorization: "Bearer opaque-value" }
+ * のような非定型の値がマスクされずに残ってしまう（実測）。そのためオブジェクトの
+ * 走査時はキー名も一緒に伝播させ、isSensitiveKeyName() が機密キーと判定した
+ * 場合は値の形式・型を問わず丸ごと [REDACTED] に置き換える。該当しないキーの
+ * 文字列値は従来どおり sanitizeSensitiveText() を通す（sk-... のような値自体の
+ * 形でマスクされるものを拾うため）。
+ */
+function sanitizeToolCallInputForLogging(value: unknown, key?: string): unknown {
+  if (key !== undefined && isSensitiveKeyName(key)) {
+    return '[REDACTED]';
+  }
+  if (typeof value === 'string') {
+    return sanitizeSensitiveText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeToolCallInputForLogging(item));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entry]) => [entryKey, sanitizeToolCallInputForLogging(entry, entryKey)]),
+    );
+  }
+  return value;
+}
+
 function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
   if (allowedTools !== undefined && allowedTools.length === 0) {
     return TAKT_AGENT_REPORT;
@@ -80,6 +122,18 @@ function selectTaktAgent(allowedTools: readonly string[] | undefined): string {
 }
 
 const log = createLogger('opencode-sdk');
+
+/**
+ * ツール引数を矯正するプラグインの絶対パス。
+ *
+ * OpenCode はプラグインをファイルパスでしか受け取らないが、config.plugin に
+ * 絶対パスを渡せば cwd の .opencode/plugin を作らずに読み込ませられる。
+ * ユーザーのリポジトリを汚さないための経路。
+ */
+function coerceToolArgsPluginPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'plugins', 'coerce-tool-args.js');
+}
+
 /** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
 function resolveMessageCycleBudget(): number {
   const fromEnv = Number(process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET);
@@ -205,6 +259,10 @@ async function createSharedServer(
       config: {
         model,
         small_model: model,
+        // ローカルモデルが送る数値の型違い（"290.0"）を実行直前に矯正する。
+        // OpenCode 本体は強制変換せず SchemaError で落とすため、これが無いと
+        // 弱いモデルは同じ呼び出しを繰り返して cycle budget を使い切る。
+        plugin: [coerceToolArgsPluginPath()],
         // Session-level permission rules are rewritten whenever a prompt
         // carries a tools map (OpenCode materializes the map into
         // session.permission), so session-scoped denies do not survive the
@@ -214,6 +272,8 @@ async function createSharedServer(
         // user's global OpenCode config).
         permission: { external_directory: 'deny' },
         ...(apiKey ? { provider: { opencode: { options: { apiKey } } } } : {}),
+        // agent プロンプトは OpenCode 既定（英語）を土台にしているため言語を切り替えない。
+        // ja 版は誰も読まないまま古びて食い違いを生むので置いていない。
         agent: {
           [TAKT_AGENT]: {
             prompt: loadTemplate('opencode_agent_prompt', 'en', {
@@ -462,6 +522,120 @@ export function resetSharedServer(): void {
     entry.server?.close();
   }
   sharedServers.clear();
+}
+
+/** 要約は本文量に比例して伸びるため、対話 RPC より長く待つ。 */
+const OPENCODE_SUMMARY_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
+const OPENCODE_SUMMARY_POLL_INTERVAL_MS = 500;
+
+/**
+ * summarize() を呼ぶ前に存在していた要約メッセージの id を控える。
+ *
+ * sessionId は phase や resume で再利用され、過去の要約メッセージが履歴に
+ * 残り続ける。「履歴上の最新の要約」を今回の要約と見なすと、今回の要約が
+ * 履歴に現れる前の最初のポーリングで過去の要約を拾い、過去が失敗していれば
+ * 即例外、成功していれば今回の完了を待たずに戻ってしまう。
+ */
+async function collectExistingSummaryIds(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+  abortSignal?: AbortSignal,
+): Promise<ReadonlySet<string>> {
+  const result = await withTimeout(
+    (signal) => client.session.messages({ sessionID, directory }, { signal }),
+    OPENCODE_INTERACTION_TIMEOUT_MS,
+    'OpenCode session messages timed out',
+    abortSignal,
+  );
+  if (result.data === undefined) {
+    throw new Error(`OpenCode session messages not readable before summarize: ${sessionID}`);
+  }
+  const ids = new Set<string>();
+  for (const message of result.data) {
+    const info = message.info as { id?: string; summary?: boolean } | undefined;
+    if (info?.summary !== true) {
+      continue;
+    }
+    // AssistantMessage.id は SDK の型で必須。欠けているなら契約違反であり、
+    // id で今回の要約を識別できない以上、過去の要約を今回のものと取り違える。
+    if (typeof info.id !== 'string') {
+      throw new Error(`OpenCode summary message has no id: ${sessionID}`);
+    }
+    ids.add(info.id);
+  }
+  return ids;
+}
+
+async function waitForSummaryToComplete(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+  existingSummaryIds: ReadonlySet<string>,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  const deadline = Date.now() + OPENCODE_SUMMARY_WAIT_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    if (abortSignal?.aborted === true) {
+      throw new Error('OpenCode session summarize aborted');
+    }
+
+    const result = await withTimeout(
+      (signal) => client.session.messages({ sessionID, directory }, { signal }),
+      OPENCODE_INTERACTION_TIMEOUT_MS,
+      'OpenCode session messages timed out',
+      abortSignal,
+    );
+
+    // data が無いのは「要約が無い」ではなく「読めなかった」。
+    // 要約中のまま先へ進むと後続のツール呼び出しが全て拒否されるため、
+    // 判定できないときは黙って通さない。
+    if (result.data === undefined) {
+      throw new Error(`OpenCode session messages not readable while waiting for summary: ${sessionID}`);
+    }
+
+    // 判定対象は「今回の summarize() が作った要約」だけ。呼び出し前に存在した
+    // 要約は id で除外する。履歴上の最新を今回のものと見なすと、今回の要約が
+    // 履歴に現れる前の最初のポーリングで過去の要約を拾ってしまう。
+    const latestSummaryMessage = [...result.data].reverse().find((message) => {
+      const info = message.info as { id?: string; summary?: boolean } | undefined;
+      if (info?.summary !== true) {
+        return false;
+      }
+      if (typeof info.id !== 'string') {
+        throw new Error(`OpenCode summary message has no id: ${sessionID}`);
+      }
+      return !existingSummaryIds.has(info.id);
+    });
+
+    if (latestSummaryMessage === undefined) {
+      // 今回の要約はまだ履歴に現れていない。summarize() は要約対象が無くても
+      // 必ず要約メッセージを作る（実測: メッセージ 0 件のセッションでも 1 秒後に
+      // 1 件現れる）。したがって現れないのは異常であり、勝手に「要約不要」と
+      // みなして先へ進めてはいけない。全体タイムアウトまで待つ。
+      await new Promise((resolve) => setTimeout(resolve, OPENCODE_SUMMARY_POLL_INTERVAL_MS));
+      continue;
+    }
+
+    // 要約メッセージが time.completed を持っていても、それは「終了した」だけで
+    // 「成功した」ではない。OpenCode はエラー終了した要約にも completed
+    // タイムスタンプを付けるため、info.error を見ずに time.completed だけで
+    // 判定すると、要約失敗を成功と誤認して未圧縮のコンテキストのまま次の
+    // プロンプトへ進み、同じ理由で再度失敗する（実測）。
+    const latestInfo = latestSummaryMessage.info as { error?: unknown; time?: { completed?: number } };
+    if (latestInfo.error !== undefined) {
+      const detail = extractOpenCodeErrorMessage(latestInfo.error) ?? 'unknown error';
+      throw new Error(`OpenCode session summarize failed: ${detail}`);
+    }
+    if (latestInfo.time?.completed !== undefined) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, OPENCODE_SUMMARY_POLL_INTERVAL_MS));
+  }
+
+  throw new Error('OpenCode session summarize did not finish in time');
 }
 
 async function withTimeout<T>(
@@ -955,8 +1129,12 @@ export class OpenCodeClient {
         // 劣化した生成は「ごく短いアシスタント応答サイクル」を数百回繰り返す
         // （実測: 524〜1211 ループ）。テキスト断片だけの空転はツールエラー
         // 予算にも無音検出にも掛からないため、応答サイクル数で打ち切る。
-        // 健全なステップはツール往復込みでも数十サイクルに収まる。
-        let assistantMessageCycles = 0;
+        //
+        // 数えるのは「ツール呼び出しが1つも成功しないまま続いたサイクル」に限る。
+        // 総サイクル数で打ち切ると、健全な作業まで巻き込む（実測: 9万行の
+        // リポジトリで implement が 120 サイクル・ツール成功 150 回の途中で
+        // 打ち切られた）。空転はツールを成功させないので、この数え方で分離できる。
+        let cyclesWithoutToolSuccess = 0;
         const messageCycleBudget = resolveMessageCycleBudget();
 
         try {
@@ -1009,11 +1187,12 @@ export class OpenCodeClient {
                 // 失敗したツール呼び出しの引数を残す。エラー文だけでは
                 // モデルが何をどう間違えたか（スキーマ違反の該当欄、
                 // 幻覚パス、oldString の不一致）を後から特定できない。
+                // input/error は無加工では機密情報が残り得るためマスクする。
                 log.debug('OpenCode tool call failed', {
                   tool: toolPart.tool,
                   callId: toolPart.callID || toolPart.id,
-                  error: toolPart.state.error,
-                  input: toolPart.state.input,
+                  error: sanitizeSensitiveText(toolPart.state.error),
+                  input: sanitizeToolCallInputForLogging(toolPart.state.input),
                 });
                 // 両検出器に必ず観測させる（?? 短絡だと invalid 側が
                 // unavailable エラーを見逃し、連続性の判定が狂う）
@@ -1037,6 +1216,9 @@ export class OpenCodeClient {
               if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
                 invalidArgumentLoopDetector.reset();
+                // ツールが1つでも成功したなら作業は前に進んでいる。
+                // 空転の計数をここで戻す（下の cyclesWithoutToolSuccess を参照）。
+                cyclesWithoutToolSuccess = 0;
               }
               handlePartUpdated(part, delta, options.onStream, state);
               if (loopError !== undefined) {
@@ -1196,10 +1378,10 @@ export class OpenCodeClient {
                 break;
               }
               if (info?.time?.completed !== undefined) {
-                assistantMessageCycles += 1;
-                if (assistantMessageCycles >= messageCycleBudget) {
+                cyclesWithoutToolSuccess += 1;
+                if (cyclesWithoutToolSuccess >= messageCycleBudget) {
                   success = false;
-                  failureMessage = `OpenCode assistant message cycle budget exceeded (${assistantMessageCycles} cycles in one call)`;
+                  failureMessage = `OpenCode assistant message cycle budget exceeded (${cyclesWithoutToolSuccess} cycles without a successful tool call)`;
                   diag.onStreamError('message.updated', failureMessage);
                   break;
                 }
@@ -1497,6 +1679,13 @@ export class OpenCodeClient {
     );
 
     try {
+      const existingSummaryIds = await collectExistingSummaryIds(
+        acquired.client,
+        options.sessionId,
+        options.cwd,
+        options.abortSignal,
+      );
+
       await withTimeout(
         (signal) => acquired.client.session.summarize({
           sessionID: options.sessionId,
@@ -1507,6 +1696,17 @@ export class OpenCodeClient {
         }, { signal }),
         OPENCODE_INTERACTION_TIMEOUT_MS,
         'OpenCode session summarize timed out',
+        options.abortSignal,
+      );
+
+      // summarize は要約ジョブを投入して即座に返る。要約中のセッションは
+      // ツール呼び出しを "Tool call not allowed while generating summary" で
+      // 拒否するため、完了を待たずに次のプロンプトを送ると最初の edit で落ちる。
+      await waitForSummaryToComplete(
+        acquired.client,
+        options.sessionId,
+        options.cwd,
+        existingSummaryIds,
         options.abortSignal,
       );
     } finally {

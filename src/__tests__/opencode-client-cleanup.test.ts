@@ -2840,6 +2840,36 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   });
 
+  it('should not stop long healthy work that keeps completing tool calls', async () => {
+    process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '5';
+    try {
+      // 成功するツール呼び出しを挟みながら予算の倍のサイクルを回す。
+      // 総サイクル数で打ち切る実装ではここで落ちる（実測: 9万行の implement）。
+      const events = Array.from({ length: 10 }, (_, i) => ([
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              type: 'tool', id: `tool-${i}`, callID: `call-${i}`, tool: 'read',
+              sessionID: 'session-healthy', messageID: `msg-${i}`,
+              state: { status: 'completed', input: {}, output: 'ok', title: 'read' },
+            },
+          },
+        },
+        {
+          type: 'message.updated',
+          properties: { info: { sessionID: 'session-healthy', role: 'assistant', time: { completed: 1000 + i } } },
+        },
+      ])).flat();
+
+      const result = await runBudgetScenario('session-healthy', events);
+
+      expect(result.status).toBe('done');
+    } finally {
+      delete process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET;
+    }
+  });
+
   it('should stop a degenerate loop that rotates tool names via the error budget', async () => {
     process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
     try {
