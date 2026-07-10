@@ -8,8 +8,17 @@ describe('buildGitRules', () => {
   });
 
   it('keeps phase2 limited to commit and push', () => {
-    for (const language of ['ja', 'en'] as const) {
-      const rules = buildGitRules(false, language, 'phase2');
+    // 除外の検証だけでは空文字列でも通ってしまう。commit / push 禁止文が
+    // 実際に含まれることを正の assertion で固定する。
+    const en = buildGitRules(false, 'en', 'phase2');
+    expect(en).toContain('**Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.');
+    expect(en).toContain('**Do NOT run git push.** Pushes are also handled automatically by the system.');
+
+    const ja = buildGitRules(false, 'ja', 'phase2');
+    expect(ja).toContain('**git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。');
+    expect(ja).toContain('**git push を実行しないでください。** プッシュもシステムが自動で行います。');
+
+    for (const rules of [en, ja]) {
       expect(rules).not.toContain('git add');
       expect(rules).not.toContain('untracked');
       expect(rules).not.toContain('index');

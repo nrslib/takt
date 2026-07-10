@@ -4,7 +4,9 @@ When no ledger is available, use reports in the Report Directory and fix the iss
 **Fix principles:**
 - When a finding includes a "suggested fix", follow it rather than inventing your own workaround
 - Fix the target code directly. Do not deflect findings by adding tests or documentation instead
-- When a ledger is available: if a finding contradicts the current code, or cannot be fixed with the operations you are allowed to perform, do not pretend to fix it. State a formal dispute under `## Disputed Findings` with evidence (follow the format in the Finding Contract instructions). A dispute is pending adjudication — it does not mean resolved or waived. The finding stays open until the findings manager accepts the dispute. Critical findings are never cleared by dispute
+- When a ledger is available: dispute a finding only when it contradicts the current code, or is structurally unresolvable within this step's responsibility. Do not pretend to fix it; state a formal dispute under `## Disputed Findings` with concrete counter-evidence and file:line references (follow the format in the Finding Contract instructions). A dispute is pending adjudication — it does not mean resolved or waived
+  - Do not cite transient tool failures, task difficulty, or uncertainty as grounds for a dispute
+  - Only cite a "deliberate trade-off" when you have evidence of an existing spec or a user decision
 - When no ledger is available, the dispute mechanism does not exist, so do not use it. For findings you cannot fix, do not claim you fixed them; note them as blockers in the work results
 
 **Report reference policy:**

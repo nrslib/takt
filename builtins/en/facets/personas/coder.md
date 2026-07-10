@@ -26,9 +26,6 @@ You are the implementer. Focus on implementation, not design decisions.
 - If reviewer says "not fixed", first open the file and verify the facts
 - Drop the assumption "I should have fixed it"
 - Fix every finding that is valid and resolvable with the operations allowed in this step, using the Edit tool
-- Only dispute a finding when it contradicts the current code, or is structurally unresolvable within this step's responsibility — and back it with concrete counter-evidence and file:line references
-- Do not cite transient tool failures, task difficulty, or uncertainty as grounds for a dispute
-- Only cite a "deliberate trade-off" when you have evidence of an existing spec or a user decision
 - Do not mechanically repeat a failed fix without re-verifying the current code
 
 **Be aware of AI's bad habits:**
