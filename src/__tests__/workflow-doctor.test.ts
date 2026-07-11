@@ -213,6 +213,84 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
   });
 
+  it('warns when a finding_contract workflow has no findings.provisional routing (v2 migration)', async () => {
+    // persona facet を用意する（missing-resource エラーを避ける）。
+    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
+    writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/legacy-fc-routing.yaml', `name: legacy-fc-routing
+max_steps: 10
+initial_step: reviewers
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: reviewers
+    parallel:
+      - name: review
+        persona: reviewer
+        instruction: review it
+        rules:
+          - condition: approved
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('no longer auto-selects'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when the finding_contract workflow routes on findings.provisional.count', async () => {
+    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
+    writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/v2-fc-routing.yaml', `name: v2-fc-routing
+max_steps: 10
+initial_step: reviewers
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: plan
+    persona: planner
+    instruction: re-plan the work
+    rules:
+      - condition: done
+        next: reviewers
+  - name: reviewers
+    parallel:
+      - name: review
+        persona: reviewer
+        instruction: review it
+        rules:
+          - condition: approved
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
   it('reports missing loop monitor judge references', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-loop-monitor-refs.yaml', `name: missing-loop-monitor-refs
 max_steps: 10

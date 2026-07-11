@@ -12,7 +12,6 @@ import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig, Workflow
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
-import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 import {
   RawFindingsStructuredOutput,
   runFindingManagerForStep,
@@ -84,9 +83,11 @@ export interface FindingContractIntakeInput {
 }
 
 /**
- * findings-manager を実行し、成功時は台帳更新イベントを発火する。台帳への
+ * findings-manager を実行し、台帳更新イベントを発火する。台帳への
  * 取り込みという副作用込みの手続きをここへ集約し、ParallelRunner と
- * StepExecutor の両方が同じ手順で呼べるようにする。
+ * StepExecutor の両方が同じ手順で呼べるようにする。v2 梯子設計では
+ * 取り込みは常に 'updated' で完了する（manager の壊れた応答・予算超過は
+ * provisional として台帳へ着地し、run-level の invalid_manager_output は無い）。
  */
 export async function ingestFindingContractResults(
   input: FindingContractIntakeInput,
@@ -109,41 +110,9 @@ export async function ingestFindingContractResults(
     ledgerCopyPath: input.ledgerCopyPath,
     priorStepResponseText: input.priorStepResponseText,
   });
-  if (result.status === 'updated') {
-    input.refreshFindingsState();
-    input.emitEvent('findings:ledger', result.ledger);
-  }
+  input.refreshFindingsState();
+  input.emitEvent('findings:ledger', result.ledger);
   return result;
-}
-
-/**
- * invalid_manager_output のとき、迂回先ルールを選ぶ。need_replan → needs_fix →
- * 非AI の next: fix の優先順で、ステップの rules から該当するものを探す。
- * ParallelRunner（parallel parent）・StepExecutor（単独ステップ）のどちらの
- * `step.rules` にも同じ考え方で使える（parallel 固有の情報は見ない）。
- */
-export function selectInvalidManagerOutputRuleIndex(step: WorkflowStep): number {
-  const rules = step.rules;
-  if (!rules) {
-    throw new Error(`Invalid finding_contract step "${step.name}": missing invalid manager output rule`);
-  }
-
-  const needReplanIndex = rules.findIndex((rule) => isNonAiReturnValueRule(rule, 'need_replan'));
-  if (needReplanIndex >= 0) {
-    return needReplanIndex;
-  }
-
-  const needsFixIndex = rules.findIndex((rule) => isNonAiReturnValueRule(rule, 'needs_fix'));
-  if (needsFixIndex >= 0) {
-    return needsFixIndex;
-  }
-
-  const fixIndex = rules.findIndex((rule) => !rule.isAiCondition && rule.next === 'fix');
-  if (fixIndex >= 0) {
-    return fixIndex;
-  }
-
-  throw new Error(`Invalid finding_contract step "${step.name}": missing invalid manager output rule`);
 }
 
 /**

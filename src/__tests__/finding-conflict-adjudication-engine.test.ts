@@ -1164,7 +1164,6 @@ describe('finding-conflict-adjudication engine detour', () => {
               location: 'src/a.ts:5',
               description: 'Verified the null guard is now present.',
               suggestion: '',
-              kind: 'resolution_confirmation',
               relation: 'resolution_confirmation',
               targetFindingId: 'F-0001',
             }],
@@ -1266,7 +1265,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     expect(finding?.suggestion).toContain('[adjudicated fix] Add the missing null guard');
   });
 
-  it('レビュア再生成: relation=new の path+title 衝突が1回の再生成で persists に直れば採用され、新規 finding は立たない', async () => {
+  it('レビュア突き返し: correction で persists に直っても taint は消えず、target へ吸収されずに conflict + provisional に着地する（攻撃4対策）', async () => {
     // conflict なし・open F-0001 だけの台帳。reviewer が同じ問題を relation=new で
     // 再報告してくる（弱いモデルの典型挙動）ケース。
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
@@ -1295,8 +1294,8 @@ describe('finding-conflict-adjudication engine detour', () => {
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      if (instruction.includes('marked relation "new"')) {
-        // 再生成呼び出し: relation を persists に直して全量再出力
+      if (instruction.includes('contradictory relation/targetFindingId labeling')) {
+        // 突き返し呼び出し: relation を persists に直して全量再出力
         return {
           persona,
           status: 'done',
@@ -1310,7 +1309,6 @@ describe('finding-conflict-adjudication engine detour', () => {
               location: 'src/secret.ts:40',
               description: 'Token logging is still present, observed at a new line.',
               suggestion: '',
-              kind: 'issue',
               relation: 'persists',
               targetFindingId: 'F-0001',
             }],
@@ -1319,6 +1317,25 @@ describe('finding-conflict-adjudication engine detour', () => {
         };
       }
       const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"interpretations"')) {
+        // ambiguous ladder の解釈フェーズ: taint された persists は target と
+        // 関係があるが同一性は確定できない → open_conflict 提案（§5 規則3）。
+        return {
+          persona,
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            interpretations: [{
+              decision: 'open_conflict',
+              rawFindingId: instruction.match(/"rawFindingId":\s*"([^"]+raw-1)"/)?.[1] ?? '',
+              proofId: '',
+              targetFindingId: 'F-0001',
+              reason: '',
+            }],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.500Z'),
+        };
+      }
       if (schemaText.includes('"rawFindings"')) {
         return {
           persona,
@@ -1333,7 +1350,6 @@ describe('finding-conflict-adjudication engine detour', () => {
               location: 'src/secret.ts:40',
               description: 'Token logging is still present, observed at a new line.',
               suggestion: '',
-              kind: 'issue',
               relation: 'new',
               targetFindingId: '',
             }],
@@ -1372,8 +1388,7 @@ describe('finding-conflict-adjudication engine detour', () => {
             { name: 'review.md', format: 'resolved facet body', formatRef: 'review-finding-contract' },
           ],
           rules: [
-            makeRule('when(findings.open.count == 1)', 'COMPLETE'),
-            makeRule('when(true)', 'ABORT'),
+            makeRule('when(true)', 'COMPLETE'),
           ],
         }),
       ],
@@ -1386,24 +1401,34 @@ describe('finding-conflict-adjudication engine detour', () => {
       detectRuleIndex: () => -1,
     }).run();
 
-    expect(result.status).toBe('completed');
-    // 再生成が1回だけ走った
+    // v2 梯子設計: correction で persists に直っても taint は消えない（攻撃4:
+    // persists 洗浄の防止）。targetFindingId が書かれているだけでは F-0001 に
+    // 吸収されず、manager 提案（open_conflict）に従い conflict + provisional に
+    // 着地する。provisional が残るため COMPLETE はエンジン最終不変条件で拒否
+    // される（fail-fast abort）。
+    expect(result.status).toBe('aborted');
+    // 突き返しが1回だけ走った
     const regenerationCalls = vi.mocked(runAgent).mock.calls.filter(([, instruction]) => (
-      instruction.includes('marked relation "new"')
+      instruction.includes('contradictory relation/targetFindingId labeling')
     ));
     expect(regenerationCalls).toHaveLength(1);
 
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
-      findings: Array<{ id: string; status: string; rawFindingIds: string[] }>;
+      findings: Array<{ id: string; status: string; rawFindingIds: string[]; provisional?: { kind: string } }>;
+      conflicts: Array<{ status: string; findingIds: string[] }>;
     };
-    // persists として既存 F-0001 に合流し、新規 finding は立っていない
-    expect(ledger.findings).toHaveLength(1);
-    expect(ledger.findings[0]?.id).toBe('F-0001');
-    expect(ledger.findings[0]?.status).toBe('open');
-    expect(ledger.findings[0]?.rawFindingIds.some((id) => id.endsWith(':raw-1'))).toBe(true);
+    // F-0001 は不変（rawFindingIds へも合流していない = 洗浄されていない）。
+    const target = ledger.findings.find((f) => f.id === 'F-0001');
+    expect(target?.status).toBe('open');
+    expect(target?.rawFindingIds).toEqual(['raw-existing']);
+    // 観測は provisional として保持され、target との active conflict が立つ。
+    const provisional = ledger.findings.find((f) => f.provisional !== undefined);
+    expect(provisional?.status).toBe('open');
+    expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
+    expect(ledger.conflicts.some((c) => c.status === 'active' && c.findingIds.includes('F-0001'))).toBe(true);
   });
 
-  it('レビュア再生成: 再生成後も relation=new のままなら new として採用せず unsupported_raw として監査記録に残す', async () => {
+  it('レビュア突き返し: 突き返し後も relation=new のままなら確定 finding にせず gate-blocking provisional として台帳に残す', async () => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify({
@@ -1437,15 +1462,14 @@ describe('finding-conflict-adjudication engine detour', () => {
         location: 'src/secret.ts:40',
         description: 'Token logging is still present, observed at a new line.',
         suggestion: '',
-        kind: 'issue',
         relation: 'new',
         targetFindingId: '',
       }],
     };
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      if (instruction.includes('marked relation "new"')) {
-        // 再生成でも直さない（relation=new のまま返してくる）
+      if (instruction.includes('contradictory relation/targetFindingId labeling')) {
+        // 突き返しでも直さない（relation=new のまま返してくる）
         return {
           persona,
           status: 'done',
@@ -1455,6 +1479,24 @@ describe('finding-conflict-adjudication engine detour', () => {
         };
       }
       const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"interpretations"')) {
+        // 解釈フェーズ: manager も判定不能 → provisional 提案。
+        return {
+          persona,
+          status: 'done',
+          content: '',
+          structuredOutput: {
+            interpretations: [{
+              decision: 'provisional',
+              rawFindingId: instruction.match(/"rawFindingId":\s*"([^"]+raw-1)"/)?.[1] ?? '',
+              proofId: '',
+              targetFindingId: '',
+              reason: 'Cannot determine whether this is the same issue as F-0001.',
+            }],
+          },
+          timestamp: new Date('2026-06-13T00:00:02.500Z'),
+        };
+      }
       if (schemaText.includes('"rawFindings"')) {
         return {
           persona,
@@ -1495,8 +1537,7 @@ describe('finding-conflict-adjudication engine detour', () => {
             { name: 'review.md', format: 'resolved facet body', formatRef: 'review-finding-contract' },
           ],
           rules: [
-            makeRule('when(findings.open.count == 1)', 'COMPLETE'),
-            makeRule('when(true)', 'ABORT'),
+            makeRule('when(true)', 'COMPLETE'),
           ],
         }),
       ],
@@ -1509,22 +1550,27 @@ describe('finding-conflict-adjudication engine detour', () => {
       detectRuleIndex: () => -1,
     }).run();
 
-    expect(result.status).toBe('completed');
+    // v2: 直らなかった raw は drop されず provisional として台帳に残り、
+    // COMPLETE はエンジン最終不変条件で拒否される。
+    expect(result.status).toBe('aborted');
 
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
-      findings: Array<{ id: string; rawFindingIds: string[] }>;
+      findings: Array<{ id: string; rawFindingIds: string[]; provisional?: { kind: string } }>;
     };
-    // 新規 finding は立たず、F-0001 にも合流していない（不採用）
-    expect(ledger.findings).toHaveLength(1);
-    expect(ledger.findings[0]?.rawFindingIds).toEqual(['raw-existing']);
+    // 確定 finding としては立たず、F-0001 にも合流していない（不採用）。
+    // ただし監査 JSON だけに残して台帳から消すこともない — provisional が立つ。
+    const target = ledger.findings.find((f) => f.id === 'F-0001');
+    expect(target?.rawFindingIds).toEqual(['raw-existing']);
+    const provisional = ledger.findings.find((f) => f.provisional !== undefined);
+    expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
 
-    // Phase A の unsupported 経路（検証レポート）に監査記録が残る
+    // 検証レポートに provisional 着地の監査記録が残る
     const reportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'findings-manager-validation.review.json');
     const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as {
-      unsupportedRawFindings?: Array<{ rawFindingId: string; targetFindingId: string; evidence: string }>;
+      provisionalLandings?: Array<{ kind: string; sourceRawFindingIds: string[] }>;
     };
-    expect(report.unsupportedRawFindings).toHaveLength(1);
-    expect(report.unsupportedRawFindings?.[0]?.rawFindingId.endsWith(':raw-1')).toBe(true);
-    expect(report.unsupportedRawFindings?.[0]?.targetFindingId).toBe('F-0001');
+    expect(report.provisionalLandings?.some((landing) => (
+      landing.sourceRawFindingIds.some((id) => id.endsWith(':raw-1'))
+    ))).toBe(true);
   });
 });

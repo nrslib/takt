@@ -8,7 +8,9 @@ import type {
   RawFinding,
   RawFindingRelation,
 } from './finding-types.js';
+import type { AmbiguousInterpretation, RawFindingKind } from './finding-types.js';
 import {
+  AMBIGUOUS_INTERPRETATION_DECISIONS,
   RAW_FINDING_KINDS,
   RAW_FINDING_RELATIONS,
   CONFLICT_DECISION_KINDS,
@@ -17,8 +19,11 @@ import {
   FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
   FINDING_CONFLICT_STATUSES,
   FINDING_LIFECYCLES,
+  FINDING_PROVISIONAL_KINDS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
+  INTERPRETATION_APPLICATION_RESULTS,
+  INTERPRETATION_STAGES,
   RAW_DECISION_KINDS,
 } from './finding-types.js';
 
@@ -46,6 +51,19 @@ export const FindingObservationSchema = z.object({
   runId: nonEmptyString,
   stepName: nonEmptyString,
   timestamp: nonEmptyString,
+}).strict();
+
+/** provisional メタデータ（設計書 §7）。ledger v1 の optional field なので後方互換。 */
+export const FindingProvisionalMetadataSchema = z.object({
+  kind: z.enum(FINDING_PROVISIONAL_KINDS),
+  stableKey: nonEmptyString,
+  lineageKey: nonEmptyString,
+  sourceRawFindingIds: z.array(nonEmptyString),
+  reason: nonEmptyString,
+  firstObservedAt: FindingObservationSchema,
+  lastObservedAt: FindingObservationSchema,
+  interpretationEpochs: z.number().int().min(0),
+  gateEffect: z.literal('block'),
 }).strict();
 
 export const FindingLedgerEntrySchema = z.object({
@@ -77,7 +95,19 @@ export const FindingLedgerEntrySchema = z.object({
   invalidatedAt: nonEmptyString.optional(),
   invalidatedEvidence: nonEmptyString.optional(),
   supersededByFindingId: nonEmptyString.optional(),
+  revision: z.number().int().positive().optional(),
+  provisional: FindingProvisionalMetadataSchema.optional(),
 }).strict();
+
+/**
+ * relation → kind の唯一の機械導出（設計書 §2.2）。`kind` は入力上の判断項目に
+ * しない: canonical 側では relation と kind を必須にし、必ずこの関数の結果と
+ * 一致させる。逆方向（kind → relation の推測）は legacy adapter
+ * （deriveRawFindingRelation 経由）だけに許される。
+ */
+export function kindForRelation(relation: RawFindingRelation): RawFindingKind {
+  return relation === 'resolution_confirmation' ? 'resolution_confirmation' : 'issue';
+}
 
 /**
  * Derives the authoritative `relation` from a parsed raw finding whose `relation`
@@ -217,6 +247,92 @@ export const FindingLedgerConflictSchema = z.object({
   adjudicationAttempts: z.array(FindingConflictAdjudicationAttemptSchema).optional(),
 }).strict();
 
+/** 楽観的前提条件（CAS、設計書 §6）。 */
+export const FindingMutationPreconditionSchema = z.object({
+  targetFindingId: nonEmptyString,
+  targetRevision: z.number().int().positive(),
+  targetStatus: FindingStatusSchema,
+  targetEvidenceHash: nonEmptyString,
+}).strict();
+
+/**
+ * manager が ambiguous raw に返す「提案」（設計書 §4.1）。台帳操作そのものでは
+ * ない。decision ごとの必須フィールドは AmbiguousInterpretationSchema の
+ * superRefine と raw-capabilities.ts の runtime 検証の両方で強制する。
+ */
+export const AmbiguousInterpretationSchema = z.object({
+  decision: z.enum(AMBIGUOUS_INTERPRETATION_DECISIONS),
+  rawFindingId: nonEmptyString,
+  // strict 様式の構造化出力では全プロパティ required になるため、該当なしは
+  // 空文字で埋めさせて未指定として扱う。
+  proofId: z.string().optional().transform((value) => (value ? value : undefined)),
+  targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
+  reason: z.string().optional().transform((value) => (value ? value : undefined)),
+}).strict();
+
+export type ParsedAmbiguousInterpretation = z.infer<typeof AmbiguousInterpretationSchema>;
+
+/**
+ * parse 済み提案を判別可能な AmbiguousInterpretation へ正規化する。decision ごとの
+ * 必須フィールド欠損は undefined を返す（呼び出し元が提案不正 → provisional へ
+ * 落とす。例外にしない: manager の壊れた応答で run を殺さない）。
+ */
+export function toAmbiguousInterpretation(parsed: {
+  decision: ParsedAmbiguousInterpretation['decision'];
+  rawFindingId: string;
+  proofId?: string | undefined;
+  targetFindingId?: string | undefined;
+  reason?: string | undefined;
+}): AmbiguousInterpretation | undefined {
+  switch (parsed.decision) {
+    case 'create_independent':
+      return { decision: 'create_independent', rawFindingId: parsed.rawFindingId };
+    case 'same_with_proof':
+      return parsed.proofId !== undefined
+        ? { decision: 'same_with_proof', rawFindingId: parsed.rawFindingId, proofId: parsed.proofId }
+        : undefined;
+    case 'open_conflict':
+      return parsed.targetFindingId !== undefined
+        ? { decision: 'open_conflict', rawFindingId: parsed.rawFindingId, targetFindingId: parsed.targetFindingId }
+        : undefined;
+    case 'provisional':
+      return parsed.reason !== undefined
+        ? { decision: 'provisional', rawFindingId: parsed.rawFindingId, reason: parsed.reason }
+        : undefined;
+  }
+}
+
+/** WAL に保存する検証済み提案（設計書 §9）。判別型を復元できる形で保存する。 */
+const StoredAmbiguousInterpretationSchema = z.object({
+  decision: z.enum(AMBIGUOUS_INTERPRETATION_DECISIONS),
+  rawFindingId: nonEmptyString,
+  proofId: nonEmptyString.optional(),
+  targetFindingId: nonEmptyString.optional(),
+  reason: nonEmptyString.optional(),
+}).strict().transform((value, ctx): AmbiguousInterpretation => {
+  const interpretation = toAmbiguousInterpretation(value);
+  if (interpretation === undefined) {
+    ctx.addIssue({ code: 'custom', message: `stored interpretation decision "${value.decision}" is missing its required field` });
+    return z.NEVER;
+  }
+  return interpretation;
+});
+
+export const FindingInterpretationRecordSchema = z.object({
+  interpretationKey: nonEmptyString,
+  reviewerStableKey: nonEmptyString,
+  lineageKey: nonEmptyString,
+  candidateEvidenceHash: nonEmptyString,
+  policyVersion: z.literal(2),
+  stage: z.enum(INTERPRETATION_STAGES),
+  startedAt: FindingObservationSchema,
+  promptPreconditions: z.array(FindingMutationPreconditionSchema),
+  completedAt: FindingObservationSchema.optional(),
+  validatedDecision: StoredAmbiguousInterpretationSchema.optional(),
+  appliedAt: FindingObservationSchema.optional(),
+  applicationResult: z.enum(INTERPRETATION_APPLICATION_RESULTS).optional(),
+}).strict();
+
 export const FindingLedgerSchema = z.object({
   version: z.literal(1),
   workflowName: nonEmptyString,
@@ -225,7 +341,62 @@ export const FindingLedgerSchema = z.object({
   findings: z.array(FindingLedgerEntrySchema),
   rawFindings: z.array(RawFindingSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
+  interpretations: z.array(FindingInterpretationRecordSchema).optional(),
 }).strict();
+
+/**
+ * findings-manager の ambiguous 解釈フェーズが返す structured output の JSON
+ * schema。提案（proposal）だけを返させる — 台帳操作の8配列は返させない。
+ */
+export const AmbiguousInterpretationsOutputJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['interpretations'],
+  properties: {
+    interpretations: {
+      type: 'array',
+      description: 'Exactly one interpretation per ambiguous raw finding listed in the prompt. These are PROPOSALS: the engine holds all authority and rejects anything outside your granted capabilities.',
+      // 構造的なハード上限（codex B4）: 出力サイズは schema レベルで有界化する。
+      // batch は最大16件（MANAGER_INTERPRETATION_LIMITS.maxAmbiguousCandidatesPerBatch）、
+      // 各フィールドは固定長。chars/4 のトークン概算は計測・ログ用であって
+      // ハード上限ではない（native structured output provider は生成自体が
+      // この schema で拘束される）。
+      maxItems: 16,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['decision', 'rawFindingId', 'proofId', 'targetFindingId', 'reason'],
+        properties: {
+          decision: {
+            enum: AMBIGUOUS_INTERPRETATION_DECISIONS,
+            description: 'create_independent = the observation is a real, independent problem; a NEW open finding is created (existing findings are never touched). same_with_proof = you assert it is identical to an existing open finding AND the prompt gave you an engine-issued proofId for that pair; echo that proofId. open_conflict = it relates to an existing finding but you cannot determine identity; an active conflict is recorded against that finding (the finding is not closed). provisional = you cannot determine the meaning; the observation is kept as a gate-blocking provisional finding.',
+          },
+          rawFindingId: { type: 'string', minLength: 1, maxLength: 512 },
+          proofId: {
+            type: 'string',
+            maxLength: 128,
+            description: 'Required for same_with_proof: an engine-issued proof id from the prompt. Empty string otherwise. You cannot mint proof ids yourself.',
+          },
+          targetFindingId: {
+            type: 'string',
+            maxLength: 128,
+            description: 'Required for open_conflict: the existing finding id the observation conflicts with. Empty string otherwise.',
+          },
+          reason: {
+            type: 'string',
+            maxLength: 2048,
+            description: 'Required for provisional: why the meaning cannot be determined. Empty string otherwise.',
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+export function parseAmbiguousInterpretations(value: unknown): ParsedAmbiguousInterpretation[] {
+  const parsed = z.object({ interpretations: z.array(AmbiguousInterpretationSchema) }).strict().parse(value);
+  return parsed.interpretations;
+}
 
 export const FindingManagerOutputSchema = z.object({
   matches: z.array(z.object({
@@ -619,13 +790,12 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'kind', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
+        required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
-          kind: {
-            enum: RAW_FINDING_KINDS,
-            description: 'Legacy field, kept for compatibility. issue = observed problem. resolution_confirmation = verified that an open ledger finding is fixed. Set relation instead; kind is derived from it (new/persists/reopened -> issue).',
-          },
+          // v2 梯子設計 §2.2: 新規 reviewer contract では relation が正本。legacy の
+          // `kind` は schema から削除した（送られてきた場合は canonicalization が
+          // relation との整合を検証し、矛盾は ambiguity taint になる）。
           relation: {
             enum: RAW_FINDING_RELATIONS,
             description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be empty). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required).',

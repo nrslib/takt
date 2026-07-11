@@ -71,6 +71,41 @@ export interface FindingDisputeRecord {
   recordedAt: FindingObservation;
 }
 
+/**
+ * v2 梯子設計（raw finding 意味矛盾）の provisional 種別。provisional は新しい
+ * status/severity/lifecycle ではなく、status=open の finding に付く optional
+ * メタデータ（設計書 §7）。provisional が1件でも open なら final gate は閉じる
+ * （エンジン最終不変条件 + findings.provisional.count ルート）。
+ */
+export const FINDING_PROVISIONAL_KINDS = [
+  'raw-meaning-ambiguous',
+  'reviewer-output-overflow',
+  'manager-budget-exhausted',
+  'interpretation-interrupted',
+  'stale-precondition',
+  /**
+   * clean raw の location 証拠が決定的検証（admission-validation.ts）に落ちた。
+   * 決定的に証明できるのは「location 証拠の不成立」だけで欠陥の虚偽は証明でき
+   * ないため、観測を drop せず gate-blocking で保持する（codex B3）。
+   */
+  'invalid-location-evidence',
+] as const;
+export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
+
+export interface FindingProvisionalMetadata {
+  kind: FindingProvisionalKind;
+  /** 決定的な再発同定キー（sha256(reviewerStableKey, lineageKey, kind, policyVersion)）。行番号・runId・タイムスタンプ・LLM 説明文は入れない（攻撃5対策）。 */
+  stableKey: string;
+  lineageKey: string;
+  sourceRawFindingIds: string[];
+  reason: string;
+  firstObservedAt: FindingObservation;
+  lastObservedAt: FindingObservation;
+  /** この lineage に対する自動 manager 解釈の消費 epoch 数。上限は raw-finding-limits.ts の MAX_INTERPRETATION_EPOCHS_PER_LINEAGE。 */
+  interpretationEpochs: number;
+  gateEffect: 'block';
+}
+
 export interface FindingLedgerEntry {
   id: string;
   status: FindingStatus;
@@ -96,6 +131,14 @@ export interface FindingLedgerEntry {
   invalidatedEvidence?: string;
   /** Set when status/lifecycle becomes 'superseded' by a duplicateDecisions merge. */
   supersededByFindingId?: string;
+  /**
+   * 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。省略時（既存 v1
+   * ledger）は 1 とみなす（finding-preconditions.ts の findingRevision 参照）。
+   * optional なので既存 ledger は migration なしで読める。
+   */
+  revision?: number;
+  /** 意味を確定できなかった観測の gate-blocking メタデータ。設計書 §7。 */
+  provisional?: FindingProvisionalMetadata;
 }
 
 export type FindingRecord = FindingLedgerEntry;
@@ -108,6 +151,240 @@ export interface FindingLedger {
   findings: FindingLedgerEntry[];
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
+  /**
+   * 解釈 WAL（write-ahead log、設計書 §9）。ambiguous raw への manager 解釈を
+   * 冪等化する。optional なので既存 v1 ledger は migration なしで読める。
+   */
+  interpretations?: FindingInterpretationRecord[];
+}
+
+// ---------------------------------------------------------------------------
+// v2 梯子設計: 二層スキーマ（candidate / canonical）・capability・CAS・WAL 型
+// ---------------------------------------------------------------------------
+
+/**
+ * canonicalizeReviewerRawFinding が candidate に付ける ambiguity code。
+ * 設計書 §3 の列挙に対応する。code の有無が taint（ambiguityOrigin）を決める。
+ */
+export const RAW_AMBIGUITY_CODES = [
+  /** relation と targetFindingId の必須・禁止条件が矛盾する。 */
+  'relation-target-mismatch',
+  /** legacy kind と relation が矛盾する（v3-r3 gemma の実測パターン）。 */
+  'kind-relation-conflict',
+  /** persists が未知の target を指す。 */
+  'persists-target-unknown',
+  /** persists が open でない target を指す。 */
+  'persists-target-not-open',
+  /** reopened が open な target を指す。 */
+  'reopened-target-open',
+  /** reopened が未知の target を指す。 */
+  'reopened-target-unknown',
+  /** resolution_confirmation が未知の target を指す。 */
+  'confirmation-target-unknown',
+  /** resolution_confirmation が open でない target を指す。 */
+  'confirmation-target-not-open',
+  /** new だが既存 open finding と path/title が衝突し、完全同一性は証明できない。 */
+  'new-collides-open-finding',
+  /** 必須文字列（title/description/severity 等）が欠損しているが provisional として監査できる。 */
+  'missing-required-field',
+] as const;
+export type RawAmbiguityCode = typeof RAW_AMBIGUITY_CODES[number];
+
+declare const candidateBrand: unique symbol;
+declare const canonicalBrand: unique symbol;
+declare const sameProofBrand: unique symbol;
+
+/**
+ * Reviewer structured output を寛容に parse した「昇格前」の raw。nominal brand
+ * により CanonicalRawFinding とは代入不能。生成は raw-canonicalization.ts の
+ * candidate factory だけが行い、受理するのは canonical 生成関数
+ * （canonicalizeReviewerRawFinding）だけ。downstream（機械分類・manager prompt・
+ * reconciler・store）へは渡せない。
+ */
+export interface ReviewerRawFindingCandidate {
+  readonly [candidateBrand]: true;
+  /** intake 内での一意 ID（正規化済み rawFindingId、または欠損時のエンジン採番）。 */
+  readonly intakeId: string;
+  readonly reviewerStableKey: string;
+
+  readonly reviewerRawFindingId?: string;
+  readonly familyTag?: string;
+  readonly severity?: FindingSeverity;
+  readonly title?: string;
+  readonly location?: string;
+  readonly description?: string;
+  readonly suggestion?: string;
+
+  readonly relation?: RawFindingRelation;
+  readonly targetFindingId?: string;
+
+  /** legacy 入力の検証専用。新規 reviewer contract では出力させない。 */
+  readonly legacyKind?: RawFindingKind;
+
+  readonly sourceBytes: number;
+
+  /** reviewer / step の帰属（台帳の RawFinding 形へ戻すために保持）。 */
+  readonly reviewer: string;
+  readonly stepName: string;
+}
+
+export type CanonicalRawFinding =
+  | CoherentCanonicalRawFinding
+  | AmbiguousCanonicalRawFinding;
+
+export interface CanonicalRawFindingProvenance {
+  readonly origin: 'reviewer' | 'legacy-ledger' | 'system';
+  readonly ambiguityOrigin: boolean;
+  readonly clarificationAttempted: boolean;
+  readonly ambiguityCodes: readonly RawAmbiguityCode[];
+}
+
+interface CanonicalRawFindingBase {
+  readonly [canonicalBrand]: true;
+  readonly rawFindingId: string;
+  readonly reviewerStableKey: string;
+  readonly lineageKey: string;
+  readonly evidenceHash: string;
+
+  readonly relation: RawFindingRelation;
+  readonly kind: RawFindingKind;
+
+  readonly reviewer: string;
+  readonly stepName: string;
+
+  readonly provenance: CanonicalRawFindingProvenance;
+}
+
+export interface CoherentCanonicalRawFinding extends CanonicalRawFindingBase {
+  readonly coherence: 'coherent';
+  readonly familyTag: string;
+  readonly severity: FindingSeverity;
+  readonly title: string;
+  readonly description: string;
+  readonly location?: string;
+  readonly suggestion?: string;
+  readonly targetFindingId?: string;
+}
+
+export interface AmbiguousCanonicalRawFinding extends CanonicalRawFindingBase {
+  readonly coherence: 'ambiguous';
+  /** provisional/manager prompt に安全に載せられる有界の抜粋（本文全文は載せない）。 */
+  readonly safeEvidenceExcerpt: string;
+  readonly targetFindingId?: string;
+  /** エンジンが発行する権限格子。LLM の出力からは受け取らない（設計書 §4）。 */
+  readonly capabilities: AmbiguousRawCapabilities;
+  /** provisional 化・manager prompt 用に保持する元 raw のフィールド（欠損あり得る）。 */
+  readonly familyTag?: string;
+  readonly severity?: FindingSeverity;
+  readonly title?: string;
+  readonly description?: string;
+  readonly location?: string;
+  readonly suggestion?: string;
+}
+
+/** ambiguous 起源 raw の権限。全フィールドがリテラル型で、緩和はコンパイルエラー。 */
+export interface AmbiguousRawCapabilities {
+  readonly mayCreateIndependentFinding: true;
+  readonly mayOpenConflict: true;
+  readonly mayCreateProvisional: true;
+
+  readonly mayResolve: false;
+  readonly mayWaive: false;
+  readonly mayInvalidate: false;
+  readonly maySupersede: false;
+  readonly mayReopenTarget: false;
+  readonly mayNonDeterministicallyMatch: false;
+}
+
+/**
+ * ambiguous raw に許される唯一の same 経路（設計書 §4.2）。manager の文章判断
+ * ではなく、エンジンが正規化フィールドの完全一致 + target open + revision 一致を
+ * 確認して発行する。発行はエンジン（raw-capabilities.ts）だけが行う。
+ */
+export interface DeterministicSameProof {
+  readonly [sameProofBrand]: true;
+  readonly proofId: string;
+  readonly rawFindingId: string;
+  readonly targetFindingId: string;
+  readonly targetRevision: number;
+  readonly identityHash: string;
+  readonly algorithmVersion: 1;
+}
+
+/**
+ * manager が ambiguous raw に対して返せる「提案」。台帳操作そのものではない。
+ * 権限はエンジン発行の capability（AmbiguousRawCapabilities / SameProof）だけ
+ * から決まる（設計書 §4.1）。
+ */
+export const AMBIGUOUS_INTERPRETATION_DECISIONS = [
+  'create_independent',
+  'same_with_proof',
+  'open_conflict',
+  'provisional',
+] as const;
+export type AmbiguousInterpretationDecision = typeof AMBIGUOUS_INTERPRETATION_DECISIONS[number];
+
+export type AmbiguousInterpretation =
+  | { decision: 'create_independent'; rawFindingId: string }
+  | { decision: 'same_with_proof'; rawFindingId: string; proofId: string }
+  | { decision: 'open_conflict'; rawFindingId: string; targetFindingId: string }
+  | { decision: 'provisional'; rawFindingId: string; reason: string };
+
+/**
+ * 楽観的前提条件（CAS、設計書 §6）。confirmation を機械処理または prompt へ
+ * 載せた時点の target のスナップショット。保存時の排他区間で再検証する。
+ * ambiguous 起源だけでなく全 confirmation（および reopen/invalidate/supersede）
+ * に適用する。
+ */
+export interface FindingMutationPrecondition {
+  targetFindingId: string;
+  targetRevision: number;
+  targetStatus: FindingStatus;
+  targetEvidenceHash: string;
+}
+
+export interface ConfirmationProposal {
+  rawFindingId: string;
+  precondition: FindingMutationPrecondition;
+}
+
+/** 解釈 WAL の段階（設計書 §9）。 */
+export const INTERPRETATION_STAGES = [
+  'interpretation_started',
+  'interpretation_completed',
+  'ledger_applied',
+] as const;
+export type InterpretationStage = typeof INTERPRETATION_STAGES[number];
+
+export const INTERPRETATION_APPLICATION_RESULTS = [
+  'created',
+  'matched_with_proof',
+  'conflict_created',
+  'provisional_created',
+  'provisional_updated',
+  'stale_precondition',
+] as const;
+export type InterpretationApplicationResult = typeof INTERPRETATION_APPLICATION_RESULTS[number];
+
+export interface FindingInterpretationRecord {
+  /** sha256(reviewerStableKey, lineageKey, candidateEvidenceHash, policyVersion)。 */
+  interpretationKey: string;
+  reviewerStableKey: string;
+  lineageKey: string;
+  candidateEvidenceHash: string;
+  policyVersion: 2;
+
+  stage: InterpretationStage;
+  startedAt: FindingObservation;
+
+  promptPreconditions: FindingMutationPrecondition[];
+
+  completedAt?: FindingObservation;
+  /** schema・capability 検証済みの manager 提案。resume 時はこれを再利用し再問い合わせしない。 */
+  validatedDecision?: AmbiguousInterpretation;
+
+  appliedAt?: FindingObservation;
+  applicationResult?: InterpretationApplicationResult;
 }
 
 export const RAW_FINDING_KINDS = ['issue', 'resolution_confirmation'] as const;
@@ -398,6 +675,16 @@ export interface FindingsRuleContext {
   };
   waived: {
     count: number;
+  };
+  /**
+   * open findings のうち provisional メタデータ（意味を確定できなかった観測）を
+   * 持つもの。open.count にも含まれる（provisional は status=open のため安全側）。
+   * builtin workflow はこの count を見て need_replan へルーティングし、エンジンは
+   * count > 0 での COMPLETE 遷移を最終不変条件として拒否する（設計書 §7）。
+   */
+  provisional: {
+    count: number;
+    items: Array<{ id: string; kind: string; reason: string }>;
   };
   /** Audit-only visibility: engine-verified "premise does not hold" findings. Not part of the blocking set; gate conditions stay on open/conflicts. */
   invalidated: {

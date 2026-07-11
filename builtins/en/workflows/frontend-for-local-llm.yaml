@@ -317,6 +317,11 @@ steps:
     rules:
       - condition: all("approved", "No AI-specific issues", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
+      # Provisional findings (observations whose meaning could not be determined)
+      # are system findings the fixer cannot address directly; replan instead of
+      # looping the fixer (raw-finding ladder design v2).
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
       - condition: any("needs_fix", "AI-specific issues found", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
@@ -385,6 +390,11 @@ steps:
     rules:
       - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
+      # Provisional findings (observations whose meaning could not be determined)
+      # are system findings the fixer cannot address directly; replan instead of
+      # looping the fixer (raw-finding ladder design v2).
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
       - condition: any("need_replan") && when(findings.conflicts.count == 0)
         next: plan
       - condition: any("needs_fix") && when(findings.conflicts.count == 0)

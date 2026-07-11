@@ -57,12 +57,6 @@ export function isNonAiReturnValueRule(rule: WorkflowRule, returnValue: string):
   return rule.isAiCondition !== true && rule.returnValue === returnValue;
 }
 
-export function isInvalidManagerOutputRule(rule: WorkflowRule): boolean {
-  return isNonAiReturnValueRule(rule, 'need_replan')
-    || isNonAiReturnValueRule(rule, 'needs_fix')
-    || (rule.isAiCondition !== true && rule.next === 'fix');
-}
-
 /**
  * Check whether a step has tag-based rules (i.e., rules that require
  * [STEP:N] tag output for detection).

@@ -69,6 +69,7 @@ function makeDeps(
     addUserInput: vi.fn(),
     emit: vi.fn(),
     updateMaxSteps: vi.fn(),
+    checkCompletionGate: vi.fn(() => ({ ok: true as const })),
     persistPreviousResponseSnapshot: vi.fn((targetState: WorkflowState, stepName: string, stepIteration: number, content: string) => {
       targetState.previousResponseSourcePath = `.takt/runs/test/context/previous_responses/${stepName}.${stepIteration}.snapshot.md`;
       targetState.lastOutput = {

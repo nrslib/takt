@@ -60,12 +60,44 @@ function validateWorkflowRuntimeContract(
       autoRouting: workflow.autoRouting ?? config.autoRouting,
       workflowCallResolver: () => null,
     });
+    warnOnMissingProvisionalRouting(report, workflow);
   } catch (validationError) {
     report.diagnostics.push({
       level: 'error',
       message: getErrorMessage(validationError),
     });
   }
+}
+
+/**
+ * v2 梯子設計への移行警告: run-level の invalid_manager_output（旧: 迂回ルールの
+ * 自動選択）は廃止され、manager の壊れた応答・意味不明な raw は gate-blocking な
+ * provisional finding として台帳に着地する。finding_contract を使う workflow が
+ * findings.provisional.count を一切参照していない場合、provisional 残存時に
+ * COMPLETE がエンジン最終不変条件で abort する（旧 rules 構成のままだと
+ * needs_fix 等の自動迂回は発火しない）ため、移行を促す警告を出す。
+ */
+function warnOnMissingProvisionalRouting(
+  report: WorkflowDoctorReport,
+  workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>,
+): void {
+  if (workflow.findingContract === undefined) {
+    return;
+  }
+  const referencesProvisional = workflow.steps.some((step) => (
+    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional'))
+  ));
+  if (referencesProvisional) {
+    return;
+  }
+  report.diagnostics.push({
+    level: 'warning',
+    message: 'finding_contract workflow has no rule routing on findings.provisional.count. '
+      + 'In the v2 raw-finding ladder, invalid manager output no longer auto-selects a needs_fix/need_replan detour rule; '
+      + 'undeterminable observations land as gate-blocking provisional findings instead, and a transition to COMPLETE '
+      + 'while any provisional finding is open aborts the workflow. '
+      + 'Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0) -> <replan step>` before your COMPLETE rule.',
+  });
 }
 
 export async function doctorWorkflowCommand(

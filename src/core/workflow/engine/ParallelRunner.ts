@@ -41,11 +41,10 @@ import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput, type FindingManagerRunResult } from '../findings/manager-runner.js';
 import {
   ingestFindingContractResults,
-  selectInvalidManagerOutputRuleIndex,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
 import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
-import { regenerateIncoherentNewRawRelationsOnce } from '../findings/relation-coherence.js';
+import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
@@ -55,6 +54,8 @@ const log = createLogger('parallel-runner');
 type ParallelSubStepResult = {
   subStep: WorkflowStep;
   response: AgentResponse;
+  /** レビュア1回突き返しの実施記録（engine 発行の taint 根拠。manager-runner が canonicalization へ渡す）。 */
+  relationClarification?: ReviewerRelationClarification;
   instruction: string;
   providerInfo?: StepRunResult['providerInfo'];
   durationMs?: number;
@@ -348,6 +349,7 @@ export class ParallelRunner {
           this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, parentIteration);
           didEmitPhaseStart = true;
         };
+        let subRelationClarification: ReviewerRelationClarification | undefined;
         let subResponse = await runWithPhaseSpan({
           enabled: this.deps.observabilityEnabled,
           runId: this.deps.observabilityRunId,
@@ -479,24 +481,26 @@ export class ParallelRunner {
               };
             }
           }
-          // レビュア再生成（設計項目3の残り）: relation=new なのに正規化
-          // path+title が既存 open finding と一致する raw があれば、同一
-          // セッションで1回だけ relation の明示を求める。直らなかった raw は
-          // 取り込み時（manager-runner.ts の partitionRelationCoherentRawFindings）
-          // に unsupported_raw として落ちる。
+          // レビュア1回突き返し（v2 梯子設計 §3）: relation/target/kind の意味
+          // 矛盾がある raw について同一セッションで1回だけ明確化を求める。
+          // 直らなかった raw は drop せず ambiguous のまま manager 解釈 /
+          // provisional へ進む。clarification は engine 発行の taint 根拠として
+          // manager-runner の canonicalization に渡す。
           if (subResponse.status === 'done' && this.deps.findingLedgerStore) {
-            subResponse = await regenerateIncoherentNewRawRelationsOnce({
+            const clarified = await clarifyAmbiguousRawRelationsOnce({
               stepName: subStep.name,
               persona: executableSubStep.persona,
               response: subResponse,
               ledger: this.deps.findingLedgerStore.loadLedger(),
               agentOptions,
-              normalize: (candidate) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+              normalize: (candidate: AgentResponse) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
                 executableSubStep,
                 candidate,
                 subRuntime,
               ),
             });
+            subResponse = clarified.response;
+            subRelationClarification = clarified.clarification;
           }
         }
         if (!didEmitPhaseStart) {
@@ -519,6 +523,7 @@ export class ParallelRunner {
           return {
             subStep,
             response: subResponse,
+            ...(subRelationClarification !== undefined ? { relationClarification: subRelationClarification } : {}),
             instruction: phase1Instruction,
             providerInfo: subPm,
             durationMs: Math.max(0, subResponse.timestamp.getTime() - startedAt),
@@ -648,6 +653,7 @@ export class ParallelRunner {
         return {
           subStep,
           response: finalResponse,
+          ...(subRelationClarification !== undefined ? { relationClarification: subRelationClarification } : {}),
           instruction: phase1Instruction,
           providerInfo: subPm,
           durationMs: Math.max(0, finalResponse.timestamp.getTime() - startedAt),
@@ -757,18 +763,9 @@ export class ParallelRunner {
       };
     }
 
-    const findingManagerResult = await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath, priorStepResponseText);
-    if (findingManagerResult?.status === 'invalid_manager_output') {
-      const response = this.createFindingManagerInvalidOutputResult({
-        step,
-        state,
-        stepIteration,
-        subResults,
-        managerResult: findingManagerResult,
-        providerInfo: findingManagerResult.providerInfo,
-      });
-      return response;
-    }
+    // v2 梯子設計: 取り込みは常に 'updated' で完了する（manager の壊れた応答・
+    // 予算超過は provisional として台帳へ着地し、run-level の失敗経路は無い）。
+    await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath, priorStepResponseText);
 
     // Print completion summary
     if (parallelLogger) {
@@ -1052,50 +1049,6 @@ export class ParallelRunner {
         options.step.name,
         ...options.subResults.map((result) => result.subStep.name),
       ],
-    };
-  }
-
-  private createFindingManagerInvalidOutputResult(options: {
-    step: WorkflowStep;
-    state: WorkflowState;
-    stepIteration: number;
-    subResults: ParallelSubStepResult[];
-    managerResult: Extract<FindingManagerRunResult, { status: 'invalid_manager_output' }>;
-    providerInfo: StepRunResult['providerInfo'];
-  }): StepRunResult {
-    const content = [
-      `Finding manager output remained semantically invalid after ${options.managerResult.retryCount} retry.`,
-      '',
-      'Validation errors:',
-      ...options.managerResult.errors.map((error) => `- ${error}`),
-      '',
-      `Validation report: ${options.managerResult.reportPath}`,
-      'Ledger was not updated.',
-    ].join('\n');
-
-    const matchedRuleIndex = selectInvalidManagerOutputRuleIndex(options.step);
-    const response: AgentResponse = {
-      persona: options.step.name,
-      status: 'done',
-      content,
-      timestamp: new Date(),
-      ...(matchedRuleIndex !== undefined ? { matchedRuleIndex, matchedRuleMethod: 'auto_select' } : {}),
-    };
-
-    options.state.stepOutputs.set(options.step.name, response);
-    options.state.lastOutput = response;
-    this.deps.stepExecutor.persistPreviousResponseSnapshot(
-      options.state,
-      options.step.name,
-      options.stepIteration,
-      response.content,
-    );
-    this.deps.stepExecutor.emitStepReports(options.step);
-
-    return {
-      response,
-      instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
-      providerInfo: options.providerInfo,
     };
   }
 

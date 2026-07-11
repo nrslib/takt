@@ -146,7 +146,14 @@ export type WorkflowAbortKind =
   | 'user_input_required'
   | 'user_input_cancelled'
   | 'step_transition'
-  | 'runtime_error';
+  | 'runtime_error'
+  /**
+   * COMPLETE への遷移時に open な provisional finding（意味を確定できなかった
+   * 観測）が残っていた。エンジン最終不変条件のバックストップ発火 = workflow の
+   * rules が findings.provisional.count を処理する記述を欠いている設定不備で、
+   * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast（v2 梯子設計 §7）。
+   */
+  | 'provisional_findings';
 
 export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;

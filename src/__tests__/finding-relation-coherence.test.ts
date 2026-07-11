@@ -1,10 +1,9 @@
 /**
- * Reviewer relation coherence (design item 3, remainder): raws that arrive
- * relation "new" but collide (normalized path+title) with an open ledger
- * finding get one reviewer regeneration chance; whatever stays incoherent is
- * dropped at intake as an unsupported-raw audit record. Pure detection /
- * partition logic plus the regeneration helper with a mocked agent call.
- * The full engine path is covered in finding-conflict-adjudication-engine.test.ts.
+ * レビュア1回突き返し（v2 梯子設計 §3・実装単位4）: relation/target/kind の
+ * 意味矛盾がある raw に同一セッションで1回だけ明確化を求める。訂正契約
+ * （raw 集合・本文不変）は決定的に検証し、失敗しても raw は drop されない
+ * （ambiguous のまま manager 解釈 / provisional へ進む）。taint は engine 発行の
+ * clarification メタデータで intake へ引き継がれる。
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -14,12 +13,11 @@ vi.mock('../agents/agent-usecases.js', () => ({
 
 import {
   buildRelationCoherenceRegenerationInstruction,
-  detectIncoherentNewRawFindings,
-  partitionRelationCoherentRawFindings,
-  regenerateIncoherentNewRawRelationsOnce,
+  clarifyAmbiguousRawRelationsOnce,
+  detectClarifiableRawMismatches,
 } from '../core/workflow/findings/relation-coherence.js';
 import type { AgentResponse } from '../core/models/types.js';
-import type { FindingLedger, FindingLedgerEntry, RawFinding } from '../core/workflow/findings/types.js';
+import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
@@ -41,17 +39,31 @@ function makeOpenFinding(overrides: Partial<FindingLedgerEntry> = {}): FindingLe
   };
 }
 
-function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
+interface WireRaw {
+  rawFindingId: string;
+  familyTag: string;
+  severity: string;
+  title: string;
+  location: string;
+  description: string;
+  relation: string;
+  targetFindingId: string;
+  kind: string;
+  suggestion: string;
+}
+
+function makeRawItem(overrides: Partial<WireRaw> = {}): WireRaw {
   return {
     rawFindingId: 'raw-new',
-    stepName: 'coding-review',
-    reviewer: 'coding-review',
     familyTag: 'security',
     severity: 'high',
     title: 'Secret is logged',
     location: 'src/secret.ts:40',
     description: 'A different observation of token logging.',
     relation: 'new',
+    targetFindingId: '',
+    kind: 'issue',
+    suggestion: '',
     ...overrides,
   };
 }
@@ -69,79 +81,84 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   };
 }
 
-describe('detectIncoherentNewRawFindings', () => {
+describe('detectClarifiableRawMismatches', () => {
   it('relation=new かつ正規化 path+title が open finding と一致する raw を検出する（行番号差は無視）', () => {
-    const mismatches = detectIncoherentNewRawFindings([makeRaw()], [makeOpenFinding()]);
+    const mismatches = detectClarifiableRawMismatches([makeRawItem()], makeLedger());
     expect(mismatches).toHaveLength(1);
-    expect(mismatches[0]).toMatchObject({ rawFindingId: 'raw-new', matchedFindingId: 'F-0001' });
+    expect(mismatches[0]).toMatchObject({ rawFindingId: 'raw-new', collidingFindingId: 'F-0001' });
+    expect(mismatches[0]!.codes).toContain('new-collides-open-finding');
   });
 
   it('description まで一致する raw は検出しない（decision-assembly が決定的に same へ畳むため）', () => {
-    const raw = makeRaw({ description: 'The code logs a token.' });
-    expect(detectIncoherentNewRawFindings([raw], [makeOpenFinding()])).toHaveLength(0);
+    const raw = makeRawItem({ description: 'The code logs a token.' });
+    expect(detectClarifiableRawMismatches([raw], makeLedger())).toHaveLength(0);
   });
 
-  it('relation が persists/reopened/resolution_confirmation の raw は対象外', () => {
-    const raws = [
-      makeRaw({ rawFindingId: 'raw-p', relation: 'persists', targetFindingId: 'F-0001' }),
-      makeRaw({ rawFindingId: 'raw-r', relation: 'reopened', targetFindingId: 'F-0001' }),
-      makeRaw({ rawFindingId: 'raw-c', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
-    ];
-    expect(detectIncoherentNewRawFindings(raws, [makeOpenFinding()])).toHaveLength(0);
-  });
-
-  it('path または title が一致しない raw は検出しない', () => {
-    const raws = [
-      makeRaw({ rawFindingId: 'raw-other-path', location: 'src/other.ts:12' }),
-      makeRaw({ rawFindingId: 'raw-other-title', title: 'A completely different issue' }),
-    ];
-    expect(detectIncoherentNewRawFindings(raws, [makeOpenFinding()])).toHaveLength(0);
-  });
-
-  it('open でない finding とは衝突しない', () => {
-    const resolved = makeOpenFinding({ status: 'resolved', lifecycle: 'resolved' });
-    expect(detectIncoherentNewRawFindings([makeRaw()], [resolved])).toHaveLength(0);
-  });
-});
-
-describe('partitionRelationCoherentRawFindings', () => {
-  it('不整合 raw を rejected（衝突相手を targetFindingId に記録）へ、他は admitted へ分ける', () => {
-    const incoherent = makeRaw();
-    const coherent = makeRaw({ rawFindingId: 'raw-fine', title: 'Another problem', location: 'src/other.ts:5' });
-    const result = partitionRelationCoherentRawFindings({
-      previousLedger: makeLedger(),
-      rawFindings: [incoherent, coherent],
+  it('整合した persists/reopened/resolution_confirmation は対象外', () => {
+    const ledger = makeLedger({
+      findings: [
+        makeOpenFinding(),
+        makeOpenFinding({ id: 'F-0002', title: 'Another one', location: 'src/two.ts:1' }),
+        makeOpenFinding({ id: 'F-0003', status: 'resolved', lifecycle: 'resolved', title: 'Fixed one', location: 'src/three.ts:1' }),
+      ],
     });
-    expect(result.admitted.map((raw) => raw.rawFindingId)).toEqual(['raw-fine']);
-    expect(result.rejected).toHaveLength(1);
-    expect(result.rejected[0]).toMatchObject({ rawFindingId: 'raw-new', targetFindingId: 'F-0001' });
-    expect(result.rejected[0]!.evidence).toContain('not adopted as a new finding');
+    const raws = [
+      makeRawItem({ rawFindingId: 'raw-p', relation: 'persists', targetFindingId: 'F-0001', kind: 'issue' }),
+      makeRawItem({ rawFindingId: 'raw-r', relation: 'reopened', targetFindingId: 'F-0003', kind: 'issue', title: 'Fixed one came back', location: 'src/three.ts:2' }),
+      makeRawItem({ rawFindingId: 'raw-c', relation: 'resolution_confirmation', targetFindingId: 'F-0002', kind: 'resolution_confirmation', title: 'Another one is fixed', location: 'src/two.ts:1' }),
+    ];
+    expect(detectClarifiableRawMismatches(raws, ledger)).toHaveLength(0);
   });
 
-  it('不整合が無ければ全量 admitted', () => {
-    const result = partitionRelationCoherentRawFindings({
-      previousLedger: makeLedger(),
-      rawFindings: [makeRaw({ relation: 'persists', targetFindingId: 'F-0001' })],
-    });
-    expect(result.admitted).toHaveLength(1);
-    expect(result.rejected).toHaveLength(0);
-  });
-});
-
-describe('regenerateIncoherentNewRawRelationsOnce', () => {
-  const reviewerStructuredOutput = {
-    rawFindings: [{
-      rawFindingId: 'raw-new',
-      familyTag: 'security',
-      severity: 'high',
-      title: 'Secret is logged',
-      location: 'src/secret.ts:40',
-      description: 'A different observation of token logging.',
-      relation: 'new',
-      targetFindingId: '',
+  it('v3-r3 実測パターン: kind=issue + relation=resolution_confirmation は kind-relation-conflict として検出する', () => {
+    const raw = makeRawItem({
+      rawFindingId: 'raw-gemma',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
       kind: 'issue',
-      suggestion: '',
-    }],
+      title: 'F-0001 is fixed',
+      location: 'src/secret.ts:12',
+    });
+    const mismatches = detectClarifiableRawMismatches([raw], makeLedger());
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0]!.codes).toContain('kind-relation-conflict');
+  });
+
+  it('persists が未知 / 非 open target を指す矛盾を検出する', () => {
+    const ledger = makeLedger({
+      findings: [makeOpenFinding({ id: 'F-0009', status: 'resolved', lifecycle: 'resolved', title: 'Old', location: 'src/x.ts:1' })],
+    });
+    const mismatches = detectClarifiableRawMismatches([
+      makeRawItem({ rawFindingId: 'raw-unknown', relation: 'persists', targetFindingId: 'F-9999', title: 'T1', location: 'src/a.ts:1' }),
+      makeRawItem({ rawFindingId: 'raw-closed', relation: 'persists', targetFindingId: 'F-0009', title: 'T2', location: 'src/b.ts:1' }),
+    ], ledger);
+    expect(mismatches.map((m) => m.rawFindingId)).toEqual(['raw-unknown', 'raw-closed']);
+    expect(mismatches[0]!.codes).toContain('persists-target-unknown');
+    expect(mismatches[1]!.codes).toContain('persists-target-not-open');
+  });
+
+  it('missing-required-field だけの raw は突き返し対象にしない（本文変更が必要なため ladder 直行）', () => {
+    const raw = { rawFindingId: 'raw-broken', relation: 'new' };
+    expect(detectClarifiableRawMismatches([raw], makeLedger())).toHaveLength(0);
+  });
+
+  it('path または title が一致しない new は検出しない', () => {
+    const raws = [
+      makeRawItem({ rawFindingId: 'raw-other-path', location: 'src/other.ts:12' }),
+      makeRawItem({ rawFindingId: 'raw-other-title', title: 'A completely different issue' }),
+    ];
+    expect(detectClarifiableRawMismatches(raws, makeLedger())).toHaveLength(0);
+  });
+
+  it('open でない finding とは new 衝突しない', () => {
+    const ledger = makeLedger({ findings: [makeOpenFinding({ status: 'resolved', lifecycle: 'resolved' })] });
+    expect(detectClarifiableRawMismatches([makeRawItem()], ledger)).toHaveLength(0);
+  });
+});
+
+describe('clarifyAmbiguousRawRelationsOnce', () => {
+  const reviewerStructuredOutput = {
+    rawFindings: [makeRawItem()],
   };
 
   function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
@@ -158,14 +175,10 @@ describe('regenerateIncoherentNewRawRelationsOnce', () => {
 
   const identityNormalize = (response: AgentResponse): { response: AgentResponse; invalidDetail?: string } => ({ response });
 
-  it('1回で直れば再生成出力を採用する（本文は元のまま、structured output だけ差し替え）', async () => {
+  it('1回で直れば再生成出力を採用する（本文は元のまま、structured output だけ差し替え）。taint 用の clarification が付く', async () => {
     executeAgentMock.mockReset();
     const correctedOutput = {
-      rawFindings: [{
-        ...reviewerStructuredOutput.rawFindings[0]!,
-        relation: 'persists',
-        targetFindingId: 'F-0001',
-      }],
+      rawFindings: [makeRawItem({ relation: 'persists', targetFindingId: 'F-0001' })],
     };
     executeAgentMock.mockResolvedValueOnce({
       persona: 'coding-reviewer',
@@ -176,7 +189,7 @@ describe('regenerateIncoherentNewRawRelationsOnce', () => {
       timestamp: new Date('2026-06-13T00:00:02.000Z'),
     });
 
-    const result = await regenerateIncoherentNewRawRelationsOnce({
+    const result = await clarifyAmbiguousRawRelationsOnce({
       stepName: 'coding-review',
       persona: 'coding-reviewer',
       response: makeResponse(),
@@ -190,12 +203,16 @@ describe('regenerateIncoherentNewRawRelationsOnce', () => {
     expect(instruction).toContain('F-0001');
     expect(instruction).toContain('relation "new"');
     expect(options).toMatchObject({ permissionMode: 'readonly', allowedTools: [], sessionId: 'session-1' });
-    expect(result.content).toBe('Review report body.');
-    expect(result.structuredOutput).toEqual(correctedOutput);
-    expect(result.sessionId).toBe('session-2');
+    expect(result.response.content).toBe('Review report body.');
+    expect(result.response.structuredOutput).toEqual(correctedOutput);
+    expect(result.response.sessionId).toBe('session-2');
+    // taint は消えない: correction が成功しても clarification（priorAmbiguityCodes）が残る。
+    expect(result.clarification).toBeDefined();
+    expect(result.clarification!.flaggedRawFindingIds).toEqual(['raw-new']);
+    expect(result.clarification!.priorAmbiguityCodesByRawId['raw-new']).toContain('new-collides-open-finding');
   });
 
-  it('再生成出力が不正なら元の応答を保持する（ステップは失敗させない）', async () => {
+  it('再生成出力が不正なら元の応答を保持する（ステップは失敗させず、drop もしない）', async () => {
     executeAgentMock.mockReset();
     executeAgentMock.mockResolvedValueOnce({
       persona: 'coding-reviewer',
@@ -205,7 +222,7 @@ describe('regenerateIncoherentNewRawRelationsOnce', () => {
     });
 
     const original = makeResponse();
-    const result = await regenerateIncoherentNewRawRelationsOnce({
+    const result = await clarifyAmbiguousRawRelationsOnce({
       stepName: 'coding-review',
       persona: 'coding-reviewer',
       response: original,
@@ -215,21 +232,18 @@ describe('regenerateIncoherentNewRawRelationsOnce', () => {
     });
 
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    expect(result).toBe(original);
+    expect(result.response).toBe(original);
+    expect(result.clarification).toBeDefined();
   });
 
-  it('不整合が無ければ再生成呼び出しをしない', async () => {
+  it('意味矛盾が無ければ再生成呼び出しをしない（clarification も付かない）', async () => {
     executeAgentMock.mockReset();
     const response = makeResponse({
       structuredOutput: {
-        rawFindings: [{
-          ...reviewerStructuredOutput.rawFindings[0]!,
-          relation: 'persists',
-          targetFindingId: 'F-0001',
-        }],
+        rawFindings: [makeRawItem({ relation: 'persists', targetFindingId: 'F-0001' })],
       },
     });
-    const result = await regenerateIncoherentNewRawRelationsOnce({
+    const result = await clarifyAmbiguousRawRelationsOnce({
       stepName: 'coding-review',
       persona: 'coding-reviewer',
       response,
@@ -238,35 +252,21 @@ describe('regenerateIncoherentNewRawRelationsOnce', () => {
       normalize: identityNormalize,
     });
     expect(executeAgentMock).not.toHaveBeenCalled();
-    expect(result).toBe(response);
+    expect(result.response).toBe(response);
+    expect(result.clarification).toBeUndefined();
   });
 });
 
-describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', () => {
-  const originalRaw = {
-    rawFindingId: 'raw-new',
-    familyTag: 'security',
-    severity: 'high',
-    title: 'Secret is logged',
-    location: 'src/secret.ts:40',
-    description: 'A different observation of token logging.',
-    relation: 'new',
-    targetFindingId: '',
-    kind: 'issue',
-    suggestion: '',
-  };
-  const bystanderRaw = {
+describe('clarifyAmbiguousRawRelationsOnce: 再生成契約 (codex B5 / 設計書 §12-4)', () => {
+  const originalRaw = makeRawItem();
+  const bystanderRaw = makeRawItem({
     rawFindingId: 'raw-other',
     familyTag: 'bug',
     severity: 'medium',
     title: 'An unrelated problem',
     location: 'src/other.ts:3',
     description: 'Something else entirely.',
-    relation: 'new',
-    targetFindingId: '',
-    kind: 'issue',
-    suggestion: '',
-  };
+  });
 
   function makeTwoRawResponse(): AgentResponse {
     return {
@@ -281,7 +281,7 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
 
   const identityNormalize = (response: AgentResponse): { response: AgentResponse; invalidDetail?: string } => ({ response });
 
-  async function runWithRegeneratedRawFindings(rawFindings: unknown[]): Promise<AgentResponse> {
+  async function runWithRegeneratedRawFindings(rawFindings: unknown[]): Promise<{ response: AgentResponse }> {
     executeAgentMock.mockReset();
     executeAgentMock.mockResolvedValueOnce({
       persona: 'coding-reviewer',
@@ -290,7 +290,7 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       structuredOutput: { rawFindings },
       timestamp: new Date('2026-06-13T00:00:02.000Z'),
     });
-    return regenerateIncoherentNewRawRelationsOnce({
+    return clarifyAmbiguousRawRelationsOnce({
       stepName: 'coding-review',
       persona: 'coding-reviewer',
       response: makeTwoRawResponse(),
@@ -305,7 +305,7 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       bystanderRaw,
     ]);
-    expect((result.structuredOutput?.rawFindings as Array<{ relation: string }>)[0]?.relation).toBe('persists');
+    expect((result.response.structuredOutput?.rawFindings as Array<{ relation: string }>)[0]?.relation).toBe('persists');
   });
 
   it('raw の欠落は破棄して元出力を保持する', async () => {
@@ -314,7 +314,7 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       // bystanderRaw が消えた
     ]);
-    expect(result.structuredOutput).toEqual(original.structuredOutput);
+    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
   });
 
   it('raw の追加は破棄して元出力を保持する', async () => {
@@ -324,7 +324,7 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       bystanderRaw,
       { ...bystanderRaw, rawFindingId: 'raw-smuggled', title: 'A smuggled-in extra finding' },
     ]);
-    expect(result.structuredOutput).toEqual(original.structuredOutput);
+    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
   });
 
   it('非対象 raw の内容変更は破棄して元出力を保持する', async () => {
@@ -333,7 +333,7 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       { ...bystanderRaw, description: 'Rewritten description of the unrelated problem.' },
     ]);
-    expect(result.structuredOutput).toEqual(original.structuredOutput);
+    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
   });
 
   it('非対象 raw の relation 変更は破棄して元出力を保持する', async () => {
@@ -342,7 +342,7 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001' },
       { ...bystanderRaw, relation: 'persists', targetFindingId: 'F-0001' },
     ]);
-    expect(result.structuredOutput).toEqual(original.structuredOutput);
+    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
   });
 
   it('対象 raw の内容（title 等）の変更は破棄して元出力を保持する', async () => {
@@ -351,14 +351,14 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       { ...originalRaw, relation: 'persists', targetFindingId: 'F-0001', title: 'A rewritten title' },
       bystanderRaw,
     ]);
-    expect(result.structuredOutput).toEqual(original.structuredOutput);
+    expect(result.response.structuredOutput).toEqual(original.structuredOutput);
   });
 
-  it('executeAgent の例外時は元出力を保持してステップを失敗させない', async () => {
+  it('executeAgent の例外時は元出力を保持してステップを失敗させない（clarification は残す）', async () => {
     executeAgentMock.mockReset();
     executeAgentMock.mockRejectedValueOnce(new Error('provider crashed mid-call'));
     const original = makeTwoRawResponse();
-    const result = await regenerateIncoherentNewRawRelationsOnce({
+    const result = await clarifyAmbiguousRawRelationsOnce({
       stepName: 'coding-review',
       persona: 'coding-reviewer',
       response: original,
@@ -366,23 +366,26 @@ describe('regenerateIncoherentNewRawRelationsOnce: 再生成契約 (codex B5)', 
       agentOptions: { provider: 'claude' },
       normalize: identityNormalize,
     });
-    expect(result).toBe(original);
+    expect(result.response).toBe(original);
+    expect(result.clarification).toBeDefined();
   });
 });
 
 describe('buildRelationCoherenceRegenerationInstruction', () => {
-  it('衝突した raw と finding の対応、および全量再出力の要求を含む', () => {
+  it('矛盾した raw と対象 finding の対応、および全量再出力・relation/target 限定の要求を含む', () => {
     const instruction = buildRelationCoherenceRegenerationInstruction([{
       rawFindingId: 'raw-new',
       title: 'Secret is logged',
       location: 'src/secret.ts:40',
-      matchedFindingId: 'F-0001',
-      matchedFindingTitle: 'Secret is logged',
+      codes: ['new-collides-open-finding'],
+      collidingFindingId: 'F-0001',
+      collidingFindingTitle: 'Secret is logged',
     }]);
     expect(instruction).toContain('raw-new');
     expect(instruction).toContain('F-0001');
     expect(instruction).toContain('persists');
     expect(instruction).toContain('reopened');
     expect(instruction).toContain('ALL raw findings');
+    expect(instruction).toContain('ONLY the relation and targetFindingId');
   });
 });

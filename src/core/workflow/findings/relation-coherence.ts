@@ -1,165 +1,173 @@
 /**
- * Reviewer relation coherence (design item 3, remainder): a raw finding that
- * arrives with relation "new" but whose normalized path + title match an
- * existing OPEN ledger finding is probably a re-report that the reviewer
- * failed to label persists/reopened. The reviewer gets exactly one chance to
- * clarify (regenerateIncoherentNewRawRelationsOnce — a same-session,
- * provider-agnostic re-query, mirroring ParallelRunner's structured-output
- * correction call). Whatever still arrives incoherent after that is never
- * adopted as a new finding: the intake path (manager-runner.ts) drops it and
- * records it through Phase A's unsupported-raw audit shape
- * (UnsupportedRawFindingReport).
+ * レビュア1回突き返し（v2 梯子設計 §3・実装単位4）。
  *
- * Deliberately narrower than it may look: a path+title match whose DESCRIPTION
- * also matches an open finding is NOT flagged — decision-assembly.ts already
- * deterministically folds those into a `same` match (findingIdentityKey), and
- * mechanical-classification.ts folds full-field duplicates. Overriding a
- * "new" on path+title alone was explicitly rejected in Phase A (codex blocker
- * B3: same title + same file can be genuinely different failure modes), which
- * is exactly why this goes through a reviewer re-query instead of a mechanical
- * redirect — only the reviewer can say whether it is the same issue.
+ * reviewer structured output のうち relation/target/kind の意味矛盾がある raw
+ * について、同一 reviewer session へ1回だけ明確化を求める。対象は 'new' 衝突
+ * だけでなく、detectRawFindingAmbiguities（raw-canonicalization.ts と共有する
+ * 唯一の検出実装）が返す全 ambiguity のうち、relation / targetFindingId の
+ * 付け替えだけで直せる見込みのあるもの。
+ *
+ * 厳守事項（設計書 §3・§12-4）:
+ * - correction では raw 集合・本文・severity 等の変更を禁止する
+ *   （findRegenerationContractViolation が決定的に検証し、違反は訂正全体を不採用）。
+ * - correction 後も ambiguity-origin taint は保持する。訂正結果は manager の
+ *   解釈材料には使えるが、既存 finding を閉じる権限の根拠にはならない —
+ *   呼び出し元は返り値の clarification（engine が作るメタデータ。LLM 出力からは
+ *   受け取らない）を intake（manager-runner.ts）へ渡し、canonicalization が
+ *   priorAmbiguityCodes として taint を復元する。
+ * - 失敗時（呼び出し失敗・契約違反・出力超過）は元 raw を drop せず、元の
+ *   応答のまま manager 段へ渡す。correction は reviewer あたり1回のみ。
  */
 
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { AgentResponse } from '../../models/types.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
-import { effectiveRawFindingRelation } from './mechanical-classification.js';
-import { parseReviewerRawFindings } from './schemas.js';
-import type { FindingLedger, FindingLedgerEntry, RawFinding } from './types.js';
+import {
+  detectRawFindingAmbiguities,
+  extractLenientRawFields,
+} from './raw-canonicalization.js';
+import { RAW_FINDING_LIMITS, estimateTokens } from './raw-finding-limits.js';
+import type { FindingLedger, RawAmbiguityCode } from './types.js';
 
 const log = createLogger('finding-relation-coherence');
 
-/** Fields of a raw finding this module needs; satisfied by both the reviewer wire shape and the namespaced RawFinding. */
-export type RelationCoherenceRaw = Pick<
-  RawFinding,
-  'rawFindingId' | 'title' | 'description' | 'location' | 'kind' | 'relation' | 'targetFindingId' | 'familyTag' | 'severity' | 'suggestion'
->;
+/**
+ * relation/target の付け替えだけで解消し得る ambiguity。missing-required-field
+ * は本文の追加（= 禁止された内容変更）が必要なため突き返し対象にしない —
+ * そのまま ambiguous ladder（manager 解釈 / provisional）へ進む。
+ */
+const CLARIFIABLE_AMBIGUITY_CODES: ReadonlySet<RawAmbiguityCode> = new Set([
+  'relation-target-mismatch',
+  'kind-relation-conflict',
+  'persists-target-unknown',
+  'persists-target-not-open',
+  'reopened-target-open',
+  'reopened-target-unknown',
+  'confirmation-target-unknown',
+  'confirmation-target-not-open',
+  'new-collides-open-finding',
+]);
 
-export interface NewRawRelationMismatch {
+export interface AmbiguousRawMismatch {
   rawFindingId: string;
-  title: string;
+  title?: string;
   location?: string;
-  matchedFindingId: string;
-  matchedFindingTitle: string;
-}
-
-function pathTitleKey(location: string | undefined, title: string): string {
-  return JSON.stringify([
-    parseFindingLocation(location)?.path ?? '',
-    normalizeFindingText(title).toLowerCase(),
-  ]);
-}
-
-function pathTitleDescriptionKey(location: string | undefined, title: string, description: string | undefined): string {
-  return JSON.stringify([
-    parseFindingLocation(location)?.path ?? '',
-    normalizeFindingText(title).toLowerCase(),
-    description !== undefined ? normalizeFindingText(description).toLowerCase() : '',
-  ]);
-}
-
-interface OpenFindingIndexes {
-  byPathTitle: Map<string, FindingLedgerEntry>;
-  identityKeys: Set<string>;
-}
-
-function indexOpenFindings(openFindings: readonly FindingLedgerEntry[]): OpenFindingIndexes {
-  const byPathTitle = new Map<string, FindingLedgerEntry>();
-  const identityKeys = new Set<string>();
-  for (const finding of openFindings) {
-    if (finding.status !== 'open') {
-      continue;
-    }
-    const key = pathTitleKey(finding.location, finding.title);
-    if (!byPathTitle.has(key)) {
-      byPathTitle.set(key, finding);
-    }
-    identityKeys.add(pathTitleDescriptionKey(finding.location, finding.title, finding.description));
-  }
-  return { byPathTitle, identityKeys };
+  codes: RawAmbiguityCode[];
+  targetFindingId?: string;
+  collidingFindingId?: string;
+  collidingFindingTitle?: string;
 }
 
 /**
- * Detects relation-incoherent raws: relation "new", normalized path+title
- * collides with an open finding, and the collision is NOT deterministically
- * resolvable (path+title+description identity match — those become `same`
- * downstream without any reviewer involvement).
+ * 突き返し（correction）の実施記録。エンジンが作る engine-to-engine メタデータで、
+ * LLM の出力フィールドからは決して受け取らない。intake はこれを使って
+ * 「correction で形式が整った raw」にも taint（priorAmbiguityCodes）を復元する。
  */
-export function detectIncoherentNewRawFindings(
-  rawFindings: readonly RelationCoherenceRaw[],
-  openFindings: readonly FindingLedgerEntry[],
-): NewRawRelationMismatch[] {
-  const indexes = indexOpenFindings(openFindings);
-  if (indexes.byPathTitle.size === 0) {
-    return [];
-  }
-  const mismatches: NewRawRelationMismatch[] = [];
-  for (const raw of rawFindings) {
-    if (effectiveRawFindingRelation(raw) !== 'new') {
+export interface ReviewerRelationClarification {
+  attempted: true;
+  /** reviewer ローカルの rawFindingId（intake の名前空間化前）。 */
+  flaggedRawFindingIds: string[];
+  priorAmbiguityCodesByRawId: Record<string, RawAmbiguityCode[]>;
+}
+
+/**
+ * 未検証の reviewer rawFindings 配列から、突き返しで直せる見込みのある意味矛盾を
+ * 検出する。detection は raw-canonicalization.ts の唯一の実装へ委譲する。
+ */
+export function detectClarifiableRawMismatches(
+  items: readonly unknown[],
+  ledger: FindingLedger,
+): AmbiguousRawMismatch[] {
+  const mismatches: AmbiguousRawMismatch[] = [];
+  for (const item of items) {
+    const fields = extractLenientRawFields(item);
+    if (fields.rawFindingId === undefined) {
+      // id の無い raw は訂正指示で参照できない。そのまま ladder へ。
       continue;
     }
-    const matched = indexes.byPathTitle.get(pathTitleKey(raw.location, raw.title));
-    if (matched === undefined) {
-      continue;
-    }
-    if (indexes.identityKeys.has(pathTitleDescriptionKey(raw.location, raw.title, raw.description))) {
-      // Full identity match: decision-assembly redirects this to `same`
-      // deterministically; no reviewer clarification needed.
+    const detection = detectRawFindingAmbiguities(fields, ledger);
+    const clarifiable = detection.codes.filter((code) => CLARIFIABLE_AMBIGUITY_CODES.has(code));
+    if (clarifiable.length === 0) {
       continue;
     }
     mismatches.push({
-      rawFindingId: raw.rawFindingId,
-      title: raw.title,
-      ...(raw.location !== undefined ? { location: raw.location } : {}),
-      matchedFindingId: matched.id,
-      matchedFindingTitle: matched.title,
+      rawFindingId: fields.rawFindingId,
+      ...(fields.title !== undefined ? { title: fields.title } : {}),
+      ...(fields.location !== undefined ? { location: fields.location } : {}),
+      codes: clarifiable,
+      ...(fields.targetFindingId !== undefined ? { targetFindingId: fields.targetFindingId } : {}),
+      ...(detection.collidingFindingId !== undefined ? { collidingFindingId: detection.collidingFindingId } : {}),
+      ...(detection.collidingFindingTitle !== undefined ? { collidingFindingTitle: detection.collidingFindingTitle } : {}),
     });
   }
   return mismatches;
 }
 
+function describeMismatch(mismatch: AmbiguousRawMismatch): string {
+  const parts: string[] = [];
+  for (const code of mismatch.codes) {
+    switch (code) {
+      case 'relation-target-mismatch':
+        parts.push('relation and targetFindingId contradict each other ("new" must have no target; every other relation requires one)');
+        break;
+      case 'kind-relation-conflict':
+        parts.push('the legacy "kind" field contradicts "relation" (set relation correctly; kind is derived from it)');
+        break;
+      case 'persists-target-unknown':
+        parts.push(`relation "persists" references target "${mismatch.targetFindingId ?? '?'}" which does not exist in the ledger`);
+        break;
+      case 'persists-target-not-open':
+        parts.push(`relation "persists" references target "${mismatch.targetFindingId ?? '?'}" which is not open (if it reappeared after being resolved, use "reopened")`);
+        break;
+      case 'reopened-target-open':
+        parts.push(`relation "reopened" references target "${mismatch.targetFindingId ?? '?'}" which is still open (if it simply still exists, use "persists")`);
+        break;
+      case 'reopened-target-unknown':
+        parts.push(`relation "reopened" references target "${mismatch.targetFindingId ?? '?'}" which does not exist in the ledger`);
+        break;
+      case 'confirmation-target-unknown':
+        parts.push(`relation "resolution_confirmation" references target "${mismatch.targetFindingId ?? '?'}" which does not exist in the ledger`);
+        break;
+      case 'confirmation-target-not-open':
+        parts.push(`relation "resolution_confirmation" references target "${mismatch.targetFindingId ?? '?'}" which is not open`);
+        break;
+      case 'new-collides-open-finding':
+        parts.push(`relation "new" but its normalized path and title match open finding ${mismatch.collidingFindingId ?? '?'} ("${mismatch.collidingFindingTitle ?? ''}"); use "persists"/"reopened" with that targetFindingId if it is the same issue, or keep "new" ONLY if it is genuinely a different problem`);
+        break;
+      case 'missing-required-field':
+        break;
+    }
+  }
+  return parts.join('; ');
+}
+
 /**
- * The one-shot clarification instruction. Asks the reviewer to re-emit the
- * WHOLE structured output (not just the flagged entries) so the result stays a
- * complete drop-in replacement — partial re-emission would force the engine to
- * merge two raw findings arrays and re-introduce the "assemble the final
- * result yourself" failure mode the Finding Contract moved away from.
+ * 1回だけの明確化指示。全 raw findings を含む構造化出力全体の再出力を求める
+ * （部分再出力だと2つの配列のマージが必要になり、「最終結果を自力で組み立てる」
+ * 失敗様式へ逆戻りする）。変更してよいのは指摘した raw の relation /
+ * targetFindingId だけであることを明示する。
  */
 export function buildRelationCoherenceRegenerationInstruction(
-  mismatches: readonly NewRawRelationMismatch[],
+  mismatches: readonly AmbiguousRawMismatch[],
 ): string {
   const mismatchBlock = mismatches.map((mismatch) => [
-    `- rawFindingId "${mismatch.rawFindingId}" ("${mismatch.title}"${mismatch.location !== undefined ? `, ${mismatch.location}` : ''})`,
-    `  matches open finding ${mismatch.matchedFindingId} ("${mismatch.matchedFindingTitle}")`,
+    `- rawFindingId "${mismatch.rawFindingId}"${mismatch.title !== undefined ? ` ("${mismatch.title}"${mismatch.location !== undefined ? `, ${mismatch.location}` : ''})` : ''}`,
+    `  problem: ${describeMismatch(mismatch)}`,
   ].join('\n'));
   return [
-    'Some of your raw findings are marked relation "new", but their normalized path and title match an existing OPEN finding already tracked in the ledger:',
+    'Some of your raw findings have contradictory relation/targetFindingId labeling against the current finding ledger:',
     ...mismatchBlock,
     '',
-    'If a raw finding above refers to one of these existing findings, set its relation to "persists" (the issue is still present) or "reopened" (it was resolved and has reappeared) and set targetFindingId to that finding id. Keep relation "new" ONLY if it is genuinely a different problem from the finding listed.',
+    'Fix ONLY the relation and targetFindingId fields of the raw findings listed above. Do NOT change any other field (title, description, severity, suggestion, familyTag, location), do NOT add or remove raw findings, and do NOT touch raw findings that are not listed.',
     'Re-emit ONLY the corrected structured output matching the schema, including ALL raw findings from your previous output (corrected where needed). Do not repeat the report text. Do not add commentary.',
   ].join('\n');
 }
 
-/** Best-effort parse of a reviewer's structured rawFindings for coherence checking. Returns undefined when the shape is unusable — detection is then skipped and any real shape problem surfaces through the existing intake fail-fast, not here. */
-function tryParseReviewerRawFindings(structuredOutput: Record<string, unknown> | undefined): RelationCoherenceRaw[] | undefined {
-  const rawFindings = structuredOutput?.rawFindings;
-  if (!Array.isArray(rawFindings)) {
-    return undefined;
-  }
-  try {
-    return parseReviewerRawFindings(rawFindings);
-  } catch {
-    return undefined;
-  }
-}
-
-export interface RegenerateIncoherentNewRawRelationsInput {
+export interface ClarifyAmbiguousRawRelationsInput {
   stepName: string;
   persona: string | undefined;
-  /** The reviewer's Phase 1 response with schema-valid structured output (status 'done'). */
+  /** The reviewer's Phase 1 response with structured output (status 'done'). */
   response: AgentResponse;
   ledger: FindingLedger;
   /** The runner's Phase 1 agent options; tool permissions are narrowed here (readonly, no tools) since the re-query only re-emits JSON. */
@@ -167,42 +175,47 @@ export interface RegenerateIncoherentNewRawRelationsInput {
   normalize: (response: AgentResponse) => { response: AgentResponse; invalidDetail?: string };
 }
 
+export interface ClarifyAmbiguousRawRelationsResult {
+  response: AgentResponse;
+  /** 意味矛盾が1件でも検出された場合に付く。correction の成否に関わらず taint の根拠。 */
+  clarification?: ReviewerRelationClarification;
+}
+
 /**
- * Gives the reviewer exactly one same-session chance to relabel raws that are
- * relation "new" but collide (normalized path+title) with an open ledger
- * finding. Provider-agnostic: the general executeAgent + normalize pair, the
- * same mechanism as ParallelRunner's structured-output correction call.
+ * 同一 reviewer session へ1回だけ relation/target の明確化を求める。
  *
- * Never fails the step: if the regenerated output is missing, invalid, or the
- * call errors, the ORIGINAL response is returned unchanged — the intake
- * partition (partitionRelationCoherentRawFindings) then drops whatever is
- * still incoherent as unsupported-raw audit records. A reviewer that cannot
- * fix its labels must not be able to fail the run; it just loses the
- * incoherent entries.
+ * ステップを失敗させることは決して無い: 呼び出し失敗・出力不正・契約違反・
+ * 出力超過のときは元の応答をそのまま返す（drop しない — v2 ではその raw は
+ * ambiguous のまま manager 解釈 / provisional へ進む）。
  */
-export async function regenerateIncoherentNewRawRelationsOnce(
-  input: RegenerateIncoherentNewRawRelationsInput,
-): Promise<AgentResponse> {
+export async function clarifyAmbiguousRawRelationsOnce(
+  input: ClarifyAmbiguousRawRelationsInput,
+): Promise<ClarifyAmbiguousRawRelationsResult> {
   if (input.response.status !== 'done') {
-    return input.response;
+    return { response: input.response };
   }
-  const parsedRaws = tryParseReviewerRawFindings(input.response.structuredOutput);
-  if (parsedRaws === undefined) {
-    return input.response;
+  const rawItems = input.response.structuredOutput?.rawFindings;
+  if (!Array.isArray(rawItems)) {
+    return { response: input.response };
   }
-  const mismatches = detectIncoherentNewRawFindings(parsedRaws, input.ledger.findings);
+  const mismatches = detectClarifiableRawMismatches(rawItems, input.ledger);
   if (mismatches.length === 0) {
-    return input.response;
+    return { response: input.response };
   }
 
-  log.info('Raw findings marked "new" collide with open ledger findings; requesting one relation clarification', {
+  const clarification: ReviewerRelationClarification = {
+    attempted: true,
+    flaggedRawFindingIds: mismatches.map((mismatch) => mismatch.rawFindingId),
+    priorAmbiguityCodesByRawId: Object.fromEntries(
+      mismatches.map((mismatch) => [mismatch.rawFindingId, mismatch.codes]),
+    ),
+  };
+
+  log.info('Raw findings have relation/target contradictions; requesting one clarification', {
     step: input.stepName,
-    rawFindingIds: mismatches.map((mismatch) => mismatch.rawFindingId),
+    rawFindingIds: clarification.flaggedRawFindingIds,
   });
   const instruction = buildRelationCoherenceRegenerationInstruction(mismatches);
-  // The regeneration call must never fail the step (codex B5): exceptions and
-  // interruptions keep the ORIGINAL output; the still-incoherent raws are then
-  // dropped as unsupported at intake instead.
   let regenerated: AgentResponse;
   let renormalized: { response: AgentResponse; invalidDetail?: string };
   try {
@@ -220,7 +233,7 @@ export async function regenerateIncoherentNewRawRelationsOnce(
       step: input.stepName,
       error: error instanceof Error ? error.message : String(error),
     });
-    return input.response;
+    return { response: input.response, clarification };
   }
   if (
     renormalized.invalidDetail !== undefined
@@ -231,120 +244,98 @@ export async function regenerateIncoherentNewRawRelationsOnce(
       step: input.stepName,
       detail: renormalized.invalidDetail ?? renormalized.response.error,
     });
-    return input.response;
+    return { response: input.response, clarification };
   }
-  const regeneratedRaws = tryParseReviewerRawFindings(renormalized.response.structuredOutput);
-  const violation = regeneratedRaws === undefined
-    ? 'regenerated raw findings could not be parsed'
-    : findRegenerationContractViolation(parsedRaws, regeneratedRaws, mismatches);
+  // correction 出力の hard budget（設計書 §10: correction 出力 2,048 output tokens 相当）。
+  const outputTokens = estimateTokens(JSON.stringify(renormalized.response.structuredOutput ?? {}));
+  if (outputTokens > RAW_FINDING_LIMITS.maxCorrectionOutputTokens) {
+    log.warn('Relation clarification output exceeded the correction budget; keeping the original raw findings', {
+      step: input.stepName,
+      outputTokens,
+    });
+    return { response: input.response, clarification };
+  }
+  const regeneratedItems = renormalized.response.structuredOutput!.rawFindings as unknown[];
+  const violation = findRegenerationContractViolation(rawItems, regeneratedItems, mismatches);
   if (violation !== undefined) {
     log.warn('Relation clarification violated the regeneration contract; keeping the original raw findings', {
       step: input.stepName,
       violation,
     });
-    return input.response;
+    return { response: input.response, clarification };
   }
   return {
-    ...input.response,
-    structuredOutput: renormalized.response.structuredOutput,
-    ...(regenerated.sessionId !== undefined ? { sessionId: regenerated.sessionId } : {}),
+    response: {
+      ...input.response,
+      structuredOutput: renormalized.response.structuredOutput,
+      ...(regenerated.sessionId !== undefined ? { sessionId: regenerated.sessionId } : {}),
+    },
+    clarification,
   };
 }
 
-/** Content identity for the regeneration contract. `kind` is deliberately excluded: it is a legacy field derived from `relation` (the schema cross-validates the pair), so comparing it would only re-encode the relation check. */
-function rawContentKey(raw: RelationCoherenceRaw): string {
+/** Content identity for the regeneration contract. relation / targetFindingId / kind は含めない（それらの付け替えが correction の目的）。 */
+function rawContentKey(fields: ReturnType<typeof extractLenientRawFields>): string {
   return JSON.stringify([
-    raw.title,
-    raw.description,
-    raw.location ?? '',
-    raw.severity,
-    raw.suggestion ?? '',
-    raw.familyTag,
+    fields.title ?? '',
+    fields.description ?? '',
+    fields.location ?? '',
+    fields.severity ?? '',
+    fields.suggestion ?? '',
+    fields.familyTag ?? '',
   ]);
 }
 
 /**
- * The regeneration contract (codex B5): the reviewer may ONLY relabel the
- * flagged raws. Verified deterministically before adopting the regenerated
- * output:
+ * regeneration contract（設計書 §12-4）: reviewer は指摘された raw の relation /
+ * targetFindingId だけを付け替えてよい。決定的に検証する:
  *
- * - the rawFindingId set must match the original exactly (no additions, no
- *   removals, no duplicates);
- * - non-flagged raws must be identical in content AND relation/targetFindingId;
- * - flagged raws may change only relation/targetFindingId (content fixed).
+ * - rawFindingId の集合が元と完全一致（追加・削除・重複なし）
+ * - 全 raw の内容（title/description/location/severity/suggestion/familyTag）不変
+ * - 指摘されていない raw は relation / targetFindingId / kind も不変
  *
- * Any violation discards the regeneration and keeps the original output.
+ * 1件でも違反があれば訂正全体を不採用にし、元の出力を使う。
  */
 export function findRegenerationContractViolation(
-  original: readonly RelationCoherenceRaw[],
-  regenerated: readonly RelationCoherenceRaw[],
-  mismatches: readonly NewRawRelationMismatch[],
+  original: readonly unknown[],
+  regenerated: readonly unknown[],
+  mismatches: readonly AmbiguousRawMismatch[],
 ): string | undefined {
   const flaggedIds = new Set(mismatches.map((mismatch) => mismatch.rawFindingId));
-  const originalById = new Map(original.map((raw) => [raw.rawFindingId, raw]));
+  const originalFields = original.map((item) => extractLenientRawFields(item));
+  const originalById = new Map(
+    originalFields
+      .filter((fields) => fields.rawFindingId !== undefined)
+      .map((fields) => [fields.rawFindingId!, fields]),
+  );
   if (regenerated.length !== original.length) {
     return `raw finding count changed from ${original.length} to ${regenerated.length}`;
   }
   const seen = new Set<string>();
-  for (const raw of regenerated) {
-    if (seen.has(raw.rawFindingId)) {
-      return `duplicate rawFindingId "${raw.rawFindingId}" in regenerated output`;
+  for (const item of regenerated) {
+    const fields = extractLenientRawFields(item);
+    if (fields.rawFindingId === undefined) {
+      return 'regenerated output contains a raw finding without rawFindingId';
     }
-    seen.add(raw.rawFindingId);
-    const originalRaw = originalById.get(raw.rawFindingId);
+    if (seen.has(fields.rawFindingId)) {
+      return `duplicate rawFindingId "${fields.rawFindingId}" in regenerated output`;
+    }
+    seen.add(fields.rawFindingId);
+    const originalRaw = originalById.get(fields.rawFindingId);
     if (originalRaw === undefined) {
-      return `regenerated output added rawFindingId "${raw.rawFindingId}"`;
+      return `regenerated output added rawFindingId "${fields.rawFindingId}"`;
     }
-    if (rawContentKey(raw) !== rawContentKey(originalRaw)) {
-      return `regenerated output changed the content of rawFindingId "${raw.rawFindingId}"`;
+    if (rawContentKey(fields) !== rawContentKey(originalRaw)) {
+      return `regenerated output changed the content of rawFindingId "${fields.rawFindingId}"`;
     }
-    if (!flaggedIds.has(raw.rawFindingId)) {
-      const relationChanged = effectiveRawFindingRelation(raw) !== effectiveRawFindingRelation(originalRaw)
-        || raw.targetFindingId !== originalRaw.targetFindingId;
+    if (!flaggedIds.has(fields.rawFindingId)) {
+      const relationChanged = fields.relation !== originalRaw.relation
+        || fields.targetFindingId !== originalRaw.targetFindingId
+        || fields.legacyKind !== originalRaw.legacyKind;
       if (relationChanged) {
-        return `regenerated output changed relation/targetFindingId of non-flagged rawFindingId "${raw.rawFindingId}"`;
+        return `regenerated output changed relation/targetFindingId of non-flagged rawFindingId "${fields.rawFindingId}"`;
       }
     }
   }
   return undefined;
-}
-
-/** Raw finding dropped at intake because it stayed relation-incoherent after the reviewer's one regeneration chance. Recorded through Phase A's unsupported-raw audit shape. */
-export interface RelationCoherenceRejection {
-  rawFindingId: string;
-  targetFindingId: string;
-  evidence: string;
-}
-
-/**
- * Intake-side partition (manager-runner.ts): raws that remain incoherent after
- * the runner-side regeneration chance are excluded from everything downstream
- * (mechanical classification, the manager, and the "unmentioned raw -> new
- * finding" fallback) and surface only as unsupported-raw audit records. The
- * full pre-partition set is still persisted by saveRawFindings for audit.
- */
-export function partitionRelationCoherentRawFindings(input: {
-  previousLedger: FindingLedger;
-  rawFindings: readonly RawFinding[];
-}): { admitted: RawFinding[]; rejected: RelationCoherenceRejection[] } {
-  const mismatches = detectIncoherentNewRawFindings(input.rawFindings, input.previousLedger.findings);
-  if (mismatches.length === 0) {
-    return { admitted: [...input.rawFindings], rejected: [] };
-  }
-  const mismatchByRawId = new Map(mismatches.map((mismatch) => [mismatch.rawFindingId, mismatch]));
-  const admitted: RawFinding[] = [];
-  const rejected: RelationCoherenceRejection[] = [];
-  for (const raw of input.rawFindings) {
-    const mismatch = mismatchByRawId.get(raw.rawFindingId);
-    if (mismatch === undefined) {
-      admitted.push(raw);
-      continue;
-    }
-    rejected.push({
-      rawFindingId: raw.rawFindingId,
-      targetFindingId: mismatch.matchedFindingId,
-      evidence: `Raw finding arrived with relation "new" but its normalized path and title match open finding "${mismatch.matchedFindingId}"; the reviewer kept relation "new" after one clarification request, so it is not adopted as a new finding`,
-    });
-  }
-  return { admitted, rejected };
 }

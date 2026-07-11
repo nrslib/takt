@@ -82,3 +82,7 @@
 `invalidateDecisions` と `duplicateDecisions` のルール。
 - `invalidateDecisions` はプロンプトが invalidate 候補として列挙した finding id のみが対象です（エンジンが location の決定的検証を既に済ませています）。候補が無い、またはすべてに同意しない場合は空配列にしてください。
 - `duplicateDecisions` は同一の根本問題である open finding のためのものです。重複が見つからなければ空配列にしてください。
+
+解釈フェーズ（ambiguous な raw finding が存在するときの別呼び出し）:
+- エンジンは「Ambiguous raw finding interpretation」プロンプトであなたを呼ぶことがあります。そこでは ambiguous raw finding 1件につき1つの「提案」を `interpretations` で返します: `create_independent`、`same_with_proof`（プロンプトでエンジンが発行した proofId がある場合のみ）、`open_conflict`、`provisional` のいずれかです。
+- このフェーズから finding を resolve / waive / invalidate / supersede / reopen することは決してできません。付与された権限の外の提案は gate-blocking な provisional finding になります。

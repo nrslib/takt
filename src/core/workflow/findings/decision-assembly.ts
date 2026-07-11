@@ -119,12 +119,10 @@ export interface AssembleManagerOutputInput {
    *
    * manager-runner.ts が保存直前に最新台帳へ再照合する呼び出し（freshAssembly）
    * は、既に確定済みの managerOutput から decisions を逆変換して渡すため、
-   * 意図的に除外された raw（例: forceUnresolvedRawDecisionsAsNew が
-   * resolution_confirmation kind を newFindings へ強制せず捨てる設計）が
-   * 「decision が無い」ものとして正しく現れる。そこでこのチェックを有効にすると
-   * 正当な意図的除外まで再問い合わせ対象と誤認するため、既定では無効
-   * （false/未指定）にし、LLM の応答そのものを検証する呼び出し側だけが
-   * 明示的に true を渡す。
+   * 意図的に除外された raw（例: provisional へ着地済みの raw）が「decision が
+   * 無い」ものとして正しく現れる。そこでこのチェックを有効にすると正当な
+   * 意図的除外まで不採用対象と誤認するため、既定では無効（false/未指定）にし、
+   * LLM の応答そのものを検証する呼び出し側だけが明示的に true を渡す。
    */
   checkMissingDecisions?: boolean;
   /**
@@ -500,6 +498,13 @@ function assembleInvalidateDecisions(input: {
       rejected.push({ findingId: decision.findingId, reason: `Cannot invalidate finding "${decision.findingId}" because it is not open` });
       continue;
     }
+    // provisional（意味を確定できなかった観測の gate blocker）は raw 由来の
+    // 判断では消せない。invalidate を許すと、解釈不能な観測を location 不成立で
+    // 洗い流してゲートが開く（v2 梯子設計 §7: 解消は clean な後続 raw のみ）。
+    if (finding.provisional !== undefined) {
+      rejected.push({ findingId: decision.findingId, reason: `Cannot invalidate provisional finding "${decision.findingId}"; provisional findings are settled only by later clean review evidence` });
+      continue;
+    }
     if (!input.eligibleFindingIds.has(decision.findingId)) {
       rejected.push({
         findingId: decision.findingId,
@@ -563,6 +568,10 @@ function assembleDuplicateDecisions(input: {
       reject(`Cannot use finding "${decision.canonicalFindingId}" as canonical because it is not open`);
       continue;
     }
+    if (canonical.provisional !== undefined) {
+      reject(`Cannot use provisional finding "${decision.canonicalFindingId}" as canonical; provisional findings are settled only by later clean review evidence`);
+      continue;
+    }
     if (input.transitionedFindingIds.has(decision.canonicalFindingId)) {
       reject(`Cannot use finding "${decision.canonicalFindingId}" as canonical because it also has a state transition in this output`);
       continue;
@@ -581,6 +590,11 @@ function assembleDuplicateDecisions(input: {
     const notOpenDuplicates = [...duplicateIds].filter((id) => findingsById.get(id)?.status !== 'open');
     if (notOpenDuplicates.length > 0) {
       reject(`Cannot supersede finding(s) that are not open: ${notOpenDuplicates.join(', ')}`);
+      continue;
+    }
+    const provisionalDuplicates = [...duplicateIds].filter((id) => findingsById.get(id)?.provisional !== undefined);
+    if (provisionalDuplicates.length > 0) {
+      reject(`Cannot supersede provisional finding(s): ${provisionalDuplicates.join(', ')}; provisional findings are settled only by later clean review evidence`);
       continue;
     }
     const transitionedDuplicates = [...duplicateIds].filter((id) => input.transitionedFindingIds.has(id));
@@ -656,6 +670,13 @@ function assembleDisputeDecisions(input: {
     }
     if (finding.status !== 'open') {
       reject(decision, `Cannot ${decision.decision === 'waive' ? 'waive' : 'record a dispute on'} finding "${decision.findingId}" because it is not open`);
+      continue;
+    }
+    // provisional は fixer が直接直せない system finding。waive はゲート開放に
+    // 直結するため拒否する（note も対象外 — dispute はコード指摘への異議であり、
+    // 解釈不能観測への異議は replan で扱う）。
+    if (finding.provisional !== undefined) {
+      reject(decision, `Cannot ${decision.decision} provisional finding "${decision.findingId}"; provisional findings are settled only by later clean review evidence`);
       continue;
     }
     if (input.transitionedFindingIds.has(decision.findingId)) {

@@ -212,17 +212,18 @@ finding_contract:
 
 When set, these values are applied as step-level `provider` / `model` for the Finding Manager. They take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, workflow defaults, and resolved input provider/model. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
 
-### Finding Contract parallel retry failure routing
+### Finding Contract provisional findings and the completion gate
 
-When a workflow defines `finding_contract`, each parallel parent must declare a deterministic rule for a Finding Manager output that stays semantically invalid after retry. This rule prevents invalid manager output from aborting the workflow or updating the ledger.
+Every raw finding is guaranteed a destination: it is either applied to the ledger as a confirmed finding, recorded as an active conflict, or kept as a **provisional finding** — an open ledger entry with `provisional` metadata representing an observation whose meaning could not be determined (contradictory relation/target labeling, reviewer output exceeding hard limits, an interrupted interpretation, a stale save-time precondition, or an exhausted interpretation budget). A single malformed raw finding, a broken Finding Manager response, or an exhausted interpretation budget never aborts the run.
 
-Accepted rules, in selection order:
+Provisional findings block the final gate:
 
-1. `return: need_replan` (recommended)
-2. `return: needs_fix`
-3. Non-AI `next: fix`
+- `findings.provisional.count` (and `findings.provisional.items`) is available in `when()` rules. Builtin workflows route `findings.provisional.count > 0` to the replan step — a provisional finding is a system finding the fixer cannot address with code changes.
+- The engine enforces a final invariant: a transition to `COMPLETE` while any provisional finding is open aborts the workflow (fail-fast, with the provisional ids/kinds/reasons in the abort reason). Custom workflows that use `finding_contract` should route on `findings.provisional.count` before their `COMPLETE` rule.
 
-`ai("...")` rules that point to `fix` are not selected for this failure path. If none of the accepted rules exists, workflow validation fails before execution.
+Provisional findings are settled only by later clean review evidence: a clean re-observation of the same claim confirms it as a real finding, and a deterministic mapping to an existing finding resolves it. They are never resolved just because a later round did not mention them, and they cannot be waived, invalidated, or superseded.
+
+**Migrating from the pre-v2 invalid-manager-output routing:** older workflows relied on the engine auto-selecting a deterministic detour rule (`return: need_replan`, `return: needs_fix`, or non-AI `next: fix`) when the Finding Manager output stayed semantically invalid. That run-level failure path no longer exists — invalid or missing manager decisions land as provisional findings and the run continues, so those detour rules are never auto-selected anymore. To migrate, add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule (see the builtin `*-for-local-llm` workflows for the reference wiring). `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
 
 ### Arpeggio Step (data-driven batch)
 

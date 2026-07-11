@@ -56,10 +56,9 @@ import type { FindingManagerRunResult } from '../findings/manager-runner.js';
 import {
   ingestFindingContractResults,
   resolveFindingContractIntakeStep,
-  selectInvalidManagerOutputRuleIndex,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
-import { regenerateIncoherentNewRawRelationsOnce } from '../findings/relation-coherence.js';
+import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 
 const log = createLogger('step-executor');
 
@@ -173,6 +172,7 @@ export class StepExecutor {
     response: AgentResponse;
     ledgerCopyPath: string;
     priorStepResponseText: string | undefined;
+    relationClarification?: ReviewerRelationClarification;
   }): Promise<FindingManagerRunResult> {
     if (!this.deps.findingLedgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
@@ -189,7 +189,11 @@ export class StepExecutor {
       stepIteration: input.stepIteration,
       // 単独ステップでは「レビュアー1件」を自分自身として渡す
       // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
-      subResults: [{ subStep: input.step, response: input.response }],
+      subResults: [{
+        subStep: input.step,
+        response: input.response,
+        ...(input.relationClarification !== undefined ? { relationClarification: input.relationClarification } : {}),
+      }],
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
@@ -203,45 +207,6 @@ export class StepExecutor {
       refreshFindingsState: this.deps.refreshFindingsState,
       emitEvent: this.deps.emitEvent,
     });
-  }
-
-  private buildFindingManagerInvalidOutputResult(input: {
-    step: WorkflowStep;
-    state: WorkflowState;
-    stepIteration: number;
-    instruction: string;
-    providerInfo: StepRunResult['providerInfo'];
-    managerResult: Extract<FindingManagerRunResult, { status: 'invalid_manager_output' }>;
-  }): StepRunResult {
-    const content = [
-      `Finding manager output remained semantically invalid after ${input.managerResult.retryCount} retry.`,
-      '',
-      'Validation errors:',
-      ...input.managerResult.errors.map((error) => `- ${error}`),
-      '',
-      `Validation report: ${input.managerResult.reportPath}`,
-      'Ledger was not updated.',
-    ].join('\n');
-
-    const matchedRuleIndex = selectInvalidManagerOutputRuleIndex(input.step);
-    const response: AgentResponse = {
-      persona: input.step.name,
-      status: 'done',
-      content,
-      timestamp: new Date(),
-      ...(matchedRuleIndex !== undefined ? { matchedRuleIndex, matchedRuleMethod: 'auto_select' } : {}),
-    };
-
-    input.state.stepOutputs.set(input.step.name, response);
-    input.state.lastOutput = response;
-    this.persistPreviousResponseSnapshot(input.state, input.step.name, input.stepIteration, response.content);
-    this.emitStepReports(input.step);
-
-    return {
-      response,
-      instruction: input.instruction,
-      providerInfo: input.providerInfo,
-    };
   }
 
   private writeSnapshot(
@@ -804,18 +769,22 @@ export class StepExecutor {
       return { response, instruction: phase1Instruction, providerInfo };
     }
 
-    // レビュア再生成（設計項目3の残り）: relation=new なのに正規化 path+title が
-    // 既存 open finding と一致する raw があれば、同一セッションで1回だけ
-    // relation の明示を求める（ParallelRunner の同名処理と同じ一般経路）。
+    // レビュア1回突き返し（v2 梯子設計 §3）: relation/target/kind の意味矛盾が
+    // ある raw について同一セッションで1回だけ明確化を求める（ParallelRunner の
+    // 同名処理と同じ一般経路）。clarification は engine 発行の taint 根拠として
+    // 取り込み（manager-runner の canonicalization）へ渡す。
+    let relationClarification: ReviewerRelationClarification | undefined;
     if (findingContractIntakeStep && findingContractContext && this.deps.findingLedgerStore && response.status === 'done') {
-      response = await regenerateIncoherentNewRawRelationsOnce({
+      const clarified = await clarifyAmbiguousRawRelationsOnce({
         stepName: step.name,
         persona: executableStep.persona,
         response,
         ledger: this.deps.findingLedgerStore.loadLedger(),
         agentOptions: baseAgentOptions,
-        normalize: (candidate) => this.normalizeStructuredOutputWithDiagnostics(executableStep, candidate, runtime),
+        normalize: (candidate: AgentResponse) => this.normalizeStructuredOutputWithDiagnostics(executableStep, candidate, runtime),
       });
+      response = clarified.response;
+      relationClarification = clarified.clarification;
       if (response.sessionId !== undefined) {
         updatePersonaSession(sessionKey, response.sessionId);
       }
@@ -825,23 +794,16 @@ export class StepExecutor {
     // ガードがこの回の取り込み結果を見る必要があるため
     // （ParallelRunner が manager 実行後にルール評価する構成と同じ）。
     if (findingContractIntakeStep && findingContractContext) {
-      const managerResult = await this.ingestFindingContractForNormalStep({
+      // v2 梯子設計: 取り込みは常に 'updated' で完了する（manager の壊れた応答・
+      // 予算超過は provisional として台帳へ着地し、run-level の失敗経路は無い）。
+      await this.ingestFindingContractForNormalStep({
         step: findingContractIntakeStep,
         stepIteration,
         response,
         ledgerCopyPath: findingContractContext.ledgerCopyPath,
         priorStepResponseText,
+        relationClarification,
       });
-      if (managerResult.status === 'invalid_manager_output') {
-        return this.buildFindingManagerInvalidOutputResult({
-          step,
-          state,
-          stepIteration,
-          instruction: phase1Instruction,
-          providerInfo,
-          managerResult,
-        });
-      }
     }
 
     response = await this.applyPostExecutionPhases(

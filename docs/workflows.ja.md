@@ -211,17 +211,18 @@ finding_contract:
 
 指定した値は Finding Manager の step レベル `provider` / `model` として扱われます。`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力 provider/model より優先されます。両方とも未指定の場合、manager は通常の workflow step provider/model 解決を維持します。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
 
-### Finding Contract parallel の retry 失敗ルーティング
+### Finding Contract の provisional finding と完了ゲート
 
-workflow に `finding_contract` がある場合、各 parallel 親 step は Finding Manager output が retry 後も意味論的に invalid なときの決定的な rule を宣言する必要があります。この rule により、invalid manager output で workflow を abort したり ledger を更新したりしません。
+すべての raw finding には必ず行き先が与えられます。台帳へ確定 finding として適用されるか、active conflict として記録されるか、**provisional finding** — 意味を確定できなかった観測を表す、`provisional` メタデータ付きの open な台帳エントリ — として保持されます（relation/target ラベリングの矛盾、reviewer 出力のハード上限超過、解釈の中断、保存時前提条件の失効、解釈予算の枯渇）。1件の不正な raw finding、Finding Manager の壊れた応答、解釈予算の超過が run を abort させることはありません。
 
-許可される rule は、選択優先順に次のとおりです。
+provisional finding は final gate を塞ぎます。
 
-1. `return: need_replan`（推奨）
-2. `return: needs_fix`
-3. 非AIの `next: fix`
+- `when()` rule で `findings.provisional.count`（と `findings.provisional.items`）が使えます。builtin workflow は `findings.provisional.count > 0` を再計画（plan）ステップへルーティングします — provisional はコード変更で直せない system finding です。
+- エンジンは最終不変条件を強制します: provisional finding が1件でも open な状態で `COMPLETE` へ遷移すると、workflow は fail-fast で abort します（abort 理由に provisional の id / kind / reason が列挙されます）。`finding_contract` を使う custom workflow は、`COMPLETE` の rule より前に `findings.provisional.count` でルーティングしてください。
 
-`fix` へ向かう `ai("...")` rule は、この失敗経路では選択されません。許可される rule がない場合、workflow validation が実行前に失敗します。
+provisional finding を確定・解消できるのは後続ラウンドの clean なレビュー証拠だけです。同じ claim の clean な再観測は確定 finding へ昇格させ、既存 finding への決定的な対応づけは resolved にします。「後のラウンドで言及されなかった」だけでは決して解消されず、waive / invalidate / supersede もできません。
+
+**v2 以前の invalid-manager-output ルーティングからの移行:** 旧 workflow は、Finding Manager output が retry 後も意味論的に invalid なとき、エンジンが決定的な迂回 rule（`return: need_replan` / `return: needs_fix` / 非AI `next: fix`）を自動選択することに依存していました。この run-level の失敗経路は廃止されています — invalid・欠落した manager の判断は provisional finding として台帳へ着地して run が継続するため、これらの迂回 rule が自動選択されることはもうありません。移行するには、`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください（配線の参考は builtin の `*-for-local-llm` workflow）。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
 
 ### Arpeggio Step（データ駆動バッチ）
 

@@ -8,7 +8,8 @@
 ## Output Contract
 {{outputContract}}
 
-Return one decision per item. Do not assemble the final ledger update yourself (matching, grouping, conflict shape, invariant enforcement) — the engine builds the ledger update from your decisions and rejects any individual decision that violates a ledger invariant.
+Return one decision per item. Your decisions are PROPOSALS: all authority over the ledger stays with the engine. Do not assemble the final ledger update yourself (matching, grouping, conflict shape, invariant enforcement) — the engine builds the ledger update from your decisions, re-verifies every mutation against the freshly reloaded ledger at save time (optimistic preconditions), and rejects any individual decision that violates a ledger invariant. A rejected decision does not make its raw finding disappear: the engine keeps it as a gate-blocking provisional finding.
+Raw findings whose labeling contradicted the ledger (ambiguous observations) are NOT shown below; the engine interprets them in a separate proposal-only phase with strictly narrower capabilities.
 For each raw finding listed below, return exactly one entry in rawDecisions with a decision of same, new, resolved, reopened, conflict, or unsupported.
 findingId is required for same, resolved, reopened, and conflict; leave it empty for new and unsupported.
 For new, do not write a title or severity yourself; the engine uses the raw finding's own title and severity.

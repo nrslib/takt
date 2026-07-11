@@ -79,19 +79,21 @@ interface Harness {
   }) => ReturnType<typeof runFindingManagerForStep>;
 }
 
-function makeHarness(ledger: FindingLedger): Harness {
+function makeHarness(initialLedger: FindingLedger): Harness {
+  // v2 では WAL（beginInterpretations / completeInterpretations）が保存を複数回
+  // 行うため、テスト double も状態を持つ（mutator の結果を次回の読み込みに使う）。
+  let ledger = initialLedger;
   const savedLedgers: FindingLedger[] = [];
   const savedRawFindings: RawFinding[][] = [];
   const savedValidationReports: FindingManagerValidationReport[] = [];
   const ledgerStore: FindingLedgerStore = {
     workflowName: 'peer-review',
     loadLedger: () => ledger,
-    saveLedger: (next) => { savedLedgers.push(next); },
-    // テスト double は同時実行を模さない単純な読み込み → 変換 → 記録。
+    saveLedger: (next) => { ledger = next; savedLedgers.push(next); },
     updateLedger: (mutator) => {
-      const next = mutator(ledger);
-      savedLedgers.push(next);
-      return Promise.resolve(next);
+      ledger = mutator(ledger);
+      savedLedgers.push(ledger);
+      return Promise.resolve(ledger);
     },
     createRunCopy: () => '/tmp/ledger-copy.json',
     saveRawFindings: (_runId, _stepName, rawFindings) => {
@@ -163,6 +165,7 @@ const CONFIRMATION_RAW = {
   description: 'Verified the fix at src/a.ts:10.',
   suggestion: '',
   kind: 'resolution_confirmation',
+  relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
 };
 
@@ -175,6 +178,7 @@ const UNMATCHED_ISSUE_RAW = {
   description: 'A different problem.',
   suggestion: 'Fix it.',
   kind: 'issue',
+  relation: 'new',
   targetFindingId: '',
 };
 
@@ -187,6 +191,7 @@ const ANOTHER_UNMATCHED_ISSUE_RAW = {
   description: 'A separate different problem.',
   suggestion: 'Fix it too.',
   kind: 'issue',
+  relation: 'new',
   targetFindingId: '',
 };
 
@@ -201,8 +206,7 @@ describe('runFindingManagerForStep mechanical path', () => {
 
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(result.status).toBe('updated');
-    expect(harness.savedLedgers).toHaveLength(1);
-    const finding = harness.savedLedgers[0]?.findings.find((entry) => entry.id === 'F-0001');
+    const finding = harness.savedLedgers.at(-1)?.findings.find((entry) => entry.id === 'F-0001');
     expect(finding?.status).toBe('resolved');
   });
 
@@ -229,7 +233,7 @@ describe('runFindingManagerForStep mechanical path', () => {
     expect(instruction).not.toContain('"run-2:reviewers:2:arch-review:c-1"');
 
     expect(result.status).toBe('updated');
-    const ledger = harness.savedLedgers[0];
+    const ledger = harness.savedLedgers.at(-1);
     expect(ledger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
     expect(ledger?.findings.some((entry) => entry.title === 'New unmatched issue' && entry.status === 'open')).toBe(true);
   });
@@ -267,9 +271,10 @@ describe('runFindingManagerForStep mechanical path', () => {
   });
 });
 
-describe('runFindingManagerForStep decision retry', () => {
-  it('Given one rejected decision among several When run Then only the rejected item is re-asked and the accepted decision from round 1 is kept', async () => {
-    // ラウンド1: i-1 は妥当な "new"（採用）、i-2 は存在しない finding への "same"（不採用）。
+describe('runFindingManagerForStep rejected decisions land as provisional (no retry, v2 ladder)', () => {
+  it('Given one rejected decision among several When run Then the manager is NOT re-asked; the accepted decision applies and the rejected raw lands as a gate-blocking provisional', async () => {
+    // v2: semantic retry は 0 回。i-1 は妥当な "new"（採用）、i-2 は存在しない
+    // finding への "same"（不採用 → provisional 着地。new への強制も drop もしない）。
     executeAgentMock.mockResolvedValueOnce({
       status: 'done',
       content: '',
@@ -282,53 +287,43 @@ describe('runFindingManagerForStep decision retry', () => {
         conflictDecisions: [],
       },
     } as unknown as AgentResponse);
-    // ラウンド2（再問い合わせ）: i-2 を妥当な "new" に訂正。
-    executeAgentMock.mockResolvedValueOnce({
-      status: 'done',
-      content: '',
-      structuredOutput: {
-        rawDecisions: [
-          { rawFindingId: 'run-2:reviewers:2:arch-review:i-2', decision: 'new', evidence: 'Separate unrelated issue.' },
-        ],
-        disputeDecisions: [],
-        conflictDecisions: [],
-      },
-    } as unknown as AgentResponse);
 
     const harness = makeHarness(makeLedger());
     const result = await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW, ANOTHER_UNMATCHED_ISSUE_RAW] });
 
-    expect(executeAgentMock).toHaveBeenCalledTimes(2);
-    const retryInstruction = executeAgentMock.mock.calls[1]?.[1] as string;
-    expect(retryInstruction).toContain('- rawFindingId: run-2:reviewers:2:arch-review:i-2');
-    expect(retryInstruction).not.toContain('- rawFindingId: run-2:reviewers:2:arch-review:i-1');
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
 
     expect(result.status).toBe('updated');
-    const ledger = harness.savedLedgers[0];
-    expect(ledger?.findings.some((entry) => entry.title === 'New unmatched issue' && entry.status === 'open')).toBe(true);
-    expect(ledger?.findings.some((entry) => entry.title === 'Another unmatched issue' && entry.status === 'open')).toBe(true);
+    const ledger = harness.savedLedgers.at(-1);
+    const accepted = ledger?.findings.find((entry) => entry.title === 'New unmatched issue');
+    expect(accepted?.status).toBe('open');
+    expect(accepted?.provisional).toBeUndefined();
+    const rejected = ledger?.findings.find((entry) => entry.title === 'Another unmatched issue');
+    expect(rejected?.status).toBe('open');
+    expect(rejected?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
     expect(harness.savedValidationReports).toHaveLength(1);
     expect(harness.savedValidationReports[0]?.ledgerUpdated).toBe(true);
+    expect(harness.savedValidationReports[0]?.provisionalLandings?.some(
+      (landing) => landing.sourceRawFindingIds.includes('run-2:reviewers:2:arch-review:i-2'),
+    )).toBe(true);
   });
 
-  it('Given the agent repeatedly tries to resolve an already-resolved finding When run Then the resolution_confirmation raw is dropped (not forced to "new") and the ledger still updates', async () => {
-    // codex の再現ケース: 既に resolved の finding を、resolution_confirmation
-    // raw を根拠に再び "resolved" と判断する決定は、対象 finding が open では
-    // ないため decision-assembly で不採用になる。再問い合わせでも同じ不採用が
-    // 続いたとき、旧実装は情報を捨てないために newFindings へ強制していたが、
-    // resolution_confirmation は manager-output-validation.ts の
-    // validateConfirmationRefsOnlyInResolutions が「cannot be cited as issue
-    // evidence」で拒否するため、最終検証が invalid_manager_output になり
-    // 台帳が更新されないまま止まっていた。
-    executeAgentMock.mockResolvedValue({
+  it('Given a confirmation whose target is already resolved When run Then it goes through the ambiguous ladder (interpretation), not the decisions manager, and lands as provisional', async () => {
+    // v3-r3 の増幅事故クラス: 対象が open でない confirmation は v2 では
+    // ambiguous（confirmation-target-not-open）として canonicalize され、
+    // decisions manager ではなく解釈フェーズへ進む。manager の提案が provisional
+    // なら観測は gate-blocking provisional として台帳に残る（黙って消えない）。
+    executeAgentMock.mockResolvedValueOnce({
       status: 'done',
       content: '',
       structuredOutput: {
-        rawDecisions: [
-          { rawFindingId: 'run-2:reviewers:2:arch-review:c-1', decision: 'resolved', findingId: 'F-0001', evidence: 'x' },
-        ],
-        disputeDecisions: [],
-        conflictDecisions: [],
+        interpretations: [{
+          decision: 'provisional',
+          rawFindingId: 'run-2:reviewers:2:arch-review:c-1',
+          proofId: '',
+          targetFindingId: '',
+          reason: 'Cannot verify the confirmation against a non-open target.',
+        }],
       },
     } as unknown as AgentResponse);
 
@@ -336,22 +331,25 @@ describe('runFindingManagerForStep decision retry', () => {
     const harness = makeHarness(ledger);
     const result = await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
 
-    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    // decisions manager は不要（clean residual 0）。解釈フェーズが1回だけ呼ばれる。
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    const instruction = executeAgentMock.mock.calls[0]?.[1] as string;
+    expect(instruction).toContain('Ambiguous raw finding interpretation');
+
     expect(result.status).toBe('updated');
-    expect(harness.savedLedgers).toHaveLength(1);
-    const savedLedger = harness.savedLedgers[0];
-    // resolution_confirmation は new にも強制されず、単に反映されない
-    // （台帳の finding 数は増えない）。
-    expect(savedLedger?.findings).toHaveLength(1);
+    const savedLedger = harness.savedLedgers.at(-1);
     expect(savedLedger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
-    expect(harness.savedValidationReports).toHaveLength(1);
-    expect(harness.savedValidationReports[0]?.ledgerUpdated).toBe(true);
-    expect(harness.savedValidationReports[0]?.attempts).toHaveLength(2);
+    const provisional = savedLedger?.findings.find((entry) => entry.provisional !== undefined);
+    expect(provisional).toBeDefined();
+    expect(provisional?.status).toBe('open');
+    expect(provisional?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
+    // WAL が記録されている（started → completed → ledger_applied）。
+    const record = savedLedger?.interpretations?.[0];
+    expect(record?.stage).toBe('ledger_applied');
+    expect(record?.applicationResult).toMatch(/provisional/);
   });
 
-  it('Given the agent repeats an invalid decision on retry When run Then the raw finding is forced to "new" and recorded in invalidAttempts', async () => {
-    // 存在しない findingId "F-9999" を指す "same" 決定は不採用になり、
-    // 再問い合わせでも同じ不採用が続くため、情報を捨てないために new として扱う。
+  it('Given the agent repeats an invalid decision When run Then the raw finding lands as provisional (never forced to "new")', async () => {
     executeAgentMock.mockResolvedValue({
       status: 'done',
       content: '',
@@ -367,25 +365,21 @@ describe('runFindingManagerForStep decision retry', () => {
     const harness = makeHarness(makeLedger());
     const result = await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW] });
 
-    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('updated');
-    expect(harness.savedLedgers).toHaveLength(1);
-    const ledger = harness.savedLedgers[0];
-    expect(ledger?.findings.some((entry) => entry.title === 'New unmatched issue' && entry.status === 'open')).toBe(true);
+    const ledger = harness.savedLedgers.at(-1);
+    const landed = ledger?.findings.find((entry) => entry.title === 'New unmatched issue');
+    expect(landed?.status).toBe('open');
+    expect(landed?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous' });
     expect(harness.savedValidationReports).toHaveLength(1);
     expect(harness.savedValidationReports[0]?.ledgerUpdated).toBe(true);
-    expect(harness.savedValidationReports[0]?.attempts).toHaveLength(2);
   });
 
-  it('Given the manager omits decisions for every residual raw finding When run Then only the missing items are re-asked, and if still missing the issue-kind raw is forced to "new" while the resolution_confirmation raw is dropped', async () => {
-    // 指摘: assembleManagerOutput() は「未知の raw finding id」「重複」
-    // 「不正な決定」だけを rejection にしており、残余 raw finding に対する
-    // decision の欠落は rejection にしていなかった。そのため manager が
-    // rawDecisions: [] を返しても hasAnyRejection() が false のままになり、
-    // 再問い合わせに入らず最終検証で失敗して即 invalid_manager_output に
-    // なっていた。修正後は欠落分だけの再問い合わせが1回入り、それでも
-    // 欠落したままなら既存の forceUnresolvedRawDecisionsAsNew の扱いに従う
-    // （issue kind は new に、resolution_confirmation kind は落ちるだけ）。
+  it('Given the manager omits decisions for every residual raw finding When run Then nothing is silently dropped: every observation lands as a gate-blocking provisional', async () => {
+    // decisions manager が rawDecisions: [] を返す（no-op gate bypass 攻撃の
+    // 基本形）。v2 では欠落 decision の raw は provisional へ、対象が resolved の
+    // confirmation は ambiguous ladder（この mock は decisions 形しか返さないため
+    // 解釈 parse に失敗し batch 全員 provisional）へ着地する。
     executeAgentMock.mockResolvedValue({
       status: 'done',
       content: '',
@@ -396,33 +390,20 @@ describe('runFindingManagerForStep decision retry', () => {
       },
     } as unknown as AgentResponse);
 
-    // CONFIRMATION_RAW の対象 F-0001 を resolved にしておき、機械分類で
-    // 自動解決されない（LLM 判断が必要な residual になる）ようにする。
     const ledger = makeLedger({ findings: [{ ...makeLedger().findings[0]!, status: 'resolved', lifecycle: 'resolved' }] });
     const harness = makeHarness(ledger);
     const result = await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW, CONFIRMATION_RAW] });
 
+    // clean residual（i-1）用の decisions call と、ambiguous（c-1）用の
+    // interpretation call の2回。
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
-    const retryInstruction = executeAgentMock.mock.calls[1]?.[1] as string;
-    // 欠落した2件だけが再問い合わせに列挙される。
-    expect(retryInstruction).toContain('run-2:reviewers:2:arch-review:i-1');
-    expect(retryInstruction).toContain('run-2:reviewers:2:arch-review:c-1');
-    expect(retryInstruction).toContain('missing a decision');
 
     expect(result.status).toBe('updated');
-    expect(harness.savedLedgers).toHaveLength(1);
-    const savedLedger = harness.savedLedgers[0];
-    // issue kind (i-1) は情報を捨てないため new として強制採用される。
-    expect(savedLedger?.findings.some((entry) => entry.title === 'New unmatched issue' && entry.status === 'open')).toBe(true);
-    // resolution_confirmation kind (c-1) は new にも強制されず、単に反映
-    // されない（F-0001 は resolved のまま、"Confirmed fixed" という finding は
-    // 作られない）。
+    const savedLedger = harness.savedLedgers.at(-1);
     expect(savedLedger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
-    expect(savedLedger?.findings.some((entry) => entry.title === 'Confirmed fixed')).toBe(false);
-    expect(savedLedger?.findings).toHaveLength(2);
-    expect(harness.savedValidationReports).toHaveLength(1);
-    expect(harness.savedValidationReports[0]?.ledgerUpdated).toBe(true);
-    expect(harness.savedValidationReports[0]?.attempts).toHaveLength(2);
+    const provisionals = savedLedger?.findings.filter((entry) => entry.provisional !== undefined) ?? [];
+    expect(provisionals).toHaveLength(2);
+    expect(provisionals.every((entry) => entry.status === 'open')).toBe(true);
   });
 });
 
@@ -737,6 +718,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'Reported by concurrent child A.',
         suggestion: '',
         kind: 'issue',
+        relation: 'new',
       }),
       runCall(storeB, 'child-b', {
         rawFindingId: 'i-1',
@@ -747,6 +729,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'Reported by concurrent child B.',
         suggestion: '',
         kind: 'issue',
+        relation: 'new',
       }),
     ]);
 
@@ -867,6 +850,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         kind: 'issue',
+        relation: 'new',
       }),
       runCall('child-b', {
         rawFindingId: 'i-1',
@@ -880,6 +864,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         kind: 'issue',
+        relation: 'new',
       }),
     ]);
 
@@ -985,6 +970,7 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
       description: 'Same bug, reported again at a nearby line.',
       suggestion: '',
       kind: 'issue',
+      relation: 'new',
     };
 
     const result = await runFindingManagerForStep({
@@ -1014,11 +1000,13 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
     expect(result.status).toBe('updated');
     expect(savedLedgers).toHaveLength(1);
     const savedLedger = savedLedgers[0];
-    // 不採用になった raw が「未言及」フォールバックで新規 finding に化けていない。
-    expect(savedLedger?.findings).toHaveLength(1);
-    expect(savedLedger?.findings[0]?.id).toBe('F-0001');
-    expect(savedLedger?.findings[0]?.status).toBe('resolved');
-    expect(savedLedger?.findings.some((f) => f.title === 'Restated existing issue')).toBe(false);
+    // v2: 不採用になった raw は「未言及」フォールバックで確定 finding に化けず、
+    // gate-blocking provisional として着地する（黙って消えてゲートが開くことも
+    // 新規 finding として洗浄されることもない）。
+    expect(savedLedger?.findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
+    const landed = savedLedger?.findings.find((f) => f.title === 'Restated existing issue');
+    expect(landed?.status).toBe('open');
+    expect(landed?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
     // 除外した理由は validation report に残る。
     expect(savedValidationReports).toHaveLength(1);
     expect(savedValidationReports[0]?.ledgerUpdated).toBe(true);

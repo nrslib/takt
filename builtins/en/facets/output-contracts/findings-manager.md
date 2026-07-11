@@ -82,3 +82,7 @@ Rules for `disputeDecisions` and `conflictDecisions`:
 Rules for `invalidateDecisions` and `duplicateDecisions`:
 - `invalidateDecisions`: only for finding ids the prompt lists as invalidation candidates (the engine already deterministically confirmed their location fails a check). Leave empty when there are no candidates or you disagree with all of them.
 - `duplicateDecisions`: for open findings that are the same underlying problem. Leave empty when you find no duplicates among the open findings shown.
+
+Interpretation phase (separate call, when ambiguous raw findings exist):
+- The engine may also call you with an "Ambiguous raw finding interpretation" prompt. There you return `interpretations` (one PROPOSAL per ambiguous raw finding): `create_independent`, `same_with_proof` (only with an engine-issued proofId from the prompt), `open_conflict`, or `provisional`.
+- You can never resolve, waive, invalidate, supersede, or reopen a finding from that phase; proposals outside your granted capabilities become gate-blocking provisional findings.

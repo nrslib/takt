@@ -8,7 +8,7 @@ import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
-import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
+import { hasUnquotedFindingsReference, isFindingsCondition } from '../evaluation/rule-utils.js';
 import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
 import { buildFindingManagerStep } from '../findings/manager-step.js';
 
@@ -278,29 +278,6 @@ function validatePromotionProviderModels(
   }
 }
 
-function hasInvalidManagerOutputRule(rules: readonly WorkflowRule[] | undefined): boolean {
-  if (!rules) {
-    return false;
-  }
-  return rules.some(isInvalidManagerOutputRule);
-}
-
-function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig, findingContractEnabled: boolean): void {
-  if (!findingContractEnabled) {
-    return;
-  }
-  for (const step of config.steps) {
-    if ((step.parallel?.length ?? 0) === 0) {
-      continue;
-    }
-    if (!hasInvalidManagerOutputRule(step.rules)) {
-      throw new Error(
-        `Invalid finding_contract step "${step.name}": parallel parent must declare an invalid manager output rule via non-AI return need_replan, non-AI return needs_fix, or non-AI next fix`,
-      );
-    }
-  }
-}
-
 function validateParallelSubStepNamesUnique(config: WorkflowConfig): void {
   for (const step of config.steps) {
     const names = new Set<string>();
@@ -349,7 +326,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateFindingContractParallelStructuredOutput(config, findingContractEnabled);
   validateFindingContractManagerProviderModel(config, options);
   validateFindingConflictAdjudicationReservedName(config);
-  validateFindingContractInvalidManagerOutputRules(config, findingContractEnabled);
   validateParallelSubStepNamesUnique(config);
   validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);

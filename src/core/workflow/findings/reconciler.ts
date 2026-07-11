@@ -4,12 +4,37 @@ import type {
   FindingLedgerConflict,
   FindingManagerOutput,
   FindingObservation,
+  FindingProvisionalKind,
   FindingReconcileContext,
   FindingRecord,
+  FindingSeverity,
   RawFinding,
 } from './types.js';
 import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
 import { validateFindingManagerOutput } from './manager-output-validation.js';
+import { computeLineageKey, computeProvisionalStableKey, computeReviewerStableKey } from './raw-canonicalization.js';
+
+/**
+ * provisional finding の upsert 指示（v2 梯子設計 §7〜§8）。stableKey が同じ
+ * open provisional が既にあれば同一 ID を更新し（新しい finding ID を作らない —
+ * 攻撃5対策）、無ければ新規 open finding を provisional メタデータ付きで作る。
+ */
+export interface ProvisionalFindingSpec {
+  kind: FindingProvisionalKind;
+  stableKey: string;
+  lineageKey: string;
+  sourceRawFindingIds: string[];
+  reason: string;
+  title: string;
+  /** raw 由来なら元 severity、system overflow / budget failure は 'high'（設計書 §7）。 */
+  severity: FindingSeverity;
+  location?: string;
+  description?: string;
+  suggestion?: string;
+  reviewers: string[];
+  /** この upsert で消費した自動 manager 解釈 epoch 数（0 または 1）。 */
+  addInterpretationEpochs: number;
+}
 
 interface ReconcileFindingLedgerInput {
   previousLedger: FindingLedger;
@@ -18,17 +43,29 @@ interface ReconcileFindingLedgerInput {
   context: FindingReconcileContext;
   priorStepResponseText?: string;
   /**
-   * 保存直前の再照合（最新台帳に対する assembleManagerOutput の再実行）で
-   * 項目単位で不採用になった raw finding id の集合。「決定で言及されなかった
-   * raw は新規 finding にする」フォールバック（下記 unmentionedNewFindings）の
-   * 対象から除外する。除外しないと、項目単位で不採用にした決定がこの
-   * フォールバックで結局 new finding になり、不採用の意味が消える
-   * （codex 指摘: 最新台帳との再照合で "same" が不採用になった raw が、未言及
-   * フォールバックで新規 finding に変換されていた）。除外した raw の理由は
-   * 呼び出し元（manager-runner.ts）が invalidAttempts / saveManagerValidationReport
-   * に記録する。
+   * どの決定にも現れなかった raw の着地先。v2 梯子設計は「未言及 raw → new
+   * finding」フォールバックを廃止した（不採用の意味が消える / 根拠不成立の
+   * 再報告が新規 finding として洗浄される）。代わりに、呼び出し元
+   * （manager-runner.ts）が未言及 raw を provisional spec としてここへ渡す。
+   * 万一渡し漏れた raw が残った場合も reconciler 自身が defense-in-depth の
+   * fallback provisional に変換する（黙って消してゲートを開けない）。
+   */
+  provisionalFindings?: ProvisionalFindingSpec[];
+  /**
+   * 保存直前の再照合で項目単位で不採用になり、かつ provisional spec 側で
+   * 既に着地が決まっている raw finding id。defense-in-depth fallback の
+   * 対象から除外する（二重着地の防止）。
    */
   excludedFromUnmentionedFallbackRawFindingIds?: ReadonlySet<string>;
+  /**
+   * raw finding id → canonicalization が計算した provenance（reviewerStableKey /
+   * lineageKey）。defense-in-depth fallback はこれを使い、reviewer 名からの
+   * 別キー導出を行わない（codex B1: 同一 lineage の provisional が intake 経路と
+   * fallback 経路で別 stableKey になり増殖していた）。manager-runner 経路は
+   * 常にこのマップを渡す。マップに無い raw（旧経路・テストの手組み raw）だけが
+   * 最終手段の導出に落ちる。
+   */
+  rawProvenanceByRawFindingId?: ReadonlyMap<string, { reviewerStableKey: string; lineageKey: string }>;
 }
 
 function formatFindingId(nextId: number): string {
@@ -104,6 +141,14 @@ function assertNonEmptyIds(ids: readonly string[], label: string): void {
 
 function mergeRawFindingIds(current: readonly string[], next: readonly string[]): string[] {
   return Array.from(new Set([...current, ...next]));
+}
+
+/**
+ * 楽観的前提条件（CAS、設計書 §6）の版数。エントリを変更する全ての決定適用で
+ * +1 する。省略時（既存 v1 ledger）は 1 とみなす。
+ */
+function bumpRevision(finding: Pick<FindingRecord, 'revision'>): number {
+  return (finding.revision ?? 1) + 1;
 }
 
 function mergeReviewers(current: readonly string[], rawFindings: readonly RawFinding[]): string[] {
@@ -216,6 +261,7 @@ function buildNewFinding(input: {
     rawFindingIds: input.rawFindingIds,
     firstSeen: observation,
     lastSeen: observationFromContext(input.context),
+    revision: 1,
   };
 }
 
@@ -244,6 +290,10 @@ function withoutResolutionFields(finding: FindingRecord): Omit<FindingRecord, 'r
     firstSeen: finding.firstSeen,
     lastSeen: finding.lastSeen,
     ...(finding.reopenedEvidence !== undefined ? { reopenedEvidence: finding.reopenedEvidence } : {}),
+    // revision / provisional は解消情報ではないため reopen でも保持する
+    // （落とすと CAS の版数が巻き戻り、stale 検出が誤って成功する）。
+    ...(finding.revision !== undefined ? { revision: finding.revision } : {}),
+    ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
   };
 }
 
@@ -375,6 +425,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       ...finding,
       status: 'open',
       lifecycle: finding.lifecycle === 'reopened' ? 'reopened' : 'persists',
+      revision: bumpRevision(finding),
       rawFindingIds: mergeRawFindingIds(finding.rawFindingIds, match.rawFindingIds),
       location: evidence.location ?? finding.location,
       description: evidence.description,
@@ -402,6 +453,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       ...finding,
       status: 'resolved',
       lifecycle: 'resolved',
+      revision: bumpRevision(finding),
       resolvedAt: input.context.timestamp,
       resolvedEvidence: resolved.evidence,
     });
@@ -422,6 +474,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       ...reopenedFinding,
       status: 'open',
       lifecycle: 'reopened',
+      revision: bumpRevision(finding),
       rawFindingIds: mergeRawFindingIds(finding.rawFindingIds, reopened.rawFindingIds),
       location: evidence.location ?? finding.location,
       description: evidence.description,
@@ -443,6 +496,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       ...finding,
       status: 'waived',
       lifecycle: 'waived',
+      revision: bumpRevision(finding),
       waivers: [
         ...(finding.waivers ?? []),
         { reason: waived.reason, evidence: waived.evidence, decidedAt: observationFromContext(input.context) },
@@ -458,6 +512,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     // 却下された異議は記録のみ: status は open のまま（ゲートを塞ぎ続ける）
     updatedById.set(note.findingId, {
       ...finding,
+      revision: bumpRevision(finding),
       disputes: [
         ...(finding.disputes ?? []),
         { reason: note.reason, evidence: note.evidence, recordedAt: observationFromContext(input.context) },
@@ -476,6 +531,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       ...finding,
       status: 'invalidated',
       lifecycle: 'invalidated',
+      revision: bumpRevision(finding),
       invalidatedAt: input.context.timestamp,
       invalidatedEvidence: invalidated.evidence,
     });
@@ -502,11 +558,14 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
         ...duplicateFinding,
         status: 'superseded',
         lifecycle: 'superseded',
+        revision: bumpRevision(duplicateFinding),
         supersededByFindingId: duplicate.canonicalFindingId,
       });
     }
+    const canonicalCurrent = updatedById.get(duplicate.canonicalFindingId)!;
     updatedById.set(duplicate.canonicalFindingId, {
-      ...updatedById.get(duplicate.canonicalFindingId)!,
+      ...canonicalCurrent,
+      revision: bumpRevision(canonicalCurrent),
       rawFindingIds: mergedRawFindingIds,
       reviewers: mergedReviewers,
       ...(mergedDisputes !== undefined && mergedDisputes.length > 0 ? { disputes: mergedDisputes } : {}),
@@ -541,35 +600,170 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     context: input.context,
   });
 
+  // v2 梯子設計: 「未言及 raw → new finding」フォールバックは廃止した。
+  // どの決定にも現れなかった raw は呼び出し元が provisional spec として渡し、
+  // 渡し漏れも defense-in-depth でここが provisional に変換する（黙って消して
+  // ゲートを開けない。新規 finding への昇格もしない — 根拠不成立の再報告が
+  // 新規 finding として洗浄される経路だった）。
   const excludedFromUnmentionedFallback = input.excludedFromUnmentionedFallbackRawFindingIds ?? new Set<string>();
-  const unmentionedNewFindings = input.rawFindings
-    // 解消確認は問題の観測ではないため、未言及でも新規 finding にしない。
-    .filter((rawFinding) => rawFinding.kind !== 'resolution_confirmation')
-    .filter((rawFinding) => !usedRawFindingIds.has(rawFinding.rawFindingId))
-    // 項目単位で不採用になった raw も未言及フォールバックの対象から外す
-    // （呼び出し元の理由は invalidAttempts / saveManagerValidationReport に残る）。
-    .filter((rawFinding) => !excludedFromUnmentionedFallback.has(rawFinding.rawFindingId))
-    .map((rawFinding) => {
+  const provisionalSpecs: ProvisionalFindingSpec[] = [...(input.provisionalFindings ?? [])];
+  const provisionalRawIds = new Set(provisionalSpecs.flatMap((spec) => spec.sourceRawFindingIds));
+  for (const rawFinding of input.rawFindings) {
+    // 解消確認は問題の観測ではない（適用されなかった確認の衝突化は呼び出し元の
+    // CAS 経路が担う）ため、fallback provisional の対象にしない。
+    if (rawFinding.kind === 'resolution_confirmation') {
+      continue;
+    }
+    if (usedRawFindingIds.has(rawFinding.rawFindingId)
+      || provisionalRawIds.has(rawFinding.rawFindingId)
+      || excludedFromUnmentionedFallback.has(rawFinding.rawFindingId)) {
+      continue;
+    }
+    // canonicalization が計算した provenance を最優先で使う（codex B1: 別キー
+    // 導出は同一 lineage の provisional を増殖させる）。manager-runner 経路は
+    // 常にマップを渡すため、以下の導出はマップ外の raw（旧経路・手組み raw）
+    // だけの最終手段。
+    const provenance = input.rawProvenanceByRawFindingId?.get(rawFinding.rawFindingId);
+    const reviewerStableKey = provenance?.reviewerStableKey ?? computeReviewerStableKey({
+      workflowName: input.context.workflowName,
+      callNamespace: '',
+      parentStepName: input.context.stepName,
+      reviewerPersonaKey: rawFinding.reviewer,
+    });
+    const lineageKey = provenance?.lineageKey ?? computeLineageKey({
+      ...(rawFinding.targetFindingId !== undefined ? { targetFindingId: rawFinding.targetFindingId } : {}),
+      ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
+      title: rawFinding.title,
+      familyTag: rawFinding.familyTag,
+    });
+    provisionalSpecs.push({
+      kind: 'raw-meaning-ambiguous',
+      stableKey: computeProvisionalStableKey({ reviewerStableKey, lineageKey, provisionalKind: 'raw-meaning-ambiguous' }),
+      lineageKey,
+      sourceRawFindingIds: [rawFinding.rawFindingId],
+      reason: `Raw finding "${rawFinding.rawFindingId}" was not referenced by any decision; kept as a gate-blocking provisional instead of being dropped or promoted to a new finding`,
+      title: rawFinding.title,
+      severity: rawFinding.severity,
+      ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
+      description: rawFinding.description,
+      ...(rawFinding.suggestion !== undefined ? { suggestion: rawFinding.suggestion } : {}),
+      reviewers: [rawFinding.reviewer],
+      addInterpretationEpochs: 0,
+    });
+  }
+
+  const provisionalNewFindings = applyProvisionalFindingSpecs({
+    updatedById,
+    specs: provisionalSpecs,
+    allocateId: () => {
       const id = formatFindingId(nextId);
       nextId += 1;
-      return buildNewFinding({
-        id,
-        severity: rawFinding.severity,
-        title: rawFinding.title,
-        rawFindingIds: [rawFinding.rawFindingId],
-        rawFindings: [rawFinding],
-        firstSeenStepName: rawFinding.stepName,
-        context: input.context,
-      });
-    });
+      return id;
+    },
+    context: input.context,
+  });
 
   return {
     version: 1,
     workflowName: input.context.workflowName,
     nextId,
     updatedAt: input.context.timestamp,
-    findings: [...updatedById.values(), ...newFindings, ...unmentionedNewFindings],
+    findings: [...updatedById.values(), ...newFindings, ...provisionalNewFindings],
     rawFindings: mergeRawFindingDetails(input.previousLedger.rawFindings, input.rawFindings),
     conflicts,
+    ...(input.previousLedger.interpretations !== undefined
+      ? { interpretations: input.previousLedger.interpretations }
+      : {}),
   };
+}
+
+/**
+ * provisional spec を台帳へ適用する（設計書 §8 の更新則）。
+ *
+ * - 同じ stableKey の open provisional が既にあれば同一 ID を更新する（新しい
+ *   finding ID を作らない）: rawFindingIds / reason / lastSeen を更新し、
+ *   revision += 1、lifecycle は 'persists'。
+ * - 無ければ新規 open finding を provisional メタデータ付きで作る。
+ * - 「今回観測されなかった」だけでは resolve しない（この関数は既存 provisional
+ *   に一切触れない — 解消は clean な後続 raw の CAS 経路だけが行う）。
+ */
+function applyProvisionalFindingSpecs(input: {
+  updatedById: Map<string, FindingRecord>;
+  specs: readonly ProvisionalFindingSpec[];
+  allocateId: () => string;
+  context: FindingReconcileContext;
+}): FindingRecord[] {
+  const observation = observationFromContext(input.context);
+  const openProvisionalByStableKey = new Map<string, string>();
+  for (const finding of input.updatedById.values()) {
+    if (finding.status === 'open' && finding.provisional !== undefined) {
+      openProvisionalByStableKey.set(finding.provisional.stableKey, finding.id);
+    }
+  }
+  const created: FindingRecord[] = [];
+  const createdByStableKey = new Map<string, FindingRecord>();
+
+  for (const spec of input.specs) {
+    const existingId = openProvisionalByStableKey.get(spec.stableKey);
+    if (existingId !== undefined) {
+      const existing = input.updatedById.get(existingId)!;
+      input.updatedById.set(existingId, {
+        ...existing,
+        lifecycle: 'persists',
+        rawFindingIds: mergeRawFindingIds(existing.rawFindingIds, spec.sourceRawFindingIds),
+        reviewers: Array.from(new Set([...existing.reviewers, ...spec.reviewers])),
+        lastSeen: observation,
+        revision: bumpRevision(existing),
+        provisional: {
+          ...existing.provisional!,
+          sourceRawFindingIds: mergeRawFindingIds(existing.provisional!.sourceRawFindingIds, spec.sourceRawFindingIds),
+          reason: spec.reason,
+          lastObservedAt: observation,
+          interpretationEpochs: existing.provisional!.interpretationEpochs + spec.addInterpretationEpochs,
+        },
+      });
+      continue;
+    }
+    // 同一ラウンド内で同じ stableKey の spec が複数来た場合も ID を増やさない。
+    const createdExisting = createdByStableKey.get(spec.stableKey);
+    if (createdExisting !== undefined) {
+      createdExisting.rawFindingIds = mergeRawFindingIds(createdExisting.rawFindingIds, spec.sourceRawFindingIds);
+      createdExisting.reviewers = Array.from(new Set([...createdExisting.reviewers, ...spec.reviewers]));
+      createdExisting.provisional = {
+        ...createdExisting.provisional!,
+        sourceRawFindingIds: mergeRawFindingIds(createdExisting.provisional!.sourceRawFindingIds, spec.sourceRawFindingIds),
+        interpretationEpochs: createdExisting.provisional!.interpretationEpochs + spec.addInterpretationEpochs,
+      };
+      continue;
+    }
+    const entry: FindingRecord = {
+      id: input.allocateId(),
+      status: 'open',
+      lifecycle: 'new',
+      severity: spec.severity,
+      title: spec.title,
+      ...(spec.location !== undefined ? { location: spec.location } : {}),
+      ...(spec.description !== undefined ? { description: spec.description } : {}),
+      ...(spec.suggestion !== undefined ? { suggestion: spec.suggestion } : {}),
+      reviewers: [...spec.reviewers],
+      rawFindingIds: [...spec.sourceRawFindingIds],
+      firstSeen: observation,
+      lastSeen: observation,
+      revision: 1,
+      provisional: {
+        kind: spec.kind,
+        stableKey: spec.stableKey,
+        lineageKey: spec.lineageKey,
+        sourceRawFindingIds: [...spec.sourceRawFindingIds],
+        reason: spec.reason,
+        firstObservedAt: observation,
+        lastObservedAt: observation,
+        interpretationEpochs: spec.addInterpretationEpochs,
+        gateEffect: 'block',
+      },
+    };
+    createdByStableKey.set(spec.stableKey, entry);
+    created.push(entry);
+  }
+  return created;
 }

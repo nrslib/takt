@@ -420,7 +420,9 @@ describe('reconcileFindingLedger', () => {
     ]);
   });
 
-  it('should keep an unmentioned raw finding open when the manager drops it', () => {
+  it('should keep an unmentioned raw finding open as a gate-blocking provisional when the manager drops it', () => {
+    // v2 梯子設計: 未言及 raw は new finding へ昇格させず（根拠不成立の再報告が
+    // 洗浄される経路だった）、gate-blocking provisional として台帳に残す。
     const rawFinding = makeRawFinding({
       rawFindingId: 'raw-unmentioned',
       stepName: 'ai-antipattern-review',
@@ -449,11 +451,11 @@ describe('reconcileFindingLedger', () => {
         severity: 'critical',
         title: 'Dropped raw finding',
         rawFindingIds: ['raw-unmentioned'],
-        firstSeen: {
-          runId: 'run-2',
-          stepName: 'ai-antipattern-review',
-          timestamp: '2026-06-13T01:00:00.000Z',
-        },
+        provisional: expect.objectContaining({
+          kind: 'raw-meaning-ambiguous',
+          sourceRawFindingIds: ['raw-unmentioned'],
+          gateEffect: 'block',
+        }),
       }),
     );
   });

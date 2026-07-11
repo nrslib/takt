@@ -316,6 +316,10 @@ steps:
     rules:
       - condition: all("approved", "AI特有の問題なし", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
+      # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
+      # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
       - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
@@ -383,6 +387,10 @@ steps:
     rules:
       - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
+      # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
+      # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
       - condition: any("need_replan") && when(findings.conflicts.count == 0)
         next: plan
       - condition: any("needs_fix") && when(findings.conflicts.count == 0)

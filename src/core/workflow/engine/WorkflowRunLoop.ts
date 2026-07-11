@@ -76,6 +76,15 @@ interface WorkflowRunLoopDeps {
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
   updateMaxSteps: (maxSteps: number) => void;
+  /**
+   * COMPLETE 遷移直前のエンジン最終不変条件（v2 梯子設計 §7）: open な
+   * provisional finding が1件でもあれば COMPLETE を拒否する。バックストップ
+   * 発火は「workflow rules が findings.provisional.count を処理していない」
+   * 設定不備なので fail-fast abort（house の「マッチなしは黙ってデフォルトを
+   * 選ばず fail-fast」と同じ扱い）。violation.reason には provisional の
+   * id / kind / reason と修正ガイダンスを含める。
+   */
+  checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
 }
 
 async function resolveStepPromotionRuntime(
@@ -604,6 +613,11 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (nextStep === COMPLETE_STEP) {
+        const completionGate = deps.checkCompletionGate();
+        if (!completionGate.ok) {
+          abort = abortWorkflow(deps, 'provisional_findings', completionGate.reason);
+          break;
+        }
         deps.state.status = 'completed';
         deps.emit('workflow:complete', deps.state);
         break;
@@ -821,6 +835,11 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   if (!isComplete) {
     advanceActiveStep(deps, nextStep, deps.state.iteration);
   } else if (nextStep === COMPLETE_STEP) {
+    const completionGate = deps.checkCompletionGate();
+    if (!completionGate.ok) {
+      const abort = abortWorkflow(deps, 'provisional_findings', completionGate.reason);
+      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
+    }
     deps.state.status = 'completed';
   }
 

@@ -8,7 +8,8 @@
 ## 出力契約
 {{outputContract}}
 
-1件ごとの判断だけを返してください。最終結果の組み立て（対応づけ、グルーピング、conflict の形状、不変条件の強制）は自分で行わないでください。エンジンがあなたの判断から台帳更新を組み立て、台帳の不変条件に違反する個々の判断は不採用にします。
+1件ごとの判断だけを返してください。あなたの判断は「提案」であり、台帳への権限はすべてエンジン側にあります。最終結果の組み立て（対応づけ、グルーピング、conflict の形状、不変条件の強制）は自分で行わないでください。エンジンがあなたの判断から台帳更新を組み立て、保存時に最新の台帳へ全変更を再検証（楽観的前提条件）し、台帳の不変条件に違反する個々の判断は不採用にします。不採用になっても raw finding は消えません: エンジンが gate-blocking な provisional finding として保持します。
+ラベリングが台帳と矛盾していた raw finding（ambiguous な観測）は下記には表示されません。エンジンが別の提案専用フェーズ（権限はさらに狭い）で解釈します。
 下記に列挙された raw finding 1件につき、rawDecisions にちょうど1エントリを返してください。decision は same、new、resolved、reopened、conflict、unsupported のいずれかです。
 findingId は same、resolved、reopened、conflict のとき必須です。new と unsupported のときは空にしてください。
 new のとき、title や severity は自分で書かないでください。エンジンが raw finding 自体の title と severity を使います。

@@ -83,12 +83,55 @@ export interface UnsupportedRawFindingReport {
   evidence: string;
 }
 
-/** Raw finding whose rejected decision could not be forced to a new finding because it explicitly references an existing finding (relation persists/reopened). Dropped from this round; kept for audit only (see manager-runner.ts's forceUnresolvedRawDecisionsAsNew). */
-export interface DroppedExplicitReferenceRawFindingReport {
-  rawFindingId: string;
-  relation: string;
-  targetFindingId?: string;
+/** reviewer 出力がハード上限（件数 / byte / フィールド長）を超え、全量が単一 overflow provisional に置き換えられた記録（v2 梯子設計 §10）。 */
+export interface ReviewerOutputOverflowReport {
+  reviewer: string;
   reason: string;
+}
+
+/**
+ * canonicalization が raw の主張を正規化した監査レコード（codex 2巡目ブロッカー
+ * 対応）。wire / ledger の identity 構成フィールド（path/title/description）には
+ * 一切載せず、この専用メタデータだけが「正規化前の元の主張」を保持する。
+ * 変換が起きた raw のみ記録する（無変換 raw のノイズは増やさない）。
+ */
+export interface RawNormalizationAuditRecord {
+  /** 正規化後（namespace 付与後）の raw finding id。wire / provisional の sourceRawFindingIds と突合できる。 */
+  rawFindingId: string;
+  reviewer: string;
+  /** レビュアが主張した元の relation（欠損していた場合は undefined）。 */
+  claimedRelation?: string;
+  /** レビュアが主張した元の targetFindingId。 */
+  claimedTargetFindingId?: string;
+  /** レビュアが送ってきた legacy kind（送られていた場合）。 */
+  claimedKind?: string;
+  /** canonical に採用された整合 relation。 */
+  normalizedRelation: string;
+  /** wire（台帳の rawFindings）に残した targetFindingId。undefined = 除外された。 */
+  wireTargetFindingId?: string;
+  /** 検出された ambiguity codes（RawAmbiguityCode）。 */
+  ambiguityCodes: string[];
+  /** 適用された正規化の種別。 */
+  normalizations: Array<'relation-normalized' | 'target-dropped-from-wire' | 'required-fields-missing'>;
+}
+
+/** raw / 決定が provisional finding として着地した記録（v2 梯子設計 §7）。 */
+export interface ProvisionalLandingReport {
+  kind: string;
+  stableKey: string;
+  reason: string;
+  sourceRawFindingIds: string[];
+}
+
+/** ambiguous raw 解釈（manager interpretation）の観測メトリクス（v2 梯子設計 実装単位10）。 */
+export interface InterpretationStatsReport {
+  ambiguousRawCount: number;
+  managerCalls: number;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  reusedCompletedDecisions: number;
+  interruptedInterpretations: number;
+  budgetExhaustedLineages: number;
 }
 
 export interface FindingManagerValidationReport {
@@ -101,7 +144,13 @@ export interface FindingManagerValidationReport {
   attempts: FindingManagerValidationAttemptReport[];
   rawAdmissionRejections?: RawAdmissionRejectionReport[];
   unsupportedRawFindings?: UnsupportedRawFindingReport[];
-  droppedExplicitReferenceRawFindings?: DroppedExplicitReferenceRawFindingReport[];
+  reviewerOutputOverflows?: ReviewerOutputOverflowReport[];
+  provisionalLandings?: ProvisionalLandingReport[];
+  /** 正規化前の元の主張の監査記録（変換が起きた raw のみ）。 */
+  rawNormalizations?: RawNormalizationAuditRecord[];
+  interpretationStats?: InterpretationStatsReport;
+  /** correction（レビュア1回突き返し）の実施記録（成功率メトリクスの材料）。 */
+  relationClarifications?: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
 }
 
 function resolveInside(baseDir: string, path: string): string {

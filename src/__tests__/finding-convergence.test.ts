@@ -313,21 +313,24 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(validateLocationAdmission(projectDir, undefined)).toEqual({ ok: true });
   });
 
-  function makeHarness(ledger: FindingLedger): {
+  function makeHarness(initialLedger: FindingLedger): {
     savedLedgers: FindingLedger[];
     savedValidationReports: unknown[];
     run: (input: { reviewerRawFindings: Array<Record<string, unknown>>; priorStepResponseText?: string }) => ReturnType<typeof runFindingManagerForStep>;
   } {
+    let ledger = initialLedger;
     const savedLedgers: FindingLedger[] = [];
     const savedValidationReports: unknown[] = [];
     const ledgerStore: FindingLedgerStore = {
       workflowName: 'peer-review',
       loadLedger: () => ledger,
       saveLedger: (next) => { savedLedgers.push(next); },
+      // v2 では WAL（beginInterpretations 等）が保存を複数回行うため、double も
+      // 状態を持つ（mutator の結果を次回の読み込みへ引き継ぐ）。
       updateLedger: (mutator) => {
-        const next = mutator(ledger);
-        savedLedgers.push(next);
-        return Promise.resolve(next);
+        ledger = mutator(ledger);
+        savedLedgers.push(ledger);
+        return Promise.resolve(ledger);
       },
       createRunCopy: () => join(projectDir, 'ledger-copy.json'),
       saveRawFindings: () => join(projectDir, 'raw-findings.json'),
@@ -374,7 +377,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     };
   }
 
-  it('Given a critical raw finding whose location does not exist When run Then it is never promoted to a ledger finding', async () => {
+  it('Given a critical raw finding whose location does not exist When run Then it is never promoted to a confirmed finding but lands as a gate-blocking invalid-location-evidence provisional (codex B3)', async () => {
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
     const result = await harness.run({
       reviewerRawFindings: [{
@@ -394,7 +397,13 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(result.status).toBe('updated');
     expect(executeAgentMock).not.toHaveBeenCalled();
     const savedLedger = harness.savedLedgers.at(-1);
-    expect(savedLedger?.findings).toEqual([]);
+    // 確定 finding には昇格しない（幻覚 location を confirmed に載せない）が、
+    // 決定的に証明できたのは「location 証拠の不成立」だけで欠陥の虚偽ではない
+    // ため、本文を保持した provisional として台帳に残り gate を塞ぐ。
+    const landed = savedLedger?.findings.find((f) => f.title === 'Hallucinated critical finding');
+    expect(landed?.status).toBe('open');
+    expect(landed?.provisional).toMatchObject({ kind: 'invalid-location-evidence', gateEffect: 'block' });
+    expect(landed?.description).toContain('does not correspond');
     expect(harness.savedValidationReports).toHaveLength(1);
     const report = harness.savedValidationReports[0] as { rawAdmissionRejections?: Array<{ rawFindingId: string; reason: string }> };
     expect(report.rawAdmissionRejections).toHaveLength(1);
@@ -543,7 +552,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
   // B2: 明示参照付き raw（relation persists/reopened）は、manager の判断が再問い
   // 合わせ後もなお不採用のとき、エンジンの「強制 new 化」フォールバックの対象に
   // ならない。強制すると根拠不成立の再報告が新規 finding として台帳に混入する。
-  it('Given a relation "persists" raw whose manager decisions stay rejected after retry When run Then it is dropped (not forced to new), excluded from the unmentioned fallback, and audited', async () => {
+  it('Given a relation "persists" raw targeting a non-open finding When run Then it goes through the ambiguous ladder and lands as a gate-blocking provisional (never forced to new)', async () => {
     // 対象 F-0001 を resolved にして、persists の機械分類（open target 前提）に
     // 掛からず manager 送りになるようにする。
     const ledger = makeLedger({
@@ -587,21 +596,25 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     });
 
     expect(result.status).toBe('updated');
-    expect(executeAgentMock).toHaveBeenCalledTimes(2); // 初回 + 再問い合わせ
+    // v2: 対象が open でない persists は ambiguous（persists-target-not-open）と
+    // して解釈フェーズへ進む。decisions manager は呼ばれない（clean residual 0）。
+    // この mock は decisions 形しか返さないため解釈 parse に失敗し、raw は
+    // provisional として着地する（強制 new 化も drop もされない）。
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
     const savedLedger = harness.savedLedgers.at(-1);
-    // 強制 new 化されない: finding は増えず、未言及フォールバックにも乗らない。
-    expect(savedLedger?.findings).toHaveLength(1);
-    expect(savedLedger?.findings[0]?.id).toBe('F-0001');
-    expect(savedLedger?.findings[0]?.status).toBe('resolved');
-    // 監査記録: droppedExplicitReferenceRawFindings に relation と target が残る。
-    expect(harness.savedValidationReports).toHaveLength(1);
-    const report = harness.savedValidationReports[0] as {
-      droppedExplicitReferenceRawFindings?: Array<{ rawFindingId: string; relation: string; targetFindingId?: string }>;
+    expect(savedLedger?.findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
+    const landed = savedLedger?.findings.find((f) => f.title === 'Existing issue still present');
+    expect(landed?.status).toBe('open');
+    expect(landed?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
+    // 監査記録: 先行保存（write-ahead の正規化監査）+ 最終保存の2件。最終保存に
+    // provisionalLandings が残る。
+    expect(harness.savedValidationReports).toHaveLength(2);
+    const report = harness.savedValidationReports.at(-1) as {
+      provisionalLandings?: Array<{ kind: string; reason: string; sourceRawFindingIds: string[] }>;
     };
-    expect(report.droppedExplicitReferenceRawFindings).toHaveLength(1);
-    expect(report.droppedExplicitReferenceRawFindings?.[0]?.rawFindingId).toContain('p-1');
-    expect(report.droppedExplicitReferenceRawFindings?.[0]?.relation).toBe('persists');
-    expect(report.droppedExplicitReferenceRawFindings?.[0]?.targetFindingId).toBe('F-0001');
+    expect(report.provisionalLandings?.some((landing) => (
+      landing.sourceRawFindingIds.some((id) => id.includes('p-1'))
+    ))).toBe(true);
   });
 });
 

@@ -16,6 +16,11 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         description: finding.description,
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,
+        // provisional は fixer が直接直せない system finding（v2 梯子設計 §7）。
+        // agent がそれを識別できるようサマリへ kind/reason を出す（追加のみ）。
+        ...(finding.provisional !== undefined
+          ? { provisional: { kind: finding.provisional.kind, reason: finding.provisional.reason } }
+          : {}),
       })),
     resolved: ledger.findings
       .filter((finding) => finding.status === 'resolved')
@@ -124,6 +129,20 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
         ...(finding.suggestion !== undefined ? { suggestion: finding.suggestion } : {}),
         reviewers: finding.reviewers,
       })),
+    },
+    // provisional は status=open の finding に付く optional メタデータなので
+    // open.count にも含まれる（既存の findings.open.count == 0 ゲートは安全側）。
+    // builtin workflow はこの count を見て need_replan へルーティングし、エンジンは
+    // count > 0 での COMPLETE を最終不変条件として拒否する（設計書 §7）。
+    provisional: {
+      count: openItems.filter((finding) => finding.provisional !== undefined).length,
+      items: openItems
+        .filter((finding) => finding.provisional !== undefined)
+        .map((finding) => ({
+          id: finding.id,
+          kind: finding.provisional!.kind,
+          reason: finding.provisional!.reason,
+        })),
     },
     resolved: {
       count: ledger.findings.filter((finding) => finding.status === 'resolved').length,

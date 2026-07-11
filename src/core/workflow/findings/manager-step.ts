@@ -1,11 +1,14 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig } from '../../models/types.js';
-import { FindingManagerDecisionsJsonSchema } from './schemas.js';
+import { AmbiguousInterpretationsOutputJsonSchema, FindingManagerDecisionsJsonSchema } from './schemas.js';
 
 // v3: v2（raw finding / disputed finding / conflict 1件ごとの「判断」だけを
 // 返させる形）に、invalidateDecisions（既存 finding の invalidate 候補選択）と
 // duplicateDecisions（重複 finding の統合）を追加。組み立てと不変条件の強制は
 // decision-assembly.ts が行う。
 export const FINDING_MANAGER_SCHEMA_REF = 'takt.findings.manager.v3';
+
+/** ambiguous raw 解釈フェーズ（v2 梯子設計 §4）の structured output。提案のみ。 */
+export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation.v1';
 
 /**
  * findings-manager の合成ステップを組み立てる。実行（manager-runner.ts）と
@@ -46,6 +49,28 @@ export function buildFindingManagerStep(input: {
     structuredOutput: {
       schemaRef: FINDING_MANAGER_SCHEMA_REF,
       schema: FindingManagerDecisionsJsonSchema,
+    },
+  };
+}
+
+/**
+ * ambiguous raw の解釈フェーズ用の合成ステップ。decisions manager と同じ
+ * persona / provider / model 解決を共有する（別の解決をすると preview と実行が
+ * 食い違う）。structured output は「提案」（AmbiguousInterpretation）のみ —
+ * 台帳操作の8配列は返させない。
+ */
+export function buildFindingInterpretationStep(input: {
+  contract: FindingContractConfig;
+  workflowProvider?: WorkflowConfig['provider'];
+  workflowModel?: WorkflowConfig['model'];
+}): AgentWorkflowStep {
+  const base = buildFindingManagerStep(input);
+  return {
+    ...base,
+    name: 'findings-interpreter',
+    structuredOutput: {
+      schemaRef: FINDING_INTERPRETATION_SCHEMA_REF,
+      schema: AmbiguousInterpretationsOutputJsonSchema,
     },
   };
 }

@@ -300,6 +300,7 @@ export class WorkflowEngine extends EventEmitter {
             this.maxSteps = maxSteps;
             this.sharedRuntime.maxSteps = maxSteps;
           },
+          checkCompletionGate: this.checkCompletionGate.bind(this),
         }),
         (result) => ({
           status: result.state.status,
@@ -331,6 +332,39 @@ export class WorkflowEngine extends EventEmitter {
       return;
     }
     this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger());
+  }
+
+  /**
+   * COMPLETE 遷移直前のエンジン最終不変条件（v2 梯子設計 §7）: open な
+   * provisional finding（意味を確定できなかった観測）が1件でも残っていれば
+   * COMPLETE を拒否する。builtin workflow は findings.provisional.count を見て
+   * need_replan へ先にルーティングするため、ここが発火するのは custom workflow
+   * が provisional を処理する記述を欠いた設定不備 — 「ルールはあるが何も
+   * マッチしない」と同じクラスとして fail-fast する。判定は state.findings の
+   * キャッシュではなく保存直前の台帳を再読込して行う（並列子の更新を見逃さない）。
+   */
+  private checkCompletionGate(): { ok: true } | { ok: false; reason: string } {
+    if (!this.findingLedgerStore) {
+      return { ok: true };
+    }
+    const ledger = this.findingLedgerStore.loadLedger();
+    const provisionals = ledger.findings.filter(
+      (finding) => finding.status === 'open' && finding.provisional !== undefined,
+    );
+    if (provisionals.length === 0) {
+      return { ok: true };
+    }
+    const items = provisionals.map(
+      (finding) => `- ${finding.id} [${finding.provisional!.kind}]: ${finding.provisional!.reason}`,
+    );
+    return {
+      ok: false,
+      reason: [
+        `Cannot COMPLETE: ${provisionals.length} provisional finding(s) remain open (observations whose meaning could not be determined):`,
+        ...items,
+        'Workflow rules must route on findings.provisional.count (e.g. to a replan step) before COMPLETE; a provisional finding is a system finding that blocks the final gate until later clean review evidence settles it.',
+      ].join('\n'),
+    };
   }
 
   private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {
@@ -499,6 +533,7 @@ export class WorkflowEngine extends EventEmitter {
           addUserInput: this.addUserInput.bind(this),
           emit: (event, ...args) => this.emit(event as never, ...args as []),
           updateMaxSteps: () => {},
+          checkCompletionGate: this.checkCompletionGate.bind(this),
         }),
         (result) => ({
           status: result.isComplete ? this.state.status : 'running',
