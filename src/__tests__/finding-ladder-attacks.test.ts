@@ -1489,8 +1489,9 @@ describe('v2 追加必須テスト', () => {
     expect(RawFindingsStructuredOutput.validationSchema).toBe(RawFindingsOutputValidationJsonSchema);
 
     // 2) intake: kind/relation が整合する raw は clean のまま処理され、
-    //    v3-r3 の矛盾 raw は taint → 解釈フェーズ → provisional に着地し、
-    //    claimedKind が監査に残る。
+    //    v3-r3 の矛盾 raw（tainted confirmation）は A-1 により provisional に
+    //    ならず監査保存のみ（解消証拠としては不採用、target 不変）。
+    //    claimedKind は正規化監査に残る。
     const harness = makeHarness(makeLedger());
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const text = instruction as string;
@@ -1525,11 +1526,13 @@ describe('v2 追加必須テスト', () => {
     const cleanLanded = saved.findings.find((finding) => finding.title === 'Plain issue with legacy kind attached');
     expect(cleanLanded?.status).toBe('open');
     expect(cleanLanded?.provisional).toBeUndefined();
-    // 矛盾 raw は provisional として着地する。
-    const tainted = saved.findings.find((finding) => finding.provisional !== undefined);
-    expect(tainted?.provisional?.kind).toBe('raw-meaning-ambiguous');
-    // claimedKind / ambiguity codes が監査メタデータに残る。
+    // 矛盾 raw（tainted confirmation）は A-1 により provisional にならず、
+    // target も不変（解消証拠として不採用、監査のみ）。
+    expect(saved.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+    expect(saved.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('open');
     const report = harness.savedReports.at(-1)!;
+    expect(report.unsupportedRawFindings?.some((entry) => entry.rawFindingId.endsWith(':k-2'))).toBe(true);
+    // claimedKind / ambiguity codes が正規化監査メタデータに残る。
     const record = report.rawNormalizations?.find((entry) => entry.rawFindingId.endsWith(':k-2'));
     expect(record?.claimedKind).toBe('issue');
     expect(record?.claimedRelation).toBe('resolution_confirmation');
@@ -1732,6 +1735,284 @@ describe('v2 追加必須テスト', () => {
       rmSync(projectCwd, { recursive: true, force: true });
       rmSync(reportDir, { recursive: true, force: true });
     }
+  });
+
+  it('A-1: tainted な confirmation の location 不成立は provisional を作らず監査保存のみ（v3-r3 実測 F-0015/16/17 の回帰）', async () => {
+    const harness = makeHarness(makeLedger());
+    const result = await harness.run({
+      reviewerRawFindings: [{
+        rawFindingId: 'c-bad',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Confirmed fixed',
+        location: 'src/does-not-exist.ts:9',
+        description: 'Verified the fix at a hallucinated location.',
+        suggestion: '',
+        // kind/relation 矛盾で tainted になる confirmation。
+        kind: 'issue',
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+      }],
+    });
+    expect(result.status).toBe('updated');
+    // 解釈フェーズにも decisions manager にも掛からない。
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    const saved = harness.currentLedger();
+    // provisional は作られない（証拠不採用のみ）。target も resolve されない。
+    expect(saved.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+    expect(saved.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('open');
+    // 監査保存はされる。
+    const report = harness.savedReports.at(-1)!;
+    expect(report.rawAdmissionRejections?.some((entry) => entry.rawFindingId.endsWith(':c-bad'))).toBe(true);
+  });
+
+  it('A-1: clean な confirmation の location 不成立も従来どおり監査保存のみ（clean/tainted で同一規則）', async () => {
+    const harness = makeHarness(makeLedger());
+    const result = await harness.run({
+      reviewerRawFindings: [{
+        rawFindingId: 'c-clean-bad',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Confirmed fixed',
+        location: 'src/does-not-exist.ts:9',
+        description: 'Verified the fix at a hallucinated location.',
+        suggestion: '',
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+      }],
+    });
+    expect(result.status).toBe('updated');
+    const saved = harness.currentLedger();
+    expect(saved.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+    expect(saved.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('open');
+    expect(harness.savedReports.at(-1)!.rawAdmissionRejections?.some((entry) => entry.rawFindingId.endsWith(':c-clean-bad'))).toBe(true);
+  });
+
+  it('A-1 完全版（codex ブロッカー1）: 行範囲 location で admission を通過する tainted confirmation も provisional にならず監査保存のみ（v3-r3 実データ形）', async () => {
+    const harness = makeHarness(makeLedger());
+    const result = await harness.run({
+      reviewerRawFindings: [{
+        // v3-r3 実台帳 F-0015/16/17 の実データ形: 実在ファイル + 行範囲 location +
+        // kind/relation 矛盾（tainted）。A-2 の正規化で admission は ok になるため、
+        // 共通ハンドラ（admission 不成立時の除外）は通らず ladder 入口の除外が要る。
+        rawFindingId: 'c-range',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Confirmed fixed across a range',
+        location: 'src/a.ts:10-20',
+        description: 'Verified the fix across the cited line range.',
+        suggestion: '',
+        kind: 'issue',
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+      }],
+    });
+    expect(result.status).toBe('updated');
+
+    // admission は通過している（location 不成立の監査は積まれない）。
+    const report = harness.savedReports.at(-1)!;
+    expect(report.rawAdmissionRejections?.some((entry) => entry.rawFindingId.endsWith(':c-range')) ?? false).toBe(false);
+    // 行範囲正規化の適用事実は記録される。
+    const normalization = report.rawNormalizations?.find((entry) => entry.rawFindingId.endsWith(':c-range'));
+    expect(normalization?.normalizations).toContain('location-line-range-interpreted');
+    expect(normalization?.ambiguityCodes).toContain('kind-relation-conflict');
+
+    // ladder（解釈フェーズ）にも decisions manager にも掛からない。
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    const saved = harness.currentLedger();
+    // provisional は作られず（blocker なし）、target も不変（resolve されない）。
+    expect(saved.findings.every((finding) => finding.provisional === undefined)).toBe(true);
+    const target = saved.findings.find((finding) => finding.id === 'F-0001');
+    expect(target?.status).toBe('open');
+    expect(target?.rawFindingIds).toEqual(['raw-existing']);
+    // 解消証拠として不採用になった事実は監査に残る。
+    expect(report.unsupportedRawFindings?.some((entry) => entry.rawFindingId.endsWith(':c-range'))).toBe(true);
+  });
+
+  it('A-3 完全版（codex ブロッカー2）: 同一ラウンドの confirmation が target を閉じた場合、証跡不成立 persists は resolved target へ添付されず provisional にフォールバックする（gate 非減少）', async () => {
+    const harness = makeHarness(makeLedger());
+    const result = await harness.run({
+      reviewerRawFindings: [
+        {
+          // 有効な confirmation（機械分類で F-0001 を resolve する）。
+          rawFindingId: 'c-ok',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Confirmed fixed',
+          location: 'src/a.ts:10',
+          description: 'Verified the fix at src/a.ts:10.',
+          suggestion: '',
+          relation: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+        },
+        {
+          // 証跡不成立（存在しない path）の persists。prompt 時点では F-0001 は
+          // open なので A-3 の添付候補になるが、reconcile が F-0001 を閉じる。
+          rawFindingId: 'p-bad',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Existing issue',
+          location: 'src/does-not-exist.ts:5',
+          description: 'Still observing it (bad evidence).',
+          suggestion: '',
+          relation: 'persists',
+          targetFindingId: 'F-0001',
+        },
+      ],
+    });
+    expect(result.status).toBe('updated');
+
+    const saved = harness.currentLedger();
+    const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
+    // confirmation は正当に適用される。
+    expect(target.status).toBe('resolved');
+    // 旧実装の欠陥: resolved target へ rejected observation が添付され provisional
+    // 0件（既存 blocker 消失 + 代替 blocker なし = gate 減少）。修正後は添付せず
+    // provisional にフォールバックする。
+    expect(target.rejectedObservations ?? []).toEqual([]);
+    const fallback = saved.findings.find((finding) => finding.provisional !== undefined);
+    expect(fallback?.status).toBe('open');
+    expect(fallback?.provisional?.kind).toBe('invalid-location-evidence');
+    expect(fallback?.rawFindingIds.some((id) => id.endsWith(':p-bad'))).toBe(true);
+    // 監査にも着地が残る。
+    expect(harness.savedReports.at(-1)!.provisionalLandings?.some((landing) => (
+      landing.sourceRawFindingIds.some((id) => id.endsWith(':p-bad'))
+    ))).toBe(true);
+  });
+
+  it('A-2: 行範囲 / N-A / 空 / カンマ区切りの4象限が admission で機械正規化され、適用事実が rawNormalizations に記録される', async () => {
+    const harness = makeHarness(makeLedger({ findings: [], rawFindings: [], nextId: 1 }));
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const ids = [...(instruction as string).matchAll(/"rawFindingId":\s*"([^"]+:(?:r-range|r-na|r-empty))"/g)].map((match) => match[1]!);
+      return {
+        persona: 'findings-manager',
+        status: 'done',
+        content: '',
+        structuredOutput: {
+          rawDecisions: [...new Set(ids)].map((rawFindingId) => ({ rawFindingId, decision: 'new', findingId: '', evidence: 'fresh' })),
+          disputeDecisions: [],
+          conflictDecisions: [],
+          invalidateDecisions: [],
+          duplicateDecisions: [],
+        },
+        timestamp: new Date(),
+      } as unknown as AgentResponse;
+    });
+    const base = {
+      familyTag: 'bug',
+      severity: 'medium' as const,
+      suggestion: '',
+      relation: 'new',
+      targetFindingId: '',
+    };
+    const result = await harness.run({
+      reviewerRawFindings: [
+        { ...base, rawFindingId: 'r-range', title: 'Range location issue', location: 'src/a.ts:5-9', description: 'Cited with a line range.' },
+        { ...base, rawFindingId: 'r-na', title: 'No-location issue', location: ' N/A ', description: 'Architectural observation.' },
+        { ...base, rawFindingId: 'r-empty', title: 'Empty-location issue', location: '', description: 'Another locationless observation.' },
+        { ...base, rawFindingId: 'r-multi', title: 'Multi location issue', location: 'src/a.ts:5, src/b.ts:9', description: 'Ambiguous multi-location citation.' },
+      ],
+    });
+    expect(result.status).toBe('updated');
+    const saved = harness.currentLedger();
+    // 行範囲・N/A・空は admissible → 確定 finding として立つ。
+    for (const title of ['Range location issue', 'No-location issue', 'Empty-location issue']) {
+      const landed = saved.findings.find((finding) => finding.title === title);
+      expect(landed?.status).toBe('open');
+      expect(landed?.provisional).toBeUndefined();
+    }
+    // カンマ区切りは正規化しない → invalid location → B3 の provisional に着地。
+    const multi = saved.findings.find((finding) => finding.title === 'Multi location issue');
+    expect(multi?.provisional?.kind).toBe('invalid-location-evidence');
+    // 正規化の適用事実が rawNormalizations に記録される（無変換の r-empty は記録なし）。
+    const report = harness.savedReports.at(-1)!;
+    const rangeRecord = report.rawNormalizations?.find((entry) => entry.rawFindingId.endsWith(':r-range'));
+    expect(rangeRecord?.normalizations).toContain('location-line-range-interpreted');
+    const naRecord = report.rawNormalizations?.find((entry) => entry.rawFindingId.endsWith(':r-na'));
+    expect(naRecord?.normalizations).toContain('location-not-applicable');
+    expect(report.rawNormalizations?.some((entry) => entry.rawFindingId.endsWith(':r-empty'))).toBe(false);
+  });
+
+  it('A-3: 証跡不成立 persists の着地4分岐（open target 添付 / provisional target 添付 / terminal target provisional / 不明 target provisional）', async () => {
+    // 台帳: open F-0001、provisional F-0002、resolved F-0003。
+    const provisionalEntry = makeFinding({
+      id: 'F-0002',
+      title: 'Provisional observation',
+      location: 'src/b.ts:5',
+      description: 'Unclear claim.',
+      rawFindingIds: ['old:reviewers:1:arch-review:p-old'],
+      provisional: {
+        kind: 'raw-meaning-ambiguous',
+        stableKey: 'sk-a3',
+        lineageKey: 'lk-a3',
+        sourceRawFindingIds: ['old:reviewers:1:arch-review:p-old'],
+        reason: 'Unclear.',
+        firstObservedAt: { runId: 'old', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        lastObservedAt: { runId: 'old', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        interpretationEpochs: 1,
+        gateEffect: 'block',
+      },
+    });
+    const resolvedEntry = makeFinding({
+      id: 'F-0003',
+      title: 'Fixed one',
+      location: 'src/a.ts:30',
+      description: 'Already fixed.',
+      status: 'resolved',
+      lifecycle: 'resolved',
+    });
+    const harness = makeHarness(makeLedger({
+      nextId: 4,
+      findings: [makeFinding(), provisionalEntry, resolvedEntry],
+    }));
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      // terminal / unknown target の persists は tainted → 解釈フェーズ。
+      const text = instruction as string;
+      const ids = [...text.matchAll(/"rawFindingId":\s*"([^"]+:(?:p-terminal|p-unknown))"/g)].map((match) => match[1]!);
+      return interpretationResponse([...new Set(ids)].map((rawFindingId) => (
+        { decision: 'provisional', rawFindingId, proofId: '', targetFindingId: '', reason: 'Cannot determine.' }
+      )));
+    });
+    const base = {
+      familyTag: 'bug',
+      severity: 'high' as const,
+      suggestion: '',
+      relation: 'persists',
+      location: 'src/does-not-exist.ts:1',
+    };
+    const result = await harness.run({
+      reviewerRawFindings: [
+        { ...base, rawFindingId: 'p-open', title: 'Existing issue', description: 'Still there (bad evidence).', targetFindingId: 'F-0001' },
+        { ...base, rawFindingId: 'p-prov', title: 'Provisional observation', description: 'Still there too (bad evidence).', targetFindingId: 'F-0002' },
+        { ...base, rawFindingId: 'p-terminal', title: 'Fixed one', description: 'Came back (bad evidence).', targetFindingId: 'F-0003' },
+        { ...base, rawFindingId: 'p-unknown', title: 'Ghost issue', description: 'References nothing real.', targetFindingId: 'F-9999' },
+      ],
+    });
+    expect(result.status).toBe('updated');
+    const saved = harness.currentLedger();
+
+    // 1) open target: 監査添付のみ。canonical evidence / revision / status 不変。
+    const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
+    expect(target.status).toBe('open');
+    expect(target.revision).toBe(1);
+    expect(target.rawFindingIds).toEqual(['raw-existing']);
+    expect(target.rejectedObservations?.some((entry) => entry.rawFindingId.endsWith(':p-open'))).toBe(true);
+
+    // 2) provisional target: その観測履歴へ添付。新規 blocker は増えない。
+    const provisionalTarget = saved.findings.find((finding) => finding.id === 'F-0002')!;
+    expect(provisionalTarget.rejectedObservations?.some((entry) => entry.rawFindingId.endsWith(':p-prov'))).toBe(true);
+
+    // 3)/4) terminal / 不明 target: 従来どおり provisional（B3 維持）。
+    const newProvisionals = saved.findings.filter(
+      (finding) => finding.provisional !== undefined && finding.id !== 'F-0002',
+    );
+    expect(newProvisionals.length).toBe(2);
+    expect(newProvisionals.every((finding) => finding.provisional?.kind === 'invalid-location-evidence')).toBe(true);
+
+    // gate 非減少: F-0001 open + F-0002 provisional は塞いだまま、追加 blocker は
+    // terminal/不明分の2件だけ（open target 分の重複 blocker は作られない）。
+    const provisionalCount = saved.findings.filter((finding) => finding.status === 'open' && finding.provisional !== undefined).length;
+    expect(provisionalCount).toBe(3); // F-0002 + terminal + unknown
   });
 
   it('B4: interpretation の structured output はスキーマ構造で出力サイズが有界（maxItems 16 / フィールド maxLength）', () => {

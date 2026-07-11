@@ -308,45 +308,26 @@ describe('runFindingManagerForStep rejected decisions land as provisional (no re
     )).toBe(true);
   });
 
-  it('Given a confirmation whose target is already resolved When run Then it goes through the ambiguous ladder (interpretation), not the decisions manager, and lands as provisional', async () => {
-    // v3-r3 の増幅事故クラス: 対象が open でない confirmation は v2 では
-    // ambiguous（confirmation-target-not-open）として canonicalize され、
-    // decisions manager ではなく解釈フェーズへ進む。manager の提案が provisional
-    // なら観測は gate-blocking provisional として台帳に残る（黙って消えない）。
-    executeAgentMock.mockResolvedValueOnce({
-      status: 'done',
-      content: '',
-      structuredOutput: {
-        interpretations: [{
-          decision: 'provisional',
-          rawFindingId: 'run-2:reviewers:2:arch-review:c-1',
-          proofId: '',
-          targetFindingId: '',
-          reason: 'Cannot verify the confirmation against a non-open target.',
-        }],
-      },
-    } as unknown as AgentResponse);
-
+  it('Given a confirmation whose target is already resolved When run Then it is tainted and, per A-1, lands as audit-only (no provisional, no ladder call, target unchanged)', async () => {
+    // 対象が open でない confirmation は ambiguous（confirmation-target-not-open）
+    // として taint される。tainted confirmation は capability 格子上 resolve 権限を
+    // 持たず、provisional 化は「解消確認」を blocker に変換する誤着地（実台帳
+    // F-0015/16/17）— A-1 により admission の成否にかかわらず ladder に載せず、
+    // 解消証拠として不採用（監査保存のみ）とする。
     const ledger = makeLedger({ findings: [{ ...makeLedger().findings[0]!, status: 'resolved', lifecycle: 'resolved' }] });
     const harness = makeHarness(ledger);
     const result = await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
 
-    // decisions manager は不要（clean residual 0）。解釈フェーズが1回だけ呼ばれる。
-    expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    const instruction = executeAgentMock.mock.calls[0]?.[1] as string;
-    expect(instruction).toContain('Ambiguous raw finding interpretation');
+    // decisions manager も解釈フェーズも呼ばれない。
+    expect(executeAgentMock).not.toHaveBeenCalled();
 
     expect(result.status).toBe('updated');
     const savedLedger = harness.savedLedgers.at(-1);
     expect(savedLedger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
-    const provisional = savedLedger?.findings.find((entry) => entry.provisional !== undefined);
-    expect(provisional).toBeDefined();
-    expect(provisional?.status).toBe('open');
-    expect(provisional?.provisional).toMatchObject({ kind: 'raw-meaning-ambiguous', gateEffect: 'block' });
-    // WAL が記録されている（started → completed → ledger_applied）。
-    const record = savedLedger?.interpretations?.[0];
-    expect(record?.stage).toBe('ledger_applied');
-    expect(record?.applicationResult).toMatch(/provisional/);
+    expect(savedLedger?.findings.every((entry) => entry.provisional === undefined)).toBe(true);
+    // 監査には不採用の事実が残る。
+    const report = harness.savedValidationReports.at(-1) as FindingManagerValidationReport | undefined;
+    expect(report?.unsupportedRawFindings?.some((entry) => entry.rawFindingId.endsWith(':c-1'))).toBe(true);
   });
 
   it('Given the agent repeats an invalid decision When run Then the raw finding lands as provisional (never forced to "new")', async () => {
@@ -375,11 +356,11 @@ describe('runFindingManagerForStep rejected decisions land as provisional (no re
     expect(harness.savedValidationReports[0]?.ledgerUpdated).toBe(true);
   });
 
-  it('Given the manager omits decisions for every residual raw finding When run Then nothing is silently dropped: every observation lands as a gate-blocking provisional', async () => {
+  it('Given the manager omits decisions for every residual raw finding When run Then nothing is silently dropped: the issue raw lands as a gate-blocking provisional and the tainted confirmation is audit-only', async () => {
     // decisions manager が rawDecisions: [] を返す（no-op gate bypass 攻撃の
-    // 基本形）。v2 では欠落 decision の raw は provisional へ、対象が resolved の
-    // confirmation は ambiguous ladder（この mock は decisions 形しか返さないため
-    // 解釈 parse に失敗し batch 全員 provisional）へ着地する。
+    // 基本形）。v2 では欠落 decision の issue raw は provisional へ。対象が
+    // resolved の confirmation は tainted confirmation として A-1 の対象になり、
+    // provisional にはならず監査保存のみ（解消確認は問題の観測ではない）。
     executeAgentMock.mockResolvedValue({
       status: 'done',
       content: '',
@@ -394,16 +375,17 @@ describe('runFindingManagerForStep rejected decisions land as provisional (no re
     const harness = makeHarness(ledger);
     const result = await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW, CONFIRMATION_RAW] });
 
-    // clean residual（i-1）用の decisions call と、ambiguous（c-1）用の
-    // interpretation call の2回。
-    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    // clean residual（i-1）用の decisions call の1回のみ（c-1 は ladder に載らない）。
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
 
     expect(result.status).toBe('updated');
     const savedLedger = harness.savedLedgers.at(-1);
     expect(savedLedger?.findings.find((entry) => entry.id === 'F-0001')?.status).toBe('resolved');
     const provisionals = savedLedger?.findings.filter((entry) => entry.provisional !== undefined) ?? [];
-    expect(provisionals).toHaveLength(2);
-    expect(provisionals.every((entry) => entry.status === 'open')).toBe(true);
+    expect(provisionals).toHaveLength(1);
+    expect(provisionals[0]?.title).toBe('New unmatched issue');
+    const report = harness.savedValidationReports.at(-1) as FindingManagerValidationReport | undefined;
+    expect(report?.unsupportedRawFindings?.some((entry) => entry.rawFindingId.endsWith(':c-1'))).toBe(true);
   });
 });
 

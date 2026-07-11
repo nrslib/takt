@@ -27,6 +27,41 @@ export interface LocationAdmissionResult {
 
 const NO_LOCATION_RESULT: LocationAdmissionResult = { ok: true };
 
+/**
+ * admission 前段の機械正規化（対策バッチ A-2）。実運用のレビュア表現が一律
+ * 「存在しないパス」化していた実測への対処:
+ * - 行範囲 `path:start-end` → path として実在検証する（行は範囲情報として扱い、
+ *   行検証はしない — codex 裁定）
+ * - `N/A`（大文字小文字・前後空白許容の厳密一致）と空文字 → locationless
+ *   （空文字は従来から admissible なので、N/A → none は新しい権限ではない）
+ * - カンマ区切り複数 location → 曖昧なので正規化しない（従来どおり invalid）
+ */
+const LINE_RANGE_PATTERN = /^(.+?):(\d+)-(\d+)$/;
+const NOT_APPLICABLE_PATTERN = /^n\/a$/i;
+
+export type LocationAdmissionNormalization = 'location-line-range-interpreted' | 'location-not-applicable';
+
+/**
+ * A-2 の正規化がこの location に適用されるかの分類（監査記録用）。適用事実は
+ * rawNormalizations（store.ts）に記録される。空文字は従来から locationless で
+ * あり正規化イベントではないため undefined を返す。
+ */
+export function classifyLocationAdmissionNormalization(
+  location: string | undefined,
+): LocationAdmissionNormalization | undefined {
+  if (location === undefined) {
+    return undefined;
+  }
+  const trimmed = location.trim();
+  if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
+    return 'location-not-applicable';
+  }
+  if (LINE_RANGE_PATTERN.test(trimmed)) {
+    return 'location-line-range-interpreted';
+  }
+  return undefined;
+}
+
 function isInsideBase(base: string, path: string): boolean {
   const basePrefix = base.endsWith(sep) ? base : base + sep;
   return path === base || path.startsWith(basePrefix);
@@ -47,7 +82,16 @@ function countLines(content: string): number {
 }
 
 export function validateLocationAdmission(cwd: string, location: string | undefined): LocationAdmissionResult {
-  const parsed = parseFindingLocation(location);
+  // A-2 機械正規化: N/A は locationless、行範囲は path + 範囲として解釈する。
+  const trimmed = location?.trim() ?? '';
+  if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
+    return NO_LOCATION_RESULT;
+  }
+  const rangeMatch = LINE_RANGE_PATTERN.exec(trimmed);
+  const parsed = rangeMatch !== null
+    // 行範囲の実在検証は path で行う（行番号の範囲チェックはしない — codex 裁定）。
+    ? { path: rangeMatch[1]!.trim() }
+    : parseFindingLocation(location);
   if (parsed === undefined) {
     // No location to validate (e.g. an architectural finding with no single
     // site). Absence of a location is not itself a fabrication signal.

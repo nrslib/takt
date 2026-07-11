@@ -5,12 +5,12 @@ import {
 } from '../../scripts/run-npm-test.mjs';
 
 describe('npm test entrypoint routing', () => {
-  it('should run the unit suite as shards when no test target is provided', () => {
+  it('should run the unit suite as a single parallel run when no test target is provided', () => {
+    // 対策バッチ A-4: --shard もワーカー上書きも付けず、vitest config 既定の
+    // ワーカー数（75%）に任せる（実測 98.6s → 65.4s）。CI は npm test を経由せず
+    // test:unit:parallel --shard を直接叩くため、この経路の変更は CI 無影響。
     expect(selectNpmTestRuns([])).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=1/4', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=2/4', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=3/4', '--maxWorkers=1'] },
-      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=4/4', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel'] },
     ]);
   });
 

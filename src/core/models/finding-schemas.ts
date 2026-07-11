@@ -97,6 +97,11 @@ export const FindingLedgerEntrySchema = z.object({
   supersededByFindingId: nonEmptyString.optional(),
   revision: z.number().int().positive().optional(),
   provisional: FindingProvisionalMetadataSchema.optional(),
+  rejectedObservations: z.array(z.object({
+    rawFindingId: nonEmptyString,
+    reason: nonEmptyString,
+    observedAt: FindingObservationSchema,
+  }).strict()).optional(),
 }).strict();
 
 /**

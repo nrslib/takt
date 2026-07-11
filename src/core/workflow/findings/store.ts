@@ -112,7 +112,15 @@ export interface RawNormalizationAuditRecord {
   /** 検出された ambiguity codes（RawAmbiguityCode）。 */
   ambiguityCodes: string[];
   /** 適用された正規化の種別。 */
-  normalizations: Array<'relation-normalized' | 'target-dropped-from-wire' | 'required-fields-missing'>;
+  normalizations: Array<
+    | 'relation-normalized'
+    | 'target-dropped-from-wire'
+    | 'required-fields-missing'
+    /** A-2: location を行範囲（path:start-end）として解釈した。 */
+    | 'location-line-range-interpreted'
+    /** A-2: location "N/A" を locationless として扱った。 */
+    | 'location-not-applicable'
+  >;
 }
 
 /** raw / 決定が provisional finding として着地した記録（v2 梯子設計 §7）。 */

@@ -4,8 +4,6 @@ import { spawn } from 'node:child_process';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
-const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
 const VITEST_OPTIONS_WITH_REQUIRED_VALUE = new Set([
   '-c',
   '-r',
@@ -58,9 +56,12 @@ const VITEST_OPTIONAL_BOOLEAN_OPTIONS = new Set([
 
 export function selectNpmTestRuns(args) {
   if (args.length === 0) {
-    return UNIT_SHARDS.map((shard) => ({
-      npmArgs: ['run', 'test:unit:parallel', '--', `--shard=${shard}`, ...NO_ARG_UNIT_RUN_OPTIONS],
-    }));
+    // 対策バッチ A-4: 引数なしは test:unit:parallel の単一実行に任せる
+    // （maxWorkers は vitest.config.unit.parallel.ts の既定 = 75% を使う。
+    // --shard もワーカー上書きも付けない）。旧「4シャード同時 × --maxWorkers=1」
+    // は実測 98.6s、単一実行は 65.4s。CI は npm test を経由せず ci.yml が
+    // test:unit:parallel --shard を直接叩くため無影響。
+    return [{ npmArgs: ['run', 'test:unit:parallel'] }];
   }
 
   const targets = splitTestTargets(args);

@@ -294,6 +294,8 @@ function withoutResolutionFields(finding: FindingRecord): Omit<FindingRecord, 'r
     // （落とすと CAS の版数が巻き戻り、stale 検出が誤って成功する）。
     ...(finding.revision !== undefined ? { revision: finding.revision } : {}),
     ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
+    // rejectedObservations（A-3 の監査添付履歴）も解消情報ではないため保持する。
+    ...(finding.rejectedObservations !== undefined ? { rejectedObservations: finding.rejectedObservations } : {}),
   };
 }
 
@@ -674,6 +676,44 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     ...(input.previousLedger.interpretations !== undefined
       ? { interpretations: input.previousLedger.interpretations }
       : {}),
+  };
+}
+
+/**
+ * reconcile 済みの台帳へ provisional spec を追加適用する（対策バッチ A-3 /
+ * codex ブロッカー2）。証跡不成立 persists の添付判断は reconcile 後の台帳に
+ * 対して行うため、その時点で target が閉じていた分の B3 フォールバックは
+ * reconcile の provisionalFindings ではなくこの関数で upsert する。更新則は
+ * applyProvisionalFindingSpecs と同一（同じ stableKey の open provisional へ
+ * upsert、無ければ新規 ID を採番）。
+ */
+export function applyProvisionalFindingSpecsToLedger(
+  ledger: FindingLedger,
+  specs: readonly ProvisionalFindingSpec[],
+  context: FindingReconcileContext,
+): FindingLedger {
+  if (specs.length === 0) {
+    return ledger;
+  }
+  const updatedById = new Map<string, FindingRecord>(
+    ledger.findings.map((finding) => [finding.id, { ...finding }]),
+  );
+  let nextId = ledger.nextId;
+  const created = applyProvisionalFindingSpecs({
+    updatedById,
+    specs,
+    allocateId: () => {
+      const id = formatFindingId(nextId);
+      nextId += 1;
+      return id;
+    },
+    context,
+  });
+  return {
+    ...ledger,
+    nextId,
+    updatedAt: context.timestamp,
+    findings: [...updatedById.values(), ...created],
   };
 }
 

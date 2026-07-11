@@ -139,6 +139,18 @@ export interface FindingLedgerEntry {
   revision?: number;
   /** 意味を確定できなかった観測の gate-blocking メタデータ。設計書 §7。 */
   provisional?: FindingProvisionalMetadata;
+  /**
+   * 証跡不成立で証拠としては不採用になった再観測の履歴（対策バッチ A-3）。
+   * location admission に落ちた persists が「実在する open target」を指す場合、
+   * 独立 provisional を作らず（target が既に gate を塞いでいるため）ここへ
+   * 監査添付する。canonical evidence / revision / status には一切影響しない
+   * （evidence hash の入力にも含めない — 攻撃4の再開口禁止）。
+   */
+  rejectedObservations?: Array<{
+    rawFindingId: string;
+    reason: string;
+    observedAt: FindingObservation;
+  }>;
 }
 
 export type FindingRecord = FindingLedgerEntry;

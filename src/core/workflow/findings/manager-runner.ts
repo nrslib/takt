@@ -29,14 +29,14 @@ import {
   parseFindingManagerDecisions,
 } from './schemas.js';
 import { buildFindingInterpretationStep, buildFindingManagerStep } from './manager-step.js';
-import { reconcileFindingLedger, type ProvisionalFindingSpec } from './reconciler.js';
+import { applyProvisionalFindingSpecsToLedger, reconcileFindingLedger, type ProvisionalFindingSpec } from './reconciler.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import {
   assembleManagerOutput,
   flattenManagerOutputToDecisions,
   type AssembleManagerOutputResult,
 } from './decision-assembly.js';
-import { validateLocationAdmission } from './admission-validation.js';
+import { classifyLocationAdmissionNormalization, validateLocationAdmission } from './admission-validation.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
 import {
@@ -322,6 +322,11 @@ function intakeReviewerOutputs(input: {
       const normalizations: RawNormalizationAuditRecord['normalizations'] = [];
       if (candidate.relation !== canonical.relation) {
         normalizations.push('relation-normalized');
+      }
+      // A-2: location の機械正規化（行範囲解釈 / N/A → locationless）の適用事実。
+      const locationNormalization = classifyLocationAdmissionNormalization(candidate.location);
+      if (locationNormalization !== undefined) {
+        normalizations.push(locationNormalization);
       }
       if (candidate.targetFindingId !== undefined && wire.targetFindingId === undefined) {
         normalizations.push('target-dropped-from-wire');
@@ -1158,75 +1163,85 @@ export async function runFindingManagerForStep(
   const clean = nonOverflow.filter((item) => item.canonical.coherence === 'coherent' && !item.canonical.provenance.ambiguityOrigin);
   const tainted = nonOverflow.filter((item) => item.canonical.provenance.ambiguityOrigin);
 
-  // 3. raw admission validation（location の決定的検証）。clean の不採用は従来
-  //    どおり監査のみ（幻覚 location を台帳へ昇格させない）。tainted の不採用は
-  //    ladder に載せず直接 provisional（幻覚 location から independent finding を
-  //    作らせない — provisional なら location は成立要件ではない）。
+  // 3. raw admission validation（location の決定的検証）。着地規則は clean /
+  //    tainted で共通の1つのハンドラに集約する（A-1: 二重ループの非対称が
+  //    tainted 側の confirmation 除外漏れ — 実台帳 F-0015/16/17 — を生んだ）:
+  //    - confirmation: 証拠不採用のみ（provisional を作らない。監査保存のみ）
+  //    - persists → 実在する open target: target への監査添付（A-3。target が
+  //      既に gate を塞いでいるため独立 provisional を作らない。provisional
+  //      target ならその観測履歴に添付され、新規 blocker は増えない）
+  //    - それ以外: invalid-location-evidence provisional（B3 — 決定的に証明
+  //      できるのは location 証拠の不成立だけで、欠陥の虚偽は証明できない）
   const admissionRejections: RawAdmissionRejectionReport[] = [];
   const admissionProvisionalSpecs: ProvisionalFindingSpec[] = [];
   const admissionRejectedItems: CanonicalIntakeItem[] = [];
+  const pendingRejectedObservations: Array<{ item: CanonicalIntakeItem; targetFindingId: string; reason: string }> = [];
   const cleanAdmitted: CanonicalIntakeItem[] = [];
+  const taintedAdmitted: CanonicalIntakeItem[] = [];
+  const ladderProvisionalSpecs: ProvisionalFindingSpec[] = [];
+  const previousFindingsById = new Map(previousLedger.findings.map((finding) => [finding.id, finding]));
+
+  const handleRejectedLocation = (item: CanonicalIntakeItem, reason: string, pool: 'clean' | 'tainted'): void => {
+    admissionRejections.push({
+      rawFindingId: item.wire.rawFindingId,
+      location: item.wire.location ?? '',
+      reason,
+    });
+    // A-1（clean/tainted 共通）: 解消確認は問題の観測ではないため、location
+    // 証拠の不成立でも provisional を作らない（証拠不採用 + 監査保存のみ。
+    // target も resolve しない）。
+    if (item.wire.kind === 'resolution_confirmation') {
+      return;
+    }
+    if (pool === 'clean') {
+      // tainted は reconcileRawFindings に全量入るため、二重計上しない。
+      admissionRejectedItems.push(item);
+    }
+    // A-3: persists が実在する open target を指すなら、target への監査添付に
+    // する（独立 provisional を作らない）。target が terminal または不明なら
+    // 従来どおり provisional（B3 維持）。
+    const targetFindingId = item.wire.targetFindingId;
+    const target = targetFindingId !== undefined ? previousFindingsById.get(targetFindingId) : undefined;
+    if (item.canonical.relation === 'persists' && target !== undefined && target.status === 'open') {
+      pendingRejectedObservations.push({
+        item,
+        targetFindingId: targetFindingId!,
+        reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${reason}); recorded as a rejected re-observation of the open target`,
+      });
+      return;
+    }
+    const spec: ProvisionalFindingSpec = {
+      ...provisionalSpecForRaw({
+        wire: item.wire,
+        canonical: item.canonical,
+        reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${reason}); the observation is kept provisional because the location's failure does not prove the finding itself is false`,
+      }),
+      kind: 'invalid-location-evidence',
+      stableKey: computeProvisionalStableKey({
+        reviewerStableKey: item.canonical.reviewerStableKey,
+        lineageKey: item.canonical.lineageKey,
+        provisionalKind: 'invalid-location-evidence',
+      }),
+    };
+    (pool === 'clean' ? admissionProvisionalSpecs : ladderProvisionalSpecs).push(spec);
+  };
+
   for (const item of clean) {
     const location = item.wire.location;
     const admission = location === undefined ? { ok: true as const } : validateLocationAdmission(input.cwd, location);
     if (admission.ok) {
       cleanAdmitted.push(item);
     } else {
-      admissionRejections.push({
-        rawFindingId: item.wire.rawFindingId,
-        location: location ?? '',
-        reason: admission.reason ?? 'invalid location',
-      });
-      // codex B3: 決定的に証明できるのは「location 証拠の不成立」だけで、欠陥の
-      // 虚偽は証明できない。監査のみの drop は本物の欠陥観測の消去になり得るため、
-      // 本文を保持した gate-blocking provisional として台帳へ着地させる。
-      // 既存 finding への confirmation / persists の証拠としては従来どおり
-      // 不採用（clean 経路には入れない）。解消確認は問題の観測ではないため
-      // provisional にしない。
-      if (item.wire.kind !== 'resolution_confirmation') {
-        admissionRejectedItems.push(item);
-        admissionProvisionalSpecs.push({
-          ...provisionalSpecForRaw({
-            wire: item.wire,
-            canonical: item.canonical,
-            reason: `Location evidence "${location ?? ''}" failed deterministic admission (${admission.reason ?? 'invalid location'}); the observation is kept provisional because the location's failure does not prove the finding itself is false`,
-          }),
-          kind: 'invalid-location-evidence',
-          stableKey: computeProvisionalStableKey({
-            reviewerStableKey: item.canonical.reviewerStableKey,
-            lineageKey: item.canonical.lineageKey,
-            provisionalKind: 'invalid-location-evidence',
-          }),
-        });
-      }
+      handleRejectedLocation(item, admission.reason ?? 'invalid location', 'clean');
     }
   }
-  const taintedAdmitted: CanonicalIntakeItem[] = [];
-  const ladderProvisionalSpecs: ProvisionalFindingSpec[] = [];
   for (const item of tainted) {
     const location = item.wire.location;
     const admission = location === undefined ? { ok: true as const } : validateLocationAdmission(input.cwd, location);
     if (admission.ok) {
       taintedAdmitted.push(item);
     } else {
-      admissionRejections.push({
-        rawFindingId: item.wire.rawFindingId,
-        location: location ?? '',
-        reason: admission.reason ?? 'invalid location',
-      });
-      ladderProvisionalSpecs.push({
-        ...provisionalSpecForRaw({
-          wire: item.wire,
-          canonical: item.canonical,
-          reason: `Ambiguous raw finding cites a location that fails deterministic admission (${admission.reason ?? 'invalid location'}); kept provisional`,
-        }),
-        kind: 'invalid-location-evidence',
-        stableKey: computeProvisionalStableKey({
-          reviewerStableKey: item.canonical.reviewerStableKey,
-          lineageKey: item.canonical.lineageKey,
-          provisionalKind: 'invalid-location-evidence',
-        }),
-      });
+      handleRejectedLocation(item, admission.reason ?? 'invalid location', 'tainted');
     }
   }
 
@@ -1351,8 +1366,30 @@ export async function runFindingManagerForStep(
   }
 
   // 5. ambiguous ladder（tainted raw）。
+  // A-1（完全版・codex ブロッカー1）: tainted な confirmation（relation が
+  // resolution_confirmation に解決される raw）は admission の成否にかかわらず
+  // ladder に載せず、provisional 着地から除外する。曖昧起源の confirmation は
+  // capability 格子上 resolve 権限を持たず（mayResolve: false）、provisional 化は
+  // 「解消確認」を blocker に変換する誤着地（実台帳 F-0015/16/17 — 実 location は
+  // 行範囲で、A-2 の正規化により admission を通過して ladder へ入っていた）。
+  // 正しい着地は「解消証拠としては不採用、監査保存のみ」— blocker も作らず
+  // target も触らない。clean 側の規則（location 不成立 confirmation の監査のみ /
+  // 不採用 decision の confirmation 非 provisional 化）と対称。
+  const taintedConfirmations = taintedAdmitted.filter(
+    (item) => item.canonical.relation === 'resolution_confirmation',
+  );
+  for (const item of taintedConfirmations) {
+    unsupportedRawFindingReports.push({
+      rawFindingId: item.wire.rawFindingId,
+      targetFindingId: item.wire.targetFindingId ?? item.canonical.targetFindingId ?? '(none)',
+      evidence: 'Ambiguity-tainted resolution confirmation cannot serve as resolution evidence (no resolve capability); recorded for audit only — no finding was created or changed',
+    });
+  }
+  const ladderTainted = taintedAdmitted.filter(
+    (item) => item.canonical.relation !== 'resolution_confirmation',
+  );
   const ladder = await runAmbiguousLadder({
-    tainted: taintedAdmitted,
+    tainted: ladderTainted,
     previousLedger,
     ledgerStore: input.ledgerStore,
     contract: input.contract,
@@ -1398,6 +1435,7 @@ export async function runFindingManagerForStep(
       ...cleanProvisionalSpecs,
       ...ladder.provisionalSpecs,
     ];
+
     for (const [key, spec] of ladder.provisionalByInterpretationKey) {
       const existsOpen = freshLedger.findings.some(
         (finding) => finding.status === 'open' && finding.provisional?.stableKey === spec.stableKey,
@@ -1575,7 +1613,11 @@ export async function runFindingManagerForStep(
       managerOutput: merged,
       provisionalFindings: specs,
       rawProvenanceByRawFindingId,
-      excludedFromUnmentionedFallbackRawFindingIds: new Set<string>(),
+      // A-3 の証跡不成立 persists は reconcile 後に添付 or provisional として
+      // 着地する（下記）— fallback で二重着地させない。
+      excludedFromUnmentionedFallbackRawFindingIds: new Set(
+        pendingRejectedObservations.map((pending) => pending.item.wire.rawFindingId),
+      ),
       context: {
         workflowName: input.workflowName,
         stepName: input.parentStep.name,
@@ -1584,7 +1626,58 @@ export async function runFindingManagerForStep(
       },
     });
     const settled = applyProvisionalSettlement(reconciled, settlement, input.timestamp);
-    return markInterpretationsApplied(settled, interpretationResults, observation);
+
+    // A-3（codex ブロッカー2）: 添付判断は reconcile 後の台帳（= 保存結果）に
+    // 対して open を再確認する。reconcile 前の fresh ledger で判定すると、同一
+    // ラウンドの有効な confirmation が target を閉じた後に rejected observation が
+    // resolved target へ添付され、既存 blocker が消えて代替 blocker も立たない
+    // （gate 減少 — codex が直接実行で再現）。閉じていた場合は B3 の provisional へ
+    // フォールバックする（矛盾する観測が同時に来ている保守側の着地）。
+    const rejectedObservationAttachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }> = [];
+    const rejectedObservationFallbackSpecs: ProvisionalFindingSpec[] = [];
+    for (const pending of pendingRejectedObservations) {
+      const reconciledTarget = settled.findings.find((finding) => finding.id === pending.targetFindingId);
+      if (reconciledTarget !== undefined && reconciledTarget.status === 'open') {
+        rejectedObservationAttachments.push({
+          targetFindingId: pending.targetFindingId,
+          rawFindingId: pending.item.wire.rawFindingId,
+          reason: pending.reason,
+        });
+      } else {
+        rejectedObservationFallbackSpecs.push({
+          ...provisionalSpecForRaw({
+            wire: pending.item.wire,
+            canonical: pending.item.canonical,
+            reason: `${pending.reason}; the target is no longer open after this round, so the observation is kept provisional instead`,
+          }),
+          kind: 'invalid-location-evidence',
+          stableKey: computeProvisionalStableKey({
+            reviewerStableKey: pending.item.canonical.reviewerStableKey,
+            lineageKey: pending.item.canonical.lineageKey,
+            provisionalKind: 'invalid-location-evidence',
+          }),
+        });
+      }
+    }
+    for (const spec of rejectedObservationFallbackSpecs) {
+      provisionalLandings.push({
+        kind: spec.kind,
+        stableKey: spec.stableKey,
+        reason: spec.reason,
+        sourceRawFindingIds: spec.sourceRawFindingIds,
+      });
+    }
+    const withRejectedObservations = applyRejectedObservationAttachments(
+      applyProvisionalFindingSpecsToLedger(settled, rejectedObservationFallbackSpecs, {
+        workflowName: input.workflowName,
+        stepName: input.parentStep.name,
+        runId: input.runId,
+        timestamp: input.timestamp,
+      }),
+      rejectedObservationAttachments,
+      observation,
+    );
+    return markInterpretationsApplied(withRejectedObservations, interpretationResults, observation);
   });
 
   const reportNeeded = invalidAttempts.length > 0
@@ -2014,6 +2107,46 @@ function settleProvisionalsWithCleanEvidence(input: {
     output: { ...input.output, newFindings, matches },
     promotedFindingIds,
     resolvedByMapping,
+  };
+}
+
+/**
+ * A-3: 証跡不成立の persists 再観測を open target の rejectedObservations へ
+ * 監査添付する。canonical evidence / rawFindingIds / revision / status には
+ * 一切触れない（evidence hash の入力にも含まれない — 攻撃4の再開口禁止）。
+ * target が既に gate を塞いでいるため、観測は消えずゲートも開かない。
+ */
+function applyRejectedObservationAttachments(
+  ledger: FindingLedger,
+  attachments: ReadonlyArray<{ targetFindingId: string; rawFindingId: string; reason: string }>,
+  observation: FindingObservation,
+): FindingLedger {
+  if (attachments.length === 0) {
+    return ledger;
+  }
+  const byTarget = new Map<string, Array<{ rawFindingId: string; reason: string }>>();
+  for (const attachment of attachments) {
+    const list = byTarget.get(attachment.targetFindingId) ?? [];
+    list.push({ rawFindingId: attachment.rawFindingId, reason: attachment.reason });
+    byTarget.set(attachment.targetFindingId, list);
+  }
+  return {
+    ...ledger,
+    findings: ledger.findings.map((finding) => {
+      const additions = byTarget.get(finding.id);
+      if (additions === undefined) {
+        return finding;
+      }
+      const existing = finding.rejectedObservations ?? [];
+      const seen = new Set(existing.map((entry) => entry.rawFindingId));
+      const appended = additions
+        .filter((entry) => !seen.has(entry.rawFindingId))
+        .map((entry) => ({ rawFindingId: entry.rawFindingId, reason: entry.reason, observedAt: observation }));
+      if (appended.length === 0) {
+        return finding;
+      }
+      return { ...finding, rejectedObservations: [...existing, ...appended] };
+    }),
   };
 }
 
