@@ -5,7 +5,10 @@
  */
 
 import * as wanakana from 'wanakana';
-import { resolveConfigValues } from '../config/index.js';
+import {
+  resolveConfigValues,
+  resolveNonWorkflowProviderModel,
+} from '../config/index.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
 import { createLogger, slugify } from '../../shared/utils/index.js';
@@ -47,34 +50,24 @@ function toRomajiSlug(text: string): string {
 /**
  * Summarizes task names into concise slugs using AI or romanization.
  */
-export class TaskSummarizer {
+class TaskSummarizer {
+  constructor(
+    private readonly providerType: ProviderType,
+    private readonly model: string | undefined,
+  ) {}
+
   /**
    * Summarize a task name into a concise slug.
    *
    * @param taskName - Original task name (can be in any language)
-   * @param options - Summarization options
+   * @param cwd - Working directory used for the provider call
    * @returns Slug suitable for branch names (English if LLM, romaji if not)
    */
   async summarize(
     taskName: string,
-    options: SummarizeOptions,
+    cwd: string,
   ): Promise<string> {
-    const globalConfig = resolveConfigValues(options.cwd, ['branchNameStrategy', 'provider', 'model']);
-    const useLLM = options.useLLM ?? (globalConfig.branchNameStrategy === 'ai');
-    log.info('Summarizing task name', { taskName, useLLM });
-
-    if (!useLLM) {
-      const slug = toRomajiSlug(taskName);
-      log.info('Task name romanized', { original: taskName, slug });
-      return slug || 'task';
-    }
-    if (!globalConfig.provider) {
-      throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
-    }
-    const providerType = globalConfig.provider as ProviderType;
-    const model = options.model ?? globalConfig.model;
-
-    const provider = getProvider(providerType);
+    const provider = getProvider(this.providerType);
     const systemPrompt = buildProviderRuntimeSystemPrompt(
       loadTemplate('score_slug_system_prompt', 'en'),
       'en',
@@ -86,8 +79,8 @@ export class TaskSummarizer {
     });
     const prompt = loadTemplate('score_slug_user_prompt', 'en', { taskDescription: taskName });
     const response = await agent.call(prompt, {
-      cwd: options.cwd,
-      model,
+      cwd,
+      model: this.model,
       permissionMode: 'readonly',
     });
 
@@ -100,11 +93,27 @@ export class TaskSummarizer {
 
 // ---- Module-level function ----
 
-const defaultSummarizer = new TaskSummarizer();
-
 export async function summarizeTaskName(
   taskName: string,
   options: SummarizeOptions,
 ): Promise<string> {
-  return defaultSummarizer.summarize(taskName, options);
+  const { branchNameStrategy } = resolveConfigValues(options.cwd, ['branchNameStrategy']);
+  const useLLM = options.useLLM ?? branchNameStrategy === 'ai';
+  log.info('Summarizing task name', { taskName, useLLM });
+
+  if (!useLLM) {
+    const slug = toRomajiSlug(taskName);
+    log.info('Task name romanized', { original: taskName, slug });
+    return slug || 'task';
+  }
+
+  const resolved = resolveNonWorkflowProviderModel(options.cwd);
+  if (resolved.provider === undefined) {
+    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+  }
+  const summarizer = new TaskSummarizer(
+    resolved.provider,
+    options.model ?? resolved.model,
+  );
+  return summarizer.summarize(taskName, options.cwd);
 }

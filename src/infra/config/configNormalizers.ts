@@ -10,6 +10,7 @@ import type { ProviderPermissionProfiles } from '../../core/models/provider-prof
 import type {
   AssistantConfig,
   AutoRoutingConfig,
+  ConfigAutoRoutingConfig,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
@@ -56,6 +57,13 @@ type RawAutoRoutingConfig = {
     provider_options?: Record<string, unknown>;
   }>;
   rules?: AutoRoutingConfig['rules'];
+};
+
+type RawConfigAutoRoutingConfig = RawAutoRoutingConfig & {
+  default_provider?: {
+    provider: NonNullable<ConfigAutoRoutingConfig['defaultProvider']>['provider'];
+    model?: string;
+  };
 };
 
 function normalizeQualityGate(gate: RawQualityGate): QualityGate {
@@ -147,7 +155,6 @@ export function normalizeAutoRoutingConfig(
   validateProviderModelRequirements(raw.router.provider, raw.router.model, {
     modelFieldName: 'Configuration error: auto_routing.router.model',
   });
-
   return {
     strategy: raw.strategy,
     router: {
@@ -171,6 +178,36 @@ export function normalizeAutoRoutingConfig(
       };
     }),
     rules: raw.rules,
+  };
+}
+
+export function normalizeConfigAutoRoutingConfig(
+  raw: RawConfigAutoRoutingConfig | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): ConfigAutoRoutingConfig | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const autoRouting = normalizeAutoRoutingConfig(raw, options);
+  if (autoRouting === undefined) {
+    return undefined;
+  }
+  if (raw.default_provider === undefined) {
+    return autoRouting;
+  }
+
+  validateProviderModelRequirements(
+    raw.default_provider.provider,
+    raw.default_provider.model,
+    { modelFieldName: 'Configuration error: auto_routing.default_provider.model' },
+  );
+  return {
+    ...autoRouting,
+    defaultProvider: {
+      provider: raw.default_provider.provider,
+      ...(raw.default_provider.model !== undefined ? { model: raw.default_provider.model } : {}),
+    },
   };
 }
 
@@ -202,6 +239,23 @@ export function denormalizeAutoRoutingConfig(
       };
     }),
     ...(config.rules !== undefined ? { rules: config.rules } : {}),
+  };
+}
+
+export function denormalizeConfigAutoRoutingConfig(
+  config: ConfigAutoRoutingConfig | undefined,
+): RawConfigAutoRoutingConfig | undefined {
+  const raw = denormalizeAutoRoutingConfig(config);
+  if (raw === undefined || config?.defaultProvider === undefined) {
+    return raw;
+  }
+
+  return {
+    ...raw,
+    default_provider: {
+      provider: config.defaultProvider.provider,
+      ...(config.defaultProvider.model !== undefined ? { model: config.defaultProvider.model } : {}),
+    },
   };
 }
 

@@ -283,6 +283,9 @@ takt_providers:
     provider: codex
     model: gpt-5.6-sol
 auto_routing:
+  default_provider:     # workflow step context を持たない内部処理で使用する
+    provider: codex
+    model: gpt-5.6-luna # 省略時は provider のデフォルトモデルを使用する
   strategy: balanced   # cost, balanced, or performance
   router:
     provider: codex
@@ -307,6 +310,10 @@ auto_routing:
     tags:
       implementation: coding
 ```
+
+effective top-level provider が `auto` の場合、AI による task slug 生成など、workflow step context を持たず concrete provider を必要とする処理では `auto_routing.default_provider` を使用します。project の `.takt/config.yaml` にある値は global の値より優先され、`provider` と省略可能な `model` は設定階層をまたいで合成せず、同じ `default_provider` から一組として選択されます。`default_provider.provider` は必須で、`auto` は指定できません。このような処理の実行時に `default_provider` が未設定の場合は、`Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.` というエラーになります。effective top-level provider が concrete provider の場合は、従来どおり top-level の provider/model を使用します。
+
+`auto_routing.router` は routing 判定専用であり、default provider として暗黙に使用されません。また、`takt_providers.assistant` は引き続きインタラクティブ assistant 専用であり、その他の内部処理の default としては使用されません。
 
 オートルーティングの決定は `.takt/events/` に NDJSON としてローカル書き込みされます。TAKT がルーティング決定をアップロードすることはありません。ローカル記録はデフォルトで有効で、`telemetry.routing_decisions` で設定でき、`takt telemetry status|enable|disable` で確認・変更できます。
 

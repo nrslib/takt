@@ -196,7 +196,7 @@ const AutoRoutingCandidateSchema = z.object({
   provider_options: StepProviderOptionsSchema,
 }).strict();
 
-export const AutoRoutingSchema = z.object({
+const AutoRoutingSchemaBase = z.object({
   strategy: AutoRoutingStrategySchema,
   router: z.object({
     provider: ProviderTypeSchema,
@@ -208,7 +208,12 @@ export const AutoRoutingSchema = z.object({
     steps: z.record(z.string(), z.string().min(1)).optional(),
     personas: z.record(z.string(), z.string().min(1)).optional(),
   }).strict().optional(),
-}).strict().superRefine((config, ctx) => {
+}).strict();
+
+function validateAutoRoutingSchema(
+  config: z.infer<typeof AutoRoutingSchemaBase>,
+  ctx: z.RefinementCtx,
+): void {
   const candidateNames = new Set<string>();
   config.candidates.forEach((candidate, index) => {
     if (candidateNames.has(candidate.name)) {
@@ -241,7 +246,16 @@ export const AutoRoutingSchema = z.object({
       message: `auto_routing strategy "${config.strategy}" requires at least one ${requiredTier} cost_tier candidate`,
     });
   }
-});
+}
+
+export const AutoRoutingSchema = AutoRoutingSchemaBase.superRefine(validateAutoRoutingSchema);
+
+export const ConfigAutoRoutingSchema = AutoRoutingSchemaBase.extend({
+  default_provider: z.object({
+    provider: ProviderTypeSchema,
+    model: z.string().trim().min(1).optional(),
+  }).strict().optional(),
+}).strict().superRefine(validateAutoRoutingSchema);
 
 export const RateLimitFallbackSchema = z.object({
   switch_chain: z.array(z.object({

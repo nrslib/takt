@@ -522,7 +522,7 @@ For the Finding Contract manager, `finding_contract.manager.provider` and `findi
 
 ### Auto Routing
 
-Set `provider: auto` when TAKT should choose both provider and model from an effective `auto_routing` candidate list. Define `auto_routing` in project or global config to apply it across workflows; a workflow-level `auto_routing` block may override that config for a self-contained workflow.
+Set `provider: auto` when TAKT should choose both provider and model from an effective `auto_routing` candidate list. The following example is for project `.takt/config.yaml` or global `~/.takt/config.yaml`:
 
 ```yaml
 provider: auto
@@ -533,6 +533,9 @@ takt_providers:
     model: gpt-5.6-sol
 
 auto_routing:
+  default_provider:
+    provider: codex
+    model: gpt-5.6-luna # optional; omit to use the provider's default model
   strategy: balanced # cost | balanced | performance
   router:
     provider: codex
@@ -563,7 +566,27 @@ auto_routing:
       architect: advanced
 ```
 
-Auto routing applies to workflow step execution only. The interactive assistant does not go through auto routing: a top-level `provider: auto` is ignored for the assistant, so pair it with `takt_providers.assistant` (or pass `--provider` on the CLI). Without either, assistant startup fails with `Provider is not configured.`
+A self-contained workflow may override routing with a workflow-level block. Workflow YAML uses only routing fields and does not accept the config-only `default_provider` field:
+
+```yaml
+workflow_config:
+  provider: auto
+auto_routing:
+  strategy: balanced
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: coding
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+      description: Implementation, testing, debugging, and refactoring
+```
+
+When the effective top-level provider is `auto`, TAKT uses `auto_routing.default_provider` for internal operations that need a concrete provider but have no workflow step context, such as AI task-slug generation. `default_provider.provider` is required and cannot be `auto`; `default_provider.model` is optional. The project `default_provider` takes precedence over the global value as a whole object, so its `provider` and `model` are not merged with fields from the global object. If this setting is missing when such an operation runs, TAKT reports `Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.` A concrete effective top-level provider continues to use its top-level provider/model.
+
+Auto-routing candidate selection applies to workflow step execution only. `auto_routing.router` is only for routing decisions and is never used implicitly as `default_provider`. The interactive assistant does not go through auto routing and continues to use `takt_providers.assistant`; that assistant setting is not used as the default for other internal operations. A top-level `provider: auto` is ignored for the assistant, so pair it with `takt_providers.assistant` (or pass `--provider` on the CLI). Without either, assistant startup fails with `Provider is not configured.`
 
 Resolution order stays conservative: `promotion`, explicit step provider/model, `provider_routing`, and `persona_providers` win before auto routing. Auto routing then checks rules in `tags`, `steps`, `personas` order. If multiple step tags match, the later tag on the step wins. If no rule matches, TAKT asks the configured router model to select a candidate from descriptions; router failures log a warning and fall back to the strategy default: `cost` chooses the first `low` candidate, `balanced` the first `medium`, and `performance` the first `high`.
 

@@ -110,6 +110,7 @@ export type {
   AutoRoutingStrategy,
   AutoRoutingCandidate,
   AutoRoutingConfig,
+  ConfigAutoRoutingConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   CustomAgentConfig,

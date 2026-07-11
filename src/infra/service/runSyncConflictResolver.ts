@@ -1,9 +1,11 @@
-import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
 import type { AgentResponse } from '../../core/models/index.js';
-import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import { getLanguage, resolveConfigValues } from '../config/index.js';
-import { getProvider, type ProviderCallOptions, type ProviderType } from '../providers/index.js';
+import {
+  getLanguage,
+  resolveConfigValues,
+  resolveNonWorkflowProviderModel,
+} from '../config/index.js';
+import { getProvider, type ProviderCallOptions } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
 
 interface RunSyncConflictResolverOptions {
@@ -26,15 +28,13 @@ export async function runSyncConflictResolver(
     originalInstruction: options.originalInstruction,
   });
   const config = resolveConfigValues(options.projectCwd, ['syncConflictResolver']);
-  const resolvedProviderModel = resolveAssistantProviderModelFromConfig(
-    resolveAssistantConfigLayers(options.projectCwd),
-  );
+  const resolvedProviderModel = resolveNonWorkflowProviderModel(options.projectCwd);
 
   if (!resolvedProviderModel.provider) {
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
 
-  const provider = getProvider(resolvedProviderModel.provider as ProviderType);
+  const provider = getProvider(resolvedProviderModel.provider);
   const resolvedSystemPrompt = buildProviderRuntimeSystemPrompt(
     systemPrompt,
     lang,

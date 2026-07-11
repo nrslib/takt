@@ -109,6 +109,7 @@ vi.mock('../infra/git/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'en'),
   resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
+  resolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'codex', model: 'gpt-5.4' })),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({

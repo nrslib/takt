@@ -746,6 +746,10 @@ unexpected_overrides:
     it('should save autoRouting as auto_routing with snake_case candidate keys', () => {
       const config = {
         autoRouting: {
+          defaultProvider: {
+            provider: 'mock',
+            model: 'project-default-model',
+          },
           strategy: 'balanced',
           router: {
             provider: 'claude-sdk',
@@ -772,10 +776,13 @@ unexpected_overrides:
 
       const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
       expect(raw).toContain('auto_routing:');
+      expect(raw).toContain('default_provider:');
+      expect(raw).toContain('model: project-default-model');
       expect(raw).toContain('cost_tier: medium');
       expect(raw).toContain('provider_options:');
       expect(raw).toContain('reasoning_effort: high');
       expect(raw).not.toContain('autoRouting:');
+      expect(raw).not.toContain('defaultProvider:');
       expect(raw).not.toContain('costTier:');
       expect(raw).not.toContain('providerOptions:');
 
