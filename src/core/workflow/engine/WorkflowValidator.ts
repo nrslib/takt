@@ -39,8 +39,12 @@ function validateFindingsRuleContract(
  * `next: finding-conflict-adjudication` targets the engine-synthesized Phase B
  * step (see constants.ts / adjudication-step.ts). Like findings.* conditions,
  * it only makes sense when a finding ledger exists to adjudicate against.
- * Applies to step rules AND loop monitor judge rules (codex B7) — both can
- * route to the synthetic step.
+ * Applies to step rules, loop monitor judge rules (codex B7), AND parallel
+ * sub-step rules. A sub-step's `next` never routes at runtime (ParallelRunner
+ * aggregates; only the parent step's rules transition), but sub-step wiring
+ * still counts for step injection (workflowWiresFindingConflictAdjudication),
+ * so a contract-less sub-step wiring is dead config referencing machinery that
+ * is not enabled — reject it at the same boundary the workflow doctor checks.
  */
 function validateFindingConflictAdjudicationRuleContract(
   findingContractConfigured: boolean,
@@ -396,6 +400,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       );
       for (const rule of subStep.rules ?? []) {
         validateFindingsRuleContract(
+          findingContractEnabled,
+          rule,
+          `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+        );
+        validateFindingConflictAdjudicationRuleContract(
           findingContractEnabled,
           rule,
           `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,

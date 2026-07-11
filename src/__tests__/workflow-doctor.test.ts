@@ -932,6 +932,73 @@ steps:
     );
   });
 
+  // parallel サブステップの next はエンジンで遷移として消費されない
+  // （ParallelRunner が集約し、遷移は親ステップの rules だけが決める）ため、
+  // 合成名への配線は契約の有無に関わらず「無視される」警告を出す。契約が
+  // 無ければ validator と同趣旨のエラーも併せて出す。
+  it('warns that a parallel sub-step routing to finding-conflict-adjudication is ignored by aggregation (finding_contract configured)', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-parallel-sub.yaml', `name: adjudication-parallel-sub
+max_steps: 10
+initial_step: step1
+finding_contract:
+  ledger_path: .takt/findings/adjudication-parallel-sub.json
+  raw_findings_path: .takt/findings/adjudication-parallel-sub/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: step1
+    parallel:
+      - name: sub-review
+        rules:
+          - condition: conflict
+            next: finding-conflict-adjudication
+          - condition: approved
+            next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
+
+    expect(diagnostics).toEqual([{
+      level: 'warning',
+      message: 'Step "step1/sub-review" routes to "finding-conflict-adjudication" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step\'s rules instead',
+    }]);
+  });
+
+  it('reports a parallel sub-step routing to finding-conflict-adjudication without finding_contract configured', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-parallel-sub-unconfigured.yaml', `name: adjudication-parallel-sub-unconfigured
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    parallel:
+      - name: sub-review
+        rules:
+          - condition: conflict
+            next: finding-conflict-adjudication
+          - condition: approved
+            next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
+
+    expect(diagnostics).toContainEqual({
+      level: 'error',
+      message: 'Step "step1/sub-review" routes to "finding-conflict-adjudication" but finding_contract is not configured',
+    });
+    expect(diagnostics).toContainEqual({
+      level: 'warning',
+      message: 'Step "step1/sub-review" routes to "finding-conflict-adjudication" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step\'s rules instead',
+    });
+  });
+
   it('reports loop monitor routing to finding-conflict-adjudication without finding_contract configured', () => {
     const filePath = writeWorkflow(
       projectDir,

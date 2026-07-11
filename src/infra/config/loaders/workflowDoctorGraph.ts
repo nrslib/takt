@@ -160,6 +160,25 @@ export function validateDoctorGraph(
 
     for (const sub of step.parallel ?? []) {
       for (const rule of sub.rules ?? []) {
+        if (findingConflictAdjudicationTargetNeedsContract(rule)) {
+          if (!findingContractConfigured) {
+            diagnostics.push({
+              level: 'error',
+              message: `Step "${step.name}/${sub.name}" routes to "${FINDING_CONFLICT_ADJUDICATION_STEP}" but finding_contract is not configured`,
+            });
+          }
+          // 事実確認済み: parallel サブステップの rules[].next はエンジンで
+          // 遷移として消費されない（ParallelRunner が集約し、遷移は親ステップの
+          // rules だけが決める。AggregateEvaluator はサブステップの一致条件の
+          // 文字列しか見ない）。合成ステップへの配線はステップ注入の条件
+          // （workflowWiresFindingConflictAdjudication）にだけ数えられ、経路と
+          // しては死んでいるため、意図どおりに動かないことを警告する。
+          diagnostics.push({
+            level: 'warning',
+            message: `Step "${step.name}/${sub.name}" routes to "${FINDING_CONFLICT_ADJUDICATION_STEP}" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step's rules instead`,
+          });
+        }
+
         if (!rule.next || SPECIAL_NEXT.has(rule.next) || stepNames.has(rule.next)) {
           continue;
         }

@@ -948,6 +948,100 @@ describe('finding-conflict-adjudication engine detour', () => {
     })).toThrow(/requires finding_contract/);
   });
 
+  // サブステップの next はエンジンの遷移としては消費されない（ParallelRunner が
+  // 集約し、遷移は親ステップの rules だけが決める）が、合成名への配線はステップ
+  // 注入の条件に数えられるため、契約なしの配線は機構が無効なままの死んだ設定と
+  // して validator が弾く（doctor 側の同じ境界チェックと揃える）。
+  it('parallel サブステップの rules からの合成名遷移も finding_contract を要求する', () => {
+    const config: WorkflowConfig = {
+      name: 'parallel-sub-no-contract-test',
+      maxSteps: 3,
+      initialStep: 'reviewers',
+      provider: 'claude',
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          parallel: [
+            makeStep({
+              name: 'sub-review',
+              persona: 'reviewer',
+              instruction: 'Review.',
+              rules: [
+                makeRule('needs adjudication', 'finding-conflict-adjudication'),
+                makeRule('approved', 'COMPLETE'),
+              ],
+            }),
+          ],
+          rules: [makeRule('when(true)', 'COMPLETE')],
+        }),
+      ],
+    };
+    expect(() => new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    })).toThrow(/requires finding_contract/);
+  });
+
+  it('parallel サブステップの合成名配線は finding_contract + adjudicator があれば検証を通る', () => {
+    const config: WorkflowConfig = {
+      name: 'parallel-sub-with-contract-test',
+      maxSteps: 3,
+      initialStep: 'reviewers',
+      provider: 'claude',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+        adjudicator: {
+          persona: 'supervisor',
+          personaPath: supervisorPersonaPath(cwd),
+          personaDisplayName: 'supervisor',
+          providerRoutingPersonaKey: 'supervisor',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'reviewers',
+          parallel: [
+            makeStep({
+              name: 'sub-review',
+              persona: 'reviewer',
+              instruction: 'Review.',
+              rules: [
+                makeRule('needs adjudication', 'finding-conflict-adjudication'),
+                makeRule('approved', 'COMPLETE'),
+              ],
+            }),
+          ],
+          rules: [
+            // finding_contract 付き parallel 親に必須の invalid manager output
+            // ルール（non-AI next: fix）。
+            makeRule('needs_fix', 'fix'),
+            makeRule('when(true)', 'COMPLETE'),
+          ],
+        }),
+        makeStep({
+          name: 'fix',
+          persona: 'coder',
+          instruction: 'Fix.',
+          rules: [makeRule('when(true)', 'reviewers')],
+        }),
+      ],
+    };
+    expect(() => new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    })).not.toThrow();
+  });
+
   it('loop monitor judge 経由の配線でも finding_contract + adjudicator があれば合成ステップが注入され検証を通る', () => {
     const config: WorkflowConfig = {
       name: 'adjudication-engine-test',
