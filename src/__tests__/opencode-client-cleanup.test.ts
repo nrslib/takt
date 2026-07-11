@@ -272,6 +272,12 @@ function unavailableToolErrorEvent(partId: string, callID: string, tool: string)
   };
 }
 
+/** promptAsync の n 回目の呼び出しで送られたプロンプト本文を取り出す。 */
+function promptTextOfCall(promptAsync: ReturnType<typeof vi.fn>, index: number): string {
+  const payload = promptAsync.mock.calls[index]?.[0] as { parts?: Array<{ text?: string }> } | undefined;
+  return payload?.parts?.[0]?.text ?? '';
+}
+
 describe('OpenCodeClient stream cleanup', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -1069,9 +1075,39 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     ]);
 
+    // unavailable-tool recovery が1回だけ挟まるため、再試行側でも同じループを
+    // 起こして「最終的にエラーで打ち切られる」従来の契約を検証する
+    const retryStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-3',
+            type: 'tool',
+            callID: 'call-run-3',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: unavailableToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-4',
+            type: 'tool',
+            callID: 'call-run-4',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: unavailableToolError },
+          },
+        },
+      },
+    ]);
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-tool-loop' } });
-    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream })
+      .mockResolvedValueOnce({ stream: retryStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -1092,7 +1128,9 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
     expect(result.content).toContain(unavailableToolError);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(stream.returnSpy).toHaveBeenCalled();
+    expect(retryStream.returnSpy).toHaveBeenCalled();
   });
 
   // OpenCode は拒否したツール呼び出しを `invalid` 擬似ツールの status='completed'
@@ -1224,9 +1262,39 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     ]);
 
+    // unavailable-tool recovery の1回を挟んでも、再試行で同じループなら
+    // 従来どおりエラーで打ち切る
+    const retryStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-3',
+            type: 'tool',
+            callID: 'call-run-3',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: invalidToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-4',
+            type: 'tool',
+            callID: 'call-run-4',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: invalidToolError },
+          },
+        },
+      },
+    ]);
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-invalid-tool-loop' } });
-    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream })
+      .mockResolvedValueOnce({ stream: retryStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -1247,6 +1315,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
     expect(result.content).toContain(invalidToolError);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -1285,9 +1354,38 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     ]);
 
+    // recovery の再試行側でも交互ループを起こし、従来の打ち切り契約を検証する
+    const retryStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-3',
+            type: 'tool',
+            callID: 'call-run-2',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: runToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-4',
+            type: 'tool',
+            callID: 'call-list-2',
+            tool: 'list',
+            state: { status: 'error', input: {}, error: listToolError },
+          },
+        },
+      },
+    ]);
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-alternating-tool-loop' } });
-    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream })
+      .mockResolvedValueOnce({ stream: retryStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -1308,6 +1406,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('list');
     expect(result.content).toContain(listToolError);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -1369,9 +1468,16 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     ]);
 
+    // recovery の再試行側でも同じループを起こし、従来の打ち切り契約を検証する
+    const retryStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-3', 'call-run-3', 'run'),
+      unavailableToolErrorEvent('tool-part-4', 'call-run-4', 'run'),
+    ]);
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-running-then-error-loop' } });
-    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream })
+      .mockResolvedValueOnce({ stream: retryStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -1390,7 +1496,8 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('error');
-    expect(result.content).toContain(toolError);
+    expect(result.content).toContain('run');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -1441,9 +1548,38 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     ]);
 
+    // recovery の再試行側でも list のループを起こし、従来の打ち切り契約を検証する
+    const retryStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-list-2',
+            type: 'tool',
+            callID: 'call-list-2',
+            tool: 'list',
+            state: { status: 'error', input: {}, error: listToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-list-3',
+            type: 'tool',
+            callID: 'call-list-3',
+            tool: 'list',
+            state: { status: 'error', input: {}, error: listToolError },
+          },
+        },
+      },
+    ]);
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-duplicate-tool-update' } });
-    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream })
+      .mockResolvedValueOnce({ stream: retryStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -1465,6 +1601,9 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.content).toContain('list');
     expect(result.content).toContain(listToolError);
     expect(result.content).not.toContain(runToolError);
+    // 発火は重複 run ではなく2件目の list（重複 update は1回として数える）。
+    // recovery の前置文が引用するツール名で確かめる。
+    expect(promptTextOfCall(promptAsync, 1)).toContain('"list"');
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -1535,9 +1674,22 @@ describe('OpenCodeClient stream cleanup', () => {
     const detector = new UnavailableToolLoopDetector();
 
     expect(detector.observe('call-1', 'run', 'invalid tool: run')).toBeUndefined();
-    expect(detector.observe('call-2', 'run', 'unavailable tool: run')).toBe(
-      'OpenCode unavailable tool loop detected for tool "run": unavailable tool: run',
-    );
+    expect(detector.observe('call-2', 'run', 'unavailable tool: run')).toEqual({
+      tool: 'run',
+      message: 'OpenCode unavailable tool loop detected for tool "run": unavailable tool: run',
+    });
+  });
+
+  it('should keep the unavailable tool loop threshold at exactly 2 consecutive errors', async () => {
+    const { UnavailableToolLoopDetector } = await import('../infra/opencode/unavailable-tool-loop.js');
+    const detector = new UnavailableToolLoopDetector();
+
+    // 1回目では発火しない（正常な試行錯誤の余地）、2回目ちょうどで発火する。
+    // recovery を足した際にも閾値自体は緩めない不変条件。
+    expect(detector.observe('call-1', 'run', 'unavailable tool: run')).toBeUndefined();
+    const detection = detector.observe('call-2', 'run', 'unavailable tool: run');
+    expect(detection).toBeDefined();
+    expect(detection?.tool).toBe('run');
   });
 
   it('should pass system prompt separately from user prompt to promptAsync', async () => {
@@ -2640,13 +2792,22 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
-  it('should not recover a stale session when the looping tool is not StructuredOutput', async () => {
+  it('should not stack the stale-session recovery on a non-StructuredOutput loop (general recovery only, 2 attempts max)', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const stream = new MockEventStream([
+    // resumed session の 'run' ループは一般 recovery（1回）だけが受け持つ。
+    // stale StructuredOutput recovery が重ねて発動して attempt が3回に
+    // 膨らまないことを固定する。
+    const firstLoop = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
     ]);
-    const subscribe = vi.fn().mockResolvedValue({ stream });
+    const secondLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
+      unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: firstLoop })
+      .mockResolvedValueOnce({ stream: secondLoop });
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
@@ -2668,8 +2829,9 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
-    expect(promptAsync).toHaveBeenCalledTimes(1);
-    expect(sessionCreate).not.toHaveBeenCalled();
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    // fresh session は一般 recovery の1回分だけ作られる
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
   });
 
   it('should not attempt stale session recovery on the first call without a session id', async () => {
@@ -2910,6 +3072,527 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('session-recovered');
     expect(result.sessionId).not.toBe('session-old');
+  });
+
+  it('should retry a general unavailable-tool loop once in a fresh session with a retry preamble', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+    ]);
+    const recoveredStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'p-1', type: 'text', text: 'done via bash' }, delta: 'done via bash' },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-b' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: recoveredStream });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-a' } })
+      .mockResolvedValueOnce({ data: { id: 'session-b' } });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    // 元セッションを捨て、新しい fresh session の ID を上位に返す
+    expect(result.sessionId).toBe('session-b');
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    const retryText = promptTextOfCall(promptAsync, 1);
+    // 前置文: 幻覚ツール名（引用付き）、既知エイリアスの案内、有効ツール一覧、
+    // workspace 継続の警告、元のプロンプト本文
+    expect(retryText).toContain('"run"');
+    expect(retryText).toContain('does not exist');
+    expect(retryText).toContain('Use "bash" for shell commands.');
+    expect(retryText).toContain('bash, edit, glob, grep');
+    expect(retryText).toContain('the workspace is NOT fresh');
+    expect(retryText).toContain('implement it');
+  });
+
+  it('should discard the resumed session when recovering a general unavailable-tool loop', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+    ]);
+    const recoveredStream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-fresh-run' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: recoveredStream });
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh-run' } });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: 'session-old',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe('session-fresh-run');
+    // 1回目は resume（create しない）、再試行だけ fresh session を作る
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({ sessionID: 'session-old' });
+    expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'session-fresh-run' });
+  });
+
+  it('should fail after the single unavailable-tool recovery when the fresh session loops again', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const firstLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+    ]);
+    const secondLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
+      unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: firstLoop })
+      .mockResolvedValueOnce({ stream: secondLoop });
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh' } });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    // 救済は1回限り。再試行後も同じ違反なら本物の失敗として即エラー（計2 attempt）
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('run');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should include the todowrite alias hint when the hallucinated tool is todo_write', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'todo_write'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'todo_write'),
+    ]);
+    const recoveredStream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-todo' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: recoveredStream });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-todo' } }), promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'track the plan', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    const retryText = promptTextOfCall(promptAsync, 1);
+    expect(retryText).toContain('Use "todowrite"');
+  });
+
+  it('should not attach a semantic mapping for an unknown hallucinated tool name', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'execute_shell'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'execute_shell'),
+    ]);
+    const recoveredStream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-unknown' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: recoveredStream });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-unknown' } }), promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'run the build', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    const retryText = promptTextOfCall(promptAsync, 1);
+    // 未知の幻覚名には意味推測のマッピングを付けず、有効ツール一覧のみ提示する
+    expect(retryText).toContain('"execute_shell"');
+    expect(retryText).not.toContain('Use "');
+    expect(retryText).toContain('bash, edit, glob, grep');
+  });
+
+  it('should suppress the bash alias hint when bash is not among the enabled tools', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+    ]);
+    const recoveredStream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-no-bash' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: recoveredStream });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-no-bash' } }), promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review the diff', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      // bash の無いレビュー系ステップの allowed_tools を再現する
+      allowedTools: ['read', 'glob', 'grep'],
+    });
+
+    expect(result.status).toBe('done');
+    const retryText = promptTextOfCall(promptAsync, 1);
+    // 変換先の bash がこの attempt で使えない以上、案内すると有効一覧と矛盾する。
+    // 未知名と同じ扱い（有効一覧のみ）に落ちることを固定する。
+    expect(retryText).toContain('"run"');
+    expect(retryText).not.toContain('Use "bash"');
+    expect(retryText).not.toContain('Use "');
+    expect(retryText).toContain('glob, grep, list, read, skill');
+    expect(retryText).not.toContain('bash');
+  });
+
+  it('should suppress the todowrite alias hint when todowrite is not among the enabled tools', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'todo_write'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'todo_write'),
+    ]);
+    const recoveredStream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-no-todo' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: recoveredStream });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-no-todo' } }), promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review the diff', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      allowedTools: ['read', 'glob', 'grep'],
+    });
+
+    expect(result.status).toBe('done');
+    const retryText = promptTextOfCall(promptAsync, 1);
+    expect(retryText).toContain('"todo_write"');
+    expect(retryText).not.toContain('Use "todowrite"');
+    expect(retryText).not.toContain('Use "');
+    expect(retryText).toContain('glob, grep, list, read, skill');
+  });
+
+  it('should route a StructuredOutput loop only through the stale-session recovery, never the general one', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    // sessionId 無しの初回呼び出し: stale recovery の条件（resume）を満たさず、
+    // 一般 recovery からも StructuredOutput は除外されるため、即エラーになる
+    const stream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
+    ]);
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-so' } }), promptAsync },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('reviewer', 'review it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('StructuredOutput');
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not recover a StructuredOutput loop that follows an unavailable-tool recovery', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    // 'run' の救済で fresh になった attempt が StructuredOutput ループに落ちた場合、
+    // plan 上は resume 由来でも実セッションは fresh なので stale recovery を発動させない
+    const runLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+    ]);
+    const structuredLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-3', 'call-3', 'StructuredOutput'),
+      unavailableToolErrorEvent('tool-part-4', 'call-4', 'StructuredOutput'),
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: runLoop })
+      .mockResolvedValueOnce({ stream: structuredLoop });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-fresh' } }), promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      sessionId: 'session-old',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('StructuredOutput');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('should not enter the unavailable-tool recovery for an invalid-argument loop', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const invalidArgError = "Required argument 'filePath' is missing or invalid";
+    const events = [1, 2, 3, 4].map((n) => ({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: `tool-part-${n}`,
+          type: 'tool',
+          callID: `call-${n}`,
+          tool: 'read',
+          state: { status: 'error', input: {}, error: invalidArgError },
+        },
+      },
+    }));
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-invalid-arg' } }), promptAsync },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream(events) }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'read files', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    // 引数不正ループは unavailable-tool ではないため recovery 対象外（従来どおり即エラー）
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('invalid tool argument loop');
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not enter the unavailable-tool recovery when the tool error budget is exhausted', async () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '2';
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      // unavailable / invalid-argument どちらのパターンにも当たらない一般エラーで
+      // 予算だけを使い切らせる（ツール名を変えて連続性検出も回避）
+      const events = [
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'tool-part-1',
+              type: 'tool',
+              callID: 'call-1',
+              tool: 'read',
+              state: { status: 'error', input: {}, error: 'file not found: /a' },
+            },
+          },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'tool-part-2',
+              type: 'tool',
+              callID: 'call-2',
+              tool: 'grep',
+              state: { status: 'error', input: {}, error: 'pattern failed to compile' },
+            },
+          },
+        },
+      ];
+      const promptAsync = vi.fn().mockResolvedValue(undefined);
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+          session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-budget-x' } }), promptAsync },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream(events) }) },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const client = new OpenCodeClient();
+      const result = await client.call('coder', 'explore', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+      });
+
+      expect(result.status).toBe('error');
+      expect(result.content).toContain('tool error budget exceeded');
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
+    }
+  });
+
+  it('should keep the unavailable-tool recovery slot even after the transient budget is consumed', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const emptyStream = () => new MockEventStream([]);
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+    ]);
+    const successStream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-late' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: emptyStream() })
+      .mockResolvedValueOnce({ stream: emptyStream() })
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: successStream });
+    const promptAsync = vi.fn()
+      .mockRejectedValueOnce(new Error('transport error'))
+      .mockRejectedValueOnce(new Error('transport error'))
+      .mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-late' } }), promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    // transient 2回で基礎予算(3)の最終試行にループが来ても、別枠の1回で救済できる
+    expect(result.status).toBe('done');
+    expect(promptAsync).toHaveBeenCalledTimes(4);
+    expect(promptTextOfCall(promptAsync, 3)).toContain('"run"');
+  });
+
+  it('should safely quote a hostile hallucinated tool name in the retry preamble', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const hostileTool = 'bad"tool\nname';
+    const loopStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', hostileTool),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', hostileTool),
+    ]);
+    const recoveredStream = new MockEventStream([
+      { type: 'session.idle', properties: { sessionID: 'session-hostile' } },
+    ]);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: recoveredStream });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-hostile' } }), promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    const retryText = promptTextOfCall(promptAsync, 1);
+    // JSON.stringify での引用: 引用符・改行がエスケープされ、生の改行が
+    // 前置文の構造を壊さない
+    expect(retryText).toContain(JSON.stringify(hostileTool));
+    expect(retryText).not.toContain('a tool named bad"tool');
   });
 
   it('should not leak sibling-session text into the active session content', async () => {

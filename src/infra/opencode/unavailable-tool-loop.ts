@@ -10,11 +10,24 @@ function isUnavailableToolErrorMessage(message: string): boolean {
   return UNAVAILABLE_TOOL_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
 }
 
+/**
+ * UnavailableToolLoopDetector の発火結果。
+ *
+ * エラー文字列だけを返すと、受け側（client.ts の recovery 判定）が
+ * 「どのツールで発火したか」を文字列の再パースで推測する羽目になる。
+ * ツール名を型で運び、recovery の対象判定（StructuredOutput か一般ツールか）を
+ * 正規表現なしで行えるようにする。
+ */
+export interface UnavailableToolLoopDetection {
+  readonly tool: string;
+  readonly message: string;
+}
+
 export class UnavailableToolLoopDetector {
   private consecutiveUnavailableToolErrors = 0;
   private lastUnavailableToolCallId: string | undefined;
 
-  observe(toolCallId: string, tool: string, message: string): string | undefined {
+  observe(toolCallId: string, tool: string, message: string): UnavailableToolLoopDetection | undefined {
     if (!isUnavailableToolErrorMessage(message)) {
       this.reset();
       return undefined;
@@ -31,7 +44,10 @@ export class UnavailableToolLoopDetector {
       return undefined;
     }
 
-    return `OpenCode unavailable tool loop detected for tool "${tool}": ${message}`;
+    return {
+      tool,
+      message: `OpenCode unavailable tool loop detected for tool "${tool}": ${message}`,
+    };
   }
 
   reset(): void {

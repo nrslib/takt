@@ -51,6 +51,13 @@ import {
   shouldDegradeToFormatless,
   shouldRecoverStaleSession,
 } from './structured-output-recovery.js';
+import {
+  buildUnavailableToolRetryPrompt,
+  createUnavailableToolRecoveryState,
+  listEnabledPromptTools,
+  markUnavailableToolRecoveryUsed,
+  shouldRecoverUnavailableToolLoop,
+} from './unavailable-tool-recovery.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import { isSensitiveKeyName, sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
@@ -938,13 +945,18 @@ export class OpenCodeClient {
     // 是正リトライ）へフォールバックする。劣化後は汚染されたセッションを
     // 引きずらないよう fresh session を強制する（structured-output-recovery.ts）。
     let recoveryState = createStructuredOutputRecoveryState(options.outputSchema !== undefined);
+    // 幻覚ツール名（存在しない 'run' 等）の連続呼び出しで止まった場合の
+    // 一般 recovery。structured-output 側とは病因が違うため予算も状態も独立
+    // （unavailable-tool-recovery.ts）。
+    let unavailableToolRecovery = createUnavailableToolRecoveryState();
     // call() の最初から resume を意図していたかどうか。attempt ごとに変わる
     // sessionId（劣化/救済で fresh に切り替わる）とは別に、呼び出し元の意図を
     // 固定値として持つ必要がある。
     const hasInitialSessionId = options.sessionId !== undefined;
-    // フォールバック（format なし再試行 / stale session 救済）は transient
-    // 再試行の予算とは別枠で、それぞれ1回だけ確保する: 先行の transient
-    // エラーで予算を使い切っていても、最終試行の失敗から救済できるようにする。
+    // フォールバック（format なし再試行 / stale session 救済 / unavailable-tool
+    // 救済）は transient 再試行の予算とは別枠で、それぞれ1回だけ確保する:
+    // 先行の transient エラーで予算を使い切っていても、最終試行の失敗から
+    // 救済できるようにする。
     let maxAttempts = OPENCODE_RETRY_MAX_ATTEMPTS;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -955,7 +967,14 @@ export class OpenCodeClient {
       let diagRef: StreamDiagnostics | undefined;
       let release: (() => void) | undefined;
       let opencodeApiClient: OpencodeClient | undefined;
-      const attemptPlan = planStructuredOutputAttempt(recoveryState, hasInitialSessionId);
+      const structuredAttemptPlan = planStructuredOutputAttempt(recoveryState, hasInitialSessionId);
+      // unavailable-tool recovery 後の attempt も fresh session を強制する。
+      // plan の sessionMode を実態に合わせて上書きしておかないと、後段の
+      // stale StructuredOutput 判定（plan.sessionMode === 'resume' が条件）が
+      // 「fresh なのに resume 扱い」で誤発動し、救済の連鎖で attempt が増える。
+      const attemptPlan = unavailableToolRecovery.used
+        ? { ...structuredAttemptPlan, sessionMode: 'fresh' as const }
+        : structuredAttemptPlan;
       let sessionId: string | undefined = attemptPlan.sessionMode === 'fresh' ? undefined : options.sessionId;
       let promptCompletion: Promise<unknown> | undefined;
       let promptCompletionWait: Promise<void> | undefined;
@@ -1109,9 +1128,16 @@ export class OpenCodeClient {
         // native format 劣化後の attempt は、structured_json_schema_instruction
         // でスキーマと fenced JSON 契約・StructuredOutput 禁止を明示したプロンプトへ
         // 包み直す。この attempt は session も fresh 強制済み（attemptPlan 参照）。
-        const promptText = attemptPlan.structuredMode === 'formatless' && options.outputSchema !== undefined
+        const basePromptText = attemptPlan.structuredMode === 'formatless' && options.outputSchema !== undefined
           ? buildFormatlessStructuredPrompt(prompt, options.outputSchema)
           : prompt;
+        // unavailable-tool recovery 後の attempt は、さらに再試行前置文
+        // （幻覚ツール名の指摘・有効ツール一覧・workspace 継続の警告）で包む。
+        // 有効ツール一覧は promptTools（buildOpenCodePromptTools() の結果）から
+        // 動的に生成する。
+        const promptText = unavailableToolRecovery.used && unavailableToolRecovery.tool !== undefined
+          ? buildUnavailableToolRetryPrompt(basePromptText, unavailableToolRecovery.tool, listEnabledPromptTools(promptTools))
+          : basePromptText;
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
@@ -1146,7 +1172,8 @@ export class OpenCodeClient {
         let failureMessage = '';
         // UnavailableToolLoopDetector が閾値到達で発火した際に、その呼び出しが
         // 狙っていたツール名を残す。stale StructuredOutput recovery の対象判定
-        // （呼ばれたツールが正確に StructuredOutput か）に使う。
+        // （呼ばれたツールが正確に StructuredOutput か）と、一般 unavailable-tool
+        // recovery の対象判定（StructuredOutput 以外か）の両方に使う。
         let unavailableLoopToolName: string | undefined;
         const state = createStreamTrackingState();
         const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
@@ -1259,13 +1286,15 @@ export class OpenCodeClient {
                 });
                 // 両検出器に必ず観測させる（?? 短絡だと invalid 側が
                 // unavailable エラーを見逃し、連続性の判定が狂う）
-                const unavailableError = unavailableToolLoopDetector.observe(
+                const unavailableDetection = unavailableToolLoopDetector.observe(
                   toolPart.callID || toolPart.id,
                   rejection.tool,
                   rejection.error,
                 );
-                if (unavailableError !== undefined) {
-                  unavailableLoopToolName = rejection.tool;
+                if (unavailableDetection !== undefined) {
+                  // detector の発火は型（tool 名入り）で受け取る。recovery の
+                  // 対象判定でエラー文字列を再パースしないため。
+                  unavailableLoopToolName = unavailableDetection.tool;
                 }
                 const invalidArgumentError = invalidArgumentLoopDetector.observe(
                   toolPart.callID || toolPart.id,
@@ -1277,7 +1306,7 @@ export class OpenCodeClient {
                   rejection.tool,
                   rejection.error,
                 );
-                loopError = unavailableError ?? invalidArgumentError ?? budgetError;
+                loopError = unavailableDetection?.message ?? invalidArgumentError ?? budgetError;
               } else if (toolPart.state.status === 'completed') {
                 unavailableToolLoopDetector.reset();
                 invalidArgumentLoopDetector.reset();
@@ -1641,6 +1670,28 @@ export class OpenCodeClient {
             continue;
           }
 
+          // A general unavailable-tool loop: the model kept calling a tool name
+          // that does not exist (hallucinated 'run' etc.) until the detector's
+          // threshold of 2 fired. Retry the same prompt once in a fresh session
+          // with a retry preamble (hallucinated name, valid tool list, workspace
+          // continuation warning). StructuredOutput is deliberately excluded —
+          // its only rescue path is the stricter stale-session branch above.
+          if (
+            unavailableLoopToolName !== undefined
+            && shouldRecoverUnavailableToolLoop(unavailableToolRecovery, unavailableLoopToolName)
+          ) {
+            unavailableToolRecovery = markUnavailableToolRecoveryUsed(unavailableToolRecovery, unavailableLoopToolName);
+            maxAttempts = Math.max(maxAttempts, attempt + 1);
+            log.debug('OpenCode unavailable tool loop detected; retrying prompt once in a fresh session with a retry preamble', {
+              agentType,
+              previousAttempt: attempt,
+              previousSessionId: activeSessionId,
+              tool: unavailableLoopToolName,
+            });
+            await this.waitForRetryDelay(attempt, options.abortSignal);
+            continue;
+          }
+
           const retriable = this.isRetriableError(message, streamAbortController.signal.aborted, abortCause);
           if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
             log.info('Retrying OpenCode call after transient failure', { agentType, attempt, message });
@@ -1648,13 +1699,14 @@ export class OpenCodeClient {
             continue;
           }
 
-          if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed) {
-            log.debug('OpenCode structured output recovery attempt finished', {
+          if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed || unavailableToolRecovery.used) {
+            log.debug('OpenCode recovery attempt finished', {
               agentType,
               attempt,
               sessionId: activeSessionId,
               nativeDegraded: recoveryState.nativeDegraded,
               staleSessionRecoveryUsed: recoveryState.staleSessionRecoveryUsed,
+              unavailableToolRecoveryUsed: unavailableToolRecovery.used,
               outcome: 'error',
               message,
             });
@@ -1671,13 +1723,14 @@ export class OpenCodeClient {
           };
         }
 
-        if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed) {
-          log.debug('OpenCode structured output recovery attempt finished', {
+        if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed || unavailableToolRecovery.used) {
+          log.debug('OpenCode recovery attempt finished', {
             agentType,
             attempt,
             sessionId: activeSessionId,
             nativeDegraded: recoveryState.nativeDegraded,
             staleSessionRecoveryUsed: recoveryState.staleSessionRecoveryUsed,
+            unavailableToolRecoveryUsed: unavailableToolRecovery.used,
             outcome: 'success',
           });
         }
