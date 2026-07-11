@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import type {
+  FindingConflictAdjudicationOutput,
   FindingLedger,
   FindingManagerDecisions,
   FindingManagerOutput,
@@ -12,6 +13,8 @@ import {
   RAW_FINDING_RELATIONS,
   CONFLICT_DECISION_KINDS,
   DISPUTE_DECISION_KINDS,
+  FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
+  FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
   FINDING_CONFLICT_STATUSES,
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
@@ -178,6 +181,24 @@ const ReviewerRawFindingFieldsSchema = z.object({
 
 export const ReviewerRawFindingSchema = ReviewerRawFindingFieldsSchema.transform(resolveRawFindingRelation);
 
+export const FindingConflictAdjudicationOutcomeSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_OUTCOMES);
+export const FindingConflictAdjudicationTransitionSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_TRANSITIONS);
+
+export const FindingConflictAdjudicationRecordSchema = z.object({
+  evidenceHash: nonEmptyString,
+  outcome: FindingConflictAdjudicationOutcomeSchema,
+  findingTransition: FindingConflictAdjudicationTransitionSchema,
+  evidence: z.array(nonEmptyString),
+  actionableFix: z.string(),
+  decidedAt: FindingObservationSchema,
+}).strict();
+
+export const FindingConflictAdjudicationAttemptSchema = z.object({
+  evidenceHash: nonEmptyString,
+  startedAt: FindingObservationSchema,
+  originStep: nonEmptyString.optional(),
+}).strict();
+
 export const FindingLedgerConflictSchema = z.object({
   id: nonEmptyString,
   status: z.enum(FINDING_CONFLICT_STATUSES),
@@ -188,6 +209,8 @@ export const FindingLedgerConflictSchema = z.object({
   lastSeen: FindingObservationSchema,
   resolvedAt: nonEmptyString.optional(),
   resolvedEvidence: nonEmptyString.optional(),
+  adjudications: z.array(FindingConflictAdjudicationRecordSchema).optional(),
+  adjudicationAttempts: z.array(FindingConflictAdjudicationAttemptSchema).optional(),
 }).strict();
 
 export const FindingLedgerSchema = z.object({
@@ -530,6 +553,54 @@ export const FindingManagerDecisionsJsonSchema = {
     },
   },
 } as const;
+
+// LLM が返す一次出力。outcome と findingTransition の整合はスキーマでは強制しない
+// （enum ペアの相互制約は JSON Schema / zod の素朴な組み合わせでは表現できない）。
+// 整合の検証（不一致は reject して例外）と、outcome + actionableFix からの
+// disposition 導出は adjudication-apply.ts の責務（"決定可能なものはコードで
+// 処理し LLM には判断だけ残す" という Finding Contract 全体の設計方針に合わせる）。
+export const FindingConflictAdjudicationOutputSchema = z.object({
+  conflictId: nonEmptyString,
+  outcome: FindingConflictAdjudicationOutcomeSchema,
+  findingTransition: FindingConflictAdjudicationTransitionSchema,
+  evidence: z.array(nonEmptyString).min(1),
+  actionableFix: z.string(),
+}).strict();
+
+export const FindingConflictAdjudicationOutputJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['conflictId', 'outcome', 'findingTransition', 'evidence', 'actionableFix'],
+  properties: {
+    conflictId: {
+      type: 'string',
+      minLength: 1,
+      description: 'The conflict id given to you in the prompt. Echo it back unchanged.',
+    },
+    outcome: {
+      enum: FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
+      description: 'finding_valid = the reviewer finding is legitimate and still stands; state the concrete coder fix in actionableFix so the workflow can route to the fix step (a finding_valid with an empty actionableFix is treated as undetermined). finding_stale = the finding no longer applies (already fixed, or the code it describes no longer exists). evidence_invalid = the finding\'s own premise does not hold (it was never a real problem). undetermined = you could not reach a conclusion from the evidence available.',
+    },
+    findingTransition: {
+      enum: FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
+      description: 'The finding-side effect that matches your outcome: finding_valid -> keep_open (the finding stays open for the coder to fix), finding_stale -> resolved, evidence_invalid -> invalidated, undetermined -> keep_open. The engine rejects output where this does not match outcome.',
+    },
+    evidence: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+      minItems: 1,
+      description: 'Concrete evidence for your outcome. For findingTransition "resolved", include at least one file:line citation the engine can verify against the current code.',
+    },
+    actionableFix: {
+      type: 'string',
+      description: 'For finding_valid: the concrete code change the coder must make (REQUIRED, non-empty — leaving it empty downgrades your verdict to undetermined and blocks the run). Empty string for every other outcome.',
+    },
+  },
+} as const;
+
+export function parseFindingConflictAdjudicationOutput(value: unknown): FindingConflictAdjudicationOutput {
+  return FindingConflictAdjudicationOutputSchema.parse(value);
+}
 
 export const RawFindingsOutputJsonSchema = {
   type: 'object',

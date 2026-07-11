@@ -1,4 +1,5 @@
 import { FINDING_SEVERITIES, type FindingLedger, type FindingSeverity, type FindingsRuleContext } from './types.js';
+import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
   return JSON.stringify({
@@ -100,6 +101,9 @@ export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
 export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
+  const unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
+    isLedgerConflictUnadjudicated(conflict, ledger)
+  )).length;
   const bySeverity = Object.fromEntries(
     FINDING_SEVERITIES.map((severity) => [severity, 0]),
   ) as Record<FindingSeverity, number>;
@@ -144,6 +148,9 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
         rawFindingIds: conflict.rawFindingIds,
         description: conflict.description,
       })),
+      unadjudicated: {
+        count: unadjudicatedConflictCount,
+      },
     },
   };
 }

@@ -1,4 +1,10 @@
 export {
+  FindingConflictAdjudicationAttemptSchema,
+  FindingConflictAdjudicationOutcomeSchema,
+  FindingConflictAdjudicationOutputJsonSchema,
+  FindingConflictAdjudicationOutputSchema,
+  FindingConflictAdjudicationRecordSchema,
+  FindingConflictAdjudicationTransitionSchema,
   FindingContractConfigRawSchema,
   FindingContractManagerConfigRawSchema,
   FindingLifecycleSchema,
@@ -14,6 +20,7 @@ export {
   RawFindingsOutputJsonSchema,
   RawFindingSchema,
   ReviewerRawFindingSchema,
+  parseFindingConflictAdjudicationOutput,
   parseFindingLedger,
   parseFindingManagerDecisions,
   parseFindingManagerOutput,

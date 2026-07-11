@@ -20,6 +20,7 @@ import {
   type UnsupportedRawDecision,
 } from './decision-assembly.js';
 import { validateLocationAdmission } from './admission-validation.js';
+import { partitionRelationCoherentRawFindings } from './relation-coherence.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
 import type {
   DroppedExplicitReferenceRawFindingReport as DroppedExplicitReferenceRawFinding,
@@ -763,7 +764,16 @@ export async function runFindingManagerForStep(
   // 既存 finding への resolution_confirmation/persists の証拠にもできない）。
   // 監査目的で元の全量は saveRawFindings に、不採用理由は検証レポートに残す。
   const admission = partitionAdmissibleRawFindings({ cwd: input.cwd, rawFindings: allRawFindings });
-  const rawFindings = admission.admitted;
+  // relation coherence（設計項目3の残り）: relation=new なのに正規化 path+title が
+  // 既存 open finding と一致する raw は、レビュア側の再生成（runner の
+  // regenerateIncoherentNewRawRelationsOnce）を経てもなお不整合だったものなので、
+  // new として採用しない。admission 落ちと同様に以降の一切の処理から除外し、
+  // Phase A の unsupported 経路（UnsupportedRawFindingReport）で監査記録に残す。
+  const relationCoherence = partitionRelationCoherentRawFindings({
+    previousLedger,
+    rawFindings: admission.admitted,
+  });
+  const rawFindings = relationCoherence.admitted;
   const rawFindingsPath = input.ledgerStore.saveRawFindings(input.runId, input.parentStep.name, allRawFindings);
   const managerStep = buildFindingManagerStep({
     contract: input.contract,
@@ -845,6 +855,7 @@ export async function runFindingManagerForStep(
       finalErrors: validation.errors,
       attempts: invalidAttempts,
       ...(admission.rejected.length > 0 ? { rawAdmissionRejections: admission.rejected } : {}),
+      ...(relationCoherence.rejected.length > 0 ? { unsupportedRawFindings: relationCoherence.rejected } : {}),
     });
     return {
       status: 'invalid_manager_output',
@@ -922,11 +933,16 @@ export async function runFindingManagerForStep(
       },
     });
   });
-  const unsupportedRawFindingReports: UnsupportedRawFindingReport[] = unsupportedRawDecisions.map((u) => ({
-    rawFindingId: u.rawFindingId,
-    targetFindingId: u.targetFindingId,
-    evidence: u.evidence,
-  }));
+  const unsupportedRawFindingReports: UnsupportedRawFindingReport[] = [
+    // relation coherence で intake 前に落とした raw（Phase A の unsupported 経路を
+    // 監査記録として再利用。targetFindingId は衝突相手の open finding）。
+    ...relationCoherence.rejected,
+    ...unsupportedRawDecisions.map((u) => ({
+      rawFindingId: u.rawFindingId,
+      targetFindingId: u.targetFindingId,
+      evidence: u.evidence,
+    })),
+  ];
   if (
     invalidAttempts.length > 0
     || staleRejections.length > 0

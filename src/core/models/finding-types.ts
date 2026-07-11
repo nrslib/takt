@@ -28,10 +28,27 @@ export interface FindingContractManagerConfig {
   model?: string;
 }
 
+/**
+ * The persona the engine-synthesized finding-conflict-adjudication step runs
+ * as (Phase B). Fixed to the "supervisor" facet by design — not user-selectable
+ * like finding_contract.manager — but the loader must still resolve the facet
+ * to a real file so its body reaches the system prompt (workflowParser
+ * resolves it whenever the workflow wires `next: finding-conflict-adjudication`
+ * and fails fast when the persona cannot be found).
+ */
+export interface FindingContractAdjudicatorConfig {
+  persona: string;
+  personaPath?: string;
+  personaDisplayName?: string;
+  providerRoutingPersonaKey?: string;
+}
+
 export interface FindingContractConfig {
   ledgerPath: string;
   rawFindingsPath: string;
   manager: FindingContractManagerConfig;
+  /** Present when the supervisor persona was resolved for the finding-conflict-adjudication synthetic step. */
+  adjudicator?: FindingContractAdjudicatorConfig;
 }
 
 export interface FindingObservation {
@@ -191,6 +208,77 @@ export interface FindingManagerDuplicateDecision {
   evidence: string;
 }
 
+// Phase B (conflict adjudication). 'finding_valid': the reviewer's finding is
+// legitimate and still stands; with a non-empty actionableFix the conflict is
+// resolved in the reviewer's favor and the workflow routes to the fix path
+// (finding stays open); with an empty actionableFix it is treated exactly like
+// 'undetermined'. 'finding_stale': the finding no longer applies (already fixed /
+// no longer true) — engine moves it to resolved. 'evidence_invalid': the
+// finding's own premise does not hold — engine moves it to invalidated.
+// 'undetermined': the adjudicator could not decide; never opens the gate.
+// See adjudication-apply.ts's FindingConflictAdjudicationDisposition.
+export const FINDING_CONFLICT_ADJUDICATION_OUTCOMES = ['finding_valid', 'finding_stale', 'evidence_invalid', 'undetermined'] as const;
+export type FindingConflictAdjudicationOutcome = typeof FINDING_CONFLICT_ADJUDICATION_OUTCOMES[number];
+
+// The finding-side effect of an adjudication outcome. Fixed 1:1 mapping from
+// outcome, enforced by the engine (adjudication-apply.ts) — never trusted from
+// the LLM's own findingTransition value alone; the engine derives it from
+// outcome and rejects output where the two disagree.
+export const FINDING_CONFLICT_ADJUDICATION_TRANSITIONS = ['keep_open', 'resolved', 'invalidated'] as const;
+export type FindingConflictAdjudicationTransition = typeof FINDING_CONFLICT_ADJUDICATION_TRANSITIONS[number];
+
+/** Structured output of the finding-conflict-adjudication synthetic step (one conflict per call). */
+export interface FindingConflictAdjudicationOutput {
+  conflictId: string;
+  outcome: FindingConflictAdjudicationOutcome;
+  findingTransition: FindingConflictAdjudicationTransition;
+  evidence: string[];
+  actionableFix: string;
+}
+
+/**
+ * One completed adjudication recorded on a conflict, keyed by evidenceHash (see
+ * adjudication-evidence.ts). The "1回制限" rule: a conflict is never adjudicated
+ * twice against the same evidence — eligibility requires the current hash to be
+ * absent from EVERY past record (and every started attempt, see
+ * FindingConflictAdjudicationAttempt), not just the latest one, so evidence
+ * that reverts to a previously-adjudicated state cannot be re-adjudicated.
+ * New raw finding content or new disputes change the hash and re-open
+ * eligibility.
+ */
+export interface FindingConflictAdjudicationRecord {
+  evidenceHash: string;
+  outcome: FindingConflictAdjudicationOutcome;
+  findingTransition: FindingConflictAdjudicationTransition;
+  evidence: string[];
+  actionableFix: string;
+  decidedAt: FindingObservation;
+}
+
+/**
+ * A started adjudication attempt, recorded BEFORE the adjudicator LLM is
+ * invoked. If the run is interrupted (or the result is discarded because the
+ * evidence changed mid-flight), the attempt stays on the ledger, so a resumed
+ * run (a DIFFERENT runId) cannot re-adjudicate the same evidence — it falls
+ * through to the workflow's ABORT rule instead. Within the SAME run
+ * (startedAt.runId matches), a pending attempt — one whose evidenceHash has no
+ * completed adjudication record — is a reusable reservation: a rate-limit
+ * fallback re-execution of the step may retry the LLM call without recording
+ * a second attempt (codex R2).
+ */
+export interface FindingConflictAdjudicationAttempt {
+  evidenceHash: string;
+  startedAt: FindingObservation;
+  /**
+   * Name of the step the workflow advanced from into the adjudication step
+   * when this attempt started. Durable record of the return-to-origin target
+   * (codex R1): a resume that starts directly at the adjudication step has no
+   * WorkflowState.previousStep, and guessing among multiple wiring steps
+   * (reviewers vs final-gate) would misroute.
+   */
+  originStep?: string;
+}
+
 export interface FindingLedgerConflict {
   id: string;
   status: FindingConflictStatus;
@@ -201,6 +289,10 @@ export interface FindingLedgerConflict {
   lastSeen: FindingObservation;
   resolvedAt?: string;
   resolvedEvidence?: string;
+  /** Completed finding-conflict-adjudication decisions against this conflict, newest last. */
+  adjudications?: FindingConflictAdjudicationRecord[];
+  /** Started (possibly interrupted or discarded) adjudication attempts, newest last. Recorded before the LLM call — see FindingConflictAdjudicationAttempt. */
+  adjudicationAttempts?: FindingConflictAdjudicationAttempt[];
 }
 
 export interface FindingManagerOutput {
@@ -324,5 +416,15 @@ export interface FindingsRuleContext {
       rawFindingIds: string[];
       description: string;
     }>;
+    /**
+     * Active conflicts whose current evidence (referenced raw findings + the
+     * disputes recorded on their findings) has never been adjudicated, or has
+     * changed since the last adjudication attempt. Workflow rules route here
+     * (rather than straight to ABORT) so a fresh conflict gets one shot at
+     * finding-conflict-adjudication; see adjudication-evidence.ts.
+     */
+    unadjudicated: {
+      count: number;
+    };
   };
 }

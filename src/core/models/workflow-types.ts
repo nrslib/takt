@@ -167,6 +167,15 @@ interface WorkflowStepBase {
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;
+  /**
+   * Set only by the engine when it synthesizes a step (e.g. the
+   * finding-conflict-adjudication step injected into config.steps). Never
+   * settable from workflow YAML (the raw schema has no such field), which is
+   * how WorkflowValidator distinguishes a user-authored step that squats on a
+   * reserved synthetic name (configuration error) from the engine's own
+   * injection (allowed).
+   */
+  engineSynthesized?: true;
 }
 
 interface AgentWorkflowStepBase extends WorkflowStepBase {
@@ -404,6 +413,14 @@ export interface FallbackContext {
 export interface WorkflowState {
   workflowName: string;
   currentStep: string;
+  /**
+   * Name of the step the state machine advanced FROM into currentStep
+   * (updated in WorkflowRunLoop's advanceActiveStep). Used by the
+   * finding-conflict-adjudication synthetic step to resolve its dynamic
+   * return-to-origin transition; undefined at workflow start and after a
+   * resume that begins directly at a step.
+   */
+  previousStep?: string;
   iteration: number;
   findings?: FindingsRuleContext;
   stepOutputs: Map<string, AgentResponse>;

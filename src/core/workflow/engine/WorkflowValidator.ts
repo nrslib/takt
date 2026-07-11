@@ -3,7 +3,7 @@ import {
   SESSION_AGENT_STEP_REQUIRED_MESSAGE,
   SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
 } from '../../models/workflow-session-constraints.js';
-import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
+import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
@@ -32,6 +32,46 @@ function validateFindingsRuleContract(
 ): void {
   if (!findingContractConfigured && isFindingsRule(rule)) {
     throw new Error(`${source}: findings.* conditions require finding_contract`);
+  }
+}
+
+/**
+ * `next: finding-conflict-adjudication` targets the engine-synthesized Phase B
+ * step (see constants.ts / adjudication-step.ts). Like findings.* conditions,
+ * it only makes sense when a finding ledger exists to adjudicate against.
+ * Applies to step rules AND loop monitor judge rules (codex B7) — both can
+ * route to the synthetic step.
+ */
+function validateFindingConflictAdjudicationRuleContract(
+  findingContractConfigured: boolean,
+  rule: { next?: string },
+  source: string,
+): void {
+  if (!findingContractConfigured && rule.next === FINDING_CONFLICT_ADJUDICATION_STEP) {
+    throw new Error(`${source}: next: ${FINDING_CONFLICT_ADJUDICATION_STEP} requires finding_contract`);
+  }
+}
+
+/**
+ * The synthetic step name is reserved (codex B7): a user-authored step
+ * squatting on it would collide with the engine's injection and silently
+ * shadow the adjudication semantics. The engine's own injected step carries
+ * engineSynthesized (not settable from YAML — the raw schema has no such
+ * field) and is exempt. Provider/model preflight for the synthetic step needs
+ * no dedicated validator anymore: the injected step is a real config.steps
+ * entry and goes through validateAgentStepProviderModel like any other step.
+ */
+function validateFindingConflictAdjudicationReservedName(config: WorkflowConfig): void {
+  const collectSteps = (steps: readonly WorkflowStep[]): WorkflowStep[] => steps.flatMap((step) => [
+    step,
+    ...collectSteps(step.parallel ?? []),
+  ]);
+  for (const step of collectSteps(config.steps)) {
+    if (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized !== true) {
+      throw new Error(
+        `Configuration error: step name "${FINDING_CONFLICT_ADJUDICATION_STEP}" is reserved for the engine-synthesized conflict adjudication step`,
+      );
+    }
   }
 }
 
@@ -304,6 +344,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
   validateFindingContractParallelStructuredOutput(config, findingContractEnabled);
   validateFindingContractManagerProviderModel(config, options);
+  validateFindingConflictAdjudicationReservedName(config);
   validateFindingContractInvalidManagerOutputRules(config, findingContractEnabled);
   validateParallelSubStepNamesUnique(config);
   validateFindingContractInheritanceConflict(config, options);
@@ -323,6 +364,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   const stepNames = new Set(config.steps.map((step) => step.name));
   stepNames.add(COMPLETE_STEP);
   stepNames.add(ABORT_STEP);
+  stepNames.add(FINDING_CONFLICT_ADJUDICATION_STEP);
 
   for (const step of config.steps) {
     validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
@@ -332,6 +374,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         throw new Error(`Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`);
       }
       validateFindingsRuleContract(
+        findingContractEnabled,
+        rule,
+        `Invalid rule in step "${step.name}"`,
+      );
+      validateFindingConflictAdjudicationRuleContract(
         findingContractEnabled,
         rule,
         `Invalid rule in step "${step.name}"`,
@@ -367,6 +414,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       if (!stepNames.has(rule.next)) {
         throw new Error(`Invalid loop_monitor judge rule: target step "${rule.next}" does not exist`);
       }
+      validateFindingConflictAdjudicationRuleContract(
+        findingContractEnabled,
+        rule,
+        'Invalid loop_monitor judge rule',
+      );
       validateFindingsRuleContract(
         findingContractEnabled,
         rule,

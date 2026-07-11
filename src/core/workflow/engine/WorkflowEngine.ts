@@ -45,6 +45,8 @@ import {
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
 import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
+import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
+import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
 import { ERROR_MESSAGES } from '../constants.js';
 const log = createLogger('workflow-engine');
 export type {
@@ -124,7 +126,16 @@ export class WorkflowEngine extends EventEmitter {
       config.autoRouting ?? options.autoRouting,
       options.autoStrategyOverride,
     );
-    this.config = config;
+    // Phase B (codex B4): the finding-conflict-adjudication step is a REAL
+    // synthesized step injected into config.steps whenever the workflow (or a
+    // loop monitor judge) wires a rule to it and a finding contract is in
+    // effect. Injection happens before validateWorkflowConfig so the injected
+    // step is validated exactly like an authored step (session, provider,
+    // model), and before any service captures config.steps.
+    this.config = injectFindingConflictAdjudicationStep(
+      config,
+      options.inheritedFindingContract?.contract ?? config.findingContract,
+    );
     this.options = {
       ...options,
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
@@ -232,6 +243,18 @@ export class WorkflowEngine extends EventEmitter {
       workflowCallRunner: this.workflowCallRunner,
       updatePersonaSession: this.updatePersonaSession.bind(this),
       emitReport: (step, filePath, fileName) => this.emit('step:report', step, filePath, fileName),
+      findingConflictAdjudicationRunner: this.findingContract && this.findingLedgerStore
+        ? createFindingConflictAdjudicationRunner({
+          ledgerStore: this.findingLedgerStore,
+          optionsBuilder: this.optionsBuilder,
+          stepExecutor: this.stepExecutor,
+          getCwd: () => this.cwd,
+          workflowName: this.config.name,
+          runId: this.runPaths.slug,
+          refreshFindingsState: this.refreshFindingsState.bind(this),
+          emitEvent: (event, ...args) => this.emit(event as never, ...args as []),
+        })
+        : undefined,
     });
     workflowRunExecutors.set(this, () => this.runWithSystemCleanup(
       () => runWithWorkflowSpan(

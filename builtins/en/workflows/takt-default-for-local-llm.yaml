@@ -315,8 +315,8 @@ steps:
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
@@ -384,8 +384,8 @@ steps:
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("There are unadjudicated findings.conflicts. Choose fix only when a concrete code change by the coder can resolve them. Do not choose it for reviewer disagreements or anything requiring human judgment.")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 

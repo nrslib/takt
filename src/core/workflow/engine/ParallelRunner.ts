@@ -45,6 +45,7 @@ import {
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
 import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { regenerateIncoherentNewRawRelationsOnce } from '../findings/relation-coherence.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
@@ -477,6 +478,25 @@ export class ParallelRunner {
                 ...(correctiveResponse.sessionId !== undefined ? { sessionId: correctiveResponse.sessionId } : {}),
               };
             }
+          }
+          // レビュア再生成（設計項目3の残り）: relation=new なのに正規化
+          // path+title が既存 open finding と一致する raw があれば、同一
+          // セッションで1回だけ relation の明示を求める。直らなかった raw は
+          // 取り込み時（manager-runner.ts の partitionRelationCoherentRawFindings）
+          // に unsupported_raw として落ちる。
+          if (subResponse.status === 'done' && this.deps.findingLedgerStore) {
+            subResponse = await regenerateIncoherentNewRawRelationsOnce({
+              stepName: subStep.name,
+              persona: executableSubStep.persona,
+              response: subResponse,
+              ledger: this.deps.findingLedgerStore.loadLedger(),
+              agentOptions,
+              normalize: (candidate) => this.deps.stepExecutor.normalizeStructuredOutputWithDiagnostics(
+                executableSubStep,
+                candidate,
+                subRuntime,
+              ),
+            });
           }
         }
         if (!didEmitPhaseStart) {

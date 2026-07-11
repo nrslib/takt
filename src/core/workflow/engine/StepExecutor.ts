@@ -59,6 +59,7 @@ import {
   selectInvalidManagerOutputRuleIndex,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
+import { regenerateIncoherentNewRawRelationsOnce } from '../findings/relation-coherence.js';
 
 const log = createLogger('step-executor');
 
@@ -801,6 +802,23 @@ export class StepExecutor {
       state.lastOutput = response;
       this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
       return { response, instruction: phase1Instruction, providerInfo };
+    }
+
+    // レビュア再生成（設計項目3の残り）: relation=new なのに正規化 path+title が
+    // 既存 open finding と一致する raw があれば、同一セッションで1回だけ
+    // relation の明示を求める（ParallelRunner の同名処理と同じ一般経路）。
+    if (findingContractIntakeStep && findingContractContext && this.deps.findingLedgerStore && response.status === 'done') {
+      response = await regenerateIncoherentNewRawRelationsOnce({
+        stepName: step.name,
+        persona: executableStep.persona,
+        response,
+        ledger: this.deps.findingLedgerStore.loadLedger(),
+        agentOptions: baseAgentOptions,
+        normalize: (candidate) => this.normalizeStructuredOutputWithDiagnostics(executableStep, candidate, runtime),
+      });
+      if (response.sessionId !== undefined) {
+        updatePersonaSession(sessionKey, response.sessionId);
+      }
     }
 
     // Finding Contract の取り込みはルール評価の前に行う。when(findings.*) の

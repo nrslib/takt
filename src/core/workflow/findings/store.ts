@@ -41,6 +41,26 @@ export interface FindingLedgerStore {
   createRunCopy: () => string;
   saveRawFindings: (runId: string, stepName: string, rawFindings: RawFinding[]) => string;
   saveManagerValidationReport: (report: FindingManagerValidationReport) => string;
+  /** Audit trail for the finding-conflict-adjudication synthetic step: discarded decisions (evidence changed between prompt and apply) and other non-applied outcomes. */
+  saveConflictAdjudicationReport: (report: FindingConflictAdjudicationAuditReport) => string;
+}
+
+/**
+ * Written when an adjudication decision could NOT be applied (codex B2: the
+ * evidence hash at apply time differed from the hash the LLM was prompted
+ * with, or the conflict stopped being active mid-flight). The started attempt
+ * stays recorded on the conflict; this report preserves WHY nothing was
+ * applied and what the discarded decision was.
+ */
+export interface FindingConflictAdjudicationAuditReport {
+  version: 1;
+  runId: string;
+  conflictId: string;
+  discarded: true;
+  reason: string;
+  promptEvidenceHash: string;
+  freshEvidenceHash?: string;
+  output: unknown;
 }
 
 export interface FindingManagerValidationAttemptReport {
@@ -274,6 +294,10 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     },
     saveManagerValidationReport: (report) => {
       const fileName = `findings-manager-validation.${sanitizeFileSegment(report.stepName)}.json`;
+      return writeReportFile(options.reportDir, fileName, JSON.stringify(report, null, 2));
+    },
+    saveConflictAdjudicationReport: (report) => {
+      const fileName = `findings-adjudication.${sanitizeFileSegment(report.conflictId)}.json`;
       return writeReportFile(options.reportDir, fileName, JSON.stringify(report, null, 2));
     },
   };

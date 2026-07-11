@@ -294,6 +294,13 @@ describe('builtin takt-default provider_options refs', () => {
           instruction: readFileSync(instructionPath(locale, 'findings-manager'), 'utf-8'),
           outputContract: readFileSync(outputContractPath(locale, 'findings-manager'), 'utf-8'),
         },
+        // Phase B (codex B6): finding-conflict-adjudication を配線しているため、
+        // supervisor persona が facet ファイルまで解決されている（personaPath が
+        // 無いと facet 本文が system prompt に載らない）。
+        adjudicator: {
+          providerRoutingPersonaKey: 'supervisor',
+          personaPath: personaPath(locale, 'supervisor'),
+        },
       });
       const antipatternOk = locale === 'ja' ? 'AI特有の問題なし' : 'No AI-specific issues';
       const antipatternNg = locale === 'ja' ? 'AI特有の問題あり' : 'AI-specific issues found';
@@ -302,7 +309,10 @@ describe('builtin takt-default provider_options refs', () => {
         `all("approved", "${antipatternOk}", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)`,
         `any("needs_fix", "${antipatternNg}", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)`,
         'when(findings.conflicts.count == 0 && findings.open.count > 0)',
-        expect.stringContaining('findings.conflicts'),
+        // Phase B (codex B1): actionable かどうかの判断は裁定ステップ自身が
+        // 構造化出力で担うため、旧 ai() conflict ルールは削除済み。未裁定の
+        // conflict は ABORT の前に合成ステップで1回だけ裁定を試みる。
+        'when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)',
         'when(findings.conflicts.count > 0)',
       ]);
       expect(reviewers?.rules?.[0]).toMatchObject({
@@ -347,9 +357,8 @@ describe('builtin takt-default provider_options refs', () => {
           next: 'fix',
         }),
         expect.objectContaining({
-          condition: expect.stringContaining('findings.conflicts'),
-          next: 'fix',
-          isAiCondition: true,
+          condition: 'when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)',
+          next: 'finding-conflict-adjudication',
         }),
         expect.objectContaining({
           condition: 'when(findings.conflicts.count > 0)',
@@ -400,12 +409,16 @@ describe('builtin takt-default provider_options refs', () => {
         const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
         const reviewerRules = reviewers?.rules ?? [];
         expect(reviewerRules.map((rule) => rule.next), name).toEqual([
-          'final-gate', 'fix', 'fix', 'fix', 'ABORT',
+          'final-gate', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
         expect(reviewerRules[0], name).toMatchObject({
           isAggregateCondition: true,
           aggregateType: 'all',
           aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
+        });
+        expect(reviewerRules[3], name).toMatchObject({
+          condition: 'when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)',
+          next: 'finding-conflict-adjudication',
         });
         expect(reviewerRules[4], name).toMatchObject({
           condition: 'when(findings.conflicts.count > 0)',
@@ -415,7 +428,7 @@ describe('builtin takt-default provider_options refs', () => {
         const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
         const gateRules = finalGate?.rules ?? [];
         expect(gateRules.map((rule) => rule.next), name).toEqual([
-          'COMPLETE', 'plan', 'fix', 'fix', 'fix', 'ABORT',
+          'COMPLETE', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
         expect(gateRules[0], name).toMatchObject({
           isAggregateCondition: true,
@@ -445,7 +458,7 @@ describe('builtin takt-default provider_options refs', () => {
         const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
         const reviewerRules = reviewers?.rules ?? [];
         expect(reviewerRules.map((rule) => rule.next), name).toEqual([
-          'final-gate', 'fix', 'fix', 'fix', 'ABORT',
+          'final-gate', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
         expect(reviewerRules[0], name).toMatchObject({
           isAggregateCondition: true,
@@ -456,7 +469,7 @@ describe('builtin takt-default provider_options refs', () => {
         const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
         const gateRules = finalGate?.rules ?? [];
         expect(gateRules.map((rule) => rule.next), name).toEqual([
-          'COMPLETE', 'plan', 'fix', 'fix', 'fix', 'ABORT',
+          'COMPLETE', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
         expect(gateRules[0], name).toMatchObject({
           isAggregateCondition: true,

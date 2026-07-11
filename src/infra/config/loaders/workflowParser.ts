@@ -14,6 +14,11 @@ import type {
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
 import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
 import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import {
+  FINDING_CONFLICT_ADJUDICATION_PERSONA,
+  workflowWiresFindingConflictAdjudication,
+} from '../../../core/workflow/findings/adjudication-step.js';
+import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../../../core/workflow/constants.js';
 import { normalizeAutoRoutingConfig, normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
@@ -117,6 +122,51 @@ function normalizeFindingContractConfig(
       ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
   };
+}
+
+/**
+ * Resolves the fixed "supervisor" persona for the engine-synthesized
+ * finding-conflict-adjudication step (codex B6). Without personaPath the
+ * runner would use the bare persona NAME as the system prompt and the facet
+ * body would never reach the model. Resolution is attempted whenever a
+ * finding contract exists (so workflow_call children that wire the step can
+ * inherit an adjudicator from the parent contract); it is a configuration
+ * error only when this workflow actually wires the step and the persona
+ * cannot be found.
+ */
+function resolveFindingConflictAdjudicator(
+  findingContract: FindingContractConfig | undefined,
+  steps: readonly WorkflowStep[],
+  loopMonitors: readonly LoopMonitorConfig[] | undefined,
+  workflowDir: string,
+  sections: WorkflowSections,
+  context?: FacetResolutionContext,
+): void {
+  if (!findingContract) {
+    return;
+  }
+  const wires = workflowWiresFindingConflictAdjudication(steps, loopMonitors);
+  const { personaSpec, personaPath } = resolvePersona(
+    FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    sections,
+    workflowDir,
+    context,
+  );
+  if (personaSpec && personaPath) {
+    findingContract.adjudicator = {
+      persona: personaSpec,
+      personaPath,
+      personaDisplayName: extractPersonaDisplayName(personaPath),
+      providerRoutingPersonaKey: FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    };
+    return;
+  }
+  if (wires) {
+    throw new Error(
+      `Configuration error: persona "${FINDING_CONFLICT_ADJUDICATION_PERSONA}" is required for `
+      + `next: ${FINDING_CONFLICT_ADJUDICATION_STEP} but could not be resolved`,
+    );
+  }
 }
 
 function validateFindingsRulesRequireContract(
@@ -258,6 +308,7 @@ export function normalizeWorkflowConfig(
 
   const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
   validateFindingsRulesRequireContract(steps, loopMonitors, findingContract);
+  resolveFindingConflictAdjudicator(findingContract, steps, loopMonitors, workflowDir, sections, context);
 
   return {
     name: parsed.name,

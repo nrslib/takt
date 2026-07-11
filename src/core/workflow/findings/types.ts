@@ -1,6 +1,8 @@
 export {
   CONFLICT_DECISION_KINDS,
   DISPUTE_DECISION_KINDS,
+  FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
+  FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
   FINDING_CONFLICT_STATUSES,
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
@@ -12,6 +14,12 @@ export {
 export type {
   ConflictDecisionKind,
   DisputeDecisionKind,
+  FindingConflictAdjudicationAttempt,
+  FindingConflictAdjudicationOutcome,
+  FindingConflictAdjudicationOutput,
+  FindingConflictAdjudicationRecord,
+  FindingConflictAdjudicationTransition,
+  FindingContractAdjudicatorConfig,
   FindingContractConfig,
   FindingContractManagerConfig,
   FindingConflictStatus,

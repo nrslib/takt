@@ -344,8 +344,8 @@ steps:
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
@@ -414,8 +414,8 @@ steps:
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
-      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
-        next: fix
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+        next: finding-conflict-adjudication
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
 
