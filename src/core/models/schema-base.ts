@@ -319,16 +319,6 @@ const CommandQualityGateInputSchema = z.object({
   timeout_ms: z.number().int().positive().optional(),
 }).strict();
 
-function normalizeCommandQualityGate(gate: z.output<typeof CommandQualityGateInputSchema>) {
-  return {
-    type: gate.type,
-    ...(gate.name !== undefined ? { name: gate.name } : {}),
-    command: gate.command,
-    ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
-    ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
-  };
-}
-
 const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
   if (typeof gate === 'string') {
     return;
@@ -357,7 +347,7 @@ const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
     return gate;
   }
 
-  return normalizeCommandQualityGate(CommandQualityGateInputSchema.parse(gate));
+  return CommandQualityGateInputSchema.parse(gate);
 });
 
 /** Quality gates schema - AI directives and command gates for step completion */

@@ -1,10 +1,12 @@
 import type {
-  CommandQualityGate,
   QualityGate,
   RateLimitFallbackConfig,
   StepProviderOptions,
   WorkflowRuntimeConfig,
 } from '../../core/models/workflow-types.js';
+import type { z } from 'zod';
+import type { QualityGatesSchema } from '../../core/models/schema-base.js';
+import type { WorkflowOverridesSchema } from '../../core/models/config-schemas.js';
 import type { PermissionMode } from '../../core/models/status.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type {
@@ -26,11 +28,6 @@ import {
 } from './providerReference.js';
 import { normalizeProviderOptions, type NormalizeProviderOptionsOptions } from './providerOptions.js';
 
-type RawCommandQualityGate = Omit<CommandQualityGate, 'timeoutMs'> & {
-  timeout_ms?: number;
-  timeoutMs?: number;
-};
-
 type RawProviderRoutingEntry = string | {
   type?: string;
   provider?: string;
@@ -38,8 +35,9 @@ type RawProviderRoutingEntry = string | {
   provider_options?: Record<string, unknown>;
 };
 
-type RawQualityGate = string | RawCommandQualityGate;
-type RawQualityGateOverride = { quality_gates?: RawQualityGate[] };
+type RawQualityGate = NonNullable<z.output<typeof QualityGatesSchema>>[number];
+type RawWorkflowOverrides = z.output<typeof WorkflowOverridesSchema>;
+type SerializedQualityGateOverride = { quality_gates?: RawQualityGate[] };
 
 type RawAutoRoutingConfig = {
   strategy: AutoRoutingConfig['strategy'];
@@ -67,13 +65,11 @@ function normalizeQualityGate(gate: RawQualityGate): QualityGate {
     ...(gate.name !== undefined ? { name: gate.name } : {}),
     command: gate.command,
     ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
-    ...(gate.timeoutMs !== undefined || gate.timeout_ms !== undefined
-      ? { timeoutMs: gate.timeoutMs ?? gate.timeout_ms }
-      : {}),
+    ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
   };
 }
 
-function normalizeQualityGates(gates: RawQualityGate[] | undefined): QualityGate[] | undefined {
+export function normalizeQualityGates(gates: RawQualityGate[] | undefined): QualityGate[] | undefined {
   return gates?.map(normalizeQualityGate);
 }
 
@@ -272,12 +268,7 @@ export function denormalizeProviderProfiles(
 }
 
 export function normalizeWorkflowOverrides(
-  raw: {
-    quality_gates?: RawQualityGate[];
-    quality_gates_edit_only?: boolean;
-    steps?: Record<string, RawQualityGateOverride>;
-    personas?: Record<string, RawQualityGateOverride>;
-  } | undefined,
+  raw: RawWorkflowOverrides,
 ): WorkflowOverrides | undefined {
   if (!raw) return undefined;
   return {
@@ -287,7 +278,7 @@ export function normalizeWorkflowOverrides(
       ? Object.fromEntries(
         Object.entries(raw.steps).map(([name, override]) => [
           name,
-          { qualityGates: normalizeQualityGates(override.quality_gates) },
+          { qualityGates: normalizeQualityGates(override?.quality_gates) },
         ])
       )
       : undefined,
@@ -295,7 +286,7 @@ export function normalizeWorkflowOverrides(
       ? Object.fromEntries(
         Object.entries(raw.personas).map(([name, override]) => [
           name,
-          { qualityGates: normalizeQualityGates(override.quality_gates) },
+          { qualityGates: normalizeQualityGates(override?.quality_gates) },
         ])
       )
       : undefined,
@@ -307,15 +298,15 @@ export function denormalizeWorkflowOverrides(
 ): {
   quality_gates?: RawQualityGate[];
   quality_gates_edit_only?: boolean;
-  steps?: Record<string, RawQualityGateOverride>;
-  personas?: Record<string, RawQualityGateOverride>;
+  steps?: Record<string, SerializedQualityGateOverride>;
+  personas?: Record<string, SerializedQualityGateOverride>;
 } | undefined {
   if (!overrides) return undefined;
   const result: {
     quality_gates?: RawQualityGate[];
     quality_gates_edit_only?: boolean;
-    steps?: Record<string, RawQualityGateOverride>;
-    personas?: Record<string, RawQualityGateOverride>;
+    steps?: Record<string, SerializedQualityGateOverride>;
+    personas?: Record<string, SerializedQualityGateOverride>;
   } = {};
   if (overrides.qualityGates !== undefined) {
     result.quality_gates = denormalizeQualityGates(overrides.qualityGates);
@@ -326,7 +317,7 @@ export function denormalizeWorkflowOverrides(
   if (overrides.steps) {
     result.steps = Object.fromEntries(
       Object.entries(overrides.steps).map(([name, override]) => {
-        const stepOverride: RawQualityGateOverride = {};
+        const stepOverride: SerializedQualityGateOverride = {};
         if (override.qualityGates !== undefined) {
           stepOverride.quality_gates = denormalizeQualityGates(override.qualityGates);
         }
@@ -337,7 +328,7 @@ export function denormalizeWorkflowOverrides(
   if (overrides.personas) {
     result.personas = Object.fromEntries(
       Object.entries(overrides.personas).map(([name, override]) => {
-        const personaOverride: RawQualityGateOverride = {};
+        const personaOverride: SerializedQualityGateOverride = {};
         if (override.qualityGates !== undefined) {
           personaOverride.quality_gates = denormalizeQualityGates(override.qualityGates);
         }

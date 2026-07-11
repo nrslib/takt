@@ -2,7 +2,6 @@ import { writeFileSync } from 'node:fs';
 import { stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
 import type { GlobalConfig, TaktProviderConfigEntry } from '../../../core/models/config-types.js';
-import type { QualityGate } from '../../../core/models/workflow-types.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -207,12 +206,7 @@ export class GlobalConfigManager {
       } : undefined,
       autoFetch: parsed.auto_fetch,
       baseBranch: parsed.base_branch,
-      workflowOverrides: normalizeWorkflowOverrides(parsed.workflow_overrides as {
-        quality_gates?: QualityGate[];
-        quality_gates_edit_only?: boolean;
-        steps?: Record<string, { quality_gates?: QualityGate[] }>;
-        personas?: Record<string, { quality_gates?: QualityGate[] }>;
-      } | undefined),
+      workflowOverrides: normalizeWorkflowOverrides(parsed.workflow_overrides),
       // Project-local keys (also accepted in global config)
       pipeline: normalizePipelineConfig(
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,

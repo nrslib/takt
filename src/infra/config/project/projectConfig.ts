@@ -1,7 +1,6 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
-import type { QualityGate } from '../../../core/models/workflow-types.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
 import type { TaktProviderConfigEntry } from '../../../core/models/config-types.js';
@@ -194,12 +193,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
         step_permission_overrides?: Record<string, string>;
       }> | undefined,
     ),
-    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides as {
-      quality_gates?: QualityGate[];
-      quality_gates_edit_only?: boolean;
-      steps?: Record<string, { quality_gates?: QualityGate[] }>;
-      personas?: Record<string, { quality_gates?: QualityGate[] }>;
-    } | undefined),
+    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides),
     runtime: normalizeRuntime(runtime),
     workflowRuntimePrepare: normalizeWorkflowRuntimePreparePolicy(parsedConfigResult.workflow_runtime_prepare),
     workflowCommandGates: normalizeWorkflowCommandGatesPolicy(parsedConfigResult.workflow_command_gates),
