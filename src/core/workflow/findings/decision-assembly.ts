@@ -157,10 +157,10 @@ export interface AssembleManagerOutputInput {
    * manager's invalidateDecisions may only select from this set; the LLM's
    * evidence alone never grants authority to invalidate a finding outside it.
    * Defaults to empty (no candidates -> no invalidateDecisions can be accepted).
-   * The save-time re-assembly (manager-runner.ts's freshAssembly) passes the
-   * finding ids already present in the finalized managerOutput.invalidatedFindings,
-   * since those were vetted once already; freshAssembly only re-checks structural
-   * validity (still open, no same-round collision), not eligibility.
+   * The save-time re-assembly (manager-runner.ts's freshAssembly) recomputes the
+   * candidates against the freshly reloaded ledger and the current cwd, so an
+   * invalidate whose location became valid between the initial judgment and the
+   * save (e.g. the file now exists) is rejected as stale instead of applied.
    */
   invalidLocationCandidateFindingIds?: ReadonlySet<string>;
 }
@@ -905,9 +905,15 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     decisions: input.decisions.duplicateDecisions,
     transitionedFindingIds: withInvalidateTransitioned,
   });
+  // canonical 側も除外集合へ加える: duplicate 統合の受け皿に指名された finding を
+  // 同じ出力で waive すると、統合された指摘ごとゲートから消える（duplicate 側は
+  // superseded 遷移で閉じ、canonical まで waive されると誰も指摘を負わない）。
   const transitionedFindingIds = new Set([
     ...withInvalidateTransitioned,
-    ...duplicateResult.duplicateFindings.flatMap((duplicate) => duplicate.duplicateFindingIds),
+    ...duplicateResult.duplicateFindings.flatMap((duplicate) => [
+      duplicate.canonicalFindingId,
+      ...duplicate.duplicateFindingIds,
+    ]),
   ]);
 
   const disputeResult = assembleDisputeDecisions({

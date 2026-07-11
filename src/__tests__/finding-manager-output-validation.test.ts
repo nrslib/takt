@@ -138,6 +138,22 @@ describe('validateFindingManagerOutput', () => {
     }
   });
 
+  // スキーマ（.min(1)）を経ない内部組み立ての出力に対する最終防衛線。
+  it('should reject a duplicateFindings entry with no duplicate finding ids', () => {
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        duplicateFindings: [{ canonicalFindingId: 'F-0001', duplicateFindingIds: [], evidence: 'dup' }],
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(' ')).toContain('lists no duplicate finding ids');
+    }
+  });
+
   it('should reject a waiver when the prior response contains no claim for the finding', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),

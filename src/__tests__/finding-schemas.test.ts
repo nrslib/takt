@@ -14,6 +14,7 @@ import {
   RawFindingSchema,
   RawFindingsOutputJsonSchema,
   ReviewerRawFindingSchema,
+  parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
 
 describe('finding schemas', () => {
@@ -91,5 +92,33 @@ describe('finding schemas', () => {
       minLength: 1,
       description: 'Structured form of the Observed Findings family_tag value. A classification/search hint only — it is not used to determine whether two findings are the same issue.',
     });
+  });
+
+  // 決定スキーマ（FindingManagerDuplicateDecisionSchema）と対称に、出力側の
+  // duplicateFindings も duplicate を1件も持たないエントリを拒否する。
+  it('rejects a duplicateFindings entry with an empty duplicateFindingIds array', () => {
+    const base = {
+      matches: [],
+      newFindings: [],
+      resolvedFindings: [],
+      reopenedFindings: [],
+      conflicts: [],
+      resolvedConflicts: [],
+      waivedFindings: [],
+      disputeNotes: [],
+      invalidatedFindings: [],
+    };
+
+    expect(() => parseFindingManagerOutput({
+      ...base,
+      duplicateFindings: [{ canonicalFindingId: 'F-0001', duplicateFindingIds: [], evidence: 'dup' }],
+    })).toThrow();
+    expect(parseFindingManagerOutput({
+      ...base,
+      duplicateFindings: [{ canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0002'], evidence: 'dup' }],
+    }).duplicateFindings).toHaveLength(1);
+    // LLM 向け JSON schema も同じ制約を明示する。
+    expect(FindingManagerOutputJsonSchema.properties.duplicateFindings.items.properties.duplicateFindingIds.minItems).toBe(1);
+    expect(FindingManagerDecisionsJsonSchema.properties.duplicateDecisions.items.properties.duplicateFindingIds.minItems).toBe(1);
   });
 });

@@ -99,6 +99,11 @@ describe('dispute guidance injection', () => {
 });
 
 describe('reviewer duty gating', () => {
+  // 確認義務の有無は義務の文言（with relation "resolution_confirmation"）で判定する。
+  // 裸の resolution_confirmation トークンは、レビュアー共通の kind 設定規則
+  // （kind と relation の整合）にも現れるため、義務の存在判定には使えない。
+  const CONFIRMATION_DUTY = 'with relation "resolution_confirmation"';
+
   it('should omit confirmation and waived duties for reviewers when the ledger is empty', () => {
     const instruction = new InstructionBuilder(
       makeStep(),
@@ -107,7 +112,7 @@ describe('reviewer duty gating', () => {
 
     const section = extractFindingContractSection(instruction);
     expect(section).toContain('relation "new"');
-    expect(section).not.toContain('resolution_confirmation');
+    expect(section).not.toContain(CONFIRMATION_DUTY);
     expect(section).not.toContain('waived');
   });
 
@@ -118,7 +123,7 @@ describe('reviewer duty gating', () => {
     ).build());
 
     expect(section).toContain('listed as waived');
-    expect(section).not.toContain('resolution_confirmation');
+    expect(section).not.toContain(CONFIRMATION_DUTY);
   });
 
   it('should inject confirmation duties when open findings exist and waived duty only with waived findings', () => {
@@ -126,7 +131,7 @@ describe('reviewer duty gating', () => {
       makeStep(),
       makeContext({ hasOpenFindings: true, rawFindingsJsonSchema: { type: 'object' } }),
     ).build());
-    expect(withOpen).toContain('resolution_confirmation');
+    expect(withOpen).toContain(CONFIRMATION_DUTY);
     expect(withOpen).not.toContain('listed as waived');
 
     const withWaived = extractFindingContractSection(new InstructionBuilder(

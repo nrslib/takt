@@ -9,6 +9,7 @@
 {{/if}}{{ledgerSummary}}
 
 {{#if isReviewer}}- Report every fresh issue you observe as a structured raw finding with relation "new" (empty targetFindingId). The `kind` field is kept for backward compatibility; set `relation`, not just `kind`.
+- When you do set `kind`, keep it consistent with `relation`: use kind "resolution_confirmation" when relation is "resolution_confirmation", and kind "issue" for every other relation.
 {{/if}}{{#if reviewerHasOpenFindings}}- Each round, verify the open ledger findings that fall within your review scope.
 - When you have confirmed an open finding is fixed, report it as a raw finding with relation "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.
 - Do not re-report an open finding that is still unfixed at the same location. If it is still happening but you're confirming it explicitly (e.g. it moved to a different line, or you want to record that it's still present rather than staying silent), report it with relation "persists" and the ledger finding id in targetFindingId — familyTag and line-number differences from the original report do not matter; cite the finding id. Report a fresh "new" issue only if it actually regressed into a different problem.

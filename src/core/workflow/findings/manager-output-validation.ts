@@ -355,6 +355,12 @@ function validateDuplicateFindings(
 
   return managerOutput.duplicateFindings.flatMap((duplicate, index) => {
     const decision = `duplicateFindings[${index}]`;
+    // スキーマ（FindingManagerOutputSchema）も .min(1) で弾くが、この関数は
+    // 最終防衛線としてスキーマを経ない内部組み立ての出力も受けるため、
+    // 空の duplicateFindingIds はここでも独立に検出する。
+    const emptyErrors = duplicate.duplicateFindingIds.length === 0
+      ? [`Duplicate decision for canonical "${duplicate.canonicalFindingId}" lists no duplicate finding ids in ${decision}`]
+      : [];
     const selfReferenceErrors = duplicate.duplicateFindingIds.includes(duplicate.canonicalFindingId)
       ? [`Canonical finding "${duplicate.canonicalFindingId}" cannot be its own duplicate in ${decision}`]
       : [];
@@ -377,7 +383,7 @@ function validateDuplicateFindings(
         ...cycleErrors,
       ];
     });
-    return [...selfReferenceErrors, ...canonicalErrors, ...duplicateEntryErrors];
+    return [...emptyErrors, ...selfReferenceErrors, ...canonicalErrors, ...duplicateEntryErrors];
   });
 }
 

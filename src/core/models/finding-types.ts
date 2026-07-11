@@ -120,7 +120,7 @@ export type RawFindingKind = typeof RAW_FINDING_KINDS[number];
 // fresh 'new' issue except by mechanical familyTag+location matching, which the
 // convergence design removes as an identity signal). 'resolution_confirmation'
 // mirrors kind=resolution_confirmation. `kind` is retained for backward
-// compatibility (see parseRawFindingRelation in finding-schemas.ts) but
+// compatibility (see deriveRawFindingRelation in finding-schemas.ts) but
 // `relation` is authoritative wherever both are present.
 export const RAW_FINDING_RELATIONS = ['new', 'persists', 'resolution_confirmation', 'reopened'] as const;
 export type RawFindingRelation = typeof RAW_FINDING_RELATIONS[number];
@@ -139,7 +139,7 @@ export interface RawFinding {
   kind?: RawFindingKind;
   /**
    * This raw finding's relationship to the ledger. Always present after schema
-   * parsing (parseRawFindingRelation derives it from `kind` for pre-existing
+   * parsing (deriveRawFindingRelation derives it from `kind` for pre-existing
    * data); optional on the wire type only because reviewers producing the v1
    * raw findings JSON schema predate this field.
    */

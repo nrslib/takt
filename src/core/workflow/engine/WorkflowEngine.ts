@@ -249,7 +249,11 @@ export class WorkflowEngine extends EventEmitter {
           optionsBuilder: this.optionsBuilder,
           stepExecutor: this.stepExecutor,
           getCwd: () => this.cwd,
-          workflowName: this.config.name,
+          // 台帳へ書く文脈の workflowName は store が束縛する正準名を使う。
+          // workflow_call の子が親の台帳を継承した場合、this.config.name
+          // （子の名前）を使うと reconcile 文脈が親の台帳の workflowName と
+          // 食い違う（StepExecutor / ParallelRunner の manager 経路と同じ理由）。
+          workflowName: this.findingLedgerStore.workflowName,
           runId: this.runPaths.slug,
           refreshFindingsState: this.refreshFindingsState.bind(this),
           emitEvent: (event, ...args) => this.emit(event as never, ...args as []),

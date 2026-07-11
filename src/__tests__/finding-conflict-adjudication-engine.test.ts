@@ -32,11 +32,22 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
   runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
 }));
 
+// 実装をそのまま通しつつ、WorkflowEngine が runner へ渡す deps（特に
+// workflowName — 継承時は台帳 store の正準名でなければならない）を観測する。
+vi.mock('../core/workflow/findings/adjudication-runner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/findings/adjudication-runner.js')>();
+  return {
+    ...actual,
+    createFindingConflictAdjudicationRunner: vi.fn(actual.createFindingConflictAdjudicationRunner),
+  };
+});
+
 import { WorkflowEngine } from '../core/workflow/index.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
-import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import { createFindingLedgerStore, resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
 
 function createTestTmpDir(): string {
@@ -115,12 +126,12 @@ describe('finding-conflict-adjudication engine detour', () => {
     }
   });
 
-  const seedLedger = (findingLocation: string): void => {
+  const seedLedger = (findingLocation: string, workflowName = 'adjudication-engine-test'): void => {
     const ledgerPath = getAuthoritativeLedgerPath(cwd);
     mkdirSync(dirname(ledgerPath), { recursive: true });
     writeFileSync(ledgerPath, JSON.stringify({
       version: 1,
-      workflowName: 'adjudication-engine-test',
+      workflowName,
       nextId: 2,
       updatedAt: '2026-06-13T00:00:00.000Z',
       findings: [{
@@ -315,6 +326,75 @@ describe('finding-conflict-adjudication engine detour', () => {
       findings: Array<{ id: string; status: string }>;
       conflicts: Array<{ id: string; status: string }>;
     };
+    expect(ledger.findings[0]?.status).toBe('resolved');
+    expect(ledger.conflicts[0]?.status).toBe('resolved');
+  });
+
+  it('workflow_call 継承: 裁定 runner の workflowName は store の正準名（親名）を使い、台帳の workflowName が親名のまま保存される', async () => {
+    // 親の台帳（workflowName: parent-workflow）を継承する子エンジンを模す。
+    seedLedger('src/a.ts:5', 'parent-workflow');
+    const parentLedgerStore = createFindingLedgerStore({
+      projectCwd: cwd,
+      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+      workflowName: 'parent-workflow',
+      ledgerPath: '.takt/findings/peer-review.json',
+      rawFindingsPath: '.takt/findings/raw',
+    });
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
+      if (schemaText.includes('"findingTransition"')) {
+        return {
+          persona,
+          status: 'done',
+          content: '{}',
+          structuredOutput: {
+            conflictId: 'C-0001',
+            outcome: 'finding_stale',
+            findingTransition: 'resolved',
+            evidence: ['Verified fixed against current code.', 'src/a.ts:5'],
+            actionableFix: '',
+          },
+          timestamp: new Date('2026-06-13T02:00:00.000Z'),
+        };
+      }
+      return {
+        persona,
+        status: 'done',
+        content: 'approved',
+        timestamp: new Date('2026-06-13T00:00:01.000Z'),
+      };
+    });
+
+    // 子は自前の finding_contract を持たず、親から契約と store を継承する。
+    const { findingContract: inheritedContract, ...childBase } = baseConfig(cwd, rules);
+    const childConfig: WorkflowConfig = { ...childBase, name: 'child-of-parent' };
+
+    const result = await new WorkflowEngine(childConfig, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      inheritedFindingContract: { contract: inheritedContract!, ledgerStore: parentLedgerStore },
+    }).run();
+
+    expect(result.status).toBe('completed');
+
+    // WorkflowEngine は runner へ store の正準名（親名）を渡す。子の
+    // config.name（child-of-parent）を渡すと reconcile 文脈が親の台帳の
+    // workflowName と食い違う。
+    const runnerDeps = vi.mocked(createFindingConflictAdjudicationRunner).mock.calls.at(-1)?.[0];
+    expect(runnerDeps?.workflowName).toBe('parent-workflow');
+
+    // 裁定適用と保存を経ても ledger.workflowName は親名のまま
+    // （store の assertLedgerWorkflowName 検証を通る）。
+    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+      workflowName: string;
+      findings: Array<{ id: string; status: string }>;
+      conflicts: Array<{ id: string; status: string }>;
+    };
+    expect(ledger.workflowName).toBe('parent-workflow');
     expect(ledger.findings[0]?.status).toBe('resolved');
     expect(ledger.conflicts[0]?.status).toBe('resolved');
   });

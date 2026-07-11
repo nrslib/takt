@@ -20,6 +20,7 @@ export {
   RawFindingsOutputJsonSchema,
   RawFindingSchema,
   ReviewerRawFindingSchema,
+  deriveRawFindingRelation,
   parseFindingConflictAdjudicationOutput,
   parseFindingLedger,
   parseFindingManagerDecisions,

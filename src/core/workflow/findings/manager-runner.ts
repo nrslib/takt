@@ -904,10 +904,16 @@ export async function runFindingManagerForStep(
       decisions,
       carriedFindingOnlyConflicts,
       priorStepResponseText: input.priorStepResponseText,
-      // invalidate は既に一度エンジンが確認済みの finding id 集合
-      // （managerOutput.invalidatedFindings）だけを再度通す。cwd ベースの
-      // 候補計算をもう一度行う必要は無い（初回時点で確認済み）。
-      invalidLocationCandidateFindingIds: new Set(managerOutput.invalidatedFindings.map((f) => f.findingId)),
+      // invalidate 候補は保存直前の台帳・現時点の cwd で再計算する。初回判断の
+      // 時点では location が無効（ファイル不在等）でも、判断と保存の間に
+      // ファイルが生まれて location が有効になっていることがある（並列子の
+      // 生成物や fix ステップの成果物）。初回確認済みの id 集合をそのまま
+      // 流すと、もはや成立しない invalidate が最新台帳に適用されてしまう。
+      // 再計算で候補から外れた stale な invalidate は assembleInvalidateDecisions
+      // が不採用にし、staleRejections として検証レポートに残る。
+      invalidLocationCandidateFindingIds: new Set(
+        computeInvalidLocationCandidates(input.cwd, freshLedger.findings).keys(),
+      ),
     });
     staleRejections = describeRejections(freshAssembly);
     // 最新台帳との再照合で項目単位で不採用になった raw は、reconciler の

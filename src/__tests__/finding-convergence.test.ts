@@ -174,6 +174,30 @@ describe('item 3/6: duplicateDecisions merges duplicates into a canonical findin
     expect(result.rejectedDuplicateDecisions).toHaveLength(1);
   });
 
+  // duplicate 統合の受け皿（canonical）を同じ出力で waive すると、統合された
+  // 指摘ごとゲートから消える。canonical も waive/note 併存禁止集合
+  // （transitionedFindingIds）に載せて不採用にする。
+  it('Given a duplicateDecisions canonical that is also waived in the same output When assembled Then the waive is rejected', () => {
+    const ledger = makeLedger({
+      findings: [makeFinding({ id: 'F-0001' }), makeFinding({ id: 'F-0002', location: 'src/b.ts:1' })],
+    });
+    const claim = '## Disputed Findings\n- findingId: F-0001\n  reason: frozen contract\n  evidence: src/a.ts:10';
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        duplicateDecisions: [{ canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0002'], evidence: 'same issue' }],
+        disputeDecisions: [{ findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/a.ts:10' }],
+      }),
+      priorStepResponseText: claim,
+    });
+
+    expect(result.output.duplicateFindings).toHaveLength(1);
+    expect(result.output.waivedFindings).toEqual([]);
+    expect(result.rejectedDisputeDecisions).toHaveLength(1);
+    expect(result.rejectedDisputeDecisions[0]?.reason).toContain('state transition');
+  });
+
   it('Given a duplicateDecisions entry where the canonical is also a duplicate of another entry When assembled Then the cyclic entry is rejected', () => {
     const ledger = makeLedger({
       findings: [makeFinding({ id: 'F-0001' }), makeFinding({ id: 'F-0002', location: 'src/b.ts:1' }), makeFinding({ id: 'F-0003', location: 'src/c.ts:1' })],
@@ -419,6 +443,59 @@ describe('item 1/4: raw admission validation and invalidate', () => {
 
     const ruleContext = buildFindingsRuleContext(savedLedger!);
     expect(ruleContext.open.count).toBe(0);
+  });
+
+  // 保存直前の再照合（freshAssembly）は invalidate 候補を fresh 台帳・現 cwd で
+  // 再計算する。初回判断の時点では不在だったファイルが保存時には存在する
+  // （並列子の生成物や fix ステップの成果物）とき、stale な invalidate を
+  // そのまま適用せず不採用として検証レポートに残す。
+  it('Given the invalidated location becomes valid between the manager judgment and the save When run Then the stale invalidate is rejected and the finding stays open', async () => {
+    const candidateFinding = makeFinding({
+      id: 'F-0012',
+      title: 'Location appears later',
+      location: 'src/appears-later.ts:2',
+      rawFindingIds: ['raw-existing'],
+    });
+    const ledger = makeLedger({ nextId: 13, findings: [candidateFinding] });
+    const harness = makeHarness(ledger);
+
+    executeAgentMock.mockImplementation(async (_persona: string, instruction: string) => {
+      if (!instruction.includes('F-0012')) {
+        throw new Error('Test setup error: F-0012 not offered as an invalidate candidate');
+      }
+      // LLM 呼び出し中にファイルが生まれる（初回候補計算の後・保存の前）。
+      writeFileSync(join(projectDir, 'src/appears-later.ts'), 'line 1\nline 2\nline 3\n');
+      return {
+        status: 'done',
+        content: '',
+        structuredOutput: {
+          rawDecisions: [],
+          disputeDecisions: [],
+          conflictDecisions: [],
+          invalidateDecisions: [{ findingId: 'F-0012', evidence: 'The cited file does not exist in the reviewed code.' }],
+          duplicateDecisions: [],
+        },
+      } as unknown as AgentResponse;
+    });
+
+    const result = await harness.run({ reviewerRawFindings: [] });
+
+    expect(result.status).toBe('updated');
+    const savedLedger = harness.savedLedgers.at(-1);
+    const finding = savedLedger?.findings.find((f) => f.id === 'F-0012');
+    expect(finding?.status).toBe('open');
+    expect(finding?.invalidatedEvidence).toBeUndefined();
+
+    // stale な invalidate は staleRejections として検証レポートに残る。
+    expect(harness.savedValidationReports).toHaveLength(1);
+    const report = harness.savedValidationReports[0] as {
+      ledgerUpdated: boolean;
+      attempts: Array<{ validationErrors: string[] }>;
+    };
+    expect(report.ledgerUpdated).toBe(true);
+    const errors = report.attempts.flatMap((attempt) => attempt.validationErrors).join(' ');
+    expect(errors).toContain('F-0012');
+    expect(errors).toContain('did not confirm');
   });
 
   it('Given the manager tries to invalidate a finding NOT in the engine-offered candidate list When assembled Then it is rejected (LLM claim alone is not enough)', () => {

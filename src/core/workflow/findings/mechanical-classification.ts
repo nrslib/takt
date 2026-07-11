@@ -1,5 +1,6 @@
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
+import { deriveRawFindingRelation } from './schemas.js';
 import type { FindingLedger, FindingManagerOutput, RawFinding } from './types.js';
 
 /**
@@ -48,19 +49,12 @@ function emptyManagerOutput(): FindingManagerOutput {
 /**
  * raw finding の実効 relation。schema（parseReviewerRawFindings /
  * parseRawFindings）を通った raw は常に relation を持つが、テストや古い経路の
- * 手組み raw に備えて finding-schemas.ts の deriveRawFindingRelation と同じ
- * 導出（kind resolution_confirmation → 同名 / targetFindingId あり → persists /
- * なし → new）をフォールバックとして持つ。decision-assembly.ts（'new' 判断の
+ * 手組み raw に備えて finding-schemas.ts の deriveRawFindingRelation（導出の
+ * 正本）へ委譲するフォールバックを持つ。decision-assembly.ts（'new' 判断の
  * 明示参照検査）と manager-runner.ts（強制 new 化の除外）も同じ導出を共有する。
  */
 export function effectiveRawFindingRelation(raw: Pick<RawFinding, 'kind' | 'relation' | 'targetFindingId'>): NonNullable<RawFinding['relation']> {
-  if (raw.relation !== undefined) {
-    return raw.relation;
-  }
-  if (raw.kind === 'resolution_confirmation') {
-    return 'resolution_confirmation';
-  }
-  return raw.targetFindingId !== undefined ? 'persists' : 'new';
+  return deriveRawFindingRelation(raw.kind, raw.relation, raw.targetFindingId);
 }
 
 /** Exact-duplicate identity key for case 1: normalized (path, title, description, suggestion). Line number is deliberately excluded (evidence of current position, not identity). */

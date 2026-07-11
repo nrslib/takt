@@ -58,6 +58,25 @@ describe('buildFindingContractInstruction', () => {
       expect(rendered).not.toContain('Disputed Findings');
     });
 
+    // kind は後方互換のため残るフィールドで、relation と食い違うとスキーマ検証
+    // （resolveRawFindingRelation の整合チェック）で raw finding 全体が落ちる。
+    // レビュアー向けに kind の設定規則（relation=resolution_confirmation のとき
+    // だけ kind も resolution_confirmation、それ以外は issue）を両言語で明示する。
+    it('states the kind/relation consistency rule for reviewers in both languages', () => {
+      const en = build({ contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA }, language: 'en' });
+      expect(en).toContain('keep it consistent with `relation`');
+      expect(en).toContain('use kind "resolution_confirmation" when relation is "resolution_confirmation"');
+      expect(en).toContain('kind "issue" for every other relation');
+
+      const ja = build({ contract: { rawFindingsJsonSchema: REVIEWER_SCHEMA }, language: 'ja' });
+      expect(ja).toContain('kind を設定する場合は relation と整合させてください');
+      expect(ja).toContain('kind も "resolution_confirmation"');
+      expect(ja).toContain('kind を "issue"');
+
+      // レビュアー以外（isReviewer=false）には出ない。
+      expect(build({ contract: { hasOpenFindings: true } })).not.toContain('keep it consistent with `relation`');
+    });
+
     // rawFindingId / familyTag / kind / targetFindingId は manager-runner /
     // manager-output-validation が英語リテラルで照合する raw finding のフィールド名。
     // ja テンプレートでも英語のまま出ることを確認する。

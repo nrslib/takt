@@ -89,8 +89,12 @@ export const FindingLedgerEntrySchema = z.object({
  * numerous kind:'issue' raws with targetFindingId set, e.g. "This is a
  * continuation of the issue tracked as F-0002"); relation undefined + kind
  * 'issue'/undefined with no targetFindingId -> 'new'.
+ *
+ * This is the single authoritative derivation: schema parsing uses it here, and
+ * effectiveRawFindingRelation (core/workflow/findings/mechanical-classification.ts)
+ * delegates to it for hand-built raws that never went through the schema.
  */
-function deriveRawFindingRelation(
+export function deriveRawFindingRelation(
   kind: RawFinding['kind'],
   relation: RawFindingRelation | undefined,
   targetFindingId: string | undefined,
@@ -271,7 +275,10 @@ export const FindingManagerOutputSchema = z.object({
   }).strict()).optional().default([]),
   duplicateFindings: z.array(z.object({
     canonicalFindingId: nonEmptyString,
-    duplicateFindingIds: z.array(nonEmptyString),
+    // 決定スキーマ側（FindingManagerDuplicateDecisionSchema）と対称に空配列を
+    // 拒否する。duplicate を1件も持たないエントリは「何も統合しない統合」で、
+    // canonical だけが transitionedFindingIds に載る等の副作用だけが残る。
+    duplicateFindingIds: z.array(nonEmptyString).min(1),
     evidence: nonEmptyString,
   }).strict()).optional().default([]),
 }).strict();
@@ -448,7 +455,7 @@ export const FindingManagerOutputJsonSchema = {
         required: ['canonicalFindingId', 'duplicateFindingIds', 'evidence'],
         properties: {
           canonicalFindingId: { type: 'string', minLength: 1 },
-          duplicateFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          duplicateFindingIds: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
           evidence: { type: 'string', minLength: 1 },
         },
       },
@@ -546,7 +553,7 @@ export const FindingManagerDecisionsJsonSchema = {
         required: ['canonicalFindingId', 'duplicateFindingIds', 'evidence'],
         properties: {
           canonicalFindingId: { type: 'string', minLength: 1 },
-          duplicateFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          duplicateFindingIds: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
           evidence: { type: 'string', minLength: 1 },
         },
       },

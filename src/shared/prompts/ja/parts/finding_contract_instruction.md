@@ -9,6 +9,7 @@
 {{/if}}{{ledgerSummary}}
 
 {{#if isReviewer}}- 観測した新規の問題はすべて、relation を "new"（targetFindingId は空）にした構造化 raw finding として報告してください。kind フィールドは後方互換のために残っていますが、kind ではなく relation を設定してください。
+- kind を設定する場合は relation と整合させてください。relation が "resolution_confirmation" のときは kind も "resolution_confirmation"、それ以外の relation では kind を "issue" にしてください。
 {{/if}}{{#if reviewerHasOpenFindings}}- 毎ラウンド、自分のレビュー範囲に入る open な台帳の指摘を検証してください。
 - open な指摘が修正済みだと確認できたら、relation を "resolution_confirmation"、targetFindingId に台帳の finding ID、description に file:line の証跡を書いた raw finding として報告してください。指摘が resolved になる経路はこの確認だけです。
 - 同じ場所で未修正のまま残っている open な指摘を再報告しないでください。まだ発生しているがそれを明示的に確認したい場合（例: 別の行に移動した、沈黙せず「まだ残っている」ことを記録したい）は、relation を "persists"、targetFindingId にその台帳 finding ID を設定して報告してください — 元の報告との familyTag や行番号の違いは問題になりません。finding ID を明示してください。実際に別問題へ退行した場合にだけ、新しい "new" の issue として報告してください。
