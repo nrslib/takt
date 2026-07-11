@@ -23,6 +23,7 @@ export {
   FindingSeveritySchema,
   FindingStatusSchema,
   RawFindingsOutputJsonSchema,
+  RawFindingsOutputValidationJsonSchema,
   RawFindingSchema,
   ReviewerRawFindingSchema,
   deriveRawFindingRelation,

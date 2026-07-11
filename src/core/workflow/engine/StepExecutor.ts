@@ -362,7 +362,13 @@ export class StepExecutor {
         structuredOutput = parsed as Record<string, unknown>;
       }
 
-      validateStructuredOutputAgainstSchema(structuredOutput, step.structuredOutput.schema);
+      // post-hoc 検証は寛容版（validationSchema）を優先する。provider へ渡る
+      // 生成拘束用 schema（strict 様式）とは役割が異なる — 詳細は
+      // WorkflowStructuredOutput の doc コメント参照。
+      validateStructuredOutputAgainstSchema(
+        structuredOutput,
+        step.structuredOutput.validationSchema ?? step.structuredOutput.schema,
+      );
       structuredOutput = this.structuredOutputNormalizers.normalize(structuredOutput, {
         step,
         language: this.deps.getLanguage(),
@@ -414,7 +420,10 @@ export class StepExecutor {
       failureReason,
       detail,
       language: this.deps.getLanguage(),
-      validate: (value) => validateStructuredOutputAgainstSchema(value, structuredOutputConfig.schema),
+      validate: (value) => validateStructuredOutputAgainstSchema(
+        value,
+        structuredOutputConfig.validationSchema ?? structuredOutputConfig.schema,
+      ),
     });
   }
 

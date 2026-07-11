@@ -4,6 +4,7 @@ import {
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
+  RAW_FINDING_KINDS,
 } from '../core/models/finding-types.js';
 import {
   FindingLifecycleSchema,
@@ -13,14 +14,21 @@ import {
   FindingStatusSchema,
   RawFindingSchema,
   RawFindingsOutputJsonSchema,
+  RawFindingsOutputValidationJsonSchema,
   ReviewerRawFindingSchema,
   parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
 
 describe('finding schemas', () => {
   it('keeps strict JSON Schema object properties listed in required', () => {
+    // provider-facing schema は strict 様式（全 properties が required、optional
+    // プロパティ無し）を維持する。OpenAI/Codex 系 native structured output は
+    // これを要求し、違反すると生成前に schema 自体が拒否される。legacy `kind` の
+    // 寛容受理は post-hoc 検証専用の RawFindingsOutputValidationJsonSchema が担う
+    // （下のテスト参照）。
     const rawFindingItem = RawFindingsOutputJsonSchema.properties.rawFindings.items;
     expect(rawFindingItem.required).toEqual(Object.keys(rawFindingItem.properties));
+    expect(Object.keys(rawFindingItem.properties)).not.toContain('kind');
 
     const managerProperties = FindingManagerOutputJsonSchema.properties;
     expect(managerProperties.matches.items.required).toEqual(Object.keys(managerProperties.matches.items.properties));
@@ -37,6 +45,18 @@ describe('finding schemas', () => {
     expect(decisionsProperties.rawDecisions.items.required).toEqual(Object.keys(decisionsProperties.rawDecisions.items.properties));
     expect(decisionsProperties.disputeDecisions.items.required).toEqual(Object.keys(decisionsProperties.disputeDecisions.items.properties));
     expect(decisionsProperties.conflictDecisions.items.required).toEqual(Object.keys(decisionsProperties.conflictDecisions.items.properties));
+  });
+
+  it('post-hoc 検証用の寛容版 schema は legacy kind だけを optional で追加した strict 版の上位集合になっている', () => {
+    const strictItem = RawFindingsOutputJsonSchema.properties.rawFindings.items;
+    const lenientItem = RawFindingsOutputValidationJsonSchema.properties.rawFindings.items;
+    // required は strict 版と同一（kind は required に入らない = optional）。
+    expect(lenientItem.required).toEqual(strictItem.required);
+    // properties は strict 版 + kind のみ。
+    expect(Object.keys(lenientItem.properties).sort()).toEqual(
+      [...Object.keys(strictItem.properties), 'kind'].sort(),
+    );
+    expect(lenientItem.properties.kind.enum).toEqual(RAW_FINDING_KINDS);
   });
 
   it('uses finding type constants for schema enum values', () => {

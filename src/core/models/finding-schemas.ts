@@ -793,9 +793,13 @@ export const RawFindingsOutputJsonSchema = {
         required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
-          // v2 梯子設計 §2.2: 新規 reviewer contract では relation が正本。legacy の
-          // `kind` は schema から削除した（送られてきた場合は canonicalization が
-          // relation との整合を検証し、矛盾は ambiguity taint になる）。
+          // v2 梯子設計 §2.2: relation が正本。legacy の `kind` はこの
+          // provider-facing schema には存在しない（OpenAI/Codex 系の native
+          // structured output は全 properties required の strict 様式を要求する
+          // ため optional プロパティを置けない。native 経路は schema が生成を
+          // 拘束するのでそもそも kind を出せず、寛容化は不要）。kind 併記を
+          // 受理する寛容版は post-hoc 検証専用の
+          // RawFindingsOutputValidationJsonSchema（下記）にある。
           relation: {
             enum: RAW_FINDING_RELATIONS,
             description: 'This finding\'s relationship to the ledger. new = a fresh observation with no target (targetFindingId must be empty). persists = you still observe an existing open finding (targetFindingId required). reopened = a previously resolved/waived finding reappeared (targetFindingId required). resolution_confirmation = you verified an open finding is fixed (targetFindingId required).',
@@ -819,6 +823,37 @@ export const RawFindingsOutputJsonSchema = {
           suggestion: {
             type: 'string',
             description: 'Fix direction. Empty string when not applicable (e.g. resolution confirmations).',
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+/**
+ * post-hoc 検証専用の寛容版 raw findings schema（codex 検証ブロッカー対応）。
+ *
+ * RawFindingsOutputJsonSchema（provider-facing、strict 様式）と役割を分離する:
+ * - provider へ渡すのは strict 版のみ（native structured output は全 properties
+ *   required を要求し、optional の kind を含む schema は生成前に拒否される）。
+ * - schema が生成を拘束しない formless/劣化経路（opencode+ollama 等）の出力は
+ *   こちらで検証する。弱いモデルは訂正1回でも legacy `kind` 併記をやめない
+ *   （v3-r3 resume 実測）ため、kind を optional で受理し、意味の検証
+ *   （kind/relation 矛盾 → 正規化・claimedKind 監査・ambiguity taint）は intake
+ *   の canonicalization に委ねる。
+ */
+export const RawFindingsOutputValidationJsonSchema = {
+  ...RawFindingsOutputJsonSchema,
+  properties: {
+    rawFindings: {
+      ...RawFindingsOutputJsonSchema.properties.rawFindings,
+      items: {
+        ...RawFindingsOutputJsonSchema.properties.rawFindings.items,
+        properties: {
+          ...RawFindingsOutputJsonSchema.properties.rawFindings.items.properties,
+          kind: {
+            enum: RAW_FINDING_KINDS,
+            description: 'Legacy field; do not emit. relation is authoritative. If present, it is checked for consistency with relation.',
           },
         },
       },

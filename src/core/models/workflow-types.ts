@@ -88,7 +88,20 @@ export type WorkflowMaxSteps = number | 'infinite';
 
 export interface WorkflowStructuredOutput {
   schemaRef: string;
+  /**
+   * provider-facing schema（native structured output の生成拘束に使う）。
+   * OpenAI/Codex 系の strict 様式（全 properties が required、optional
+   * プロパティ禁止）を満たす形を保つこと。provider へはこちらだけを渡す。
+   */
   schema: Record<string, unknown>;
+  /**
+   * post-hoc 検証専用の寛容版 schema（任意）。schema が生成を拘束しない
+   * formless/劣化経路（providerSupportsStructuredOutput === false の provider や
+   * プロンプト埋め込み fallback）の出力検証にはこちらを使う。未指定なら
+   * `schema` で検証する。provider へ渡してはならない（strict 様式に違反し、
+   * native 経路では生成前に schema 自体が拒否される — codex 検証で実証）。
+   */
+  validationSchema?: Record<string, unknown>;
 }
 
 export interface OutputContractItem {

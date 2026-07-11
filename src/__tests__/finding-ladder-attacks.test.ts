@@ -37,7 +37,9 @@ import {
   createReviewerRawFindingCandidates,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
-import { AmbiguousInterpretationsOutputJsonSchema } from '../core/workflow/findings/schemas.js';
+import { AmbiguousInterpretationsOutputJsonSchema, RawFindingsOutputJsonSchema, RawFindingsOutputValidationJsonSchema } from '../core/workflow/findings/schemas.js';
+import { RawFindingsStructuredOutput } from '../core/workflow/findings/manager-runner.js';
+import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { issueDeterministicSameProofs, verifySameProofAgainstLedger } from '../core/workflow/findings/raw-capabilities.js';
 import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
 import { kindForRelation, parseFindingLedger } from '../core/workflow/findings/schemas.js';
@@ -1432,6 +1434,108 @@ describe('v2 追加必須テスト', () => {
     const provisional = saved.findings.find((finding) => finding.id === 'F-0002');
     expect(provisional?.status).toBe('open');
     expect(provisional?.provisional).toBeDefined();
+  });
+
+  it('v3-r3 resume 実測: legacy kind を含む reviewer 出力は post-hoc 寛容 schema を通過して intake の寛容経路へ到達し、provider-facing schema は strict のまま', async () => {
+    // gemma は訂正1回でも kind 併記をやめない（v3-r3 実測）。schema が kind を
+    // 拒否すると post-hoc validator が sub-step を殺し、設計した梯子1段目
+    // （kind/relation 矛盾 → taint）が到達不能になる。kind は optional として
+    // wire schema を通し、意味の検証は intake（canonicalization）が行う。
+    const consistentKindRaw = {
+      rawFindingId: 'k-1',
+      kind: 'issue',
+      relation: 'new',
+      targetFindingId: '',
+      familyTag: 'bug',
+      severity: 'medium',
+      title: 'Plain issue with legacy kind attached',
+      location: 'src/b.ts:5',
+      description: 'A normal observation that still carries the legacy kind field.',
+      suggestion: '',
+    };
+    const gemmaConflictRaw = {
+      rawFindingId: 'k-2',
+      kind: 'issue',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Existing issue',
+      location: 'src/a.ts:10',
+      description: 'Confirmed the fix but mislabeled kind (v3-r3 pattern).',
+      suggestion: '',
+    };
+
+    // 1) post-hoc 検証レベル（寛容版 schema — StepExecutor が
+    //    validationSchema ?? schema で選ぶ側）: kind 併記の出力が validator を通る
+    //    （旧: $.rawFindings[0].kind is not allowed by the schema で run が死んでいた）。
+    expect(() => validateStructuredOutputAgainstSchema(
+      { rawFindings: [consistentKindRaw, gemmaConflictRaw] },
+      RawFindingsOutputValidationJsonSchema as unknown as Record<string, unknown>,
+    )).not.toThrow();
+    // enum 外の kind は引き続き拒否される（無制限に緩めてはいない）。
+    expect(() => validateStructuredOutputAgainstSchema(
+      { rawFindings: [{ ...consistentKindRaw, kind: 'bogus' }] },
+      RawFindingsOutputValidationJsonSchema as unknown as Record<string, unknown>,
+    )).toThrow();
+    // provider-facing schema（native 生成拘束用）は strict のまま: kind プロパティは
+    // 存在せず、kind 併記出力はこちらでは通らない（OpenAI/Codex strict 様式維持）。
+    const strictItem = (RawFindingsOutputJsonSchema as { properties: { rawFindings: { items: { properties: Record<string, unknown>; required: string[] } } } })
+      .properties.rawFindings.items;
+    expect(Object.keys(strictItem.properties)).not.toContain('kind');
+    expect(strictItem.required).toEqual(Object.keys(strictItem.properties));
+    // 取り込みステップに実際に付く structured output 契約が両面を正しく運ぶ。
+    expect(RawFindingsStructuredOutput.schema).toBe(RawFindingsOutputJsonSchema);
+    expect(RawFindingsStructuredOutput.validationSchema).toBe(RawFindingsOutputValidationJsonSchema);
+
+    // 2) intake: kind/relation が整合する raw は clean のまま処理され、
+    //    v3-r3 の矛盾 raw は taint → 解釈フェーズ → provisional に着地し、
+    //    claimedKind が監査に残る。
+    const harness = makeHarness(makeLedger());
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const text = instruction as string;
+      if (text.includes('Ambiguous raw finding interpretation')) {
+        const rawId = extractResidualRawIdFromInterpretationInstruction(text, 'k-2');
+        return interpretationResponse([
+          { decision: 'provisional', rawFindingId: rawId, proofId: '', targetFindingId: '', reason: 'Mislabeled confirmation.' },
+        ]);
+      }
+      // decisions manager: clean residual（k-1）を new として採用。
+      const ids = [...text.matchAll(/"rawFindingId":\s*"([^"]+:k-1)"/g)].map((match) => match[1]!);
+      return {
+        persona: 'findings-manager',
+        status: 'done',
+        content: '',
+        structuredOutput: {
+          rawDecisions: [...new Set(ids)].map((rawFindingId) => ({ rawFindingId, decision: 'new', findingId: '', evidence: 'fresh' })),
+          disputeDecisions: [],
+          conflictDecisions: [],
+          invalidateDecisions: [],
+          duplicateDecisions: [],
+        },
+        timestamp: new Date(),
+      } as unknown as AgentResponse;
+    });
+
+    const result = await harness.run({ reviewerRawFindings: [consistentKindRaw, gemmaConflictRaw] });
+    expect(result.status).toBe('updated');
+
+    const saved = harness.currentLedger();
+    // 整合 kind の raw は clean 経路で確定 finding になる（taint なし）。
+    const cleanLanded = saved.findings.find((finding) => finding.title === 'Plain issue with legacy kind attached');
+    expect(cleanLanded?.status).toBe('open');
+    expect(cleanLanded?.provisional).toBeUndefined();
+    // 矛盾 raw は provisional として着地する。
+    const tainted = saved.findings.find((finding) => finding.provisional !== undefined);
+    expect(tainted?.provisional?.kind).toBe('raw-meaning-ambiguous');
+    // claimedKind / ambiguity codes が監査メタデータに残る。
+    const report = harness.savedReports.at(-1)!;
+    const record = report.rawNormalizations?.find((entry) => entry.rawFindingId.endsWith(':k-2'));
+    expect(record?.claimedKind).toBe('issue');
+    expect(record?.claimedRelation).toBe('resolution_confirmation');
+    expect(record?.ambiguityCodes).toContain('kind-relation-conflict');
+    // 整合 kind の raw は正規化されていないため監査ノイズにならない。
+    expect(report.rawNormalizations?.some((entry) => entry.rawFindingId.endsWith(':k-1'))).toBe(false);
   });
 
   it('正規化監査: 矛盾 relation の raw を intake すると、wire は new + targetFindingId なしに正規化されつつ、監査メタデータから元の主張が復元できる', async () => {
