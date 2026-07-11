@@ -1,4 +1,5 @@
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
+import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../../../core/workflow/constants.js';
 import type { WorkflowDiagnostic } from './workflowDoctorTypes.js';
 
 type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
@@ -26,7 +27,16 @@ type DoctorGraph = {
   steps: DoctorGraphStep[];
 };
 
-const SPECIAL_NEXT = new Set(['COMPLETE', 'ABORT']);
+const TERMINAL_NEXT = new Set(['COMPLETE', 'ABORT']);
+
+// The engine synthesizes this step at construction time (injectFindingConflictAdjudicationStep)
+// rather than authoring it in config.steps, so it never appears in the raw
+// workflow's step list. Treat it like the terminal targets for "unknown next
+// step" / reachability purposes — WorkflowValidator does the same via its own
+// stepNames.add(FINDING_CONFLICT_ADJUDICATION_STEP) (WorkflowValidator.ts).
+const SYNTHESIZED_NEXT = new Set([FINDING_CONFLICT_ADJUDICATION_STEP]);
+
+const SPECIAL_NEXT = new Set([...TERMINAL_NEXT, ...SYNTHESIZED_NEXT]);
 
 function collectStepEdges(config: DoctorGraph): Map<string, Set<string>> {
   const edges = new Map<string, Set<string>>();
@@ -100,12 +110,28 @@ function createDoctorGraph(raw: RawWorkflow): DoctorGraph {
   };
 }
 
+/**
+ * Mirrors WorkflowValidator's validateFindingConflictAdjudicationRuleContract:
+ * `next: finding-conflict-adjudication` only makes sense when a finding
+ * ledger exists to adjudicate against. Doctor runs on the raw (pre-load)
+ * config, so the check is against `finding_contract` presence directly
+ * rather than the resolved WorkflowConfig#findingContract /
+ * inheritedFindingContract the engine uses at runtime — a callable
+ * subworkflow that expects to inherit its contract from a parent workflow_call
+ * is out of scope here, matching the other doctor checks that inspect one
+ * workflow file at a time.
+ */
+function findingConflictAdjudicationTargetNeedsContract(rule: DoctorGraphRule): boolean {
+  return rule.next === FINDING_CONFLICT_ADJUDICATION_STEP;
+}
+
 export function validateDoctorGraph(
   raw: RawWorkflow,
   diagnostics: WorkflowDiagnostic[],
 ): void {
   const config = createDoctorGraph(raw);
   const stepNames = new Set(config.steps.map((step) => step.name));
+  const findingContractConfigured = raw.finding_contract !== undefined;
 
   if (!stepNames.has(config.initialStep)) {
     diagnostics.push({
@@ -116,6 +142,13 @@ export function validateDoctorGraph(
 
   for (const step of config.steps) {
     for (const rule of step.rules ?? []) {
+      if (!findingContractConfigured && findingConflictAdjudicationTargetNeedsContract(rule)) {
+        diagnostics.push({
+          level: 'error',
+          message: `Step "${step.name}" routes to "${FINDING_CONFLICT_ADJUDICATION_STEP}" but finding_contract is not configured`,
+        });
+      }
+
       if (!rule.next || SPECIAL_NEXT.has(rule.next) || stepNames.has(rule.next)) {
         continue;
       }
@@ -141,6 +174,13 @@ export function validateDoctorGraph(
   for (const monitor of config.loopMonitors ?? []) {
     const label = monitor.cycle.join(' -> ');
     for (const rule of monitor.judge.rules) {
+      if (!findingContractConfigured && findingConflictAdjudicationTargetNeedsContract(rule)) {
+        diagnostics.push({
+          level: 'error',
+          message: `Loop monitor "${label}" routes to "${FINDING_CONFLICT_ADJUDICATION_STEP}" but finding_contract is not configured`,
+        });
+      }
+
       if (!rule.next || SPECIAL_NEXT.has(rule.next) || stepNames.has(rule.next)) {
         continue;
       }

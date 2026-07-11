@@ -887,6 +887,97 @@ steps:
     expect(report.diagnostics).toEqual([]);
   });
 
+  it('does not flag routing to the synthesized finding-conflict-adjudication step when finding_contract is configured', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-wired.yaml', `name: adjudication-wired
+max_steps: 10
+initial_step: step1
+finding_contract:
+  ledger_path: .takt/findings/adjudication-wired.json
+  raw_findings_path: .takt/findings/adjudication-wired/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: step1
+    rules:
+      - condition: conflict
+        next: finding-conflict-adjudication
+      - condition: done
+        next: COMPLETE
+`);
+
+    const report = inspectWorkflowFile(filePath, projectDir);
+
+    expect(report.diagnostics).toEqual([]);
+  });
+
+  it('reports routing to finding-conflict-adjudication without finding_contract configured', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-unconfigured.yaml', `name: adjudication-unconfigured
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    rules:
+      - condition: conflict
+        next: finding-conflict-adjudication
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Step "step1" routes to "finding-conflict-adjudication" but finding_contract is not configured',
+    );
+  });
+
+  it('reports loop monitor routing to finding-conflict-adjudication without finding_contract configured', () => {
+    const filePath = writeWorkflow(
+      projectDir,
+      '.takt/workflows/adjudication-loop-monitor-unconfigured.yaml',
+      `name: adjudication-loop-monitor-unconfigured
+max_steps: 10
+initial_step: step1
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      rules:
+        - condition: conflict
+          next: finding-conflict-adjudication
+steps:
+  - name: step1
+    rules:
+      - condition: continue
+        next: step2
+  - name: step2
+    rules:
+      - condition: repeat
+        next: step1
+      - condition: done
+        next: COMPLETE
+`,
+    );
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Loop monitor "step1 -> step2" routes to "finding-conflict-adjudication" but finding_contract is not configured',
+    );
+  });
+
+  it.each(['en', 'ja'] as const)(
+    'inspects the builtin takt-default-for-local-llm workflow (%s) cleanly',
+    (lang) => {
+      const builtinPath = join(process.cwd(), 'builtins', lang, 'workflows', 'takt-default-for-local-llm.yaml');
+
+      const report = inspectWorkflowFile(builtinPath, process.cwd());
+
+      expect(report.diagnostics).toEqual([]);
+    },
+  );
+
   it('resolves named builtin workflow targets without downgrading privileged builtin trust', async () => {
     await expect(doctorWorkflowCommand(['auto-improvement-loop'], process.cwd())).resolves.toBeUndefined();
 
