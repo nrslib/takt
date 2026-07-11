@@ -26,8 +26,8 @@ import {
   denormalizeWorkflowOverrides,
   normalizeRuntime,
   normalizeRateLimitFallback,
-  normalizeAutoRoutingConfig,
-  denormalizeAutoRoutingConfig,
+  normalizeConfigAutoRoutingConfig,
+  denormalizeConfigAutoRoutingConfig,
   denormalizeRateLimitFallback,
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
@@ -186,7 +186,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
-    autoRouting: normalizeAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
+    autoRouting: normalizeConfigAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -247,7 +247,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.telemetry;
   }
 
-  const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
+  const rawAutoRouting = denormalizeConfigAutoRoutingConfig(config.autoRouting);
   if (rawAutoRouting) {
     savePayload.auto_routing = rawAutoRouting;
   } else {

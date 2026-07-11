@@ -4,7 +4,11 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import {
+  createIsolatedEnv,
+  updateIsolatedConfig,
+  type IsolatedEnv,
+} from '../helpers/isolated-env';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 
@@ -12,6 +16,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const MOCK_WORKFLOW_PATH = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 const MOCK_SCENARIO_PATH = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
+const AUTO_DEFAULT_PROVIDER_SCENARIO_PATH = resolve(
+  __dirname,
+  '../fixtures/scenarios/auto-default-provider-worktree.json',
+);
 
 interface CompletedTaskMeta {
   status?: string;
@@ -259,6 +267,56 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
     }).trim();
     expect(restoredBranch).toContain(taskMeta.branch!);
     expect(stagedFiles.trim()).toBe('README.md');
+  }, 240_000);
+
+  it('should create a queued worktree with the auto default provider for AI slug generation', () => {
+    const taskName = 'e2e-auto-default-provider';
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider: 'auto',
+      branch_name_strategy: 'ai',
+      auto_routing: {
+        default_provider: {
+          provider: 'mock',
+          model: 'mock-summary-model',
+        },
+        strategy: 'balanced',
+        router: {
+          provider: 'mock',
+          model: 'mock/router-model',
+        },
+        candidates: [
+          {
+            name: 'coding',
+            description: 'Mock coding provider',
+            provider: 'mock',
+            model: 'mock/workflow-model',
+            cost_tier: 'medium',
+          },
+        ],
+      },
+    });
+    writePendingWorktreeTask(
+      testRepo.path,
+      taskName,
+      'Create a worktree using the configured auto default provider',
+    );
+
+    const result = runTakt({
+      args: ['run', '--provider', 'mock'],
+      cwd: testRepo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: AUTO_DEFAULT_PROVIDER_SCENARIO_PATH,
+      },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
+    const taskMeta = readTaskMeta(testRepo.path, taskName);
+    expect(taskMeta.status).toBe('completed');
+    expect(taskMeta.branch).toContain('auto-default-provider-slug');
+    expect(taskMeta.worktree_path).toContain('auto-default-provider-slug');
+    expect(result.stdout + result.stderr).not.toContain('Unknown provider type: auto');
   }, 240_000);
 
   it('should create a completed worktree task via mock run and merge from root', () => {

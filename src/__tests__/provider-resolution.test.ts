@@ -11,8 +11,10 @@ import {
 import {
   resolveAssistantProviderModelFromConfig,
   resolveAssistantScopedProviderModelFromConfig,
+  resolveNonWorkflowProviderModelFromConfig,
 } from '../core/config/provider-resolution.js';
 import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
+import type { ProjectConfig } from '../core/models/config-types.js';
 
 describe('resolveProviderModelCandidates', () => {
   it('should resolve first defined provider and model independently', () => {
@@ -952,5 +954,100 @@ describe('resolveAssistantScopedProviderModelFromConfig', () => {
       provider: 'codex',
       model: undefined,
     });
+  });
+});
+
+describe('resolveNonWorkflowProviderModelFromConfig', () => {
+  it('should preserve the effective concrete top-level provider and model', () => {
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project: {
+        provider: 'codex',
+        model: 'project-model',
+        autoRouting: {
+          defaultProvider: { provider: 'claude', model: 'unused-default-model' },
+        },
+      },
+      global: {
+        provider: 'mock',
+        model: 'global-model',
+      },
+    });
+
+    expect(result).toEqual({ provider: 'codex', model: 'project-model' });
+  });
+
+  it('should not combine a project provider with a global model for another provider', () => {
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project: {
+        provider: 'codex',
+      },
+      global: {
+        provider: 'claude',
+        model: 'global-claude-model',
+      },
+    });
+
+    expect(result).toEqual({ provider: 'codex', model: undefined });
+  });
+
+  it('should use the project default provider and its model as one atomic pair', () => {
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project: {
+        provider: 'auto',
+        autoRouting: {
+          defaultProvider: { provider: 'codex' },
+        },
+      },
+      global: {
+        provider: 'auto',
+        autoRouting: {
+          defaultProvider: { provider: 'claude', model: 'global-default-model' },
+        },
+      },
+    });
+
+    expect(result).toEqual({ provider: 'codex', model: undefined });
+  });
+
+  it('should use the global default provider when the project default is absent', () => {
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project: { provider: 'auto' },
+      global: {
+        autoRouting: {
+          defaultProvider: { provider: 'mock', model: 'global-default-model' },
+        },
+      },
+    });
+
+    expect(result).toEqual({ provider: 'mock', model: 'global-default-model' });
+  });
+
+  it('should fail before provider lookup when auto has no default provider', () => {
+    const project: ProjectConfig = {
+      provider: 'auto',
+      taktProviders: {
+        assistant: { provider: 'claude', model: 'assistant-model' },
+      },
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'router-model' },
+        candidates: [
+          {
+            name: 'coding',
+            description: 'Implementation',
+            provider: 'codex',
+            model: 'candidate-model',
+            costTier: 'medium',
+          },
+        ],
+      },
+    };
+
+    expect(() => resolveNonWorkflowProviderModelFromConfig({
+      project,
+      global: {},
+    })).toThrow(
+      'Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.',
+    );
   });
 });

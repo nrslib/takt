@@ -8,7 +8,7 @@ import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import {
   AnalyticsConfigSchema,
-  AutoRoutingSchema,
+  ConfigAutoRoutingSchema,
   LanguageSchema,
   LoggingConfigSchema,
   ObservabilityConfigSchema,
@@ -92,7 +92,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   language: LanguageSchema.optional(),
   provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().optional(),
-  auto_routing: AutoRoutingSchema.optional(),
+  auto_routing: ConfigAutoRoutingSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   telemetry: TelemetryConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),

@@ -6,6 +6,7 @@ import {
   resolveAutoRoutingRuntime,
   selectStrategyDefaultCandidate,
 } from '../core/workflow/auto-routing/resolver.js';
+import type { ConfigAutoRoutingConfig } from '../core/models/config-types.js';
 
 function createAutoRoutingConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -167,6 +168,38 @@ describe('applyAutoRoutingStrategyOverride', () => {
 });
 
 describe('resolveAutoRoutingRuntime', () => {
+  it('Given config auto routing includes a non-workflow default provider, When a workflow rule matches, Then the rule candidate remains authoritative', async () => {
+    const autoRouting: ConfigAutoRoutingConfig = {
+      strategy: 'balanced',
+      defaultProvider: { provider: 'mock', model: 'non-workflow-default-model' },
+      router: { provider: 'claude-sdk', model: 'router-model' },
+      candidates: [
+        {
+          name: 'coding',
+          description: 'Implementation and tests',
+          provider: 'codex',
+          model: 'workflow-candidate-model',
+          costTier: 'medium',
+        },
+      ],
+      rules: { tags: { implementation: 'coding' } },
+    };
+
+    const result = await resolveAutoRoutingRuntime({
+      autoRouting,
+      step: createStepMetadata(),
+      currentProviderInfo: { provider: undefined, model: undefined },
+      routeWithAi: vi.fn(),
+    });
+
+    expect(result?.providerInfo).toMatchObject({
+      provider: 'codex',
+      model: 'workflow-candidate-model',
+      providerSource: 'auto.rules',
+      autoRoutingDecision: { candidateName: 'coding' },
+    });
+  });
+
   it('Given provider is already resolved by a higher-priority layer, When resolving auto routing, Then it does not override providerInfo', async () => {
     const routeWithAi = vi.fn();
     const result = await resolveAutoRoutingRuntime({
