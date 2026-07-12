@@ -116,6 +116,21 @@ export const WorkflowRuleSchema = z.object({
   },
 );
 
+function validateParallelRuleEffects(
+  rules: readonly z.output<typeof WorkflowRuleSchema>[] | undefined,
+  ctx: z.core.$RefinementCtx,
+): void {
+  rules?.forEach((rule, index) => {
+    if (rule.effects !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rules', index, 'effects'],
+        message: 'parallel sub-step rules do not support effects',
+      });
+    }
+  });
+}
+
 function validateWorkflowCallRules(
   rules: readonly z.output<typeof WorkflowRuleSchema>[] | undefined,
   ctx: z.core.$RefinementCtx,
@@ -324,14 +339,8 @@ const AgentParallelSubStepRawSchema = z.object({
         message: 'parallel sub-step rules do not allow "return"',
       });
     }
-    if (rule.effects !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['rules', index, 'effects'],
-        message: 'parallel sub-step rules do not support effects',
-      });
-    }
   });
+  validateParallelRuleEffects(data.rules, ctx);
 });
 
 const WorkflowCallParallelSubStepRawSchema = z.object({
@@ -366,6 +375,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   pass_previous_response: z.never().optional(),
 }).superRefine((data, ctx) => {
   validateWorkflowCallRules(data.rules, ctx, { allowExtendedConditions: true });
+  validateParallelRuleEffects(data.rules, ctx);
 });
 
 /** Sub-step schema for parallel execution */
@@ -677,6 +687,9 @@ export const WorkflowConfigRawSchema = z.object({
 }).strict().superRefine((workflow, ctx) => {
   const usesRuleEffects = workflow.steps.some((step) => (
     step.rules?.some((rule) => rule.effects !== undefined) === true
+    || step.parallel?.some((subStep) => (
+      subStep.rules?.some((rule) => rule.effects !== undefined) === true
+    )) === true
   ));
   if (usesRuleEffects && workflow.requires?.rule_effects !== 1) {
     ctx.addIssue({

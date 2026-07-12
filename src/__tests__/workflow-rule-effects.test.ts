@@ -131,4 +131,31 @@ describe('workflow rule effects', () => {
       }],
     })).toThrow(/parallel sub-step rules do not support effects/);
   });
+
+  it('rejects rule effects on workflow-call parallel sub-steps', () => {
+    expect(() => WorkflowConfigRawSchema.parse({
+      name: 'parallel-workflow-call-effects',
+      requires: { rule_effects: 1 },
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'review',
+        parallel: [{
+          name: 'child',
+          kind: 'workflow_call',
+          call: 'child-workflow',
+          rules: [{
+            condition: 'COMPLETE',
+            next: 'COMPLETE',
+            effects: [{
+              type: 'commit_artifacts',
+              manifest_path: '.takt/state/plan-artifacts.json',
+              message: 'approve',
+            }],
+          }],
+        }],
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    })).toThrow(/parallel sub-step rules do not support effects/);
+  });
 });
