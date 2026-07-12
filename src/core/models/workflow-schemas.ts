@@ -641,10 +641,14 @@ export const LoopMonitorSchema = z.object({
 
 /** Interactive mode schema for workflow-level default */
 export const InteractiveModeSchema = z.enum(INTERACTIVE_MODES);
+const WorkflowRequirementsRawSchema = z.object({
+  rule_effects: z.literal(1).optional(),
+}).strict();
 /** Workflow configuration schema - raw YAML format */
 export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  requires: WorkflowRequirementsRawSchema.optional(),
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
   finding_contract: FindingContractConfigRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsWithExtendsSchema,
@@ -662,4 +666,15 @@ export const WorkflowConfigRawSchema = z.object({
   max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   interactive_mode: InteractiveModeSchema.optional(),
-}).strict();
+}).strict().superRefine((workflow, ctx) => {
+  const usesRuleEffects = workflow.steps.some((step) => (
+    step.rules?.some((rule) => rule.effects !== undefined) === true
+  ));
+  if (usesRuleEffects && workflow.requires?.rule_effects !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['requires', 'rule_effects'],
+      message: 'Rule effects require requires.rule_effects: 1',
+    });
+  }
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WorkflowRuleSchema } from '../core/models/workflow-schemas.js';
+import { WorkflowConfigRawSchema, WorkflowRuleSchema } from '../core/models/workflow-schemas.js';
 import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { makeStep } from './engine-test-helpers.js';
@@ -75,5 +75,32 @@ describe('workflow rule effects', () => {
         message: 'approve',
       }],
     })).toThrow(/exactly one/);
+  });
+
+  it('requires an explicit workflow capability before rule effects can execute', () => {
+    const workflow = {
+      name: 'rule-effects-capability',
+      steps: [{
+        name: 'plan',
+        persona: 'planner',
+        instruction: 'plan',
+        rules: [{
+          condition: 'ready',
+          next: 'COMPLETE',
+          effects: [{
+            type: 'capture_artifacts',
+            allowed_patterns: ['specs/phase-*/plan.md'],
+            required_basenames: ['plan.md'],
+            same_parent: true,
+          }],
+        }],
+      }],
+    };
+
+    expect(() => WorkflowConfigRawSchema.parse(workflow)).toThrow(/requires\.rule_effects/);
+    expect(() => WorkflowConfigRawSchema.parse({
+      ...workflow,
+      requires: { rule_effects: 1 },
+    })).not.toThrow();
   });
 });
