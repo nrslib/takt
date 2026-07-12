@@ -207,7 +207,7 @@ describe('OpenCodeClient retry', () => {
     await vi.advanceTimersByTimeAsync(1);
     const result = await resultPromise;
 
-    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(subscribe).toHaveBeenCalledTimes(2);
     expect(result.status).toBe('done');
@@ -232,17 +232,17 @@ describe('OpenCodeClient retry', () => {
     });
 
     await vi.advanceTimersByTimeAsync(OPENCODE_STREAM_IDLE_TIMEOUT_MS + 250);
-    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(OPENCODE_STREAM_IDLE_TIMEOUT_MS + 500);
-    expect(sessionCreate).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledTimes(3);
 
     await vi.advanceTimersByTimeAsync(OPENCODE_STREAM_IDLE_TIMEOUT_MS);
     const result = await resultPromise;
 
-    expect(sessionCreate).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledTimes(3);
     expect(subscribe).toHaveBeenCalledTimes(3);
     expect(result.status).toBe('error');
