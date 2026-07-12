@@ -291,6 +291,267 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
+  // v3-r4 の裁定ステップ死因の再発防止: {report:X} が「そのステップより前に
+  // 実行され得るステップの output_contracts」に無い参照を警告する。
+  it('warns when an instruction references a report that is only produced by later steps (v3-r4 arbitrate shape)', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-later.yaml', `name: report-ref-later
+max_steps: 10
+initial_step: review
+loop_monitors:
+  - cycle:
+      - review
+      - fix
+    threshold: 3
+    judge:
+      instruction: "check the loop using {report:final-review.md}"
+      rules:
+        - condition: healthy
+          next: review
+        - condition: stuck
+          next: reviewers
+steps:
+  - name: review
+    instruction: review the diff
+    rules:
+      - condition: issues found
+        next: fix
+      - condition: clean
+        next: reviewers
+    output_contracts:
+      report:
+        - name: review-1st.md
+          format: simple-report
+  - name: fix
+    instruction: fix it
+    rules:
+      - condition: fixed
+        next: review
+      - condition: no fix needed
+        next: arbitrate
+  - name: arbitrate
+    instruction: "arbitrate using {report:final-review.md}"
+    rules:
+      - condition: reviewer is right
+        next: fix
+      - condition: coder is right
+        next: reviewers
+  - name: reviewers
+    instruction: final review
+    rules:
+      - condition: ok
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: final-review.md
+          format: simple-report
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('step "arbitrate" references {report:final-review.md}'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('before any step producing the report has run'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('loop monitor judge for cycle [review -> fix] references {report:final-review.md}'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when the referenced report is produced before the step on every path', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-earlier.yaml', `name: report-ref-earlier
+max_steps: 10
+initial_step: review
+loop_monitors:
+  - cycle:
+      - review
+      - fix
+    threshold: 3
+    judge:
+      instruction: "check the loop using {report:review-1st.md}"
+      rules:
+        - condition: healthy
+          next: review
+        - condition: stuck
+          next: COMPLETE
+steps:
+  - name: review
+    instruction: review the diff
+    rules:
+      - condition: issues found
+        next: fix
+      - condition: clean
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: review-1st.md
+          format: simple-report
+  - name: fix
+    instruction: fix it
+    rules:
+      - condition: fixed
+        next: review
+      - condition: no fix needed
+        next: arbitrate
+  - name: arbitrate
+    instruction: "arbitrate using {report:review-1st.md}"
+    rules:
+      - condition: reviewer is right
+        next: fix
+      - condition: coder is right
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  // codex 指摘 (a): workflow_call のワイルドカードは全集合として交差に吸収される。
+  // 一方の経路が workflow_call（任意レポート producer）、他方が実 producer のとき、
+  // 合流点では設計上レポートが保証される — 交差を空にして偽陽性を出さない。
+  it('does not warn when a workflow_call path and a producing path merge before the reference', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    writeWorkflow(projectDir, '.takt/workflows/wildcard-child.yaml', `name: wildcard-child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: work
+max_steps: 3
+steps:
+  - name: work
+    instruction: do the delegated work
+    rules:
+      - condition: done
+        return: ok
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-wildcard-merge.yaml', `name: report-ref-wildcard-merge
+max_steps: 10
+initial_step: route
+steps:
+  - name: route
+    instruction: route the work
+    rules:
+      - condition: delegate path
+        next: delegate
+      - condition: direct path
+        next: produce
+  - name: delegate
+    kind: workflow_call
+    call: wildcard-child
+    rules:
+      - condition: ok
+        next: join
+  - name: produce
+    instruction: produce the report
+    rules:
+      - condition: done
+        next: join
+    output_contracts:
+      report:
+        - name: x-report.md
+          format: simple-report
+  - name: join
+    instruction: "consume {report:x-report.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  // codex 指摘 (b): loop monitor の judge は cycle 完走後にしか発火しないため、
+  // judge エッジは cycle 最後のステップからのみ張る。cycle 後半のステップが
+  // 生成するレポートを judge の遷移先が参照しても偽陽性を出さない。
+  it('does not warn when a judge target references a report produced by the last cycle step', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-cycle-late-producer.yaml', `name: report-ref-cycle-late-producer
+max_steps: 10
+initial_step: stepa
+loop_monitors:
+  - cycle:
+      - stepa
+      - stepb
+    threshold: 3
+    judge:
+      instruction: judge the loop
+      rules:
+        - condition: healthy
+          next: stepa
+        - condition: stuck
+          next: escalate
+steps:
+  - name: stepa
+    instruction: do a
+    rules:
+      - condition: continue
+        next: stepb
+  - name: stepb
+    instruction: do b
+    rules:
+      - condition: loop
+        next: stepa
+      - condition: done
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: b-report.md
+          format: simple-report
+  - name: escalate
+    instruction: "handle the stuck loop using {report:b-report.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('warns when an instruction references a report that no step produces at all', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-nowhere.yaml', `name: report-ref-nowhere
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: "work with {report:ghost-report.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('step "step1" references {report:ghost-report.md}'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining("no step's output_contracts produce that report"));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('does not warn on callable subworkflows whose reports may come from the parent run', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-callable.yaml', `name: report-ref-callable
+subworkflow:
+  callable: true
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: "work with {report:plan.md}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
   it('reports missing loop monitor judge references', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-loop-monitor-refs.yaml', `name: missing-loop-monitor-refs
 max_steps: 10

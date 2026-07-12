@@ -23,7 +23,7 @@ loop_monitors:
     threshold: 5
     judge:
       persona: supervisor
-      instruction: loop-monitor-ai-antipattern-fix
+      instruction: loop-monitor-ai-antipattern-fix-1st
       rules:
         - condition: Healthy (making progress)
           next: ai-antipattern-review-1st
@@ -35,7 +35,7 @@ loop_monitors:
     threshold: 5
     judge:
       persona: supervisor
-      instruction: loop-monitor-ai-antipattern-fix
+      instruction: loop-monitor-ai-antipattern-fix-1st
       rules:
         - condition: Healthy (making progress)
           next: ai-antipattern-review-1st
@@ -225,7 +225,7 @@ steps:
     policy: review
     provider_options:
       extends: review-files
-    instruction: arbitrate
+    instruction: arbitrate-review-1st
     rules:
       - condition: ai-antipattern-review-1st's findings are valid (fix required)
         next: ai-antipattern-fix
