@@ -39,6 +39,7 @@ import {
 import { classifyLocationAdmissionNormalization, validateLocationAdmission } from './admission-validation.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
+import { attachFixpointState } from './fixpoint.js';
 import {
   canonicalizeReviewerRawFinding,
   computeInterpretationKey,
@@ -1677,7 +1678,11 @@ export async function runFindingManagerForStep(
       rejectedObservationAttachments,
       observation,
     );
-    return markInterpretationsApplied(withRejectedObservations, interpretationResults, observation);
+    const applied = markInterpretationsApplied(withRejectedObservations, interpretationResults, observation);
+    // 対策バッチ B1: このラウンドの最終状態を、ラウンド開始直前の fresh ledger
+    // （= 直前ラウンド終了時点。lost-update 対策で再読込した値）と比較し、
+    // fixpoint 到達を判定して次ラウンド比較用のスナップショットごと永続化する。
+    return attachFixpointState(freshLedger, applied);
   });
 
   const reportNeeded = invalidAttempts.length > 0

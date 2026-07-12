@@ -3,7 +3,7 @@ import {
   SESSION_AGENT_STEP_REQUIRED_MESSAGE,
   SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
 } from '../../models/workflow-session-constraints.js';
-import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
+import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES, FINDING_CONFLICT_ADJUDICATION_STEP, NEEDS_ADJUDICATION_STEP } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
@@ -53,6 +53,23 @@ function validateFindingConflictAdjudicationRuleContract(
 ): void {
   if (!findingContractConfigured && rule.next === FINDING_CONFLICT_ADJUDICATION_STEP) {
     throw new Error(`${source}: next: ${FINDING_CONFLICT_ADJUDICATION_STEP} requires finding_contract`);
+  }
+}
+
+/**
+ * `next: NEEDS_ADJUDICATION` (対策バッチ B1) only makes sense when a finding
+ * ledger exists to have reached a provisional fixpoint against — mirrors
+ * validateFindingConflictAdjudicationRuleContract above. Unlike that target,
+ * NEEDS_ADJUDICATION is a pure terminal marker (no synthesized step), so this
+ * is the only place its use is constrained to finding_contract workflows.
+ */
+function validateNeedsAdjudicationRuleContract(
+  findingContractConfigured: boolean,
+  rule: { next?: string },
+  source: string,
+): void {
+  if (!findingContractConfigured && rule.next === NEEDS_ADJUDICATION_STEP) {
+    throw new Error(`${source}: next: ${NEEDS_ADJUDICATION_STEP} requires finding_contract`);
   }
 }
 
@@ -345,6 +362,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   stepNames.add(COMPLETE_STEP);
   stepNames.add(ABORT_STEP);
   stepNames.add(FINDING_CONFLICT_ADJUDICATION_STEP);
+  stepNames.add(NEEDS_ADJUDICATION_STEP);
 
   for (const step of config.steps) {
     validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
@@ -359,6 +377,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         `Invalid rule in step "${step.name}"`,
       );
       validateFindingConflictAdjudicationRuleContract(
+        findingContractEnabled,
+        rule,
+        `Invalid rule in step "${step.name}"`,
+      );
+      validateNeedsAdjudicationRuleContract(
         findingContractEnabled,
         rule,
         `Invalid rule in step "${step.name}"`,
@@ -385,6 +408,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
           rule,
           `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
         );
+        validateNeedsAdjudicationRuleContract(
+          findingContractEnabled,
+          rule,
+          `Invalid rule in parallel sub-step "${subStep.name}" of step "${step.name}"`,
+        );
       }
     }
   }
@@ -400,6 +428,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         throw new Error(`Invalid loop_monitor judge rule: target step "${rule.next}" does not exist`);
       }
       validateFindingConflictAdjudicationRuleContract(
+        findingContractEnabled,
+        rule,
+        'Invalid loop_monitor judge rule',
+      );
+      validateNeedsAdjudicationRuleContract(
         findingContractEnabled,
         rule,
         'Invalid loop_monitor judge rule',

@@ -136,6 +136,10 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
     // count > 0 での COMPLETE を最終不変条件として拒否する（設計書 §7）。
     provisional: {
       count: openItems.filter((finding) => finding.provisional !== undefined).length,
+      // 対策バッチ B1: 直前の findings-manager ラウンドが fixpoint に達したか
+      // （台帳側で計算・永続化済み。ここは読むだけ）。builtin workflow はこれを
+      // 見て NEEDS_ADJUDICATION へルーティングする。
+      fixpoint: ledger.fixpoint?.reached ?? false,
       items: openItems
         .filter((finding) => finding.provisional !== undefined)
         .map((finding) => ({

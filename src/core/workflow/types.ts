@@ -153,7 +153,16 @@ export type WorkflowAbortKind =
    * rules が findings.provisional.count を処理する記述を欠いている設定不備で、
    * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast（v2 梯子設計 §7）。
    */
-  | 'provisional_findings';
+  | 'provisional_findings'
+  /**
+   * `next: NEEDS_ADJUDICATION` への遷移（対策バッチ B1）: provisional findings
+   * が直前ラウンドから意味的な変化の無い fixpoint に達し、plan への差し戻しでは
+   * もう解消し得ないと機械判定された。provisional_findings（設定不備の
+   * fail-fast）とは異なり、これは workflow が意図的にルーティングした正規の
+   * 終端状態 — resume 可能で、人手が台帳を編集するか新しいレビュー観測を
+   * 与えれば fixpoint が破れて再び plan へ進める。
+   */
+  | 'needs_adjudication';
 
 export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;

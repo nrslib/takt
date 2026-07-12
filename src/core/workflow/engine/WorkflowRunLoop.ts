@@ -1,6 +1,6 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import type { AgentResponse, FallbackContext, LoopMonitorConfig, RateLimitFallbackProvider, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
-import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
+import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES, NEEDS_ADJUDICATION_STEP } from '../constants.js';
 import type {
   RuntimeStepResolution,
   StepProviderInfo,
@@ -85,6 +85,14 @@ interface WorkflowRunLoopDeps {
    * id / kind / reason と修正ガイダンスを含める。
    */
   checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
+  /**
+   * `next: NEEDS_ADJUDICATION` 到達時（対策バッチ B1）に呼ぶ。現在 open な
+   * provisional finding とその発生元を監査レポートへ永続化し
+   * （FindingLedgerStore.saveNeedsAdjudicationReport）、人間可読な abort reason
+   * 文字列を返す副作用込みの操作 — 純粋な "build" ではないため checkCompletionGate
+   * と違う名前にしている。
+   */
+  recordNeedsAdjudication: () => string;
 }
 
 async function resolveStepPromotionRuntime(
@@ -622,6 +630,10 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         deps.emit('workflow:complete', deps.state);
         break;
       }
+      if (nextStep === NEEDS_ADJUDICATION_STEP) {
+        abort = abortWorkflow(deps, 'needs_adjudication', deps.recordNeedsAdjudication());
+        break;
+      }
       if (nextStep === ABORT_STEP) {
         abort = abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition');
         break;
@@ -830,7 +842,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   const nextStep = requireNextStep(step, transition);
-  const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP;
+  const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP || nextStep === NEEDS_ADJUDICATION_STEP;
 
   if (!isComplete) {
     advanceActiveStep(deps, nextStep, deps.state.iteration);
@@ -841,6 +853,9 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
       return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
     }
     deps.state.status = 'completed';
+  } else if (nextStep === NEEDS_ADJUDICATION_STEP) {
+    const abort = abortWorkflow(deps, 'needs_adjudication', deps.recordNeedsAdjudication());
+    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
   if (nextStep === ABORT_STEP) {

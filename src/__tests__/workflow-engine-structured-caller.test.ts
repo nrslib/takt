@@ -3990,3 +3990,198 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(persistedLedger.findings).toHaveLength(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 対策バッチ B1: provisional fixpoint → NEEDS_ADJUDICATION（raw finding 梯子
+// 設計 v2 の収束性対策）。checkCompletionGate（COMPLETE 直前の provisional
+// バックストップ）と対になる、独立した終端遷移であることを実エンジンで固定する。
+// ---------------------------------------------------------------------------
+describe('WorkflowEngine NEEDS_ADJUDICATION (provisional fixpoint, batch B1)', () => {
+  let cwd: string;
+  let configDir: string;
+  let previousTaktConfigDir: string | undefined;
+
+  beforeEach(() => {
+    previousTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    configDir = join(tmpdir(), `takt-engine-needs-adjudication-config-${randomUUID()}`);
+    process.env.TAKT_CONFIG_DIR = configDir;
+    cwd = createTestTmpDir();
+    vi.clearAllMocks();
+    vi.mocked(runAgent).mockReset();
+  });
+
+  afterEach(() => {
+    if (existsSync(cwd)) {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+    if (existsSync(configDir)) {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+    if (previousTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousTaktConfigDir;
+    }
+  });
+
+  function buildFixpointWorkflowConfig(): WorkflowConfig {
+    return {
+      name: 'needs-adjudication-e2e',
+      maxSteps: 10,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [
+        makeStep({
+          name: 'plan',
+          persona: 'planner',
+          instruction: 'Replan.',
+          rules: [makeRule('when(true)', 'reviewers')],
+        }),
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'architecture-review',
+              persona: 'architecture-reviewer',
+              instruction: 'Review architecture.',
+              rules: [makeRule('when(true)', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE'),
+            makeRule('when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
+            makeRule('when(findings.provisional.count > 0 && findings.conflicts.count == 0)', 'plan'),
+            makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
+          ],
+        }),
+      ],
+    };
+  }
+
+  function hallucinatedRawFindingResponse(rawFindingId: string, location: string) {
+    return {
+      persona: 'architecture-reviewer',
+      status: 'done',
+      content: 'Found an issue.',
+      structuredOutput: {
+        rawFindings: [{
+          rawFindingId,
+          targetFindingId: '',
+          relation: 'new',
+          familyTag: 'bug',
+          severity: 'high',
+          title: 'Null check missing in a file that does not exist',
+          location,
+          description: 'This bug lives in a file that is not part of the reviewed tree.',
+          suggestion: 'Add a null check.',
+        }],
+      },
+      timestamp: new Date(),
+    };
+  }
+
+  it('stops at NEEDS_ADJUDICATION once a hallucinated provisional finding reaches a fixpoint across two review rounds, instead of replanning forever', async () => {
+    vi.mocked(runAgent)
+      // Round 1: reviewers report a finding against a file that does not
+      // exist in the reviewed tree. It is rejected at deterministic admission
+      // (no LLM manager call needed) and lands as an invalid-location-evidence
+      // provisional. Fixpoint cannot be reached on the first round.
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return hallucinatedRawFindingResponse('raw-1', 'src/does-not-exist.ts:5');
+      })
+      // The provisional-count rule (not yet fixpoint) routes to plan.
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
+      })
+      // Round 2: reviewers report the exact same hallucination again (a
+      // different rawFindingId and line number — identity survives both,
+      // since the ladder's semantic key strips line numbers).
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return hallucinatedRawFindingResponse('raw-2', 'src/does-not-exist.ts:99');
+      });
+
+    const engine = new WorkflowEngine(buildFixpointWorkflowConfig(), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => { abortReasons.push(reason); });
+
+    const result = await engine.run();
+
+    // Not COMPLETE: NEEDS_ADJUDICATION is a non-success terminal state, and
+    // engine state has only 'completed'/'aborted' — this must land on the
+    // latter, exactly like every other abort kind.
+    expect(result.status).toBe('aborted');
+    expect(abortReasons).toHaveLength(1);
+    expect(abortReasons[0]).toContain('NEEDS_ADJUDICATION');
+    expect(abortReasons[0]).toContain('fixpoint');
+    expect(abortReasons[0]).toContain('invalid-location-evidence');
+    // Explains why it stopped (CLI-visible reason string).
+    expect(abortReasons[0]).toContain('A human must adjudicate');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+
+    // "Open provisional list + origin" is durably recorded (not only in the
+    // ephemeral abort reason string) so a human/tool can inspect it later.
+    const needsAdjudicationReportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'needs-adjudication.json');
+    expect(existsSync(needsAdjudicationReportPath)).toBe(true);
+    const report = JSON.parse(readFileSync(needsAdjudicationReportPath, 'utf-8')) as {
+      stepName: string;
+      provisionalFindings: Array<{ kind: string; reviewers: string[]; sourceRawFindingIds: string[]; reason: string }>;
+    };
+    expect(report.stepName).toBe('reviewers');
+    expect(report.provisionalFindings).toHaveLength(1);
+    expect(report.provisionalFindings[0]?.kind).toBe('invalid-location-evidence');
+    expect(report.provisionalFindings[0]?.reviewers).toEqual(['architecture-review']);
+    expect(report.provisionalFindings[0]?.sourceRawFindingIds.length).toBeGreaterThan(0);
+
+    // The ledger itself keeps the fixpoint snapshot for the next round —
+    // resuming and getting the same observation again would still show
+    // reached === true; a differing observation would break it.
+    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+      fixpoint?: { reached: boolean };
+    };
+    expect(ledger.fixpoint?.reached).toBe(true);
+  });
+
+  it('keeps replanning (not NEEDS_ADJUDICATION) on the first round even though a provisional finding is already open', async () => {
+    vi.mocked(runAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      return hallucinatedRawFindingResponse('raw-1', 'src/does-not-exist.ts:5');
+    });
+
+    const engine = new WorkflowEngine(buildFixpointWorkflowConfig(), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+      // Stop right after the "reviewers" -> "plan" transition so the test
+      // can inspect where the rule routed without mocking a second round.
+      maxStepsOverride: 1,
+    });
+
+    const result = await engine.run();
+
+    // The rule itself routed to "plan", not NEEDS_ADJUDICATION: fixpoint
+    // requires a previous round to compare against, and this is round 1.
+    expect(result.currentStep).toBe('plan');
+    expect(result.status).toBe('aborted');
+    const needsAdjudicationReportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'needs-adjudication.json');
+    expect(existsSync(needsAdjudicationReportPath)).toBe(false);
+  });
+});

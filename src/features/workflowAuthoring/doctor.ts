@@ -67,6 +67,7 @@ function validateWorkflowRuntimeContract(
       workflowCallResolver: () => null,
     });
     warnOnMissingProvisionalRouting(report, workflow);
+    warnOnMissingFixpointRouting(report, workflow);
     warnOnUnproducibleReportReferences(report, workflow);
   } catch (validationError) {
     report.diagnostics.push({
@@ -104,6 +105,43 @@ function warnOnMissingProvisionalRouting(
       + 'undeterminable observations land as gate-blocking provisional findings instead, and a transition to COMPLETE '
       + 'while any provisional finding is open aborts the workflow. '
       + 'Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0) -> <replan step>` before your COMPLETE rule.',
+  });
+}
+
+/**
+ * 対策バッチ B1（provisional fixpoint → NEEDS_ADJUDICATION）への移行警告:
+ * findings.provisional.count で replan ルーティングしている workflow が
+ * findings.provisional.fixpoint を一切参照していない場合、意味を確定できない
+ * provisional（例: 実在しないファイルへの幻覚指摘）が解消され得ないまま
+ * plan への差し戻しを無限に繰り返す（安全だが有限時間で停止しない）。
+ * fixpoint ルーティングの追加を促す。
+ */
+function warnOnMissingFixpointRouting(
+  report: WorkflowDoctorReport,
+  workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>,
+): void {
+  if (workflow.findingContract === undefined) {
+    return;
+  }
+  const referencesProvisionalCount = workflow.steps.some((step) => (
+    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional.count'))
+  ));
+  if (!referencesProvisionalCount) {
+    return;
+  }
+  const referencesFixpoint = workflow.steps.some((step) => (
+    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional.fixpoint'))
+  ));
+  if (referencesFixpoint) {
+    return;
+  }
+  report.diagnostics.push({
+    level: 'warning',
+    message: 'finding_contract workflow routes on findings.provisional.count but never references findings.provisional.fixpoint. '
+      + 'A provisional finding that never settles (e.g. a hallucinated finding against a nonexistent file) is replanned forever '
+      + 'instead of stopping at a resumable checkpoint. '
+      + 'Add a rule such as `when(findings.provisional.fixpoint == true && findings.conflicts.count == 0) -> NEEDS_ADJUDICATION` '
+      + 'before your findings.provisional.count replan rule.',
   });
 }
 

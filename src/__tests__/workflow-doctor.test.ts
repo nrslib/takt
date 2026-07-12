@@ -258,10 +258,55 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('does not warn when the finding_contract workflow routes on findings.provisional.count', async () => {
+  it('does not warn when the finding_contract workflow routes on findings.provisional.count and findings.provisional.fixpoint', async () => {
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
     writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
     const filePath = writeWorkflow(projectDir, '.takt/workflows/v2-fc-routing.yaml', `name: v2-fc-routing
+max_steps: 10
+initial_step: reviewers
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: plan
+    persona: planner
+    instruction: re-plan the work
+    rules:
+      - condition: done
+        next: reviewers
+  - name: reviewers
+    parallel:
+      - name: review
+        persona: reviewer
+        instruction: review it
+        rules:
+          - condition: approved
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+        next: plan
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+`);
+
+    await doctorWorkflowCommand([filePath], projectDir);
+
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.fixpoint'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('warns when a finding_contract workflow routes on findings.provisional.count but never references findings.provisional.fixpoint (B1 migration)', async () => {
+    writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
+    writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/v2-fc-routing-no-fixpoint.yaml', `name: v2-fc-routing-no-fixpoint
 max_steps: 10
 initial_step: reviewers
 finding_contract:
@@ -296,7 +341,8 @@ steps:
 
     await doctorWorkflowCommand([filePath], projectDir);
 
-    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('findings.provisional.fixpoint'));
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('NEEDS_ADJUDICATION'));
     expect(mockError).not.toHaveBeenCalled();
   });
 
@@ -1482,6 +1528,120 @@ steps:
 
     expect(messages).toContain(
       'Loop monitor "step1 -> step2" routes to "finding-conflict-adjudication" but finding_contract is not configured',
+    );
+  });
+
+  // NEEDS_ADJUDICATION (対策バッチ B1) is a terminal marker like COMPLETE/ABORT,
+  // but — like finding-conflict-adjudication — only makes sense with a finding
+  // ledger to have reached a fixpoint against. Mirrors the
+  // finding-conflict-adjudication graph checks above.
+  it('does not flag routing to NEEDS_ADJUDICATION when finding_contract is configured', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/needs-adjudication-wired.yaml', `name: needs-adjudication-wired
+max_steps: 10
+initial_step: step1
+finding_contract:
+  ledger_path: .takt/findings/needs-adjudication-wired.json
+  raw_findings_path: .takt/findings/needs-adjudication-wired/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+steps:
+  - name: step1
+    rules:
+      - condition: fixpoint
+        next: NEEDS_ADJUDICATION
+      - condition: done
+        next: COMPLETE
+`);
+
+    const report = inspectWorkflowFile(filePath, projectDir);
+
+    expect(report.diagnostics).toEqual([]);
+  });
+
+  it('reports routing to NEEDS_ADJUDICATION without finding_contract configured', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/needs-adjudication-unconfigured.yaml', `name: needs-adjudication-unconfigured
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    rules:
+      - condition: fixpoint
+        next: NEEDS_ADJUDICATION
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Step "step1" routes to "NEEDS_ADJUDICATION" but finding_contract is not configured',
+    );
+  });
+
+  it('reports a parallel sub-step routing to NEEDS_ADJUDICATION without finding_contract configured', () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/needs-adjudication-parallel-sub-unconfigured.yaml', `name: needs-adjudication-parallel-sub-unconfigured
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    parallel:
+      - name: sub-review
+        rules:
+          - condition: fixpoint
+            next: NEEDS_ADJUDICATION
+          - condition: approved
+            next: COMPLETE
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const diagnostics = inspectWorkflowFile(filePath, projectDir).diagnostics;
+
+    expect(diagnostics).toContainEqual({
+      level: 'error',
+      message: 'Step "step1/sub-review" routes to "NEEDS_ADJUDICATION" but finding_contract is not configured',
+    });
+    expect(diagnostics).toContainEqual({
+      level: 'warning',
+      message: 'Step "step1/sub-review" routes to "NEEDS_ADJUDICATION" from a parallel sub-step, but sub-step "next" is ignored by parallel aggregation; wire the parent step\'s rules instead',
+    });
+  });
+
+  it('reports loop monitor routing to NEEDS_ADJUDICATION without finding_contract configured', () => {
+    const filePath = writeWorkflow(
+      projectDir,
+      '.takt/workflows/needs-adjudication-loop-monitor-unconfigured.yaml',
+      `name: needs-adjudication-loop-monitor-unconfigured
+max_steps: 10
+initial_step: step1
+loop_monitors:
+  - cycle: [step1, step2]
+    threshold: 2
+    judge:
+      rules:
+        - condition: fixpoint
+          next: NEEDS_ADJUDICATION
+steps:
+  - name: step1
+    rules:
+      - condition: continue
+        next: step2
+  - name: step2
+    rules:
+      - condition: repeat
+        next: step1
+      - condition: done
+        next: COMPLETE
+`,
+    );
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Loop monitor "step1 -> step2" routes to "NEEDS_ADJUDICATION" but finding_contract is not configured',
     );
   });
 

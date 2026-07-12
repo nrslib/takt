@@ -95,6 +95,35 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     }
   });
 
+  // 対策バッチ B1: provisional fixpoint（前ラウンドから意味的な変化が無い）に
+  // 達したら plan への差し戻しではなく NEEDS_ADJUDICATION（要人手裁定の終端状態）
+  // へルーティングする。fixpoint ルールは「変化のあるラウンドでは従来どおり
+  // plan へ」の要請を満たすため、汎用の provisional.count ルールより前に
+  // 置かれていなければならない（first-match-wins のルール評価順）。
+  it.each(DEV_WORKFLOWS)('should route provisional fixpoint to NEEDS_ADJUDICATION before falling back to plan when %s is loaded', (name) => {
+    languageState.value = lang;
+    const workflow = loadWorkflow(name, process.cwd());
+    expect(workflow).toBeDefined();
+
+    for (const stepName of ['reviewers', 'final-gate']) {
+      const step = workflow!.steps.find((candidate) => candidate.name === stepName);
+      expect(step, `step "${stepName}" should exist`).toBeDefined();
+      const rules = step!.rules ?? [];
+
+      const fixpointRuleIndex = rules.findIndex((rule) => rule.next === 'NEEDS_ADJUDICATION');
+      expect(fixpointRuleIndex, `step "${stepName}" should route to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
+      expect(rules[fixpointRuleIndex]!.condition).toContain('findings.provisional.fixpoint');
+
+      const replanRuleIndex = rules.findIndex((rule) => rule.next === 'plan' && rule.condition.includes('findings.provisional.count'));
+      expect(replanRuleIndex, `step "${stepName}" should still route provisional.count to plan`).toBeGreaterThanOrEqual(0);
+
+      // first-match-wins: fixpoint must be checked before the generic
+      // provisional.count replan rule, or a fixpoint round would never reach
+      // NEEDS_ADJUDICATION (it would keep matching the earlier plan rule).
+      expect(fixpointRuleIndex).toBeLessThan(replanRuleIndex);
+    }
+  });
+
   // 既定のセッションキーは persona 由来（session-key.ts）のため、同じ persona
   // "ai-antipattern-reviewer" を使う ai-antipattern-review-1st と、並列
   // reviewers 配下の Finding Contract 版 ai-antipattern-review が同一セッションを

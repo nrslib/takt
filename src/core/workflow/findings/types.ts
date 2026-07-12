@@ -48,6 +48,8 @@ export type {
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
+  FindingLedgerFixpointSnapshot,
+  FindingLedgerFixpointState,
   FindingLifecycle,
   FindingManagerConflict,
   FindingManagerConflictDecision,

@@ -43,6 +43,30 @@ export interface FindingLedgerStore {
   saveManagerValidationReport: (report: FindingManagerValidationReport) => string;
   /** Audit trail for the finding-conflict-adjudication synthetic step: discarded decisions (evidence changed between prompt and apply) and other non-applied outcomes. */
   saveConflictAdjudicationReport: (report: FindingConflictAdjudicationAuditReport) => string;
+  /** Audit trail for a NEEDS_ADJUDICATION stop (対策バッチ B1): the open provisional findings that reached a cross-round fixpoint and their origin. */
+  saveNeedsAdjudicationReport: (report: NeedsAdjudicationReport) => string;
+}
+
+/**
+ * Written when the workflow stops at NEEDS_ADJUDICATION (対策バッチ B1: a
+ * cross-round provisional fixpoint). Durable, machine-readable record of
+ * "why it stopped" alongside the human-readable abort reason string — see
+ * WorkflowEngine's recordNeedsAdjudication.
+ */
+export interface NeedsAdjudicationReport {
+  version: 1;
+  runId: string;
+  /** Step whose rule transition matched NEEDS_ADJUDICATION (e.g. "reviewers", "final-gate"). */
+  stepName: string;
+  reachedAt: string;
+  provisionalFindings: Array<{
+    findingId: string;
+    kind: string;
+    stableKey: string;
+    reason: string;
+    reviewers: string[];
+    sourceRawFindingIds: string[];
+  }>;
 }
 
 /**
@@ -356,6 +380,12 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     saveConflictAdjudicationReport: (report) => {
       const fileName = `findings-adjudication.${sanitizeFileSegment(report.conflictId)}.json`;
       return writeReportFile(options.reportDir, fileName, JSON.stringify(report, null, 2));
+    },
+    saveNeedsAdjudicationReport: (report) => {
+      // NEEDS_ADJUDICATION is terminal — a run reaches it at most once, so a
+      // fixed name (already scoped by the run's own report directory) is
+      // enough; no per-conflict/per-step disambiguation is needed.
+      return writeReportFile(options.reportDir, 'needs-adjudication.json', JSON.stringify(report, null, 2));
     },
   };
 }

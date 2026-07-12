@@ -340,6 +340,11 @@ steps:
     rules:
       - condition: all("approved", "approved", "AI特有の問題なし", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
+      # provisional が直前ラウンドから意味的な変化の無い fixpoint に達した場合、
+      # 再計画では解消し得ない（対策バッチ B1: raw finding 梯子設計 v2 の収束性対策）。
+      # plan への差し戻しの前に、要人手裁定の終端状態へルーティングする。
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
       # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
       # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
@@ -412,6 +417,11 @@ steps:
     rules:
       - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
+      # provisional が直前ラウンドから意味的な変化の無い fixpoint に達した場合、
+      # 再計画では解消し得ない（対策バッチ B1: raw finding 梯子設計 v2 の収束性対策）。
+      # plan への差し戻しの前に、要人手裁定の終端状態へルーティングする。
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
       # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
       # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)

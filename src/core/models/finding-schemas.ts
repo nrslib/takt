@@ -338,6 +338,18 @@ export const FindingInterpretationRecordSchema = z.object({
   applicationResult: z.enum(INTERPRETATION_APPLICATION_RESULTS).optional(),
 }).strict();
 
+/** ラウンド跨ぎの fixpoint 比較スナップショット（対策バッチ B1）。 */
+export const FindingLedgerFixpointSnapshotSchema = z.object({
+  provisionalKeys: z.array(nonEmptyString),
+  substantiveEntries: z.array(nonEmptyString),
+  unadjudicatedConflictEntries: z.array(nonEmptyString),
+}).strict();
+
+export const FindingLedgerFixpointStateSchema = z.object({
+  snapshot: FindingLedgerFixpointSnapshotSchema,
+  reached: z.boolean(),
+}).strict();
+
 export const FindingLedgerSchema = z.object({
   version: z.literal(1),
   workflowName: nonEmptyString,
@@ -347,6 +359,7 @@ export const FindingLedgerSchema = z.object({
   rawFindings: z.array(RawFindingSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
   interpretations: z.array(FindingInterpretationRecordSchema).optional(),
+  fixpoint: FindingLedgerFixpointStateSchema.optional(),
 }).strict();
 
 /**

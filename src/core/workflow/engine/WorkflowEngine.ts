@@ -45,6 +45,7 @@ import {
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
 import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
+import type { FindingLedger, FindingLedgerEntry } from '../findings/types.js';
 import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
 import { ERROR_MESSAGES } from '../constants.js';
@@ -301,6 +302,7 @@ export class WorkflowEngine extends EventEmitter {
             this.sharedRuntime.maxSteps = maxSteps;
           },
           checkCompletionGate: this.checkCompletionGate.bind(this),
+          recordNeedsAdjudication: this.recordNeedsAdjudication.bind(this),
         }),
         (result) => ({
           status: result.state.status,
@@ -334,6 +336,20 @@ export class WorkflowEngine extends EventEmitter {
     this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger());
   }
 
+  /** Open findings still carrying provisional metadata (shared by checkCompletionGate and recordNeedsAdjudication). */
+  private loadOpenProvisionalFindings(ledger: FindingLedger): FindingLedgerEntry[] {
+    return ledger.findings.filter(
+      (finding) => finding.status === 'open' && finding.provisional !== undefined,
+    );
+  }
+
+  /** Human-readable bullet lines for open provisional findings (shared by checkCompletionGate and recordNeedsAdjudication). */
+  private formatProvisionalFindingItems(provisionals: readonly FindingLedgerEntry[]): string[] {
+    return provisionals.map(
+      (finding) => `- ${finding.id} [${finding.provisional!.kind}]: ${finding.provisional!.reason}`,
+    );
+  }
+
   /**
    * COMPLETE 遷移直前のエンジン最終不変条件（v2 梯子設計 §7）: open な
    * provisional finding（意味を確定できなかった観測）が1件でも残っていれば
@@ -348,15 +364,11 @@ export class WorkflowEngine extends EventEmitter {
       return { ok: true };
     }
     const ledger = this.findingLedgerStore.loadLedger();
-    const provisionals = ledger.findings.filter(
-      (finding) => finding.status === 'open' && finding.provisional !== undefined,
-    );
+    const provisionals = this.loadOpenProvisionalFindings(ledger);
     if (provisionals.length === 0) {
       return { ok: true };
     }
-    const items = provisionals.map(
-      (finding) => `- ${finding.id} [${finding.provisional!.kind}]: ${finding.provisional!.reason}`,
-    );
+    const items = this.formatProvisionalFindingItems(provisionals);
     return {
       ok: false,
       reason: [
@@ -365,6 +377,40 @@ export class WorkflowEngine extends EventEmitter {
         'Workflow rules must route on findings.provisional.count (e.g. to a replan step) before COMPLETE; a provisional finding is a system finding that blocks the final gate until later clean review evidence settles it.',
       ].join('\n'),
     };
+  }
+
+  /**
+   * `next: NEEDS_ADJUDICATION` 到達時（対策バッチ B1）に呼ぶ。open provisional
+   * findings と発生元（sourceRawFindingIds / reason / reviewers）を監査
+   * レポート（findings-ledger store 経由）へ永続化し、CLI に表示する人間可読な
+   * abort reason を返す。findingLedgerStore は必ず定義済み — この遷移は
+   * findings.provisional.fixpoint を参照する rule からしか到達できず、
+   * WorkflowValidator が finding_contract 無しでのその rule 記述自体を拒否する
+   * （validateNeedsAdjudicationRuleContract）。
+   */
+  private recordNeedsAdjudication(): string {
+    const ledger = this.findingLedgerStore!.loadLedger();
+    const provisionals = this.loadOpenProvisionalFindings(ledger);
+    this.findingLedgerStore!.saveNeedsAdjudicationReport({
+      version: 1,
+      runId: this.runPaths.slug,
+      stepName: this.state.currentStep,
+      reachedAt: new Date().toISOString(),
+      provisionalFindings: provisionals.map((finding) => ({
+        findingId: finding.id,
+        kind: finding.provisional!.kind,
+        stableKey: finding.provisional!.stableKey,
+        reason: finding.provisional!.reason,
+        reviewers: finding.reviewers,
+        sourceRawFindingIds: finding.provisional!.sourceRawFindingIds,
+      })),
+    });
+    const items = this.formatProvisionalFindingItems(provisionals);
+    return [
+      `NEEDS_ADJUDICATION: ${provisionals.length} provisional finding(s) reached a fixpoint (no meaningful change across consecutive review rounds) and cannot be resolved automatically:`,
+      ...items,
+      'A human must adjudicate: edit the finding ledger to drop/resolve the stuck provisional finding(s), or provide new review evidence, then continue with `takt resume`.',
+    ].join('\n');
   }
 
   private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {
@@ -534,6 +580,7 @@ export class WorkflowEngine extends EventEmitter {
           emit: (event, ...args) => this.emit(event as never, ...args as []),
           updateMaxSteps: () => {},
           checkCompletionGate: this.checkCompletionGate.bind(this),
+          recordNeedsAdjudication: this.recordNeedsAdjudication.bind(this),
         }),
         (result) => ({
           status: result.isComplete ? this.state.status : 'running',

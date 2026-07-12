@@ -142,6 +142,8 @@ function makeHarness(initialLedger: FindingLedger): Harness {
       savedReports.push(report);
       return '/tmp/manager-report.json';
     },
+    saveConflictAdjudicationReport: () => '/tmp/adjudication-report.json',
+    saveNeedsAdjudicationReport: () => '/tmp/needs-adjudication.json',
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -2152,5 +2154,89 @@ describe('v2 追加必須テスト', () => {
     expect(context.open.count).toBe(2);
     expect(context.provisional.count).toBe(1);
     expect(context.provisional.items[0]).toMatchObject({ id: 'F-0002', kind: 'raw-meaning-ambiguous' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// attack 9: fixpoint gaming（対策バッチ B1 — 意図的な provisional 固定による
+// 早期停止の悪用）
+// ---------------------------------------------------------------------------
+describe('attack 9: fixpoint gaming（意図的に provisional を固定して早期停止させ、その隙に何かを通そうとする試み）', () => {
+  it('fixpoint に達しても provisional は open かつ gate-blocking のまま残り、COMPLETE 不変条件（open.count == 0）は独立して働き続ける', async () => {
+    const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
+    const hallucinated = (rawFindingId: string, location: string) => ({
+      rawFindingId,
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Null check missing in a file that does not exist',
+      location,
+      description: 'This bug lives in a file that is not part of the reviewed tree.',
+      suggestion: 'Add a null check.',
+      relation: 'new',
+      targetFindingId: '',
+    });
+
+    // 攻撃者（または壊れたレビュアー）が意図的に同一の偽装観測を繰り返し、
+    // fixpoint への到達を最短で狙う。
+    await harness.run({ reviewerRawFindings: [hallucinated('raw-1', 'src/does-not-exist.ts:5')] });
+    await harness.run({ reviewerRawFindings: [hallucinated('raw-2', 'src/does-not-exist.ts:99')] });
+
+    const ledger = harness.currentLedger();
+    expect(ledger.fixpoint?.reached).toBe(true);
+
+    // fixpoint 到達は「plan への差し戻しをやめて NEEDS_ADJUDICATION へ回す」
+    // という workflow のルーティング判断材料になるだけで、台帳側の finding
+    // そのものには一切影響しない — resolve/waive/invalidate のいずれにも
+    // ならず、open のまま gate-blocking であり続ける。
+    const provisional = ledger.findings.find((finding) => finding.provisional !== undefined);
+    expect(provisional?.status).toBe('open');
+    // 'persists' は「同じ観測が繰り返された」ことを表す非終端 lifecycle。
+    // resolved/waived/invalidated/superseded/reopened のいずれにもなっていない
+    // ことが不変条件 — fixpoint 到達がこれらへ勝手に遷移させないことを見る。
+    expect(['new', 'persists']).toContain(provisional?.lifecycle);
+    expect(provisional?.provisional?.gateEffect).toBe('block');
+    expect(provisional?.resolvedAt).toBeUndefined();
+    expect(provisional?.waivers).toBeUndefined();
+    expect(provisional?.invalidatedAt).toBeUndefined();
+
+    // COMPLETE 不変条件（WorkflowEngine.checkCompletionGate 相当）が見る
+    // findings.open.count == 0 は、fixpoint の有無と無関係に false のまま。
+    const context = buildFindingsRuleContext(ledger);
+    expect(context.open.count).toBeGreaterThan(0);
+    expect(context.provisional.count).toBeGreaterThan(0);
+  });
+
+  it('fixpoint 到達後にさらに同一の偽装観測を繰り返しても、新しい finding が増殖したり既存 finding の状態が動いたりしない（何も「通らない」）', async () => {
+    const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
+    const hallucinated = (rawFindingId: string) => ({
+      rawFindingId,
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Null check missing in a file that does not exist',
+      location: 'src/does-not-exist.ts:5',
+      description: 'This bug lives in a file that is not part of the reviewed tree.',
+      suggestion: 'Add a null check.',
+      relation: 'new',
+      targetFindingId: '',
+    });
+
+    await harness.run({ reviewerRawFindings: [hallucinated('raw-1')] });
+    await harness.run({ reviewerRawFindings: [hallucinated('raw-2')] });
+    expect(harness.currentLedger().fixpoint?.reached).toBe(true);
+    const findingCountAtFixpoint = harness.currentLedger().findings.length;
+
+    // fixpoint 到達後もラウンドを止める権限は engine 側の rule 評価にしかない
+    // （このユニットテストは manager-runner 単体の性質を見るため、workflow
+    // ルーティングそのものは別テストで検証済み）。ここでは「fixpoint 到達済み」
+    // という事実そのものが、後続ラウンドの台帳更新ロジックを緩めないことを見る。
+    await harness.run({ reviewerRawFindings: [hallucinated('raw-3')] });
+
+    const ledger = harness.currentLedger();
+    // 同一 stableKey の観測が繰り返されただけで、finding は増殖しない。
+    expect(ledger.findings.length).toBe(findingCountAtFixpoint);
+    expect(ledger.findings.filter((finding) => finding.provisional !== undefined)).toHaveLength(1);
+    // fixpoint 到達は継続する（何も新しい進展が無いため）が、それでも open のまま。
+    expect(ledger.fixpoint?.reached).toBe(true);
+    expect(ledger.findings[0]?.status).toBe('open');
   });
 });

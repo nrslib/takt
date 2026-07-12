@@ -340,6 +340,12 @@ steps:
     rules:
       - condition: all("approved", "approved", "No AI-specific issues", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
+      # If provisional findings reached a semantic fixpoint since the previous
+      # round (no meaningful change), replanning cannot resolve them either
+      # (convergence batch B1). Route to the human-adjudication terminal state
+      # before falling back to the replan rule below.
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
       # Provisional findings (observations whose meaning could not be determined)
       # are system findings the fixer cannot address directly; replan instead of
       # looping the fixer (raw-finding ladder design v2).
@@ -414,6 +420,12 @@ steps:
     rules:
       - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
+      # If provisional findings reached a semantic fixpoint since the previous
+      # round (no meaningful change), replanning cannot resolve them either
+      # (convergence batch B1). Route to the human-adjudication terminal state
+      # before falling back to the replan rule below.
+      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
       # Provisional findings (observations whose meaning could not be determined)
       # are system findings the fixer cannot address directly; replan instead of
       # looping the fixer (raw-finding ladder design v2).

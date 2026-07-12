@@ -155,6 +155,31 @@ export interface FindingLedgerEntry {
 
 export type FindingRecord = FindingLedgerEntry;
 
+/**
+ * ラウンド跨ぎの意味的スナップショット（対策バッチ B1: provisional fixpoint 判定）。
+ * 要素は全てソート済み・重複排除済みの文字列配列で、単純な配列等価比較で
+ * ラウンド間の「変化なし」を判定できる（fixpoint.ts 参照）。
+ */
+export interface FindingLedgerFixpointSnapshot {
+  /** open provisional の意味的同一性キー（stableKey）集合。 */
+  provisionalKeys: string[];
+  /** provisional でない finding（あらゆる status）の "id:status" 集合。 */
+  substantiveEntries: string[];
+  /** 未裁定 active conflict の "id:evidenceHash" 集合。 */
+  unadjudicatedConflictEntries: string[];
+}
+
+export interface FindingLedgerFixpointState {
+  /** 直近ラウンド終了時点のスナップショット（次ラウンドの比較対象）。 */
+  snapshot: FindingLedgerFixpointSnapshot;
+  /**
+   * 直前ラウンドの snapshot と完全一致し、かつ open provisional が1件以上ある
+   * 場合のみ true。ラウンド1（前回スナップショットが無い）は常に false
+   * （初回は必ず plan へ差し戻す、という設計上の要請）。
+   */
+  reached: boolean;
+}
+
 export interface FindingLedger {
   version: 1;
   workflowName: string;
@@ -168,6 +193,15 @@ export interface FindingLedger {
    * 冪等化する。optional なので既存 v1 ledger は migration なしで読める。
    */
   interpretations?: FindingInterpretationRecord[];
+  /**
+   * 対策バッチ B1（provisional fixpoint → NEEDS_ADJUDICATION）: 直近の
+   * findings-manager ラウンド終了時点の比較スナップショットと fixpoint 到達
+   * 判定。ledger 自体が run を跨いで永続化されるため、resume や再走行を
+   * またいだラウンド比較もここだけで完結する（engine 内メモリの
+   * LoopDetector/CycleDetector は resume で再構築され使えない）。optional
+   * なので既存 v1 ledger は migration なしで読める。
+   */
+  fixpoint?: FindingLedgerFixpointState;
 }
 
 // ---------------------------------------------------------------------------
@@ -696,6 +730,14 @@ export interface FindingsRuleContext {
    */
   provisional: {
     count: number;
+    /**
+     * 対策バッチ B1: 直前の findings-manager ラウンドが、その前のラウンドから
+     * 意味的な変化（provisional 集合・substantive finding の status・未裁定
+     * conflict のいずれも）が無い fixpoint に達したかどうか。builtin workflow は
+     * これを見て NEEDS_ADJUDICATION（要人手裁定の終端状態）へルーティングする
+     * （raw finding 梯子設計 v2 の収束性対策）。
+     */
+    fixpoint: boolean;
     items: Array<{ id: string; kind: string; reason: string }>;
   };
   /** Audit-only visibility: engine-verified "premise does not hold" findings. Not part of the blocking set; gate conditions stay on open/conflicts. */
