@@ -5,6 +5,7 @@
  * Follows the same patterns as the Codex client.
  */
 
+import { createHash } from 'node:crypto';
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -41,7 +42,17 @@ import {
   emitResult,
   handlePartUpdated,
 } from './OpenCodeStreamHandler.js';
-import { InvalidToolArgumentLoopDetector, ToolErrorBudgetDetector, UnavailableToolLoopDetector } from './unavailable-tool-loop.js';
+import {
+  OpenCodeToolGuard,
+  buildEditConflictCorrectionPrompt,
+  buildToolGuardRetryPrompt,
+  clearToolGuardPendingCorrection,
+  createToolGuardRecoveryState,
+  markToolGuardCorrectionPending,
+  markToolGuardFreshSessionUsed,
+  shouldIssueEditConflictCorrection,
+  type ToolGuardFailure,
+} from './tool-guard.js';
 import {
   buildFormatlessStructuredPrompt,
   createStructuredOutputRecoveryState,
@@ -105,9 +116,63 @@ function extractEventSessionId(event: OpenCodeStreamEvent): string | undefined {
  * 文字列値は従来どおり sanitizeSensitiveText() を通す（sk-... のような値自体の
  * 形でマスクされるものを拾うため）。
  */
+/**
+ * edit ツールの本文引数。ソースコード断片がそのまま入るため、debug ログには
+ * 本文を残さず {sha256 先頭12桁, length} に置き換える（tool-guard の
+ * edit conflict 署名と同じ「本文非露出・ハッシュのみ」の規約）。filePath 等の
+ * 他の引数は従来どおり残す — このログは「モデルが引数をどう壊したか」を後から
+ * 特定するツール失敗デバッグ機能の本体であり、消してはならない。
+ */
+const EDIT_CONTENT_INPUT_KEYS = new Set(['oldstring', 'newstring']);
+
+function maskEditContentForLogging(value: string): { sha256: string; length: number } {
+  return {
+    sha256: createHash('sha256').update(value).digest('hex').slice(0, 12),
+    length: value.length,
+  };
+}
+
+/**
+ * エラー文そのものに edit 本文が引用される経路を閉じる（codex 2巡目ブロッカー）。
+ *
+ * OpenCode の edit エラー文は oldString の内容を含むことがあり、入力側の
+ * マスク（sanitizeToolCallInputForLogging）だけでは閉じない。state.error は
+ * sanitizeSensitiveText()（API キー等のパターンマスク）しか通らないため、
+ * 当該ツールコールの input に含まれる oldString/newString の実値がエラー文中に
+ * 現れたら {sha256:先頭12桁,length:N} プレースホルダへ置換する。tool 失敗の
+ * 観測時点でこの関数を通し、マスク済みのエラー文だけを downstream
+ * （debug ログ・ToolGuardFailure.message → AgentResponse.error・correction 文・
+ * stats）に流す。
+ *
+ * ごく短い値（例: 1〜2 文字の oldString）は置換するとエラー文全体が壊れる
+ * 一方で漏えいとしての意味を持たないため、閾値未満はそのままにする。
+ */
+const EDIT_CONTENT_ERROR_MASK_MIN_LENGTH = 6;
+
+function maskEditContentInErrorText(error: string, input: unknown): string {
+  if (typeof input !== 'object' || input === null) {
+    return error;
+  }
+  let masked = error;
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!EDIT_CONTENT_INPUT_KEYS.has(key.toLowerCase()) || typeof value !== 'string') {
+      continue;
+    }
+    if (value.length < EDIT_CONTENT_ERROR_MASK_MIN_LENGTH || !masked.includes(value)) {
+      continue;
+    }
+    const { sha256, length } = maskEditContentForLogging(value);
+    masked = masked.split(value).join(`{sha256:${sha256},length:${length}}`);
+  }
+  return masked;
+}
+
 function sanitizeToolCallInputForLogging(value: unknown, key?: string): unknown {
   if (key !== undefined && isSensitiveKeyName(key)) {
     return '[REDACTED]';
+  }
+  if (key !== undefined && EDIT_CONTENT_INPUT_KEYS.has(key.toLowerCase()) && typeof value === 'string') {
+    return maskEditContentForLogging(value);
   }
   if (typeof value === 'string') {
     return sanitizeSensitiveText(value);
@@ -949,6 +1014,11 @@ export class OpenCodeClient {
     // 一般 recovery。structured-output 側とは病因が違うため予算も状態も独立
     // （unavailable-tool-recovery.ts）。
     let unavailableToolRecovery = createUnavailableToolRecoveryState();
+    // tool ガード（進捗感知型 burst / edit conflict / 絶対コスト上限）。
+    // call() 全体で1インスタンス: 絶対台帳は attempt / recovery をまたいで
+    // 引き継ぎ、attempt 開始時に短期カウンタだけをリセットする。
+    const toolGuard = new OpenCodeToolGuard();
+    let toolGuardRecovery = createToolGuardRecoveryState();
     // call() の最初から resume を意図していたかどうか。attempt ごとに変わる
     // sessionId（劣化/救済で fresh に切り替わる）とは別に、呼び出し元の意図を
     // 固定値として持つ必要がある。
@@ -972,10 +1042,18 @@ export class OpenCodeClient {
       // plan の sessionMode を実態に合わせて上書きしておかないと、後段の
       // stale StructuredOutput 判定（plan.sessionMode === 'resume' が条件）が
       // 「fresh なのに resume 扱い」で誤発動し、救済の連鎖で attempt が増える。
-      const attemptPlan = unavailableToolRecovery.used
+      const attemptPlan = unavailableToolRecovery.used || toolGuardRecovery.freshSessionUsed
         ? { ...structuredAttemptPlan, sessionMode: 'fresh' as const }
         : structuredAttemptPlan;
-      let sessionId: string | undefined = attemptPlan.sessionMode === 'fresh' ? undefined : options.sessionId;
+      // edit conflict の correction attempt は直前の attempt のセッションを再開する
+      // （同一セッション内で1回だけの是正指示 — tool-guard.ts 参照）。
+      const pendingToolGuardCorrection = toolGuardRecovery.pendingCorrection;
+      if (pendingToolGuardCorrection !== undefined) {
+        toolGuardRecovery = clearToolGuardPendingCorrection(toolGuardRecovery);
+      }
+      let sessionId: string | undefined = pendingToolGuardCorrection !== undefined
+        ? pendingToolGuardCorrection.sessionId
+        : (attemptPlan.sessionMode === 'fresh' ? undefined : options.sessionId);
       let promptCompletion: Promise<unknown> | undefined;
       let promptCompletionWait: Promise<void> | undefined;
       let promptError: string | undefined;
@@ -1135,9 +1213,19 @@ export class OpenCodeClient {
         // （幻覚ツール名の指摘・有効ツール一覧・workspace 継続の警告）で包む。
         // 有効ツール一覧は promptTools（buildOpenCodePromptTools() の結果）から
         // 動的に生成する。
-        const promptText = unavailableToolRecovery.used && unavailableToolRecovery.tool !== undefined
+        const unavailableWrappedPromptText = unavailableToolRecovery.used && unavailableToolRecovery.tool !== undefined
           ? buildUnavailableToolRetryPrompt(basePromptText, unavailableToolRecovery.tool, listEnabledPromptTools(promptTools))
           : basePromptText;
+        // tool-guard recovery の attempt:
+        // - correction: 同一セッション再開なので元プロンプトは再送しない
+        //   （セッションに文脈がある）。是正指示だけを送る。
+        // - fresh session: unavailable-tool recovery と同じ機構で、workspace の
+        //   途中成果・上書き禁止・再読込を明記した前置文で元プロンプトを包む。
+        const promptText = pendingToolGuardCorrection !== undefined
+          ? buildEditConflictCorrectionPrompt(pendingToolGuardCorrection.filePath)
+          : toolGuardRecovery.freshSessionUsed && toolGuardRecovery.freshReason !== undefined
+            ? buildToolGuardRetryPrompt(unavailableWrappedPromptText, toolGuardRecovery.freshReason)
+            : unavailableWrappedPromptText;
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
@@ -1176,9 +1264,10 @@ export class OpenCodeClient {
         // recovery の対象判定（StructuredOutput 以外か）の両方に使う。
         let unavailableLoopToolName: string | undefined;
         const state = createStreamTrackingState();
-        const unavailableToolLoopDetector = new UnavailableToolLoopDetector();
-        const invalidArgumentLoopDetector = new InvalidToolArgumentLoopDetector();
-        const toolErrorBudgetDetector = new ToolErrorBudgetDetector();
+        // 新しい attempt = 新しいストリーム。セッション固有の短期カウンタだけ
+        // リセットする（絶対台帳は call 全体で引き継ぐ — tool-guard.ts 参照）。
+        toolGuard.resetSessionCounters();
+        let toolGuardFailure: ToolGuardFailure | undefined;
         const echoState = { remainingPrompts: buildPromptEchoCandidates(promptText, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
@@ -1260,7 +1349,7 @@ export class OpenCodeClient {
             const delta = props.delta;
 
             if (part.type === 'text') {
-              unavailableToolLoopDetector.reset();
+              toolGuard.noteTextActivity();
               const textPart = part as OpenCodeTextPart;
               const prev = textOffsets.get(textPart.id) ?? 0;
               const rawDelta = delta
@@ -1273,48 +1362,56 @@ export class OpenCodeClient {
               const toolPart = part as OpenCodeToolPart;
               const rejection = extractOpenCodeToolRejection(toolPart);
               let loopError: string | undefined;
+              // onStream（→ provider event logging 有効時は *-provider-events.jsonl
+              // へ永続化される）にも raw エラー文を流さない。マスク済みの
+              // コピーを downstream へ渡す（codex 裁定: onStream はライブ表示
+              // 専用ではなく永続化経路を含む）。
+              let partForDownstream: OpenCodePart = part;
               if (rejection !== undefined) {
                 // 失敗したツール呼び出しの引数を残す。エラー文だけでは
                 // モデルが何をどう間違えたか（スキーマ違反の該当欄、
                 // 幻覚パス、oldString の不一致）を後から特定できない。
                 // input/error は無加工では機密情報が残り得るためマスクする。
+                // エラー文は先に edit 本文（oldString/newString の実値の引用）を
+                // 除去し、以後 downstream にはマスク済みの文字列だけを流す。
+                const maskedError = maskEditContentInErrorText(rejection.error, toolPart.state.input);
+                if (toolPart.state.status === 'error') {
+                  partForDownstream = {
+                    ...toolPart,
+                    state: { ...toolPart.state, error: maskedError },
+                  } as OpenCodePart;
+                }
                 log.debug('OpenCode tool call failed', {
                   tool: rejection.tool,
                   callId: toolPart.callID || toolPart.id,
-                  error: sanitizeSensitiveText(rejection.error),
+                  error: sanitizeSensitiveText(maskedError),
                   input: sanitizeToolCallInputForLogging(toolPart.state.input),
                 });
-                // 両検出器に必ず観測させる（?? 短絡だと invalid 側が
-                // unavailable エラーを見逃し、連続性の判定が狂う）
-                const unavailableDetection = unavailableToolLoopDetector.observe(
+                // ガードに観測させる（unavailable / invalid-argument の連続性
+                // 検出器はガード内部で従来ロジックのまま動く）。発火は型付き
+                // union（ToolGuardFailure）で受け取り、文字列を再パースしない。
+                const failure = toolGuard.observeError(
                   toolPart.callID || toolPart.id,
                   rejection.tool,
-                  rejection.error,
+                  maskedError,
+                  toolPart.state.input,
                 );
-                if (unavailableDetection !== undefined) {
-                  // detector の発火は型（tool 名入り）で受け取る。recovery の
-                  // 対象判定でエラー文字列を再パースしないため。
-                  unavailableLoopToolName = unavailableDetection.tool;
+                if (failure !== undefined) {
+                  if (failure.kind === 'unavailable_tool_loop') {
+                    unavailableLoopToolName = failure.tool;
+                  }
+                  toolGuardFailure = failure;
+                  loopError = failure.message;
                 }
-                const invalidArgumentError = invalidArgumentLoopDetector.observe(
-                  toolPart.callID || toolPart.id,
-                  rejection.tool,
-                  rejection.error,
-                );
-                const budgetError = toolErrorBudgetDetector.observe(
-                  toolPart.callID || toolPart.id,
-                  rejection.tool,
-                  rejection.error,
-                );
-                loopError = unavailableDetection?.message ?? invalidArgumentError ?? budgetError;
               } else if (toolPart.state.status === 'completed') {
-                unavailableToolLoopDetector.reset();
-                invalidArgumentLoopDetector.reset();
+                // 進捗は2段階（強: write/edit/bash → 短期カウンタリセット、
+                // 弱: read/glob/grep 等 → 密度緩和のみ — tool-guard.ts 参照）。
+                toolGuard.observeSuccess(toolPart.callID || toolPart.id, toolPart.tool);
                 // ツールが1つでも成功したなら作業は前に進んでいる。
                 // 空転の計数をここで戻す（下の cyclesWithoutToolSuccess を参照）。
                 cyclesWithoutToolSuccess = 0;
               }
-              handlePartUpdated(part, delta, options.onStream, state);
+              handlePartUpdated(partForDownstream, delta, options.onStream, state);
               if (loopError !== undefined) {
                 success = false;
                 failureMessage = loopError;
@@ -1336,7 +1433,7 @@ export class OpenCodeClient {
               delta: string;
             };
             if (deltaProps.field === 'text' && deltaProps.delta) {
-              unavailableToolLoopDetector.reset();
+              toolGuard.noteTextActivity();
               consumeTextDelta(deltaProps.partID, deltaProps.delta);
             }
             continue;
@@ -1692,7 +1789,62 @@ export class OpenCodeClient {
             continue;
           }
 
-          const retriable = this.isRetriableError(message, streamAbortController.signal.aborted, abortCause);
+          // edit_conflict_loop: 同一セッション内 correction（対象再読込・同一
+          // oldString 反復禁止・必要なら write、の是正指示）。署名を照合する:
+          // correction 済み署名の再発は「correction 失敗」として下の fresh へ
+          // escalate し、別署名の新規 conflict は自身の correction 段階から
+          // 始める（コール全体の correction 回数上限内で）。
+          if (
+            toolGuardFailure?.kind === 'edit_conflict_loop'
+            && shouldIssueEditConflictCorrection(toolGuardRecovery, toolGuardFailure.signature)
+            && activeSessionId !== undefined
+          ) {
+            toolGuardRecovery = markToolGuardCorrectionPending(
+              toolGuardRecovery,
+              activeSessionId,
+              toolGuardFailure.filePath,
+              toolGuardFailure.signature,
+            );
+            toolGuard.noteRecovery();
+            maxAttempts = Math.max(maxAttempts, attempt + 1);
+            log.debug('OpenCode edit conflict loop detected; sending one in-session correction', {
+              agentType,
+              previousAttempt: attempt,
+              sessionId: activeSessionId,
+              signature: toolGuardFailure.signature.slice(0, 12),
+              toolHealth: toolGuard.stats(),
+            });
+            await this.waitForRetryDelay(attempt, options.abortSignal);
+            continue;
+          }
+
+          // correction 済み署名の再発（correction 失敗）・correction 上限超過後の
+          // 新規 conflict・tool_error_burst: fresh session recovery を最大1回
+          //（すべてで合計1回を共有）。
+          if (
+            (toolGuardFailure?.kind === 'edit_conflict_loop' || toolGuardFailure?.kind === 'tool_error_burst')
+            && !toolGuardRecovery.freshSessionUsed
+          ) {
+            toolGuardRecovery = markToolGuardFreshSessionUsed(toolGuardRecovery, toolGuardFailure.kind);
+            toolGuard.noteRecovery();
+            maxAttempts = Math.max(maxAttempts, attempt + 1);
+            log.debug('OpenCode tool guard failure; retrying prompt once in a fresh session with a continuation preamble', {
+              agentType,
+              previousAttempt: attempt,
+              previousSessionId: activeSessionId,
+              reason: toolGuardFailure.kind,
+              toolHealth: toolGuard.stats(),
+            });
+            await this.waitForRetryDelay(attempt, options.abortSignal);
+            continue;
+          }
+
+          // ガード発火（absolute_cost_limit / recovery 消費後の再発）は決定的な
+          // ループ失敗であり transient ではない — retriable 判定に流さず即失敗する。
+          // needs_fix / plan への自動迂回はしない（インフラ障害とレビュー判断を
+          // 混同しない — codex 裁定）。
+          const retriable = toolGuardFailure === undefined
+            && this.isRetriableError(message, streamAbortController.signal.aborted, abortCause);
           if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
             log.info('Retrying OpenCode call after transient failure', { agentType, attempt, message });
             await this.waitForRetryDelay(attempt, options.abortSignal);
@@ -1713,6 +1865,10 @@ export class OpenCodeClient {
           }
 
           emitResult(options.onStream, false, message, activeSessionId);
+          // 観測: 閾値校正の材料として tool health を構造化して残す
+          // （debug ログ + AgentResponse.debugInfo）。
+          const failureToolHealth = toolGuard.stats();
+          log.debug('OpenCode tool health at failure', { agentType, ...failureToolHealth });
           return {
             persona: agentType,
             status: 'error',
@@ -1720,6 +1876,7 @@ export class OpenCodeClient {
             error: message,
             timestamp: new Date(),
             sessionId: activeSessionId,
+            debugInfo: { toolHealth: failureToolHealth },
           };
         }
 
@@ -1758,6 +1915,12 @@ export class OpenCodeClient {
           }
         }
 
+        // 観測: 成功時も tool health を残す（v3-r4 のような「生産的だが edit 税を
+        // 払っている」走行の分布を校正データとして採取するため）。
+        const successToolHealth = toolGuard.stats();
+        if (successToolHealth.totalErrors > 0) {
+          log.debug('OpenCode tool health at success', { agentType, ...successToolHealth });
+        }
         return {
           persona: agentType,
           status: 'done',
@@ -1765,6 +1928,7 @@ export class OpenCodeClient {
           timestamp: new Date(),
           sessionId: activeSessionId,
           ...(capturedStructuredOutput !== undefined ? { structuredOutput: capturedStructuredOutput } : {}),
+          debugInfo: { toolHealth: successToolHealth },
         };
       } catch (error) {
         const message = getErrorMessage(error);

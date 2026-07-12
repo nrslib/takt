@@ -5,6 +5,7 @@
  * used throughout the takt codebase.
  */
 
+import { createHash } from 'node:crypto';
 import type { StreamCallback } from '../../shared/types/provider.js';
 
 /** Subset of OpenCode Part types relevant for stream handling */
@@ -183,6 +184,34 @@ export function emitThinking(onStream: StreamCallback | undefined, thinking: str
   onStream({ type: 'thinking', data: { thinking } });
 }
 
+/**
+ * edit 系ツールの本文引数（oldString/newString）。tool_use イベントは
+ * provider event logging 有効時に `*-provider-events.jsonl` へ全文永続化される
+ * ため、発火時点から本文を {sha256 先頭12桁, length} に置換する（codex 裁定:
+ * 失敗が判明してから遡って消すことはできないので、発火時点でマスクする。
+ * filePath 等の他の引数は維持され、実質的なライブ可視性は保たれる）。
+ * tool-guard の edit conflict 署名・debug ログと同じ「本文非露出・ハッシュのみ」
+ * の規約。
+ */
+const EDIT_CONTENT_INPUT_KEYS = new Set(['oldstring', 'newstring']);
+
+function maskEditContentInToolInput(input: Record<string, unknown>): Record<string, unknown> {
+  let changed = false;
+  const masked: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (EDIT_CONTENT_INPUT_KEYS.has(key.toLowerCase()) && typeof value === 'string') {
+      masked[key] = {
+        sha256: createHash('sha256').update(value).digest('hex').slice(0, 12),
+        length: value.length,
+      };
+      changed = true;
+    } else {
+      masked[key] = value;
+    }
+  }
+  return changed ? masked : input;
+}
+
 export function emitToolUse(
   onStream: StreamCallback | undefined,
   tool: string,
@@ -190,7 +219,10 @@ export function emitToolUse(
   id: string,
 ): void {
   if (!onStream) return;
-  onStream({ type: 'tool_use', data: { tool, input, id } });
+  const maskedInput = (typeof input === 'object' && input !== null && !Array.isArray(input))
+    ? maskEditContentInToolInput(input)
+    : input;
+  onStream({ type: 'tool_use', data: { tool, input: maskedInput, id } });
 }
 
 export function emitToolResult(

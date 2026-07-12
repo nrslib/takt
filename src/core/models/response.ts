@@ -61,4 +61,9 @@ export interface AgentResponse {
   structuredOutput?: Record<string, unknown>;
   /** Provider-native usage payload normalized for TAKT observability */
   providerUsage?: ProviderUsageSnapshot;
+  /**
+   * Provider 内部のデバッグスナップショット（例: OpenCode の tool health
+   * メトリクス）。閾値校正・調査用の観測データであり、制御フローには使わない。
+   */
+  debugInfo?: Record<string, unknown>;
 }
