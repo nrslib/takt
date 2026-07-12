@@ -5,8 +5,12 @@ import {
   WorkflowConfigRawSchema,
 } from '../core/models/index.js';
 import type { AutoRoutingConfig, WorkflowConfig } from '../core/models/index.js';
+import { resolveNonWorkflowProviderModelFromConfig } from '../core/config/provider-resolution.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
-import { normalizeAutoRoutingConfig } from '../infra/config/configNormalizers.js';
+import {
+  normalizeAutoRoutingConfig,
+  normalizeConfigAutoRoutingConfig,
+} from '../infra/config/configNormalizers.js';
 
 function createAutoRoutingConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -84,6 +88,111 @@ function expectParseFailureMessage(result: { success: false; error: Error }, exp
 }
 
 describe('auto_routing config schema', () => {
+  it('Given a concrete default provider and model, When parsing project config, Then the default provider contract is accepted', () => {
+    const result = ProjectConfigSchema.safeParse({
+      provider: 'auto',
+      auto_routing: createAutoRoutingConfig({
+        default_provider: {
+          provider: 'codex',
+          model: 'gpt-5.6-luna',
+        },
+      }),
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.data.auto_routing.default_provider).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.6-luna',
+    });
+  });
+
+  it('Given a default provider without a model, When parsing project config, Then the optional model is accepted', () => {
+    const result = ProjectConfigSchema.safeParse({
+      provider: 'auto',
+      auto_routing: createAutoRoutingConfig({
+        default_provider: { provider: 'mock' },
+      }),
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Given default_provider.provider is auto, When parsing project config, Then schema validation rejects it', () => {
+    const result = ProjectConfigSchema.safeParse({
+      provider: 'auto',
+      auto_routing: createAutoRoutingConfig({
+        default_provider: { provider: 'auto' },
+      }),
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expectParseFailureMessage(result, /default_provider|provider/i);
+    }
+  });
+
+  it('Given default_provider.provider is missing, When parsing project config, Then schema validation rejects it', () => {
+    const result = ProjectConfigSchema.safeParse({
+      provider: 'auto',
+      auto_routing: createAutoRoutingConfig({
+        default_provider: { model: 'gpt-5.6-luna' },
+      }),
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expectParseFailureMessage(result, /default_provider|provider/i);
+    }
+  });
+
+  it('Given default_provider.model is empty, When parsing project config, Then schema validation rejects it', () => {
+    const result = ProjectConfigSchema.safeParse({
+      provider: 'auto',
+      auto_routing: createAutoRoutingConfig({
+        default_provider: { provider: 'codex', model: '' },
+      }),
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Given default_provider.model is whitespace, When parsing project config, Then schema validation rejects it', () => {
+    const result = ProjectConfigSchema.safeParse({
+      provider: 'auto',
+      auto_routing: createAutoRoutingConfig({
+        default_provider: { provider: 'codex', model: '   ' },
+      }),
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Given default_provider.model has surrounding whitespace, When resolving runtime config, Then the trimmed model is propagated', () => {
+    const parsed = ProjectConfigSchema.parse({
+      provider: 'auto',
+      auto_routing: createAutoRoutingConfig({
+        default_provider: { provider: 'codex', model: '  gpt-5.6-luna  ' },
+      }),
+    });
+    const autoRouting = normalizeConfigAutoRoutingConfig(parsed.auto_routing);
+
+    const resolved = resolveNonWorkflowProviderModelFromConfig({
+      project: { provider: parsed.provider, autoRouting },
+      global: {},
+    });
+
+    expect(resolved).toEqual({ provider: 'codex', model: 'gpt-5.6-luna' });
+  });
+
+  it('Given an opencode default provider has no model, When normalizing config, Then provider requirements reject it', () => {
+    expect(() => normalizeConfigAutoRoutingConfig(createAutoRoutingConfig({
+      default_provider: { provider: 'opencode' },
+    }))).toThrow(/auto_routing\.default_provider\.model|provider 'opencode' requires model/);
+  });
+
   it('Given provider auto and a valid auto_routing block, When parsing project config, Then the input contract is accepted', () => {
     const result = ProjectConfigSchema.safeParse({
       provider: 'auto',
@@ -321,6 +430,29 @@ describe('auto_routing config schema', () => {
 });
 
 describe('auto_routing workflow schema', () => {
+  it('Given workflow-level auto_routing contains default_provider, When parsing workflow YAML shape, Then strict validation rejects the config-only field', () => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'invalid-workflow-default-provider',
+      workflow_config: { provider: 'auto' },
+      auto_routing: createAutoRoutingConfig({
+        default_provider: { provider: 'mock', model: 'unused-model' },
+      }),
+      steps: [
+        {
+          name: 'implement',
+          persona: 'coder',
+          instruction: 'implement',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expectParseFailureMessage(result, /default_provider|unrecognized/i);
+    }
+  });
+
   it('Given workflow_config provider auto and workflow-level auto_routing, When parsing workflow YAML shape, Then it is accepted', () => {
     const result = WorkflowConfigRawSchema.safeParse({
       name: 'auto-routing-workflow',

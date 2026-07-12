@@ -98,12 +98,8 @@ export async function runInstructMode(
   runSessionContext?: RunSessionContext,
   previousOrderContent?: string | null,
 ): Promise<InstructModeResult> {
-  const globalConfig = resolveWorkflowConfigValues(cwd, ['language', 'provider']);
+  const globalConfig = resolveWorkflowConfigValues(cwd, ['language']);
   const lang = resolveLanguage(globalConfig.language);
-
-  if (!globalConfig.provider) {
-    throw new Error('Provider is not configured.');
-  }
 
   const baseCtx = initializeSession(cwd, 'instruct');
   const ctx: SessionContext = { ...baseCtx, lang, personaName: 'instruct' };

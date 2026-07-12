@@ -267,6 +267,40 @@ OrderPlaced, PaymentReceived, ItemShipped
 OrderUpdated, OrderDeleted
 ```
 
+### Fact Events vs Request Events
+
+Events express facts that occurred, and their names come from business meaning. A `...Requested` suffix or the current number of consumers does not by itself distinguish a fact event from a command in disguise. Accepting or starting a request can be a business fact; a message whose only meaning is instructing a known destination to execute work is a command.
+
+| Decision axis | Fact event | Consider a command |
+|---------------|------------|--------------------|
+| Business meaning | An occurrence such as acceptance, start, or rejection that matters to audit or replay | Its only purpose is to make a specific process run |
+| Emitter lifecycle | Used by later decisions such as waiting, duplicate rejection, or timeout | The emitter tracks neither state nor outcome |
+| Outcome | Continues to another uncertain fact such as completion or failure | Can run immediately within the same boundary and return its result there |
+| Consumers | Consumers may change without changing event meaning | Destination and operation are the message's meaning |
+
+Split events by independent business facts, not by technical consumers. Do not emit duplicate state and trigger events for the same occurrence; EventHandlers and projections subscribe to the fact owned by the emitting Aggregate. Multiple events are appropriate only when independently named, audited, and replayed facts occur together. Do not pack another Aggregate's internal state or initialization details into the event; resolve stable IDs or references at the boundary.
+
+```kotlin
+// NG - One business fact duplicated as separate state and technical trigger events
+fun addItem(itemId: String, productId: String, quantity: Int): List<OrderEvent> = listOf(
+    OrderItemLinkedEvent(orderId, itemId),                 // for state
+    OrderItemCreationRequestedEvent(orderId, itemId, productId, quantity), // for triggering (a command in effect)
+)
+
+// OK - A single event carrying the content that is factual for the emitting Aggregate
+fun addItem(itemId: String, productId: String, quantity: Int): OrderItemAddedEvent =
+    OrderItemAddedEvent(orderId, itemId, productId, quantity)
+```
+
+| Criteria | Judgment |
+|----------|----------|
+| Classifying a message as an event or command from its suffix or current consumer count alone | REJECT. Judge business meaning and lifecycle |
+| Splitting the same business fact into a state event (Linked, etc.) and a trigger event (Requested, etc.) | REJECT. Merge them into the fact owned by the emitting Aggregate |
+| An asynchronous request to an external service or another context where acceptance or waiting is a business fact and completion/failure is tracked | OK. It can be expressed as the fact that the request was accepted |
+| Adding a dedicated request event for processing that an existing fact event (confirmed, approved, etc.) can drive | REJECT. Have an EventHandler, and a domain policy when needed, subscribe to the existing fact |
+| Recording an occurrence that only changes another Aggregate's state as an event in one's own stream | REJECT. Facts belong to the stream of the Aggregate where they happened |
+| Routing an operation unrelated to an Aggregate's own state or lifecycle through it and relaying it to the target Aggregate | REJECT. Send the command to the target Aggregate and perform membership or existence checks at the boundary that owns the invariant |
+
 ### Event Type Hierarchy with sealed interface
 
 Aggregate events should use a sealed interface type hierarchy. The Aggregate root ID should be required as a common field, enabling exhaustive `when` checks.
@@ -371,6 +405,20 @@ CQRS+ES migration must distinguish DB schema migration, data migration, event up
 | Handler changes multiple Aggregates | REJECT |
 | Command has no validation | REJECT |
 | Handler executes queries to make decisions | Needs review |
+| The return contract does not match the number of events an operation can produce | Needs review. Choose a single, optional, collection, or result type from domain cardinality and language/framework conventions |
+
+### Contract Lifetimes of Commands and Events
+
+Events are long-lived contracts persisted as history, so stored type identifiers and payloads must remain replayable. Whether the type identifier is a fully qualified class name or a logical name, and whether changes use an upcaster, alias, or migration, depends on the event store and serialization strategy.
+
+Commands are usually short-lived messages created and handled at the application boundary, but some architectures persist them for scheduling, outbox delivery, retries, dead-letter handling, or audit. Decide placement and compatibility from responsibility and the actual storage contract, not from an assumption that every command is transient. Domain models should not depend on transport- or framework-specific command types; translate them into domain arguments and value objects at the application or adapter boundary.
+
+| Criteria | Judgment |
+|----------|----------|
+| A domain model directly receives a transport- or framework-specific command type | REJECT. Translate it into domain input at the application or adapter boundary |
+| An application message unused by domain classes sits in the domain package | Move it to the application boundary |
+| A command package is moved or renamed without checking for persisted references | REJECT. Check scheduling, outbox, retry, dead-letter, and audit storage contracts |
+| A stored event type identifier or payload changes without a conversion path | REJECT. Provide compatibility for the identifier and serialization strategy in use. Direct change is allowed only when no persisted events exist yet; release status is not the criterion |
 
 Good command handler:
 ```

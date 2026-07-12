@@ -17,7 +17,7 @@ export function parseLastJsonBlock(content: string): unknown {
 }
 
 export function buildPromptBasedStructuredInstruction(baseInstruction: string): string {
-  return loadTemplate('structured_json_step_instruction', 'en', { baseInstruction });
+  return loadTemplate('parts/structured_json_step_instruction', 'en', { baseInstruction });
 }
 
 export function resolveStructuredStep(json: unknown): number {

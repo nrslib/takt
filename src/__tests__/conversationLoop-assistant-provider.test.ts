@@ -2,16 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockResolveConfigValues,
+  mockResolveNonWorkflowProviderModel,
   mockResolveAssistantConfigLayers,
   mockGetProvider,
 } = vi.hoisted(() => ({
   mockResolveConfigValues: vi.fn(),
+  mockResolveNonWorkflowProviderModel: vi.fn(),
   mockResolveAssistantConfigLayers: vi.fn(),
   mockGetProvider: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+  resolveNonWorkflowProviderModel: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderModel(...args),
   loadSessionState: vi.fn(() => null),
   clearSessionState: vi.fn(),
 }));
@@ -42,13 +46,15 @@ describe('initializeSession assistant provider resolution', () => {
     vi.clearAllMocks();
     mockGetProvider.mockReturnValue({ setup: vi.fn() });
     mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'mock',
+      model: 'non-workflow-model',
+    });
   });
 
   it('should prioritize CLI provider/model over takt_providers.assistant and top-level provider/model', () => {
     mockResolveConfigValues.mockReturnValue({
       language: 'ja',
-      provider: 'codex',
-      model: 'gpt-5.4',
     });
     mockResolveAssistantConfigLayers.mockReturnValue({
       local: {
@@ -73,13 +79,12 @@ describe('initializeSession assistant provider resolution', () => {
     expect(ctx.providerType).toBe('opencode');
     expect(ctx.model).toBe('cli-model');
     expect(ctx.lang).toBe('ja');
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
   });
 
   it('should fallback to takt_providers.assistant when CLI override is missing', () => {
     mockResolveConfigValues.mockReturnValue({
       language: 'en',
-      provider: 'codex',
-      model: 'gpt-5.4',
     });
     mockResolveAssistantConfigLayers.mockReturnValue({
       local: {
@@ -100,13 +105,12 @@ describe('initializeSession assistant provider resolution', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     expect(ctx.providerType).toBe('claude');
     expect(ctx.model).toBe('haiku');
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
   });
 
   it('should fallback to top-level provider/model when assistant and CLI overrides are missing', () => {
     mockResolveConfigValues.mockReturnValue({
       language: 'en',
-      provider: 'codex',
-      model: 'gpt-5.4',
     });
     mockResolveAssistantConfigLayers.mockReturnValue({
       local: {
@@ -121,10 +125,11 @@ describe('initializeSession assistant provider resolution', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('codex');
     expect(ctx.providerType).toBe('codex');
     expect(ctx.model).toBe('gpt-5.4');
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
   });
 
   it('should use local config assistant when local config file exists', () => {
-    mockResolveConfigValues.mockReturnValue({ language: 'en', provider: 'mock', model: 'global-top-level-model' });
+    mockResolveConfigValues.mockReturnValue({ language: 'en' });
     mockResolveAssistantConfigLayers.mockReturnValue({
       local: {
         provider: 'opencode',
@@ -154,10 +159,11 @@ describe('initializeSession assistant provider resolution', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('codex');
     expect(ctx.providerType).toBe('codex');
     expect(ctx.model).toBe('local-assistant-model');
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
   });
 
   it('should keep CLI model highest even when provider comes from assistant config', () => {
-    mockResolveConfigValues.mockReturnValue({ language: 'en', provider: 'mock', model: 'global-top-level-model' });
+    mockResolveConfigValues.mockReturnValue({ language: 'en' });
     mockResolveAssistantConfigLayers.mockReturnValue({
       local: {
         provider: 'opencode',
@@ -179,10 +185,11 @@ describe('initializeSession assistant provider resolution', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('codex');
     expect(ctx.providerType).toBe('codex');
     expect(ctx.model).toBe('cli-model');
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
   });
 
   it('should not reuse assistant or top-level models from another provider when only CLI provider is set', () => {
-    mockResolveConfigValues.mockReturnValue({ language: 'en', provider: 'mock', model: 'global-top-level-model' });
+    mockResolveConfigValues.mockReturnValue({ language: 'en' });
     mockResolveAssistantConfigLayers.mockReturnValue({
       local: {
         provider: 'claude',
@@ -213,15 +220,100 @@ describe('initializeSession assistant provider resolution', () => {
     expect(mockGetProvider).toHaveBeenCalledWith('cursor');
     expect(ctx.providerType).toBe('cursor');
     expect(ctx.model).toBeUndefined();
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
   });
 
-  // REQ-1011-1: instruct persona routes through takt_providers.assistant
-  it('should resolve takt_providers.assistant for instruct persona when top-level provider differs', () => {
-    // Given: top-level cursor + assistant claude-sdk (Issue #1011 scenario)
+  it.each(['instruct', 'retry'] as const)(
+    'should resolve takt_providers.assistant for %s persona when top-level provider differs',
+    (personaName) => {
+      mockResolveConfigValues.mockReturnValue({
+        language: 'en',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'cursor',
+          model: 'composer-2.5',
+          taktProviders: {
+            assistant: {
+              provider: 'claude-sdk',
+              model: 'claude-sonnet-5',
+            },
+          },
+        },
+        global: {},
+      });
+
+      const ctx = initializeSession('/project', personaName);
+
+      expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
+      expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
+      expect(mockGetProvider).toHaveBeenCalledWith('claude-sdk');
+      expect(ctx.providerType).toBe('claude-sdk');
+      expect(ctx.model).toBe('claude-sonnet-5');
+      expect(ctx.personaName).toBe(personaName);
+    },
+  );
+
+  it.each(['instruct', 'retry'] as const)(
+    'should fallback to top-level provider/model for %s when assistant is unset',
+    (personaName) => {
+      mockResolveConfigValues.mockReturnValue({
+        language: 'en',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          provider: 'cursor',
+          model: 'composer-2.5',
+        },
+        global: {},
+      });
+
+      const ctx = initializeSession('/project', personaName);
+
+      expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
+      expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
+      expect(mockGetProvider).toHaveBeenCalledWith('cursor');
+      expect(ctx.providerType).toBe('cursor');
+      expect(ctx.model).toBe('composer-2.5');
+    },
+  );
+
+  it.each(['instruct', 'retry'] as const)(
+    'should resolve takt_providers.assistant for %s when top-level provider is unset',
+    (personaName) => {
+      mockResolveConfigValues.mockReturnValue({
+        language: 'en',
+      });
+      mockResolveAssistantConfigLayers.mockReturnValue({
+        local: {
+          taktProviders: {
+            assistant: {
+              provider: 'claude-sdk',
+              model: 'claude-sonnet-5',
+            },
+          },
+        },
+        global: {},
+      });
+
+      const ctx = initializeSession('/project', personaName);
+
+      expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
+      expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
+      expect(mockGetProvider).toHaveBeenCalledWith('claude-sdk');
+      expect(ctx.providerType).toBe('claude-sdk');
+      expect(ctx.model).toBe('claude-sonnet-5');
+      expect(ctx.personaName).toBe(personaName);
+    },
+  );
+
+  it('should use the non-workflow provider resolver for persona-interactive even when assistant is set', () => {
     mockResolveConfigValues.mockReturnValue({
       language: 'en',
-      provider: 'cursor',
-      model: 'composer-2.5',
+    });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'codex',
+      model: 'default-non-workflow-model',
     });
     mockResolveAssistantConfigLayers.mockReturnValue({
       local: {
@@ -237,132 +329,33 @@ describe('initializeSession assistant provider resolution', () => {
       global: {},
     });
 
-    // When
-    const ctx = initializeSession('/project', 'instruct');
-
-    // Then: assistant provider/model win over top-level
-    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
-    expect(mockGetProvider).toHaveBeenCalledWith('claude-sdk');
-    expect(ctx.providerType).toBe('claude-sdk');
-    expect(ctx.model).toBe('claude-sonnet-5');
-    expect(ctx.personaName).toBe('instruct');
-  });
-
-  // REQ-1011-2: retry persona routes through takt_providers.assistant
-  it('should resolve takt_providers.assistant for retry persona when top-level provider differs', () => {
-    // Given: top-level cursor + assistant claude-sdk (Issue #1011 scenario)
-    mockResolveConfigValues.mockReturnValue({
-      language: 'en',
-      provider: 'cursor',
-      model: 'composer-2.5',
-    });
-    mockResolveAssistantConfigLayers.mockReturnValue({
-      local: {
-        provider: 'cursor',
-        model: 'composer-2.5',
-        taktProviders: {
-          assistant: {
-            provider: 'claude-sdk',
-            model: 'claude-sonnet-5',
-          },
-        },
-      },
-      global: {},
-    });
-
-    // When
-    const ctx = initializeSession('/project', 'retry');
-
-    // Then: assistant provider/model win over top-level
-    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
-    expect(mockGetProvider).toHaveBeenCalledWith('claude-sdk');
-    expect(ctx.providerType).toBe('claude-sdk');
-    expect(ctx.model).toBe('claude-sonnet-5');
-    expect(ctx.personaName).toBe('retry');
-  });
-
-  // REQ-1011-3: instruct falls back to top-level when assistant is unset
-  it('should fallback to top-level provider/model for instruct when assistant is unset', () => {
-    // Given: no takt_providers.assistant
-    mockResolveConfigValues.mockReturnValue({
-      language: 'en',
-      provider: 'cursor',
-      model: 'composer-2.5',
-    });
-    mockResolveAssistantConfigLayers.mockReturnValue({
-      local: {
-        provider: 'cursor',
-        model: 'composer-2.5',
-      },
-      global: {},
-    });
-
-    // When
-    const ctx = initializeSession('/project', 'instruct');
-
-    // Then: assistant resolution path is used, then falls back to top-level
-    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
-    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
-    expect(ctx.providerType).toBe('cursor');
-    expect(ctx.model).toBe('composer-2.5');
-  });
-
-  // REQ-1011-3: retry falls back to top-level when assistant is unset
-  it('should fallback to top-level provider/model for retry when assistant is unset', () => {
-    // Given: no takt_providers.assistant
-    mockResolveConfigValues.mockReturnValue({
-      language: 'en',
-      provider: 'cursor',
-      model: 'composer-2.5',
-    });
-    mockResolveAssistantConfigLayers.mockReturnValue({
-      local: {
-        provider: 'cursor',
-        model: 'composer-2.5',
-      },
-      global: {},
-    });
-
-    // When
-    const ctx = initializeSession('/project', 'retry');
-
-    // Then: assistant resolution path is used, then falls back to top-level
-    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith('/project');
-    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
-    expect(ctx.providerType).toBe('cursor');
-    expect(ctx.model).toBe('composer-2.5');
-  });
-
-  // REQ-1011-NEG: persona-interactive stays on top-level (out of scope for #1011)
-  it('should keep top-level provider/model for persona-interactive even when assistant is set', () => {
-    // Given: assistant differs from top-level
-    mockResolveConfigValues.mockReturnValue({
-      language: 'en',
-      provider: 'cursor',
-      model: 'composer-2.5',
-    });
-    mockResolveAssistantConfigLayers.mockReturnValue({
-      local: {
-        provider: 'cursor',
-        model: 'composer-2.5',
-        taktProviders: {
-          assistant: {
-            provider: 'claude-sdk',
-            model: 'claude-sonnet-5',
-          },
-        },
-      },
-      global: {},
-    });
-
-    // When
     const ctx = initializeSession('/project', 'persona-interactive');
 
-    // Then: top-level wins; assistant layers are not consulted
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/project');
     expect(mockResolveAssistantConfigLayers).not.toHaveBeenCalled();
-    expect(mockGetProvider).toHaveBeenCalledWith('cursor');
-    expect(ctx.providerType).toBe('cursor');
-    expect(ctx.model).toBe('composer-2.5');
+    expect(mockGetProvider).toHaveBeenCalledWith('codex');
+    expect(mockGetProvider).not.toHaveBeenCalledWith('auto');
+    expect(ctx.providerType).toBe('codex');
+    expect(ctx.model).toBe('default-non-workflow-model');
     expect(ctx.personaName).toBe('persona-interactive');
+  });
+
+  it('should resolve provider: auto through the non-workflow provider resolver for persona-interactive', () => {
+    mockResolveConfigValues.mockReturnValue({
+      language: 'en',
+    });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'claude-sdk',
+      model: 'auto-routed-model',
+    });
+
+    const ctx = initializeSession('/project', 'persona-interactive');
+
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/project');
+    expect(mockResolveAssistantConfigLayers).not.toHaveBeenCalled();
+    expect(mockGetProvider).toHaveBeenCalledWith('claude-sdk');
+    expect(mockGetProvider).not.toHaveBeenCalledWith('auto');
+    expect(ctx.providerType).toBe('claude-sdk');
+    expect(ctx.model).toBe('auto-routed-model');
   });
 });

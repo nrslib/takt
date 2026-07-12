@@ -5,8 +5,10 @@
 -->
 {{instruction}}
 
-Return exactly one fenced JSON block that matches this JSON schema:
+次の JSON schema に一致する fenced JSON block をちょうど1つ返してください:
+
 ```json
 {{schemaJson}}
 ```
-Do not include any text before or after the JSON block.
+
+JSON block の前後に余計なテキストを含めないでください。

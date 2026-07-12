@@ -5,8 +5,10 @@
 -->
 {{baseInstruction}}
 
-Return exactly one fenced JSON block with this shape:
+次の形の fenced JSON block をちょうど1つ返してください:
+
 ```json
 {"step": 1}
 ```
-Do not include any text before or after the JSON block.
+
+JSON block の前後に余計なテキストを含めないでください。

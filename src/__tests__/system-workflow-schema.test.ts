@@ -1083,7 +1083,7 @@ describe('system workflow schema', () => {
     }
   });
 
-  it('agent step で string gate と command gate が混在する quality_gates を保持できる', () => {
+  it('agent step の quality_gates を raw 形式で保持できる', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'implement',
       persona: 'coder',
@@ -1116,10 +1116,41 @@ describe('system workflow schema', () => {
           name: 'quality-check',
           command: './.takt/quality-gates/check.sh',
           cwd: '.',
-          timeoutMs: 300000,
+          timeout_ms: 300000,
         },
       ]);
     }
+  });
+
+  it('command gate の timeoutMs を raw input として拒否する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement the feature',
+      quality_gates: [
+        {
+          type: 'command',
+          command: './.takt/quality-gates/check.sh',
+          timeoutMs: 300000,
+        },
+      ],
+      rules: [
+        {
+          when: 'done',
+          next: 'COMPLETE',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ['quality_gates', 0],
+          message: 'Unrecognized key: "timeoutMs"',
+        }),
+      ]),
+    );
   });
 
   it('system step では agent 用フィールドを拒否する', () => {

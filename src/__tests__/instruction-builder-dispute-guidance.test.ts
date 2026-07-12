@@ -15,7 +15,12 @@ function makeStep(): WorkflowStep {
   } as WorkflowStep;
 }
 
-function makeContext(options: { hasOpenFindings: boolean; hasWaivedFindings?: boolean; rawFindingsJsonSchema?: Record<string, unknown> }): InstructionContext {
+function makeContext(options: {
+  hasOpenFindings: boolean;
+  hasWaivedFindings?: boolean;
+  rawFindingsJsonSchema?: Record<string, unknown>;
+  language?: 'en' | 'ja';
+}): InstructionContext {
   return {
     task: 'task',
     iteration: 1,
@@ -24,7 +29,7 @@ function makeContext(options: { hasOpenFindings: boolean; hasWaivedFindings?: bo
     cwd: '/tmp',
     projectCwd: '/tmp',
     userInputs: [],
-    language: 'en',
+    language: options.language ?? 'en',
     findingContract: {
       ledgerCopyPath: '/tmp/.takt/findings/ledger.json',
       ledgerSummary: '{}',
@@ -73,6 +78,23 @@ describe('dispute guidance injection', () => {
     expect(section).toContain('raw findings schema');
     expect(section).not.toContain('Disputed Findings');
     expect(section).not.toContain('dispute claim');
+  });
+
+  // language の配線漏れは buildFindingContractInstruction の単体テストだけでは
+  // 検出できない（InstructionBuilder が context.language を渡し忘れても単体テストは
+  // 気づかない）。InstructionBuilder 経由で実際に ja が伝播することを確認する（#1012）。
+  it('should inject ja prose with English protocol tokens when language is ja', () => {
+    const instruction = new InstructionBuilder(
+      makeStep(),
+      makeContext({ hasOpenFindings: true, language: 'ja' }),
+    ).build();
+
+    const section = extractFindingContractSection(instruction);
+    expect(section).toContain('## Disputed Findings');
+    expect(section).toContain('findingId:');
+    expect(section).toContain('reason:');
+    expect(section).toContain('evidence:');
+    expect(section).toContain('見出しとフィールド名は英語のまま書いてください');
   });
 });
 

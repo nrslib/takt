@@ -62,6 +62,7 @@ data class Order(
 | Controller directly referencing Repository | REJECT. Must go through UseCase layer |
 | Outward dependencies from domain layer (DB, HTTP, etc.) | REJECT |
 | Direct dependencies between adapters (inbound → outbound) | REJECT |
+| Types or identifiers in the application/domain layer carry protocol-specific meaning such as HTTP request/response, endpoint, or status code | REJECT. Translate them into use-case concepts at the boundary. A domain term that happens to contain words such as Request is not itself a violation |
 
 ## API Layer Design (Controller)
 
@@ -208,17 +209,15 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 | Structural validation (@NotBlank, etc.) in domain | REJECT. Belongs in API layer |
 | UseCase-level validation inside Aggregate | REJECT. Read Model queries belong in UseCase layer |
 
-### Unify on Declarative Validation
+### Entry Validation Ownership
 
-Do not implement the same constraint twice as declarative validation (validation annotations, etc.) and a procedural check. Declarative validation runs before the handler body, so the hand-written check downstream becomes unreachable dead code, and the duplication hides which implementation actually decides the response.
-
-For scalar arguments such as `@PathVariable` or `@RequestParam`, this assumes Spring method validation is active in the running stack. Older Spring MVC setups commonly require class-level `@Validated`; Spring 6.1+ can use built-in method validation depending on configuration. Verify the project setup before relying on the annotation alone.
+Give each entry constraint a single owner and a single enforcement mechanism. Validations with different purposes per layer are not duplication, but do not re-implement the same boundary and the same condition in multiple mechanisms. Where declarative validation is active, invalid input is rejected before the handler; the downstream check remains reachable for valid input but redundantly re-evaluates the same condition and cannot define the violation response. Whether declarative validation is actually active depends on the framework configuration — verify it, then make a single mechanism the effective owner.
 
 ```kotlin
-// NG - same constraint twice; declarative validation runs first, procedural check is unreachable
+// NG - same constraint twice; declarative validation owns the violation response
 @GetMapping("/orders/{id}")
 fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse {
-    requireIdWithinLimit(id)  // never executed; its error message is never used
+    requireIdWithinLimit(id)  // runs only for valid input and cannot define the violation response
     return orderReadService.get(id).toResponse()
 }
 
@@ -228,14 +227,17 @@ fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse =
     orderReadService.get(id).toResponse()
 ```
 
-Violation exceptions from declarative validation are thrown by the framework, outside your own exception hierarchy. Even with domain exception translation in place, if this exception goes untranslated the framework's default response (such as 500) is returned instead of the intended status. Follow "Exception Translation Scope" for where the translation belongs. The exception type thrown on violation depends on the framework configuration and version, so do not guess; pin the actual exception, status, and response shape with an integration test.
+In the Spring example, constraints on scalar arguments such as `@PathVariable` or `@RequestParam` work only when method validation is active. Older setups commonly require class-level `@Validated`; Spring 6.1+ can use built-in method validation depending on configuration.
+
+On a validation violation, the response may fall through to the framework's default translation outside your own exception hierarchy (some setups translate to 400, others leave it untranslated as 500). Judge not by whether a default translation is used, but by whether the status and response shape match the explicit API contract. The exception type thrown on violation depends on configuration and version, so do not guess; pin the actual exception and response with an integration test. Follow "Exception Translation Scope" for where the translation belongs.
 
 | Criteria | Judgment |
 |----------|----------|
-| Same constraint implemented in both declarative validation and a procedural check | REJECT. Unify on the declarative side and delete the procedural check |
-| Declarative validation violations go untranslated and return the framework default response (such as 500) | REJECT |
+| Same entry and same condition implemented in multiple validation mechanisms | REJECT. Make a single mechanism the effective owner and delete the unreachable side |
+| Status and response shape on a validation violation do not match the explicit API contract (including implicit reliance on the default translation with no contract defined) | REJECT. Make the contract explicit and wire the translation |
 | No test pinning the status and response shape on validation violation | REJECT. Verify the actual exception type with an integration test |
-| Validation style differs by input kind (body vs. path vs. query) | Warning. Align on the declarative style |
+| Validation policy is inconsistent across entrypoints sharing the same trust boundary and input contract | REJECT. State the reason for the difference or unify the policy |
+| External error contract depends on messages from the runtime's default locale | REJECT. Use stable error codes or explicit messages as the contract |
 | Constraint values (max length, etc.) share a single constant across validation and API spec | OK |
 
 ### Read and Write Entrypoints
@@ -301,6 +303,7 @@ Translate exceptions into HTTP status codes at an exception translation layer on
 | API-specific exception mapping is added to a global handler | Scope is too broad. Keep it inside the target API boundary |
 | Authentication failures, input validation, and common error shapes shared by all APIs | OK. Handle at a global boundary |
 | HTTP representation mapping lives in the application or domain layer | REJECT. Keep it at the HTTP adapter boundary |
+| Multiple translation layers handle the same exception type without a contract for scope and precedence | REJECT. Consolidate under a single owner or make the non-overlapping applicability explicit |
 
 ## Domain Model Design
 
@@ -414,6 +417,18 @@ data class OrderEntity(
 | Domain model doubling as JPA Entity | REJECT. Separate them |
 | Business logic in Entity | REJECT. Entity is data structure only |
 | Repository implementation in domain layer | REJECT. Belongs in adapter/outbound |
+
+### Persistence Boundary for Structured Attributes
+
+For structured attributes in relational or read-model persistence, choose the storage format based on update granularity, integrity, size, and schema evolution — not just current query requirements. Do not implicitly use a domain type's generic serialized form as the persistence contract; use a persistence-specific representation or an explicit mapping. Event-store type identifiers and payloads may use an explicit, versioned serialization contract; govern their evolution with the CQRS-ES compatibility and upcaster rules.
+
+| Criteria | Judgment |
+|----------|----------|
+| Bounded structure read and written as a whole, with no need for search, joins, referential integrity, or partial updates | Consider a structured column (JSON, etc.) |
+| Referential integrity, an independent lifecycle, or joins with other tables matter | Normalize into its own table |
+| The DB's structured-column features (jsonb, etc.) can guarantee the needed search, indexing, and partial updates, and integrity requirements are met | A structured column is also a valid choice |
+| Domain type is converted directly by a generic serializer, implicitly using its field names as the DB schema | REJECT. Insert a persistence-specific representation or an explicit mapping |
+| Field changes to stored structures have no chosen path among compatible reads, migration, or rebuild, and no test pinning it | REJECT. Choose one path and pin it with a test |
 
 ## Authentication & Authorization Placement
 

@@ -35,6 +35,7 @@ import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
 import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
 import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
+import { normalizeQualityGates } from '../configNormalizers.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
@@ -288,7 +289,7 @@ export function normalizeStepFromRaw(
 
   const qualityGates = applyQualityGateOverrides(
     step.name,
-    step.quality_gates,
+    normalizeQualityGates(step.quality_gates),
     step.edit,
     personaOverrideKey,
     projectOverrides,

@@ -17,7 +17,6 @@ export type {
 // Classes
 export { CloneManager } from './clone.js';
 export { AutoCommitter } from './autoCommit.js';
-export { TaskSummarizer } from './summarize.js';
 export { BranchManager } from './branchList.js';
 
 export { TaskRunner } from './runner.js';

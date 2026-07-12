@@ -68,6 +68,7 @@ export type {
   AutoRoutingStrategy,
   AutoRoutingCandidate,
   AutoRoutingConfig,
+  ConfigAutoRoutingConfig,
   LoggingConfig,
   TelemetryConfig,
   ObservabilityConfig,

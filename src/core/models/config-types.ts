@@ -39,6 +39,13 @@ export interface AutoRoutingConfig {
   };
 }
 
+export interface ConfigAutoRoutingConfig extends AutoRoutingConfig {
+  defaultProvider?: {
+    provider: ProviderType;
+    model?: string;
+  };
+}
+
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
@@ -268,7 +275,7 @@ export interface ProjectConfig {
   /** Provider-specific options (overrides global, overridden by workflow/step) */
   providerOptions?: StepProviderOptions;
   /** Automatic provider/model routing configuration. */
-  autoRouting?: AutoRoutingConfig;
+  autoRouting?: ConfigAutoRoutingConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */

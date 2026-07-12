@@ -2,11 +2,11 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 
 function getSourceContextSystemPromptGuard(lang: 'en' | 'ja'): string {
-  return loadTemplate('source_context_system_guard', lang);
+  return loadTemplate('parts/source_context_system_guard', lang);
 }
 
 function getSourceContextGuidance(lang: 'en' | 'ja'): string {
-  return loadTemplate('source_context_section_guidance', lang);
+  return loadTemplate('parts/source_context_section_guidance', lang);
 }
 
 export function formatLiteralBlock(content: string): string {

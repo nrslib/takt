@@ -1347,6 +1347,48 @@ steps:
     ]);
   });
 
+  it('should load a callable command quality gate with timeout_ms from YAML', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_command_gates:\n  custom_scripts: true\n');
+
+    writeFileSync(join(workflowsDir, 'callable-command-gate.yaml'), `
+name: callable-command-gate
+description: Callable workflow with a command quality gate timeout
+subworkflow:
+  callable: true
+  visibility: internal
+max_steps: 5
+initial_step: implement
+
+steps:
+  - name: implement
+    persona: coder
+    edit: true
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        timeout_ms: 900000
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadWorkflowConfig('callable-command-gate', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.steps.find((step) => step.name === 'implement')?.qualityGates).toEqual([
+      {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        timeoutMs: 900000,
+      },
+    ]);
+  });
+
   it('rejects workflow command quality gates by default', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
@@ -1499,6 +1541,7 @@ steps:
           - type: command
             name: arch-quality-check
             command: "./.takt/quality-gates/check.sh"
+            timeout_ms: 300000
         rules:
           - condition: approved
     rules:
@@ -1516,6 +1559,7 @@ steps:
         type: 'command',
         name: 'arch-quality-check',
         command: './.takt/quality-gates/check.sh',
+        timeoutMs: 300000,
       },
     ]);
   });

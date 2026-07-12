@@ -8,6 +8,7 @@
 import type { WorkflowStep, Language } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildGitRules } from './instruction-context.js';
+import { buildFindingContractReportInstruction } from './finding-contract-instruction.js';
 import { replaceTemplatePlaceholders } from './escape.js';
 import {
   isOutputContractItem,
@@ -100,7 +101,7 @@ export class ReportInstructionBuilder {
       outputContract = replaceTemplatePlaceholders(targetContract.format.trimEnd(), this.step, instrContext);
       hasOutputContract = true;
     }
-    reportOutput = this.appendFindingContractReportInstruction(reportOutput);
+    reportOutput = this.appendFindingContractReportInstruction(reportOutput, language);
     hasReportOutput = hasReportOutput || this.context.findingContract !== undefined;
 
     return loadTemplate('perform_phase2_message', language, {
@@ -117,20 +118,17 @@ export class ReportInstructionBuilder {
     });
   }
 
-  private appendFindingContractReportInstruction(reportOutput: string): string {
+  private appendFindingContractReportInstruction(reportOutput: string, language: Language): string {
     if (!this.context.findingContract) {
       return reportOutput;
     }
 
-    const findingContractInstruction = [
-      '## Finding Contract',
-      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
-      '- Use existing finding IDs from the inline ledger summary when referring to tracked findings.',
-      '- Do not assign final finding IDs.',
-      '',
-      'Current finding ledger IDs:',
-      renderFencedJsonBlock(this.context.findingContract.reportLedgerSummary),
-    ].join('\n');
+    const findingContractInstruction = buildFindingContractReportInstruction({
+      ledgerCopyPath: this.context.findingContract.ledgerCopyPath,
+      reportLedgerSummary: this.context.findingContract.reportLedgerSummary,
+      language,
+      renderFencedJsonBlock,
+    });
 
     return reportOutput.length > 0
       ? [reportOutput, '', findingContractInstruction].join('\n')

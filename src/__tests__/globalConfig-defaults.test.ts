@@ -465,6 +465,9 @@ describe('loadGlobalConfig', () => {
         'language: en',
         'provider: auto',
         'auto_routing:',
+        '  default_provider:',
+        '    provider: mock',
+        '    model: global-default-model',
         '  strategy: balanced',
         '  router:',
         '    provider: claude-sdk',
@@ -490,10 +493,13 @@ describe('loadGlobalConfig', () => {
     expect(reloaded.autoRouting).toEqual(loaded.autoRouting);
     const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
     expect(raw).toContain('auto_routing:');
+    expect(raw).toContain('default_provider:');
+    expect(raw).toContain('model: global-default-model');
     expect(raw).toContain('cost_tier: medium');
     expect(raw).toContain('provider_options:');
     expect(raw).toContain('reasoning_effort: high');
     expect(raw).not.toContain('autoRouting:');
+    expect(raw).not.toContain('defaultProvider:');
     expect(raw).not.toContain('costTier:');
     expect(raw).not.toContain('providerOptions:');
   });

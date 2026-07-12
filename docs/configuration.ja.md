@@ -523,44 +523,71 @@ Finding Contract manager では、`finding_contract.manager.provider` と `findi
 
 ### Auto Routing
 
-TAKT に provider と model の両方を実効 `auto_routing` candidate list から選ばせる場合は、`provider: auto` を設定します。workflow 横断で使う場合は project または global config に `auto_routing` を定義します。自己完結した workflow では、workflow-level の `auto_routing` block で config を上書きできます。
+TAKT に provider と model の両方を実効 `auto_routing` candidate list から選ばせる場合は、`provider: auto` を設定します。次の例は project `.takt/config.yaml` または global `~/.takt/config.yaml` 用です。
 
 ```yaml
 provider: auto
 
+takt_providers:
+  assistant:
+    provider: codex
+    model: gpt-5.6-sol
+
 auto_routing:
+  default_provider:
+    provider: codex
+    model: gpt-5.6-luna # 省略時は provider のデフォルトモデルを使用
   strategy: balanced # cost | balanced | performance
   router:
-    provider: claude-sdk
-    model: claude-haiku-4-5-20251001
+    provider: codex
+    model: gpt-5.6-luna
   candidates:
-    - name: reasoning
-      description: Complex reasoning, architecture, and ambiguous decisions
-      provider: claude-sdk
-      model: claude-opus-4-20250514
+    - name: advanced
+      description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
+      provider: codex
+      model: gpt-5.6-sol
       cost_tier: high
     - name: coding
       description: Implementation, tests, debugging, and refactoring
       provider: codex
-      model: gpt-5
+      model: gpt-5.6-terra
       cost_tier: medium
-      provider_options:
-        codex:
-          reasoning_effort: high
     - name: lightweight
       description: Formatting and small mechanical edits
-      provider: claude-sdk
-      model: claude-haiku-4-5-20251001
+      provider: codex
+      model: gpt-5.6-luna
       cost_tier: low
   rules:
     tags:
       implementation: coding
-      architecture: reasoning
+      architecture: advanced
     steps:
-      security-audit: reasoning
+      security-audit: advanced
     personas:
-      architect: reasoning
+      architect: advanced
 ```
+
+自己完結した workflow では workflow-level block で routing を上書きできます。workflow YAML が受理するのは routing 用フィールドだけであり、config 専用の `default_provider` は指定できません。
+
+```yaml
+workflow_config:
+  provider: auto
+auto_routing:
+  strategy: balanced
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: coding
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+      description: Implementation, testing, debugging, and refactoring
+```
+
+effective top-level provider が `auto` の場合、AI による task slug 生成など、workflow step context を持たず concrete provider を必要とする内部処理では `auto_routing.default_provider` を使用します。`default_provider.provider` は必須で、`auto` は指定できません。`default_provider.model` は省略可能です。project の `default_provider` は global の値よりオブジェクト単位で優先されるため、`provider` と `model` が global のオブジェクトのフィールドと合成されることはありません。このような処理の実行時に設定がない場合は、`Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.` というエラーになります。effective top-level provider が concrete provider の場合は、従来どおり top-level の provider/model を使用します。
+
+auto routing の candidate 選択が適用されるのは workflow の step 実行だけです。`auto_routing.router` は routing 判定専用であり、`default_provider` として暗黙に使用されません。assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）は auto routing を通らず、引き続き `takt_providers.assistant` を使用します。この assistant 設定がその他の内部処理の default として使用されることもありません。top-level の `provider: auto` は assistant では無視されるため、`takt_providers.assistant` を併記してください。CLI の `--provider` / `--model` override が効くのはインタラクティブモードの計画会話のみです。instruct / retry は `takt_providers.assistant`（未設定時は top-level provider/model）を解決し、それらの CLI override は受け取りません。解決可能な assistant または top-level provider がない場合、assistant は起動時に `Provider is not configured.` で失敗します。
 
 解決順序は保守的です。`promotion`、明示的な step provider/model、`provider_routing`、`persona_providers` が auto routing より優先されます。その後、auto routing は `tags`、`steps`、`personas` の順に rule を確認します。複数の step tag が一致した場合は、step 上で後ろに書かれた tag が優先されます。rule が一致しない場合、TAKT は設定された router model に candidate description から候補を選ばせます。router failure は warning を出し、strategy default にフォールバックします。`cost` は最初の `low` candidate、`balanced` は最初の `medium` candidate、`performance` は最初の `high` candidate を選びます。
 

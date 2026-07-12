@@ -93,6 +93,31 @@ describe('validateFindingManagerOutput', () => {
     expect(result.ok).toBe(true);
   });
 
+  // finding_contract_instruction.md (ja) の異議申告ガイドは、見出しとフィールド名
+  // （## Disputed Findings / findingId / reason / evidence）を英語のまま書かせ、
+  // reason だけを日本語散文にする。coder がガイドどおりに書いた応答を
+  // hasDisputeClaimsHeading() / hasDisputeClaimFor() が認識できることを、
+  // 公開APIである validateFindingManagerOutput 経由で確認する（#1012）。
+  it('should accept a waiver backed by a ja-prose dispute claim that keeps protocol tokens in English', () => {
+    const jaClaim = [
+      '## Disputed Findings',
+      '- findingId: F-0001',
+      '  reason: 凍結された公開契約により、この型を変更できない',
+      '  evidence: src/types.ts:94',
+    ].join('\n');
+
+    const result = validateFindingManagerOutput({
+      previousLedger: makeLedger(),
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: '凍結された公開契約により、この型を変更できない', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: jaClaim,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it('should reject duplicate dispute notes for the same finding', () => {
     const result = validateFindingManagerOutput({
       previousLedger: makeLedger(),

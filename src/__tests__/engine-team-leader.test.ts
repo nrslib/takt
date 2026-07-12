@@ -144,6 +144,43 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('Tests done');
   });
 
+  // buildGitRules は team-leader-part-runner の buildTeamLeaderPartInstruction 経由でも
+  // 注入される（#1012）。git_rules.md の parts/ 移行でこの経路が壊れていないことを確認する。
+  it('team leader が分解したパートの instruction にも git ルールが注入される', async () => {
+    const config = buildTeamLeaderConfig();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
+
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    // 2回目の runAgent 呼び出しがパート（coder）実行。第2引数が組み立てられた instruction。
+    // commit 禁止文は phase2 にもあるため、それだけでは phase2 への退行を検出できない。
+    // phase1 固有の index 状態ルールまで直接 assert する。
+    const partCall = vi.mocked(runAgent).mock.calls[1];
+    expect(partCall?.[1]).toContain('Do NOT run git commit');
+    expect(partCall?.[1]).toContain('Do NOT run git add');
+    expect(partCall?.[1]).toContain('index state (staged / unstaged / untracked)');
+    expect(partCall?.[1]).toContain('git check-ignore -v');
+  });
+
   it('team leader と worker の auto routing decision を routing event として発行する', async () => {
     const config = buildTeamLeaderConfig();
     const step = config.steps[0];

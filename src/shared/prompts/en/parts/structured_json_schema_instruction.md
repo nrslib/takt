@@ -6,7 +6,9 @@
 {{instruction}}
 
 Return exactly one fenced JSON block that matches this JSON schema:
+
 ```json
 {{schemaJson}}
 ```
+
 Do not include any text before or after the JSON block.

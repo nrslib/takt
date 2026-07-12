@@ -303,6 +303,17 @@ interface Channel {
 }
 ```
 
+### Explicit Dependencies
+
+Pass dependencies in a form whose role and type are visible. Do not reject function-typed parameters categorically; judge whether they hide a stable business role or external dependency behind an anonymous callback.
+
+| Pattern | Verdict |
+|---------|---------|
+| A business rule or external lookup relayed through multiple layers as an anonymous callback | REJECT. Give the role a name and promote it to a port, validator, service, or equivalent boundary |
+| A function type defined as a named business role or port | OK. Its meaning and substitution boundary are visible |
+| A function passed for local enrichment or conversion at a layer boundary | OK. The responsibility stays within the boundary and is not relayed onward |
+| A block that scopes a lock, transaction, or resource | OK. It is a control structure, not dependency smuggling |
+
 ### Leaky Abstraction
 
 If a specific implementation appears in a generic layer, the abstraction is leaking. The generic layer should only know interfaces; branching should be absorbed by implementations.
@@ -329,6 +340,8 @@ A name expresses the code's actual role and effect, not its implementation mecha
 | Side effects or call frequency are unreadable | Cannot tell from the name whether it initializes, retrieves, or updates | REJECT |
 | Cannot distinguish it from nearby APIs | Same name as the wrapped or delegated API, hiding which layer owns the responsibility | REJECT |
 | Named after role/effect | The provided value, state change, or responsibility is clear from the name | OK |
+| Path/origin suffix with no distinct counterpart path in existence | FromRequest / ViaApi on the only existing path | REJECT. Drop the suffix; when the counterpart path disappears, the name follows |
+| Naming convention differs for only some of a set of same-kind operations | createXxxFromRequest / updateXxxFromRequest / deleteXxx | REJECT. Make them consistent |
 
 ```typescript
 // REJECT - Name reads as if it causes a side effect every time, but it is a memoized accessor
@@ -362,6 +375,7 @@ Criteria:
 - Has its own state → Separate
 - UI/logic exceeding 50 lines → Separate
 - Has multiple responsibilities → Separate
+- Has an independent reason to change, responsibility, or reuse boundary → Separate. Whether small supporting types may share a file depends on language conventions and file cohesion
 
 ### Reachability When Adding Features
 
@@ -550,6 +564,8 @@ AI tends to define the same logic under multiple function names.
 |---------|---------|---------|
 | Same implementation with different names | `copyFacets()` and `placeFacetFiles()` doing the same thing | REJECT |
 | Same parameter signature and body | Two functions taking the same params and doing the same work | REJECT |
+| Public method only forwards to a private method with the identical signature and has no distinct public contract, registration, decorator, authorization, instrumentation, or side effect | Internal alias delegates 1:1 to the implementation | REJECT. Promote the delegate and merge |
+| A 1:1 delegating public method is a stable API or an entry point for framework registration, decorators, authorization, or instrumentation | Public boundary delegates implementation while preserving an external contract | OK. Keep the boundary and make its role explicit |
 
 ```typescript
 // REJECT - Same implementation exists under different names

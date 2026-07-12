@@ -90,6 +90,8 @@ Accessible names, roles, and states are UI contracts consumed by assistive techn
 | A new interactive element has no accessible name | REJECT |
 | Checked, expanded, disabled, or similar state is not exposed to assistive technologies | Warning |
 | An existing accessible name is changed without being required by the task | REJECT |
+| A dynamic accessible name is assembled by concatenating fragments without checking the final sentence for meaning and naturalness | REJECT |
+| Distinct elements in the same interaction context cannot be identified by name or programmatic context (row/group association, etc.) | REJECT. Including the target name in the accessible name is a strong way to identify it |
 | Existing accessible names are preserved while missing role/state is added | OK |
 | The reason and impact scope for changing an existing contract are explicit | OK |
 
@@ -139,6 +141,7 @@ State should hold canonical values such as user input, server data, and temporar
 | Multiple state fields have invariants that require constant synchronization | REJECT |
 | Display labels, counts, totals, all-selected flags, sorted results, or grouped results are kept as canonical state | REJECT |
 | API sending, persistence, or diffing depends on derived state instead of canonical state | REJECT |
+| A display-position sequence number after filtering, paging, or grouping is treated as the ordering of the source data | REJECT. Define which collection's order the label represents and derive it from that collection |
 | Only canonical state is stored, and display, aggregation, and decisions are derived via selectors, render logic, or useMemo | OK |
 | Derived values required by external contracts are generated from canonical state at send or persistence boundaries | OK |
 
@@ -255,6 +258,7 @@ Fetch data from screen-specific API endpoints. Do not assemble screens by repurp
 | Reusing list API response for detail screen | REJECT |
 | Display unit and API fetch unit mismatch | REJECT |
 | Fetching all records just for a decision (should use aggregation API) | REJECT |
+| A concept the UI needs is missing from the response, and a semantically different body/description field is implicitly repurposed as a heading | REJECT. Define the summary/fallback as an explicit display contract, or add a dedicated field |
 | Each screen has dedicated fetch endpoints returning only needed data | OK |
 
 ```tsx
@@ -284,7 +288,7 @@ Communication is scoped to the active tab/screen. Do not prefetch for other tabs
 
 ## Shared Components and Abstraction
 
-Common UI patterns should be shared components. Copy-paste of inline styles is prohibited.
+Common UI patterns should be shared components. Copy-paste of inline styles is prohibited. UI that represents the same role or semantic state (placeholder, disabled, unconfirmed, etc.) must align copy, styling, and screen-reader output within the same shared component or an explicit design contract; presentation may vary with display context (hierarchy, density, theme), but the meaning and interaction contract must hold.
 
 ```tsx
 // ❌ WRONG - Copy-pasted inline styles

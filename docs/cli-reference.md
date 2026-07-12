@@ -493,6 +493,21 @@ Installed packages are stored in `~/.takt/repertoire/` and their workflows/facet
 
 When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.
 
+### takt telemetry
+
+Manage local routing event recording used by auto-routing (`provider: auto`). Decisions are written locally to `.takt/events/` as NDJSON; TAKT does not upload them.
+
+```bash
+# Show local routing event recording status
+takt telemetry status
+
+# Enable local routing event recording
+takt telemetry enable
+
+# Disable local routing event recording
+takt telemetry disable
+```
+
 ### takt purge
 
 Purge old analytics event files.

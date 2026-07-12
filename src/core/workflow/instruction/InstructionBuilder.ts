@@ -11,6 +11,7 @@
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
+import { buildFindingContractInstruction } from './finding-contract-instruction.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
@@ -232,54 +233,13 @@ export class InstructionBuilder {
       return instructions;
     }
 
-    const lines = [
-      instructions,
-      '',
-      '## Finding Contract',
-      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
-      '- Use existing finding IDs from the ledger when referring to tracked findings.',
-      '- Do not assign final finding IDs.',
-      '',
-      'Current finding ledger summary:',
-      renderFencedJsonBlock(this.context.findingContract.ledgerSummary),
-    ];
+    const section = buildFindingContractInstruction({
+      contract: this.context.findingContract,
+      language: this.context.language ?? 'en',
+      renderFencedJsonBlock,
+    });
 
-    if (this.context.findingContract.rawFindingsJsonSchema) {
-      // 状態に該当しない指示は注入しない: 確認・再指摘系は open がある
-      // ラウンドだけ、waived 除外は waived が実在するときだけ。
-      lines.push(
-        '',
-        '- Report every issue you observe as structured raw findings with kind "issue" (empty targetFindingId).',
-        ...(this.context.findingContract.hasOpenFindings
-          ? [
-              '- Each round, verify the open ledger findings that fall within your review scope.',
-              '- When you have confirmed an open finding is fixed, report it as a raw finding with kind "resolution_confirmation", the ledger finding id in targetFindingId, and file:line evidence in description. Findings are only marked resolved through such confirmations.',
-              '- Do not re-report an open finding that is still unfixed; report a new issue only if it regressed or changed.',
-            ]
-          : []),
-        ...(this.context.findingContract.hasWaivedFindings
-          ? ['- Do not re-report findings listed as waived in the ledger summary. If you observe that a waiver premise no longer holds, report that observation as a new issue citing the waived finding id.']
-          : []),
-        '- Use rawFindingId values that are unique within this response.',
-        '- Copy each Observed Findings family_tag value into the structured familyTag field.',
-        '- Return structured output matching this raw findings schema:',
-        renderFencedJsonBlock(this.context.findingContract.rawFindingsJsonSchema),
-      );
-    } else if (this.context.findingContract.hasOpenFindings) {
-      // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の
-      // 段階（初回 implement 等）では無意味であり、無関係なプロトコル文が
-      // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。
-      lines.push(
-        '',
-        '- Before re-fixing an open finding you already addressed, check it against the current code. If the finding no longer matches reality (already fixed, or it cites structures that no longer exist), or it is valid but cannot be fixed (frozen public contract, external constraint, deliberate trade-off), do NOT loop on it. State a dispute claim in your response under a "## Disputed Findings" heading, one entry per finding:',
-        '  - findingId: the ledger finding id',
-        '  - reason: why the finding is stale or cannot be fixed',
-        '  - evidence: file:line references from the current code backing the reason',
-        '- The findings manager adjudicates dispute claims; only accepted claims stop blocking the gate. Critical findings can never be waived.',
-      );
-    }
-
-    return lines.join('\n');
+    return [instructions, '', section].join('\n');
   }
 }
 
