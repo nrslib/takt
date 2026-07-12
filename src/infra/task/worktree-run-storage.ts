@@ -115,12 +115,18 @@ export function initializeWorktreeRunStorage(
   }
   const migrateLegacyRuns = isLegacyRunsDirectory(linkPath);
   const cloneId = randomUUID();
-  const storeContainer = join(getGlobalRunStoreDir(), projectId, cloneId);
+  const runStoreRoot = getGlobalRunStoreDir();
+  const projectStore = join(runStoreRoot, projectId);
+  const storeContainer = join(projectStore, cloneId);
   const storePath = join(storeContainer, 'runs');
 
   try {
     mkdirSync(taktDir, { recursive: true });
-    mkdirSync(storeContainer, { recursive: true, mode: STORE_DIRECTORY_MODE });
+    mkdirSync(runStoreRoot, { recursive: true, mode: STORE_DIRECTORY_MODE });
+    chmodSync(runStoreRoot, STORE_DIRECTORY_MODE);
+    mkdirSync(projectStore, { recursive: true, mode: STORE_DIRECTORY_MODE });
+    chmodSync(projectStore, STORE_DIRECTORY_MODE);
+    mkdirSync(storeContainer, { mode: STORE_DIRECTORY_MODE });
     if (migrateLegacyRuns) {
       renameSync(linkPath, storePath);
     } else {

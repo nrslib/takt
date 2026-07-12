@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -86,6 +86,19 @@ describe('initializeWorktreeRunStorage', () => {
     const second = initializeWorktreeRunStorage(projectDir, clonePath, 'feature/retry');
 
     expect(second).toEqual(first);
+  });
+
+  it('restricts every run-store directory that exposes project or clone identities', () => {
+    const projectDir = join(root, 'project');
+    mkdirSync(projectDir);
+    const storage = initializeWorktreeRunStorage(projectDir, createClone('clone'), 'feature/private');
+    const cloneStore = join(storage.storePath, '..');
+    const projectStore = join(cloneStore, '..');
+    const runStore = join(projectStore, '..');
+
+    for (const directory of [runStore, projectStore, cloneStore, storage.storePath]) {
+      expect(statSync(directory).mode & 0o777).toBe(0o700);
+    }
   });
 
   it('supports the canonical run path, metadata, and order readers through the link', () => {
