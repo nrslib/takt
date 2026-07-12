@@ -5,6 +5,7 @@
  */
 
 import type {
+  WorkflowEffect,
   WorkflowStep,
 } from '../../models/types.js';
 
@@ -12,6 +13,7 @@ export interface WorkflowRuleTransition {
   nextStep?: string;
   returnValue?: string;
   requiresUserInput?: boolean;
+  effects?: WorkflowEffect[];
 }
 
 export function determineRuleTransition(
@@ -27,6 +29,7 @@ export function determineRuleTransition(
     ...(rule.next !== undefined ? { nextStep: rule.next } : {}),
     ...(rule.returnValue !== undefined ? { returnValue: rule.returnValue } : {}),
     ...(rule.requiresUserInput === true ? { requiresUserInput: true } : {}),
+    ...(rule.effects !== undefined ? { effects: rule.effects } : {}),
   };
 }
 

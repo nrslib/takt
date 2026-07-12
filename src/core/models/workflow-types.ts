@@ -65,6 +65,7 @@ export {
 
 export interface WorkflowRule {
   condition: string;
+  effects?: WorkflowEffect[];
   next?: string;
   returnValue?: string;
   appendix?: string;

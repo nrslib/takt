@@ -105,6 +105,21 @@ export class SystemStepExecutor {
     return services.executeEffect(effect, payload, state);
   }
 
+  async runTransitionEffects(
+    stepName: string,
+    effects: readonly WorkflowEffect[] | undefined,
+    state: WorkflowState,
+  ): Promise<void> {
+    if (!effects || effects.length === 0) {
+      return;
+    }
+    const stepEffectResults = { ...(state.effectResults.get(stepName) ?? {}) };
+    for (const effect of effects) {
+      stepEffectResults[effect.type] = await this.executeEffect(effect, state, this.deps.getCwd());
+      state.effectResults.set(stepName, { ...stepEffectResults });
+    }
+  }
+
   async run(step: WorkflowStep, state: WorkflowState): Promise<AgentResponse> {
     await waitForStepDelay(step);
     const ruleContext = this.deps.getRuleContext(step);
@@ -131,11 +146,7 @@ export class SystemStepExecutor {
     state.systemContexts.set(step.name, resolvedContext);
 
     if (step.effects && step.effects.length > 0) {
-      const stepEffectResults: Record<string, unknown> = {};
-      for (const effect of step.effects) {
-        stepEffectResults[effect.type] = await this.executeEffect(effect, state, ruleContext.cwd);
-        state.effectResults.set(step.name, { ...stepEffectResults });
-      }
+      await this.runTransitionEffects(step.name, step.effects, state);
     }
 
     const match = await detectMatchedRule(step, '', '', {

@@ -102,6 +102,7 @@ export const WorkflowRuleSchema = z.object({
   appendix: z.string().optional(),
   requires_user_input: z.boolean().optional(),
   interactive_only: z.boolean().optional(),
+  effects: z.array(WorkflowEffectRawSchema).min(1).optional(),
 }).refine(
   (data) => (data.condition != null) !== (data.when != null),
   {

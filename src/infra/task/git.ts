@@ -41,7 +41,7 @@ function getFilterConfigNames(cwd: string): string[] {
   }
 }
 
-function getSafeGitEnv(cwd: string, options: StageAndCommitOptions): NodeJS.ProcessEnv | undefined {
+export function getSafeGitEnv(cwd: string, options: StageAndCommitOptions): NodeJS.ProcessEnv | undefined {
   const configEntries: Array<readonly [string, string]> = [];
 
   if (!options.allowGitHooks) {
@@ -71,6 +71,42 @@ function getSafeGitEnv(cwd: string, options: StageAndCommitOptions): NodeJS.Proc
   });
 
   return env;
+}
+
+export function commitExactPaths(
+  cwd: string,
+  message: string,
+  paths: readonly string[],
+  options: StageAndCommitOptions = {},
+): string | undefined {
+  if (paths.length === 0) {
+    throw new Error('Exact-path commit requires at least one path');
+  }
+  const env = getSafeGitEnv(cwd, options);
+  const literal = ['--literal-pathspecs'] as const;
+  execFileSync('git', [...literal, 'add', '--', ...paths], { cwd, stdio: 'pipe', env });
+
+  const staged = execFileSync('git', [...literal, 'diff', '--cached', '--name-only', 'HEAD', '--', ...paths], {
+    cwd,
+    encoding: 'utf8',
+    stdio: 'pipe',
+    env,
+  }).trim();
+  if (staged.length === 0) {
+    return undefined;
+  }
+
+  execFileSync('git', [...literal, 'commit', '--no-verify', '--only', '-m', message, '--', ...paths], {
+    cwd,
+    stdio: 'pipe',
+    env,
+  });
+  return execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd,
+    encoding: 'utf8',
+    stdio: 'pipe',
+    env,
+  }).trim();
 }
 
 /**

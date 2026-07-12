@@ -133,6 +133,22 @@ const EnqueueTaskEffectBaseSchema = z.object({
 }).strict();
 
 export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('capture_artifacts'),
+    allowed_patterns: z.array(z.string().min(1)).min(1),
+    required_basenames: z.array(z.string().min(1)).min(1),
+    same_parent: z.literal(true),
+    manifest_path: z.string().min(1).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal('commit_artifacts'),
+    manifest: TemplateReferenceSchema.optional(),
+    manifest_path: z.string().min(1).optional(),
+    message: z.string().min(1),
+  }).strict().refine(
+    (data) => (data.manifest !== undefined) !== (data.manifest_path !== undefined),
+    { message: 'commit_artifacts requires exactly one of manifest or manifest_path' },
+  ),
   EnqueueTaskEffectBaseSchema.superRefine((data, ctx) => {
     if (data.mode === 'from_pr' && data.pr === undefined) {
       ctx.addIssue({

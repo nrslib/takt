@@ -42,6 +42,7 @@ function makeDeps(
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
     resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE' })),
+    runTransitionEffects: vi.fn(async () => {}),
     runLoopMonitorJudge: vi.fn(),
     runStep: vi.fn(async (_step: WorkflowStep, instruction: string) => ({ response, instruction })),
     runQualityGates: vi.fn(async () => ({ ok: true as const })),

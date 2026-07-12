@@ -25,6 +25,7 @@ import { enqueueTaskEffect } from './system-enqueue-effect.js';
 import { resolveConflictsWithAiEffect, syncWithRootEffect } from './system-sync-effects.js';
 import { resolveIssueListInput, resolveIssueSelectionInput } from './system-issue-input-resolver.js';
 import { resolvePrListInput, resolvePrSelectionInput } from './system-pr-input-resolver.js';
+import { captureArtifactsEffect, commitArtifactsEffect } from './system-artifact-effects.js';
 
 function listQueueTasks(projectCwd: string) {
   return new TaskRunner(projectCwd).listAllTaskItems();
@@ -168,6 +169,10 @@ async function runEffect(
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   switch (effect.type) {
+    case 'capture_artifacts':
+      return captureArtifactsEffect(options, effect);
+    case 'commit_artifacts':
+      return commitArtifactsEffect(options, payload);
     case 'enqueue_task':
       return enqueueTaskEffect(options, payload as Parameters<typeof enqueueTaskEffect>[1]);
     case 'comment_pr':

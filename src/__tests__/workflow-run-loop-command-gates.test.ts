@@ -50,8 +50,9 @@ function makeDeps(
     getStep: () => step,
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
-    cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
+    cycleDetectorRecordAndCheck: vi.fn(() => ({ triggered: false, cycleCount: 0 })),
     resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE' })),
+    runTransitionEffects: vi.fn(async () => {}),
     runLoopMonitorJudge: vi.fn(),
     runStep,
     runQualityGates,
@@ -82,6 +83,31 @@ function makeDeps(
 }
 
 describe('WorkflowRunLoop command quality gates', () => {
+  it('runs matched rule effects after gate success and fails before advancing', async () => {
+    const step = makeStep('plan-review', {
+      rules: [makeRule('Go judgment', 'implement')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: step.name, content: 'Go' });
+    const runStep = vi.fn(async (_step: WorkflowStep, instruction: string) => ({ response, instruction }));
+    const runQualityGates = vi.fn<() => Promise<CommandGateRunResult>>().mockResolvedValue({ ok: true });
+    const deps = makeDeps(state, step, runStep, runQualityGates);
+    deps.resolveDoneTransition.mockReturnValue({
+      nextStep: 'implement',
+      effects: [{ type: 'commit_artifacts', manifest: '{effect:plan.capture_artifacts.manifest}', message: 'approve' }],
+    });
+    deps.runTransitionEffects.mockRejectedValue(new Error('artifact hash mismatch'));
+
+    const result = await runWorkflowToCompletion(deps);
+    expect(result.abort).toMatchObject({
+      kind: 'runtime_error',
+      reason: 'Step execution failed: artifact hash mismatch',
+    });
+    expect(deps.runTransitionEffects).toHaveBeenCalledTimes(1);
+    expect(deps.cycleDetectorRecordAndCheck).not.toHaveBeenCalled();
+    expect(state.currentStep).toBe('plan-review');
+  });
+
   it('should rerun the same step with command gate feedback before resolving the done transition', async () => {
     const step = makeStep('implement', {
       qualityGates: [

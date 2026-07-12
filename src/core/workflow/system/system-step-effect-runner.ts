@@ -93,6 +93,19 @@ export function validateSystemEffectPayload(
   effect: WorkflowEffect,
   payload: Record<string, unknown>,
 ): void {
+  if (effect.type === 'capture_artifacts') {
+    if (payload.type !== 'capture_artifacts') {
+      throw new Error('capture_artifacts payload type mismatch');
+    }
+  }
+  if (effect.type === 'commit_artifacts') {
+    if ((payload.manifest !== undefined) === (payload.manifestPath !== undefined)) {
+      throw new Error('commit_artifacts requires exactly one of manifest or manifestPath');
+    }
+    if (payload.manifest !== undefined) requireObject(payload.manifest, 'manifest');
+    if (payload.manifestPath !== undefined) requireString(payload.manifestPath, 'manifestPath');
+    requireString(payload.message, 'message');
+  }
   if (effect.type === 'enqueue_task') {
     if (payload.mode !== undefined) requireString(payload.mode, 'mode');
     if (payload.workflow !== undefined) requireString(payload.workflow, 'workflow');

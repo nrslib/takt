@@ -44,6 +44,7 @@ interface WorkflowRunLoopDeps {
   loopDetectorCheck: (stepName: string) => { shouldWarn?: boolean; shouldAbort?: boolean; count: number; isLoop: boolean };
   cycleDetectorRecordAndCheck: (stepName: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
   resolveDoneTransition: (step: WorkflowStep, response: AgentResponse) => WorkflowRuleTransition;
+  runTransitionEffects: (stepName: string, transition: WorkflowRuleTransition) => Promise<void>;
   runLoopMonitorJudge: (
     monitor: LoopMonitorConfig,
     cycleCount: number,
@@ -557,6 +558,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       const transition = deps.resolveDoneTransition(step, response);
+      await deps.runTransitionEffects(step.name, transition);
       if (transition.requiresUserInput) {
         if (!deps.options.onUserInput) {
           abort = abortWorkflow(deps, 'user_input_required', 'User input required but no handler is configured');
@@ -784,6 +786,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   const transition = deps.resolveDoneTransition(step, response);
+  await deps.runTransitionEffects(step.name, transition);
   if (transition.requiresUserInput) {
     if (!deps.options.onUserInput) {
       const abort = abortWorkflow(deps, 'user_input_required', 'User input required but no handler is configured');

@@ -246,6 +246,11 @@ export class WorkflowEngine extends EventEmitter {
           },
           cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
+          runTransitionEffects: (stepName, transition) => this.systemStepExecutor.runTransitionEffects(
+            stepName,
+            transition.effects,
+            this.state,
+          ),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
           runQualityGates,
@@ -448,6 +453,11 @@ export class WorkflowEngine extends EventEmitter {
           },
           cycleDetectorRecordAndCheck: (stepName) => this.cycleDetector.recordAndCheck(stepName),
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
+          runTransitionEffects: (stepName, transition) => this.systemStepExecutor.runTransitionEffects(
+            stepName,
+            transition.effects,
+            this.state,
+          ),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
           runQualityGates,

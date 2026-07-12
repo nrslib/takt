@@ -2,13 +2,12 @@ import type { z } from 'zod';
 import type {
   WorkflowEffect,
   WorkflowEffectScalarReference,
-  WorkflowStep,
   WorkflowStepRawSchema,
   WorkflowTemplateReference,
 } from '../../../core/models/index.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
-type RawWorkflowEffect = NonNullable<RawStep['effects']>[number];
+export type RawWorkflowEffect = NonNullable<RawStep['effects']>[number];
 
 const TEMPLATE_REFERENCE_PATTERN = /^\{(?:context|structured|effect):[^}]+\}$/;
 
@@ -45,6 +44,23 @@ function requireEffectScalarReference(
 
 function normalizeWorkflowEffect(effect: RawWorkflowEffect): WorkflowEffect {
   switch (effect.type) {
+  case 'capture_artifacts':
+    return {
+      type: 'capture_artifacts',
+      allowedPatterns: effect.allowed_patterns,
+      requiredBasenames: effect.required_basenames,
+      sameParent: effect.same_parent,
+      ...(effect.manifest_path !== undefined ? { manifestPath: effect.manifest_path } : {}),
+    };
+  case 'commit_artifacts':
+    return {
+      type: 'commit_artifacts',
+      ...(effect.manifest !== undefined
+        ? { manifest: normalizeTemplateReference(effect.manifest, 'effects.manifest') }
+        : {}),
+      ...(effect.manifest_path !== undefined ? { manifestPath: effect.manifest_path } : {}),
+      message: effect.message,
+    };
   case 'enqueue_task':
     return {
       type: 'enqueue_task',
@@ -89,6 +105,6 @@ function normalizeWorkflowEffect(effect: RawWorkflowEffect): WorkflowEffect {
   }
 }
 
-export function normalizeWorkflowEffects(effects: RawStep['effects']): WorkflowStep['effects'] {
+export function normalizeWorkflowEffects(effects: RawWorkflowEffect[] | undefined): WorkflowEffect[] | undefined {
   return effects?.map((effect) => normalizeWorkflowEffect(effect));
 }

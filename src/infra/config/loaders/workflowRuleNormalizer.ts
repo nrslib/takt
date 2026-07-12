@@ -6,6 +6,10 @@ import {
   parseAiConditionExpression,
 } from '../../../core/models/workflow-condition-expression.js';
 import { isDeterministicCondition, unwrapWhenCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import {
+  normalizeWorkflowEffects,
+  type RawWorkflowEffect,
+} from './workflowSystemStepNormalizer.js';
 
 
 /**
@@ -73,6 +77,7 @@ export function normalizeRule(rule: {
   appendix?: string;
   requires_user_input?: boolean;
   interactive_only?: boolean;
+  effects?: RawWorkflowEffect[];
 }): WorkflowRule {
   // `when:` キーは決定的条件の宣言形: when(<式>) に包んで扱う。
   // 裸の式を condition: に書いた場合は通常のタグ条件（散文）として扱う。
@@ -91,6 +96,7 @@ export function normalizeRule(rule: {
       appendix: rule.appendix,
       requiresUserInput: rule.requires_user_input,
       interactiveOnly: rule.interactive_only,
+      effects: normalizeWorkflowEffects(rule.effects),
       isAiCondition: true,
       aiConditionText: aiExpression.text,
     };
@@ -106,6 +112,7 @@ export function normalizeRule(rule: {
       appendix: rule.appendix,
       requiresUserInput: rule.requires_user_input,
       interactiveOnly: rule.interactive_only,
+      effects: normalizeWorkflowEffects(rule.effects),
       isAggregateCondition: true,
       aggregateType: aggregateExpression.type,
       aggregateConditionText: conditions.length === 1 ? conditions[0]! : conditions,
@@ -124,6 +131,7 @@ export function normalizeRule(rule: {
       appendix: rule.appendix,
       requiresUserInput: rule.requires_user_input,
       interactiveOnly: rule.interactive_only,
+      effects: normalizeWorkflowEffects(rule.effects),
       guardCondition: compound.guard,
     };
   }
@@ -135,5 +143,6 @@ export function normalizeRule(rule: {
     appendix: rule.appendix,
     requiresUserInput: rule.requires_user_input,
     interactiveOnly: rule.interactive_only,
+    effects: normalizeWorkflowEffects(rule.effects),
   };
 }

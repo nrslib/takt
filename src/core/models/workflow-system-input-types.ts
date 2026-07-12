@@ -143,6 +143,19 @@ export type WorkflowEffectScalarReference = WorkflowTemplateReference | number;
 
 export type WorkflowEffect =
   | {
+    type: 'capture_artifacts';
+    allowedPatterns: string[];
+    requiredBasenames: string[];
+    sameParent: true;
+    manifestPath?: string;
+  }
+  | {
+    type: 'commit_artifacts';
+    manifest?: WorkflowTemplateReference;
+    manifestPath?: string;
+    message: string;
+  }
+  | {
     type: 'enqueue_task';
     mode: 'new' | 'from_pr';
     workflow: string;
