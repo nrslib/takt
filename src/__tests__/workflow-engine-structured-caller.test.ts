@@ -4185,3 +4185,378 @@ describe('WorkflowEngine NEEDS_ADJUDICATION (provisional fixpoint, batch B1)', (
     expect(existsSync(needsAdjudicationReportPath)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: fixpoint が成立しない churn
+// （毎ラウンド別の架空 provisional）でも、累積ラウンド数の上限超過で
+// NEEDS_ADJUDICATION へ収束することを実エンジンで固定する。
+// ---------------------------------------------------------------------------
+describe('WorkflowEngine NEEDS_ADJUDICATION (bounded stop budget, codex-adjudicated extension of batch B1)', () => {
+  let cwd: string;
+  let configDir: string;
+  let previousTaktConfigDir: string | undefined;
+
+  beforeEach(() => {
+    previousTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    configDir = join(tmpdir(), `takt-engine-stop-budget-config-${randomUUID()}`);
+    process.env.TAKT_CONFIG_DIR = configDir;
+    cwd = createTestTmpDir();
+    vi.clearAllMocks();
+    vi.mocked(runAgent).mockReset();
+  });
+
+  afterEach(() => {
+    if (existsSync(cwd)) {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+    if (existsSync(configDir)) {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+    if (previousTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousTaktConfigDir;
+    }
+  });
+
+  function buildBudgetWorkflowConfig(): WorkflowConfig {
+    return {
+      name: 'needs-adjudication-budget-e2e',
+      maxSteps: 10,
+      initialStep: 'reviewers',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+        // 2ラウンドで尽きる小さな予算 — テストで40ラウンド分のモックを
+        // 用意しなくても発火を確認できる。
+        stopBudget: { maxRounds: 2 },
+      },
+      steps: [
+        makeStep({
+          name: 'plan',
+          persona: 'planner',
+          instruction: 'Replan.',
+          rules: [makeRule('when(true)', 'reviewers')],
+        }),
+        makeStep({
+          name: 'reviewers',
+          persona: 'reviewer',
+          instruction: 'Run reviewers.',
+          parallel: [
+            makeStep({
+              name: 'architecture-review',
+              persona: 'architecture-reviewer',
+              instruction: 'Review architecture.',
+              rules: [makeRule('when(true)', 'COMPLETE')],
+            }),
+          ],
+          rules: [
+            makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE'),
+            makeRule('when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
+            makeRule('when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
+            makeRule('when(findings.provisional.count > 0 && findings.conflicts.count == 0)', 'plan'),
+            makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
+          ],
+        }),
+      ],
+    };
+  }
+
+  function churnRawFindingResponse(rawFindingId: string, location: string, title: string) {
+    return {
+      persona: 'architecture-reviewer',
+      status: 'done',
+      content: 'Found an issue.',
+      structuredOutput: {
+        rawFindings: [{
+          rawFindingId,
+          targetFindingId: '',
+          relation: 'new',
+          familyTag: 'bug',
+          severity: 'high',
+          title,
+          location,
+          description: `This bug lives in a file that is not part of the reviewed tree (${title}).`,
+          suggestion: 'Add a null check.',
+        }],
+      },
+      timestamp: new Date(),
+    };
+  }
+
+  it('stops at NEEDS_ADJUDICATION once the round budget is exhausted, even though a DIFFERENT hallucinated finding every round keeps fixpoint from ever being reached', async () => {
+    vi.mocked(runAgent)
+      // Round 1: a hallucination against fabricated file A. Rejected at
+      // deterministic admission (no LLM manager call needed); lands as an
+      // invalid-location-evidence provisional. Not a fixpoint (round 1).
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-1', 'src/does-not-exist-a.ts:5', 'Bug in fabricated file A');
+      })
+      // Round 1 of 2: neither fixpoint nor the (2-round) budget has fired
+      // yet, so the generic provisional-count rule routes to plan.
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
+      })
+      // Round 2: a DIFFERENT hallucination against fabricated file B — the
+      // provisional set changed (now 2 open provisionals instead of 1), so
+      // fixpoint cannot be reached this round either. This is the 2nd of the
+      // 2 rounds the stop budget allows.
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-2', 'src/does-not-exist-b.ts:5', 'Bug in fabricated file B');
+      });
+
+    const engine = new WorkflowEngine(buildBudgetWorkflowConfig(), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => { abortReasons.push(reason); });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    expect(abortReasons).toHaveLength(1);
+    expect(abortReasons[0]).toContain('NEEDS_ADJUDICATION');
+    expect(abortReasons[0]).toContain('stop budget');
+    // Not a fixpoint stop: the churn never let the provisional set stabilize.
+    expect(abortReasons[0]).not.toContain('reached a fixpoint');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+
+    // The ledger records the churn correctly: fixpoint never reached, but the
+    // round budget did — roundsCompleted is derived from distinct round markers.
+    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+      fixpoint?: { reached: boolean };
+      stopBudget?: { roundMarkers: string[]; exhausted: boolean };
+    };
+    expect(ledger.fixpoint?.reached).toBe(false);
+    expect(ledger.stopBudget?.roundMarkers).toHaveLength(2);
+    expect(ledger.stopBudget?.exhausted).toBe(true);
+
+    // The audit report distinguishes the stop reason (classified from the
+    // matched condition FACT, not ledger inference) and carries the budget
+    // consumption, not just the open provisional list.
+    const needsAdjudicationReportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'needs-adjudication.json');
+    expect(existsSync(needsAdjudicationReportPath)).toBe(true);
+    const report = JSON.parse(readFileSync(needsAdjudicationReportPath, 'utf-8')) as {
+      stopReason: string;
+      matchedCondition?: string;
+      stopBudget?: { roundsCompleted: number; firstRoundAt: string };
+      provisionalFindings: Array<{ kind: string }>;
+    };
+    expect(report.stopReason).toBe('budget-exhausted');
+    expect(report.matchedCondition).toContain('findings.rounds.budgetExhausted');
+    expect(report.stopBudget?.roundsCompleted).toBe(2);
+    expect(report.provisionalFindings).toHaveLength(2);
+  });
+
+  // Blocker 2 (codex): stopReason must be the FACT of the matched rule, not a
+  // ledger-state inference. A workflow that places the budget rule BEFORE the
+  // fixpoint rule must record 'budget-exhausted' when the budget rule matches
+  // first — even on a round where fixpoint ALSO holds (both true simultaneously).
+  function buildBudgetBeforeFixpointWorkflowConfig(): WorkflowConfig {
+    const config = buildBudgetWorkflowConfig();
+    const reviewers = config.steps.find((step) => step.name === 'reviewers')!;
+    // Reorder: budget rule first, fixpoint rule second (opposite of builtin).
+    reviewers.rules = [
+      makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE'),
+      makeRule('when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
+      makeRule('when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)', 'NEEDS_ADJUDICATION'),
+      makeRule('when(findings.provisional.count > 0 && findings.conflicts.count == 0)', 'plan'),
+      makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
+    ];
+    return config;
+  }
+
+  it('records stopReason "budget-exhausted" (from the matched condition) when the budget rule is placed before the fixpoint rule and both hold — not the ledger-inferred fixpoint', async () => {
+    // The SAME hallucination repeats every round → fixpoint IS reached on round
+    // 2, AND the 2-round budget is exhausted on round 2. With the budget rule
+    // placed first, first-match-wins selects the budget rule; stopReason must
+    // reflect that fact, not the ledger's fixpoint.reached === true.
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-1', 'src/does-not-exist-a.ts:5', 'Repeated bug');
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
+      })
+      // Round 2: the EXACT same hallucination (different line/id, same identity)
+      // → fixpoint reached AND budget exhausted at the same time.
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-2', 'src/does-not-exist-a.ts:99', 'Repeated bug');
+      });
+
+    const engine = new WorkflowEngine(buildBudgetBeforeFixpointWorkflowConfig(), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => { abortReasons.push(reason); });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    // Ledger-state inference would say 'fixpoint' (fixpoint.reached === true),
+    // but the matched rule was the budget rule (placed first) — the recorded
+    // fact must be budget-exhausted.
+    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as { fixpoint?: { reached: boolean } };
+    expect(ledger.fixpoint?.reached).toBe(true);
+    expect(abortReasons[0]).toContain('stop budget');
+    expect(abortReasons[0]).not.toContain('reached a fixpoint');
+
+    const report = JSON.parse(readFileSync(join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'needs-adjudication.json'), 'utf-8')) as {
+      stopReason: string;
+      matchedCondition?: string;
+    };
+    expect(report.stopReason).toBe('budget-exhausted');
+    expect(report.matchedCondition).toContain('findings.rounds.budgetExhausted');
+    expect(report.matchedCondition).not.toContain('findings.provisional.fixpoint');
+  });
+
+  // Blocker 2 (codex, 2nd pass): a COMPOSITE condition referencing both signals
+  // (when-evaluator supports || / &&) cannot be attributed to one reason —
+  // first-match-wins fixes the RULE, not which sub-expression fired. So a
+  // `fixpoint == true || budgetExhausted == true` rule that matches because
+  // budget is true (fixpoint false) must record 'unclassified', not a guessed
+  // 'fixpoint'. The verbatim condition still lands in the audit report.
+  function buildCompositeConditionWorkflowConfig(): WorkflowConfig {
+    const config = buildBudgetWorkflowConfig();
+    const reviewers = config.steps.find((step) => step.name === 'reviewers')!;
+    reviewers.rules = [
+      makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE'),
+      // Single rule referencing BOTH signals via ||.
+      makeRule('when(findings.provisional.fixpoint == true || findings.rounds.budgetExhausted == true)', 'NEEDS_ADJUDICATION'),
+      makeRule('when(findings.provisional.count > 0 && findings.conflicts.count == 0)', 'plan'),
+      makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
+    ];
+    return config;
+  }
+
+  it('records stopReason "unclassified" when the matched condition is a composite referencing BOTH fixpoint and budget signals (cannot attribute which fired)', async () => {
+    // A DIFFERENT hallucination each round → fixpoint never reached; the budget
+    // (maxRounds 2) is exhausted on round 2. The composite rule matches via its
+    // budgetExhausted sub-expression, but the condition text names both signals.
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-1', 'src/does-not-exist-a.ts:5', 'Bug in fabricated file A');
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-2', 'src/does-not-exist-b.ts:5', 'Bug in fabricated file B');
+      });
+
+    const engine = new WorkflowEngine(buildCompositeConditionWorkflowConfig(), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => { abortReasons.push(reason); });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    // fixpoint was NOT reached (churn), budget WAS — but the composite rule
+    // makes the true cause unattributable from the condition text alone.
+    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+      fixpoint?: { reached: boolean };
+      stopBudget?: { exhausted: boolean };
+    };
+    expect(ledger.fixpoint?.reached).toBe(false);
+    expect(ledger.stopBudget?.exhausted).toBe(true);
+    // Neither specific headline is used — it is not attributed to either reason.
+    expect(abortReasons[0]).toContain('NEEDS_ADJUDICATION');
+    expect(abortReasons[0]).not.toContain('reached a fixpoint');
+    expect(abortReasons[0]).not.toContain('stop budget');
+
+    const report = JSON.parse(readFileSync(join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'needs-adjudication.json'), 'utf-8')) as {
+      stopReason: string;
+      matchedCondition?: string;
+    };
+    expect(report.stopReason).toBe('unclassified');
+    // The verbatim matched condition (the fact) is still preserved — it names both.
+    expect(report.matchedCondition).toContain('findings.provisional.fixpoint');
+    expect(report.matchedCondition).toContain('findings.rounds.budgetExhausted');
+  });
+
+  // Blocker 2 (codex, 3rd pass): a signal name appearing only inside a QUOTED
+  // string literal is a value, not a reference (parseLiteral treats "..." as a
+  // string). Classification must not be fooled by it — the condition below
+  // references budget for real and merely mentions fixpoint inside a quoted
+  // literal, so it is a single-signal (budget) condition.
+  function buildQuotedSignalWorkflowConfig(): WorkflowConfig {
+    const config = buildBudgetWorkflowConfig();
+    const reviewers = config.steps.find((step) => step.name === 'reviewers')!;
+    reviewers.rules = [
+      makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE'),
+      // "marker" != "findings.provisional.fixpoint" is a literal-vs-literal
+      // comparison (always true); the ONLY real reference is budgetExhausted.
+      makeRule('when(findings.rounds.budgetExhausted == true && "marker" != "findings.provisional.fixpoint")', 'NEEDS_ADJUDICATION'),
+      makeRule('when(findings.provisional.count > 0 && findings.conflicts.count == 0)', 'plan'),
+      makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
+    ];
+    return config;
+  }
+
+  it('records stopReason "budget-exhausted" when the condition references budget for real but only mentions fixpoint inside a quoted string literal (quote-aware classification)', async () => {
+    vi.mocked(runAgent)
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-1', 'src/does-not-exist-a.ts:5', 'Bug in fabricated file A');
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return { persona: 'planner', status: 'done', content: 'Replanned.', timestamp: new Date() };
+      })
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+        return churnRawFindingResponse('raw-2', 'src/does-not-exist-b.ts:5', 'Bug in fabricated file B');
+      });
+
+    const engine = new WorkflowEngine(buildQuotedSignalWorkflowConfig(), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => -1,
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => { abortReasons.push(reason); });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    // The quoted "findings.provisional.fixpoint" must NOT be mistaken for a
+    // fixpoint reference — classified as the single real signal, budget.
+    expect(abortReasons[0]).toContain('stop budget');
+    expect(abortReasons[0]).not.toContain('reached a fixpoint');
+
+    const report = JSON.parse(readFileSync(join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'needs-adjudication.json'), 'utf-8')) as {
+      stopReason: string;
+      matchedCondition?: string;
+    };
+    expect(report.stopReason).toBe('budget-exhausted');
+    // The verbatim condition (including the quoted literal) is still recorded.
+    expect(report.matchedCondition).toContain('findings.rounds.budgetExhausted');
+    expect(report.matchedCondition).toContain('"findings.provisional.fixpoint"');
+  });
+});

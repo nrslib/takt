@@ -49,6 +49,37 @@ export function hasUnquotedFindingsReference(condition: string): boolean {
   return false;
 }
 
+/**
+ * Whether `identifier` appears in `condition` as a real, unquoted, COMPLETE
+ * reference — not inside a quoted string literal and not as a substring of a
+ * longer identifier. Shares the same quote-skipping and identifier-boundary
+ * handling as hasUnquotedFindingsReference (and thus the when-evaluator's
+ * tokenizer), so callers classifying a condition by which references it names
+ * cannot be fooled by `... != "some.identifier"` (a valid string literal) or by
+ * an accidental substring match. `identifier` is a dotted path such as
+ * `findings.provisional.fixpoint`.
+ */
+export function hasUnquotedIdentifierReference(condition: string, identifier: string): boolean {
+  let inString = false;
+
+  for (let index = 0; index < condition.length; index++) {
+    if (condition[index] === '"') {
+      if (!isEscapedQuote(condition, index)) {
+        inString = !inString;
+      }
+      continue;
+    }
+    if (inString || !condition.startsWith(identifier, index)) {
+      continue;
+    }
+    if (isReferenceBoundary(condition[index - 1]) && isReferenceBoundary(condition[index + identifier.length])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function isFindingsCondition(condition: string): boolean {
   return isDeterministicCondition(condition) && hasUnquotedFindingsReference(unwrapWhenCondition(condition));
 }

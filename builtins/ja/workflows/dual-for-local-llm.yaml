@@ -345,6 +345,12 @@ steps:
       # plan への差し戻しの前に、要人手裁定の終端状態へルーティングする。
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
+      # 累積ラウンド数（または設定されていれば経過時間）が finding_contract.stop_budget
+      # を超過した場合、provisional 集合が churn し続けて fixpoint に到達しなくても、
+      # plan への差し戻しの前に同じ要人手裁定の終端状態へルーティングする
+      # （有限停止予算 — codex 裁定による対策バッチ B1 の拡張）。
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
       # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
       # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
@@ -421,6 +427,12 @@ steps:
       # 再計画では解消し得ない（対策バッチ B1: raw finding 梯子設計 v2 の収束性対策）。
       # plan への差し戻しの前に、要人手裁定の終端状態へルーティングする。
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # 累積ラウンド数（または設定されていれば経過時間）が finding_contract.stop_budget
+      # を超過した場合、provisional 集合が churn し続けて fixpoint に到達しなくても、
+      # plan への差し戻しの前に同じ要人手裁定の終端状態へルーティングする
+      # （有限停止予算 — codex 裁定による対策バッチ B1 の拡張）。
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
       # provisional（意味を確定できなかった観測）は fixer が直接直せない system finding。
       # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。

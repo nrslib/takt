@@ -40,6 +40,7 @@ import { classifyLocationAdmissionNormalization, validateLocationAdmission } fro
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { attachFixpointState } from './fixpoint.js';
+import { attachStopBudgetState, computeRoundMarker, resolveStopBudgetLimits } from './stop-budget.js';
 import {
   canonicalizeReviewerRawFinding,
   computeInterpretationKey,
@@ -1110,6 +1111,18 @@ export async function runFindingManagerForStep(
     stepName: input.parentStep.name,
     timestamp: input.timestamp,
   };
+  // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: 上限は finding_contract
+  // の設定に対して一意に決まるため、ラウンドごとに再解決する必要はない。
+  // このラウンドの durable 冪等マーカーは (runId, callNamespace, parentStepName,
+  // stepIteration) から作る（crash/replay で同一 invocation が再適用されても
+  // 二重計上しない — stop-budget.ts 参照）。
+  const stopBudgetLimits = resolveStopBudgetLimits(input.contract.stopBudget);
+  const stopBudgetRoundMarker = computeRoundMarker({
+    runId: input.runId,
+    callNamespace: input.callNamespace,
+    parentStepName: input.parentStep.name,
+    stepIteration: input.stepIteration,
+  });
 
   // 1. intake: envelope → candidate → canonical（例外で死ぬ経路は無い）。
   const intake = intakeReviewerOutputs({
@@ -1682,7 +1695,13 @@ export async function runFindingManagerForStep(
     // 対策バッチ B1: このラウンドの最終状態を、ラウンド開始直前の fresh ledger
     // （= 直前ラウンド終了時点。lost-update 対策で再読込した値）と比較し、
     // fixpoint 到達を判定して次ラウンド比較用のスナップショットごと永続化する。
-    return attachFixpointState(freshLedger, applied);
+    const withFixpoint = attachFixpointState(freshLedger, applied);
+    // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: fixpoint と同じ
+    // freshLedger を「直前ラウンド」として、このラウンドのマーカーを適用済み
+    // 集合へ冪等に追記する。fixpoint が成立しない churn でも、この呼び出しは
+    // reconcile が完了する限り毎ラウンド必ず起きるため、予算は fixpoint の
+    // 成立可否と無関係に単調累積する（同一マーカーの再適用は no-op）。
+    return attachStopBudgetState(freshLedger, withFixpoint, stopBudgetLimits, stopBudgetRoundMarker, input.timestamp);
   });
 
   const reportNeeded = invalidAttempts.length > 0

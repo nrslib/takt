@@ -48,10 +48,25 @@ export interface FindingLedgerStore {
 }
 
 /**
+ * Which condition forced the NEEDS_ADJUDICATION transition. 'fixpoint' is the
+ * original 対策バッチ B1 mechanism (the provisional set stopped changing
+ * across rounds); 'budget-exhausted' is the codex-adjudicated bounded stop
+ * budget extension (the cumulative round count, or elapsed time, exceeded its
+ * configured limit even though the provisional set kept churning). This is
+ * classified from the actual matched rule condition (see NeedsAdjudicationReport.matchedCondition),
+ * NOT inferred from ledger state — so a workflow that places the budget rule
+ * before the fixpoint rule correctly records 'budget-exhausted' when the budget
+ * rule matched first. 'unclassified' covers a custom route to NEEDS_ADJUDICATION
+ * whose condition references neither signal.
+ */
+export type NeedsAdjudicationStopReason = 'fixpoint' | 'budget-exhausted' | 'unclassified';
+
+/**
  * Written when the workflow stops at NEEDS_ADJUDICATION (対策バッチ B1: a
- * cross-round provisional fixpoint). Durable, machine-readable record of
- * "why it stopped" alongside the human-readable abort reason string — see
- * WorkflowEngine's recordNeedsAdjudication.
+ * cross-round provisional fixpoint, or its bounded-stop-budget extension).
+ * Durable, machine-readable record of "why it stopped" alongside the
+ * human-readable abort reason string — see WorkflowEngine's
+ * recordNeedsAdjudication.
  */
 export interface NeedsAdjudicationReport {
   version: 1;
@@ -59,6 +74,15 @@ export interface NeedsAdjudicationReport {
   /** Step whose rule transition matched NEEDS_ADJUDICATION (e.g. "reviewers", "final-gate"). */
   stepName: string;
   reachedAt: string;
+  /** Classified from `matchedCondition` (fact), not ledger-state inference. */
+  stopReason: NeedsAdjudicationStopReason;
+  /** The exact condition of the rule that routed to NEEDS_ADJUDICATION — the ground-truth fact `stopReason` is derived from. Absent only when the transition came from a loop-monitor judge override (which surfaces no condition string). */
+  matchedCondition?: string;
+  /** Present whenever the ledger carries stop-budget state, regardless of stopReason — audit context for how many rounds it took to reach either terminal condition. */
+  stopBudget?: {
+    roundsCompleted: number;
+    firstRoundAt: string;
+  };
   provisionalFindings: Array<{
     findingId: string;
     kind: string;

@@ -121,6 +121,17 @@ function normalizeFindingContractConfig(
       ...(raw.manager.provider ? { provider: raw.manager.provider } : {}),
       ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
+    // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: 省略されたサブ
+    // フィールドは stop-budget.ts の DEFAULT_STOP_BUDGET が補うため、ここでは
+    // YAML に書かれた値だけをそのまま写す（未指定フィールドの穴埋めはしない）。
+    ...(raw.stop_budget
+      ? {
+        stopBudget: {
+          ...(raw.stop_budget.max_rounds !== undefined ? { maxRounds: raw.stop_budget.max_rounds } : {}),
+          ...(raw.stop_budget.max_minutes !== undefined ? { maxMinutes: raw.stop_budget.max_minutes } : {}),
+        },
+      }
+      : {}),
   };
 }
 

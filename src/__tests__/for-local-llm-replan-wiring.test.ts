@@ -124,6 +124,41 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
     }
   });
 
+  // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: レビュアーが毎ラウンド
+  // 別の架空 provisional を生成し続けると provisional 集合が churn し続け、
+  // fixpoint が永久に成立しない。累積ラウンド数（または経過時間）が上限を
+  // 超えたら、fixpoint 未成立でも同じ NEEDS_ADJUDICATION へルーティングする。
+  // 優先順位は COMPLETE > fixpoint > budget > plan — budget ルールは fixpoint
+  // ルールの直後、汎用の provisional.count ルールより前に置かれていなければ
+  // ならない（first-match-wins のルール評価順）。
+  it.each(DEV_WORKFLOWS)('should route the exhausted stop budget to NEEDS_ADJUDICATION after fixpoint but before falling back to plan when %s is loaded', (name) => {
+    languageState.value = lang;
+    const workflow = loadWorkflow(name, process.cwd());
+    expect(workflow).toBeDefined();
+
+    for (const stepName of ['reviewers', 'final-gate']) {
+      const step = workflow!.steps.find((candidate) => candidate.name === stepName);
+      expect(step, `step "${stepName}" should exist`).toBeDefined();
+      const rules = step!.rules ?? [];
+
+      const fixpointRuleIndex = rules.findIndex((rule) => rule.condition.includes('findings.provisional.fixpoint') && rule.next === 'NEEDS_ADJUDICATION');
+      const budgetRuleIndex = rules.findIndex((rule) => rule.condition.includes('findings.rounds.budgetExhausted') && rule.next === 'NEEDS_ADJUDICATION');
+      const replanRuleIndex = rules.findIndex((rule) => rule.next === 'plan' && rule.condition.includes('findings.provisional.count'));
+
+      expect(fixpointRuleIndex, `step "${stepName}" should route fixpoint to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
+      expect(budgetRuleIndex, `step "${stepName}" should route the exhausted stop budget to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
+      expect(replanRuleIndex, `step "${stepName}" should still route provisional.count to plan`).toBeGreaterThanOrEqual(0);
+
+      // COMPLETE > fixpoint > budget > plan: budget is checked after fixpoint
+      // (a round that reached fixpoint should report that reason, not budget)
+      // and before the generic provisional.count replan rule (or a budget
+      // round would never reach NEEDS_ADJUDICATION — it would keep matching
+      // the earlier plan rule).
+      expect(fixpointRuleIndex).toBeLessThan(budgetRuleIndex);
+      expect(budgetRuleIndex).toBeLessThan(replanRuleIndex);
+    }
+  });
+
   // 既定のセッションキーは persona 由来（session-key.ts）のため、同じ persona
   // "ai-antipattern-reviewer" を使う ai-antipattern-review-1st と、並列
   // reviewers 配下の Finding Contract 版 ai-antipattern-review が同一セッションを

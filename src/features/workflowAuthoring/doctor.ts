@@ -68,6 +68,7 @@ function validateWorkflowRuntimeContract(
     });
     warnOnMissingProvisionalRouting(report, workflow);
     warnOnMissingFixpointRouting(report, workflow);
+    warnOnMissingStopBudgetRouting(report, workflow);
     warnOnUnproducibleReportReferences(report, workflow);
   } catch (validationError) {
     report.diagnostics.push({
@@ -142,6 +143,42 @@ function warnOnMissingFixpointRouting(
       + 'instead of stopping at a resumable checkpoint. '
       + 'Add a rule such as `when(findings.provisional.fixpoint == true && findings.conflicts.count == 0) -> NEEDS_ADJUDICATION` '
       + 'before your findings.provisional.count replan rule.',
+  });
+}
+
+/**
+ * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）への
+ * 移行警告: fixpoint ルーティングだけでは、レビュアーが毎ラウンド別の架空
+ * provisional を生成し続けると provisional 集合が毎回変わり fixpoint が
+ * 永久に成立しない（v3-r4 実測）。findings.rounds.budgetExhausted を一切
+ * 参照していない workflow は、そのような churn を有限時間で打ち切れない。
+ */
+function warnOnMissingStopBudgetRouting(
+  report: WorkflowDoctorReport,
+  workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>,
+): void {
+  if (workflow.findingContract === undefined) {
+    return;
+  }
+  const referencesProvisionalCount = workflow.steps.some((step) => (
+    (step.rules ?? []).some((rule) => rule.condition.includes('findings.provisional.count'))
+  ));
+  if (!referencesProvisionalCount) {
+    return;
+  }
+  const referencesStopBudget = workflow.steps.some((step) => (
+    (step.rules ?? []).some((rule) => rule.condition.includes('findings.rounds.budgetExhausted'))
+  ));
+  if (referencesStopBudget) {
+    return;
+  }
+  report.diagnostics.push({
+    level: 'warning',
+    message: 'finding_contract workflow routes on findings.provisional.count but never references findings.rounds.budgetExhausted. '
+      + 'If reviewers keep producing a different unresolvable provisional finding every round, the provisional set never reaches '
+      + 'a fixpoint either, and the workflow replans forever instead of stopping at a resumable checkpoint. '
+      + 'Add a rule such as `when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0) -> NEEDS_ADJUDICATION` '
+      + 'after your findings.provisional.fixpoint rule and before your findings.provisional.count replan rule.',
   });
 }
 

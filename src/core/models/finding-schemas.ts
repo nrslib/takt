@@ -37,10 +37,17 @@ export const FindingContractManagerConfigRawSchema = z.object({
   model: nonEmptyString.optional(),
 }).strict();
 
+/** 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）。両方省略可 — 省略分は stop-budget.ts の DEFAULT_STOP_BUDGET が補う。 */
+export const FindingContractStopBudgetRawSchema = z.object({
+  max_rounds: z.number().int().positive().optional(),
+  max_minutes: z.number().int().positive().optional(),
+}).strict();
+
 export const FindingContractConfigRawSchema = z.object({
   ledger_path: nonEmptyString,
   raw_findings_path: nonEmptyString,
   manager: FindingContractManagerConfigRawSchema,
+  stop_budget: FindingContractStopBudgetRawSchema.optional(),
 }).strict();
 
 export const FindingSeveritySchema = z.enum(FINDING_SEVERITIES);
@@ -350,6 +357,13 @@ export const FindingLedgerFixpointStateSchema = z.object({
   reached: z.boolean(),
 }).strict();
 
+/** 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）のラウンド跨ぎ累積状態。roundsCompleted は roundMarkers.length から導出する（冪等な適用済み集合）。 */
+export const FindingLedgerStopBudgetStateSchema = z.object({
+  roundMarkers: z.array(nonEmptyString),
+  firstRoundAt: nonEmptyString,
+  exhausted: z.boolean(),
+}).strict();
+
 export const FindingLedgerSchema = z.object({
   version: z.literal(1),
   workflowName: nonEmptyString,
@@ -360,6 +374,7 @@ export const FindingLedgerSchema = z.object({
   conflicts: z.array(FindingLedgerConflictSchema),
   interpretations: z.array(FindingInterpretationRecordSchema).optional(),
   fixpoint: FindingLedgerFixpointStateSchema.optional(),
+  stopBudget: FindingLedgerStopBudgetStateSchema.optional(),
 }).strict();
 
 /**

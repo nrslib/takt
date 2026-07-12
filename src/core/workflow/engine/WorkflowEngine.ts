@@ -44,7 +44,9 @@ import {
 } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { buildFindingsRuleContext } from '../findings/context.js';
-import { createFindingLedgerStore, type FindingLedgerStore } from '../findings/store.js';
+import { hasUnquotedIdentifierReference } from '../evaluation/rule-utils.js';
+import { createFindingLedgerStore, type FindingLedgerStore, type NeedsAdjudicationStopReason } from '../findings/store.js';
+import { stopBudgetRoundsCompleted } from '../findings/stop-budget.js';
 import type { FindingLedger, FindingLedgerEntry } from '../findings/types.js';
 import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
@@ -380,22 +382,76 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   /**
-   * `next: NEEDS_ADJUDICATION` 到達時（対策バッチ B1）に呼ぶ。open provisional
-   * findings と発生元（sourceRawFindingIds / reason / reviewers）を監査
-   * レポート（findings-ledger store 経由）へ永続化し、CLI に表示する人間可読な
-   * abort reason を返す。findingLedgerStore は必ず定義済み — この遷移は
-   * findings.provisional.fixpoint を参照する rule からしか到達できず、
+   * NEEDS_ADJUDICATION の停止理由（codex 裁定・対策バッチ B1 の有限停止予算
+   * 拡張）を、実際にマッチしたルールの condition（= 事実）から分類する。台帳
+   * 状態からの推定ではない — WorkflowRunLoop が遷移を起こしたルールの condition
+   * 文字列を渡してくる（recordNeedsAdjudication の引数）。builtin では fixpoint と
+   * budget は別ルールなので matchedCondition はどちらか一方だけを参照し、ルール順を
+   * 入れ替えても「先にマッチしたルールの condition」が渡るため常に正しい理由になる
+   * （first-match-wins）。
+   *
+   * ただし first-match-wins が確定させるのは「どのルール」であって、複合式
+   * （when-evaluator は `||` / `&&` を正式サポート）の中で「どのサブ式が成立
+   * 要因か」ではない。単一 condition が両シグナルを参照する場合
+   * （例: `fixpoint == true || budgetExhausted == true`）は、どちらが成立して
+   * マッチしたか condition テキストからは判別できないため、決めつけず
+   * 'unclassified' にする（verbatim の matchedCondition は監査レポートに残る）。
+   * loop-monitor judge override 等で condition が取れない場合
+   * （matchedCondition === undefined）や、両シグナルとも参照しない場合も
+   * 'unclassified'。
+   *
+   * シグナル検出は hasUnquotedIdentifierReference（rule-utils / when-evaluator と
+   * 同じ引用除去・識別子境界処理）で行う。単純な includes() は引用文字列内の
+   * 一致（例: `... != "findings.provisional.fixpoint"` は budget のみの有効条件）や
+   * 部分文字列の偶然一致を拾うため使わない。
+   */
+  private classifyNeedsAdjudicationStopReason(matchedCondition: string | undefined): NeedsAdjudicationStopReason {
+    if (matchedCondition === undefined) {
+      return 'unclassified';
+    }
+    const referencesFixpoint = hasUnquotedIdentifierReference(matchedCondition, 'findings.provisional.fixpoint');
+    const referencesBudget = hasUnquotedIdentifierReference(matchedCondition, 'findings.rounds.budgetExhausted');
+    if (referencesFixpoint && referencesBudget) {
+      return 'unclassified';
+    }
+    if (referencesFixpoint) {
+      return 'fixpoint';
+    }
+    if (referencesBudget) {
+      return 'budget-exhausted';
+    }
+    return 'unclassified';
+  }
+
+  /**
+   * `next: NEEDS_ADJUDICATION` 到達時（対策バッチ B1、および codex 裁定の
+   * 有限停止予算拡張）に呼ぶ。open provisional findings と発生元
+   * （sourceRawFindingIds / reason / reviewers）、実際にマッチした condition
+   * （matchedCondition）と、そこから分類した停止理由（fixpoint /
+   * budget-exhausted）を監査レポート（findings-ledger store 経由）へ永続化し、
+   * CLI に表示する人間可読な abort reason を返す。matchedCondition は
+   * WorkflowRunLoop が「NEEDS_ADJUDICATION へ遷移させたルールの condition」を
+   * 渡してくる事実であり、台帳状態からの推定ではない。findingLedgerStore は
+   * 必ず定義済み — この遷移は findings.* を参照する rule からしか到達できず、
    * WorkflowValidator が finding_contract 無しでのその rule 記述自体を拒否する
    * （validateNeedsAdjudicationRuleContract）。
    */
-  private recordNeedsAdjudication(): string {
+  private recordNeedsAdjudication(matchedCondition?: string): string {
     const ledger = this.findingLedgerStore!.loadLedger();
     const provisionals = this.loadOpenProvisionalFindings(ledger);
+    const stopReason = this.classifyNeedsAdjudicationStopReason(matchedCondition);
+    const roundsCompleted = stopBudgetRoundsCompleted(ledger);
+    const stopBudget = ledger.stopBudget !== undefined
+      ? { roundsCompleted, firstRoundAt: ledger.stopBudget.firstRoundAt }
+      : undefined;
     this.findingLedgerStore!.saveNeedsAdjudicationReport({
       version: 1,
       runId: this.runPaths.slug,
       stepName: this.state.currentStep,
       reachedAt: new Date().toISOString(),
+      stopReason,
+      ...(matchedCondition !== undefined ? { matchedCondition } : {}),
+      ...(stopBudget !== undefined ? { stopBudget } : {}),
       provisionalFindings: provisionals.map((finding) => ({
         findingId: finding.id,
         kind: finding.provisional!.kind,
@@ -406,11 +462,27 @@ export class WorkflowEngine extends EventEmitter {
       })),
     });
     const items = this.formatProvisionalFindingItems(provisionals);
+    const headline = this.buildNeedsAdjudicationHeadline(stopReason, provisionals.length, roundsCompleted);
     return [
-      `NEEDS_ADJUDICATION: ${provisionals.length} provisional finding(s) reached a fixpoint (no meaningful change across consecutive review rounds) and cannot be resolved automatically:`,
+      headline,
       ...items,
       'A human must adjudicate: edit the finding ledger to drop/resolve the stuck provisional finding(s), or provide new review evidence, then continue with `takt resume`.',
     ].join('\n');
+  }
+
+  private buildNeedsAdjudicationHeadline(
+    stopReason: NeedsAdjudicationStopReason,
+    provisionalCount: number,
+    roundsCompleted: number,
+  ): string {
+    switch (stopReason) {
+      case 'budget-exhausted':
+        return `NEEDS_ADJUDICATION: the findings-manager stop budget was exhausted (${roundsCompleted} round(s) completed) while ${provisionalCount} provisional finding(s) remained open and unresolved:`;
+      case 'fixpoint':
+        return `NEEDS_ADJUDICATION: ${provisionalCount} provisional finding(s) reached a fixpoint (no meaningful change across consecutive review rounds) and cannot be resolved automatically:`;
+      case 'unclassified':
+        return `NEEDS_ADJUDICATION: the workflow routed to a human-adjudication stop with ${provisionalCount} provisional finding(s) still open:`;
+    }
   }
 
   private buildResumePoint(step: WorkflowStep, iteration: number): WorkflowResumePoint {

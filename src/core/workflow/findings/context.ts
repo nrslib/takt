@@ -148,6 +148,13 @@ export function buildFindingsRuleContext(ledger: FindingLedger): FindingsRuleCon
           reason: finding.provisional!.reason,
         })),
     },
+    // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: 累積ラウンド数・
+    // 経過時間が上限に達したか（台帳側で計算・永続化済み。ここは読むだけ）。
+    // provisional バケットとは独立 — fixpoint が成立しない churn でも、
+    // ラウンド数だけで機械的に判定できる最終防波堤。
+    rounds: {
+      budgetExhausted: ledger.stopBudget?.exhausted ?? false,
+    },
     resolved: {
       count: ledger.findings.filter((finding) => finding.status === 'resolved').length,
     },

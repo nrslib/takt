@@ -43,12 +43,32 @@ export interface FindingContractAdjudicatorConfig {
   providerRoutingPersonaKey?: string;
 }
 
+/**
+ * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）の
+ * per-workflow 設定。B1 の fixpoint 判定だけでは、レビュアーが毎ラウンド
+ * 別の架空 provisional を1件でも生成し続けると provisional 集合が毎回変わり
+ * fixpoint が永久に成立しない（v3-r4 実測）。ここは「モデル挙動に依存しない」
+ * 停止条件を追加する — 累積ラウンド数（と任意で経過時間）が上限を超えたら、
+ * fixpoint 未成立でも NEEDS_ADJUDICATION へ収束させる。
+ *
+ * 両フィールドとも YAML では省略可能。省略されたフィールドには
+ * stop-budget.ts の DEFAULT_STOP_BUDGET が適用される（resolveStopBudgetLimits）
+ * ため、finding_contract.stop_budget を一切書かないワークフローでも既定値で
+ * 有限に停止する（無制限を許さない、という設計要請）。
+ */
+export interface FindingContractStopBudgetConfig {
+  maxRounds?: number;
+  maxMinutes?: number;
+}
+
 export interface FindingContractConfig {
   ledgerPath: string;
   rawFindingsPath: string;
   manager: FindingContractManagerConfig;
   /** Present when the supervisor persona was resolved for the finding-conflict-adjudication synthetic step. */
   adjudicator?: FindingContractAdjudicatorConfig;
+  /** Optional per-workflow override of the bounded stop budget; see FindingContractStopBudgetConfig. */
+  stopBudget?: FindingContractStopBudgetConfig;
 }
 
 export interface FindingObservation {
@@ -180,6 +200,49 @@ export interface FindingLedgerFixpointState {
   reached: boolean;
 }
 
+/**
+ * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）の
+ * ラウンド跨ぎ累積状態。fixpoint が「変化が無いこと」を判定するのに対し、
+ * こちらは「消費した量」を追跡する — provisional 集合が毎ラウンド変化し
+ * 続けて fixpoint が決して成立しない場合でも、有限ラウンド（または経過時間）で
+ * NEEDS_ADJUDICATION へ収束させるための最終防波堤。
+ */
+export interface FindingLedgerStopBudgetState {
+  /**
+   * この台帳に適用済みの findings-manager ラウンドの一意マーカー集合（重複排除・
+   * ソート済み）。ラウンド数（roundsCompleted）はこの集合の要素数から導出する —
+   * crash/replay で同一 identity のラウンドが再適用されても、Set への追加が no-op に
+   * なるため二重計上しない（interpretation-wal.ts の ledger_applied 集合と同じ
+   * 「台帳に永続した適用済み集合へ冪等に追記する」思想）。集合は追記専用なので
+   * 巻き戻りもしない。マーカーは (runId, callNamespace, parentStepName,
+   * stepIteration) から作る run 内一意の値であり、進捗（resolved の増加等）では
+   * 変化しない — 予算は単調累積のみ（codex: 進捗を churn の停止条件と誤認させない）。
+   *
+   * 注意: 実 `takt resume` は run slug（= runId）を採り直し stepIterations を
+   * リセットするため、resume 後の reviewers 再走はマーカーが変わり「新しい
+   * ラウンド」として1回だけ計上される。これは意図した挙動で、resume ごとに
+   * 実際にレビューが再実行される（＝実作業が発生する）以上、liveness 予算は
+   * それを1ラウンドとして数えるのが安全側（無料の再レビュー枠を作らない）。
+   * このマーカーが冪等に潰すのは「同一 invocation の台帳への再適用」（同一
+   * runId/stepName/stepIteration が二度コミットされる crash/replay）である。
+   */
+  roundMarkers: string[];
+  /**
+   * この台帳の最初の findings-manager ラウンドの ISO タイムスタンプ。一度
+   * 設定されたら以降のラウンドで上書きしない（時間予算の起点を固定する）。
+   */
+  firstRoundAt: string;
+  /**
+   * roundMarkers.length が設定上限（既定値は stop-budget.ts の
+   * DEFAULT_STOP_BUDGET）に達したか、または firstRoundAt からの経過時間が
+   * 時間予算の上限に達したら true。毎ラウンド、その時点の設定値に対して
+   * 計算し直して永続化する（fixpoint.reached と同じパターン）ため、
+   * context.ts は finding_contract の設定を知らなくてもこの結果だけで
+   * 判定できる。
+   */
+  exhausted: boolean;
+}
+
 export interface FindingLedger {
   version: 1;
   workflowName: string;
@@ -202,6 +265,13 @@ export interface FindingLedger {
    * なので既存 v1 ledger は migration なしで読める。
    */
   fixpoint?: FindingLedgerFixpointState;
+  /**
+   * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）:
+   * 累積ラウンド数と（設定されていれば）経過時間の消費状況。fixpoint と同様に
+   * ledger 自体が run/resume を跨いで永続化されるため、resume を跨いだ累積も
+   * ここだけで完結する。optional なので既存 v1 ledger は migration なしで読める。
+   */
+  stopBudget?: FindingLedgerStopBudgetState;
 }
 
 // ---------------------------------------------------------------------------
@@ -739,6 +809,19 @@ export interface FindingsRuleContext {
      */
     fixpoint: boolean;
     items: Array<{ id: string; kind: string; reason: string }>;
+  };
+  /**
+   * 有限停止予算（bounded stop budget; codex 裁定・対策バッチ B1 の拡張）の
+   * 消費状況。provisional バケットとは独立: fixpoint が「provisional 集合の
+   * 意味的な安定」を見るのに対し、こちらは findings-manager の完了ラウンド数
+   * （と任意の経過時間）そのものを見る — provisional が churn し続けて
+   * fixpoint に到達しない場合でも、有限ラウンドで停止することをモデル挙動に
+   * 依存せず保証する最終防波堤。builtin workflow は fixpoint ルールの直後・
+   * plan フォールバックの直前でこれを見て NEEDS_ADJUDICATION へルーティングする
+   * （優先順位: COMPLETE > fixpoint > budgetExhausted > plan）。
+   */
+  rounds: {
+    budgetExhausted: boolean;
   };
   /** Audit-only visibility: engine-verified "premise does not hold" findings. Not part of the blocking set; gate conditions stay on open/conflicts. */
   invalidated: {

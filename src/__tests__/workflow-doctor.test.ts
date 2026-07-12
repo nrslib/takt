@@ -258,7 +258,7 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
-  it('does not warn when the finding_contract workflow routes on findings.provisional.count and findings.provisional.fixpoint', async () => {
+  it('does not warn when the finding_contract workflow routes on findings.provisional.count, findings.provisional.fixpoint, and findings.rounds.budgetExhausted', async () => {
     writeWorkflow(projectDir, '.takt/facets/personas/reviewer.md', 'You are a reviewer.');
     writeWorkflow(projectDir, '.takt/facets/personas/planner.md', 'You are a planner.');
     const filePath = writeWorkflow(projectDir, '.takt/workflows/v2-fc-routing.yaml', `name: v2-fc-routing
@@ -290,6 +290,8 @@ steps:
         next: COMPLETE
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: plan
       - condition: when(findings.conflicts.count > 0)
@@ -300,6 +302,7 @@ steps:
 
     expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.count'));
     expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.provisional.fixpoint'));
+    expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('findings.rounds.budgetExhausted'));
     expect(mockError).not.toHaveBeenCalled();
   });
 

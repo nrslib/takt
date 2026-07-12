@@ -322,6 +322,13 @@ steps:
       # before falling back to the replan rule below.
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
+      # If the cumulative findings-manager round count (or elapsed time, when
+      # configured) exceeds finding_contract.stop_budget, the provisional set
+      # may still be churning (never reaching a fixpoint) — route to the same
+      # human-adjudication terminal state instead of replanning forever
+      # (bounded stop budget, codex-adjudicated extension of convergence batch B1).
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
       # Provisional findings (observations whose meaning could not be determined)
       # are system findings the fixer cannot address directly; replan instead of
       # looping the fixer (raw-finding ladder design v2).
@@ -400,6 +407,13 @@ steps:
       # (convergence batch B1). Route to the human-adjudication terminal state
       # before falling back to the replan rule below.
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+        next: NEEDS_ADJUDICATION
+      # If the cumulative findings-manager round count (or elapsed time, when
+      # configured) exceeds finding_contract.stop_budget, the provisional set
+      # may still be churning (never reaching a fixpoint) — route to the same
+      # human-adjudication terminal state instead of replanning forever
+      # (bounded stop budget, codex-adjudicated extension of convergence batch B1).
+      - condition: when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
       # Provisional findings (observations whose meaning could not be determined)
       # are system findings the fixer cannot address directly; replan instead of
