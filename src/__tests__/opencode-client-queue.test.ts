@@ -177,11 +177,11 @@ describe('OpenCodeClient session queue', () => {
       return callCount === 1 ? firstPrompt.promise : secondPrompt.promise;
     });
     const sessionCreate = vi.fn();
-    const subscribe = vi.fn().mockResolvedValue({
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
       stream: new MockEventStream([
         { type: 'session.idle', properties: { sessionID: sessionId } },
       ]),
-    });
+    }));
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -266,11 +266,11 @@ describe('OpenCodeClient session queue', () => {
       return secondPrompt.promise;
     });
     const sessionCreate = vi.fn();
-    const subscribe = vi.fn().mockResolvedValue({
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
       stream: new MockEventStream([
         { type: 'session.idle', properties: { sessionID: sessionId } },
       ]),
-    });
+    }));
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -309,11 +309,11 @@ describe('OpenCodeClient session queue', () => {
       .mockImplementationOnce(() => firstPrompt.promise)
       .mockImplementationOnce(() => secondPrompt.promise);
     const sessionCreate = vi.fn();
-    const subscribe = vi.fn().mockResolvedValue({
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
       stream: new MockEventStream([
         { type: 'session.idle', properties: { sessionID: sessionId } },
       ]),
-    });
+    }));
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -366,11 +366,11 @@ describe('OpenCodeClient session queue', () => {
       if (promptCount === 2) return retryHeld.promise;
       return call2Held.promise;
     });
-    const subscribe = vi.fn().mockResolvedValue({
+    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
       stream: new MockEventStream([
         { type: 'session.idle', properties: { sessionID: 'session-retry-key' } },
       ]),
-    });
+    }));
 
     createOpencodeMock.mockResolvedValue({
       client: {
