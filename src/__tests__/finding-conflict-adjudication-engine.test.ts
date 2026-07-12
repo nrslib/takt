@@ -49,6 +49,7 @@ import { makeRule, makeStep } from './test-helpers.js';
 import { createFindingLedgerStore, resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
+import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 
 function createTestTmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-adjudication-engine-'));
@@ -1161,11 +1162,14 @@ describe('finding-conflict-adjudication engine detour', () => {
               familyTag: 'bug',
               severity: 'high',
               title: 'Disputed issue',
-              location: 'src/a.ts:5',
               description: 'Verified the null guard is now present.',
               suggestion: '',
               relation: 'resolution_confirmation',
               targetFindingId: 'F-0001',
+              // typed evidence protocol（codex 対策#4）: admission を通すには
+              // 機械照合済み verbatimExcerpt が要る。無いと A-1 の audit-only
+              // 経路に落ち、F-0001 が解消されない。
+              ...verifiedSourceQuoteFields(cwd, 'src/a.ts', 5),
             }],
           },
           timestamp: new Date('2026-06-13T03:00:01.000Z'),
@@ -1306,11 +1310,15 @@ describe('finding-conflict-adjudication engine detour', () => {
               familyTag: 'security',
               severity: 'high',
               title: 'Secret is logged',
-              location: 'src/secret.ts:40',
               description: 'Token logging is still present, observed at a new line.',
               suggestion: '',
               relation: 'persists',
               targetFindingId: 'F-0001',
+              // typed evidence protocol（codex 対策#4）: この raw は admission を
+              // 通す必要がある（本テストの主眼は admission 後の taint 保持であって
+              // admission 自体ではない）。評価対象は「証跡が成立しても taint は
+              // 残る」ことなので、機械照合済み evidence を与える。
+              ...verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40),
             }],
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
@@ -1459,11 +1467,15 @@ describe('finding-conflict-adjudication engine detour', () => {
         familyTag: 'security',
         severity: 'high',
         title: 'Secret is logged',
-        location: 'src/secret.ts:40',
         description: 'Token logging is still present, observed at a new line.',
         suggestion: '',
         relation: 'new',
         targetFindingId: '',
+        // typed evidence protocol（codex 対策#4）: この試験の主眼は「訂正しても
+        // relation が直らない raw が ladder で provisional に着地する」ことで
+        // あって admission ではないため、機械照合済み evidence を与えて
+        // admission を通す（無いと ladder に届く前に anomaly へ隔離される）。
+        ...verifiedSourceQuoteFields(cwd, 'src/secret.ts', 40),
       }],
     };
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {

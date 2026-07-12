@@ -316,6 +316,14 @@ steps:
       # round (no meaningful change), replanning cannot resolve them either
       # (convergence batch B1). Route to the human-adjudication terminal state
       # before falling back to the replan rule below.
+      # Review-integrity gate (codex 対策#4 / verification blocker #1): if the product
+      # gate is clear (no open findings) but unpromoted reviewer anomalies remain, hand
+      # to final-gate — which re-reviews up to the review-integrity budget, then
+      # adjudicates — instead of falling through to the fix rules below. There is
+      # nothing to fix (the observations were isolated as unverifiable), and an anomaly
+      # must be sent to re-review, never to fix.
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
       # If the cumulative findings-manager round count (or elapsed time, when
@@ -395,6 +403,21 @@ steps:
               format: summary
               use_judge: false
     rules:
+      # Review-integrity gate (codex 対策#4 / verification blocker #1): unpromoted
+      # reviewer anomalies mean at least one reviewer made a claim whose evidence
+      # did not mechanically verify (quote-mismatch / stale-snapshot). An anomaly is
+      # NOT a product finding, so it never blocks the product gate (open/conflicts)
+      # — but a run whose entire review landed in anomalies would otherwise reach an
+      # empty product gate and COMPLETE without having been soundly reviewed. So
+      # while any unpromoted anomaly remains, do NOT COMPLETE: re-review (reviewers)
+      # until a correctly-quoted finding promotes it, and once the review-integrity
+      # budget is exhausted route to human adjudication (mirrors the provisional
+      # fixpoint / stop-budget terminals). The engine completion gate is fail-closed
+      # for this even if a workflow omits the wiring below.
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: reviewers
       - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
       # If provisional findings reached a semantic fixpoint since the previous

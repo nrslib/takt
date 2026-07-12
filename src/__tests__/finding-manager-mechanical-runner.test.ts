@@ -6,6 +6,7 @@ import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerStore, RawFinding } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -161,12 +162,12 @@ const CONFIRMATION_RAW = {
   familyTag: 'bug',
   severity: 'high',
   title: 'Confirmed fixed',
-  location: 'src/a.ts:10',
   description: 'Verified the fix at src/a.ts:10.',
   suggestion: '',
   kind: 'resolution_confirmation',
   relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
+  ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 10),
 };
 
 const UNMATCHED_ISSUE_RAW = {
@@ -174,12 +175,12 @@ const UNMATCHED_ISSUE_RAW = {
   familyTag: 'security',
   severity: 'medium',
   title: 'New unmatched issue',
-  location: 'src/b.ts:5',
   description: 'A different problem.',
   suggestion: 'Fix it.',
   kind: 'issue',
   relation: 'new',
   targetFindingId: '',
+  ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/b.ts', 5),
 };
 
 const ANOTHER_UNMATCHED_ISSUE_RAW = {
@@ -187,12 +188,12 @@ const ANOTHER_UNMATCHED_ISSUE_RAW = {
   familyTag: 'style',
   severity: 'low',
   title: 'Another unmatched issue',
-  location: 'src/c.ts:1',
   description: 'A separate different problem.',
   suggestion: 'Fix it too.',
   kind: 'issue',
   relation: 'new',
   targetFindingId: '',
+  ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/c.ts', 1),
 };
 
 beforeEach(() => {
@@ -696,22 +697,22 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         familyTag: 'bug',
         severity: 'high',
         title: 'Issue reported by child A',
-        location: 'src/a.ts:10',
         description: 'Reported by concurrent child A.',
         suggestion: '',
         kind: 'issue',
         relation: 'new',
+        ...verifiedSourceQuoteFields(projectCwd, 'src/a.ts', 10),
       }),
       runCall(storeB, 'child-b', {
         rawFindingId: 'i-1',
         familyTag: 'security',
         severity: 'medium',
         title: 'Issue reported by child B',
-        location: 'src/b.ts:20',
         description: 'Reported by concurrent child B.',
         suggestion: '',
         kind: 'issue',
         relation: 'new',
+        ...verifiedSourceQuoteFields(projectCwd, 'src/b.ts', 20),
       }),
     ]);
 
@@ -828,11 +829,11 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         familyTag: 'bug',
         severity: 'high',
         title: 'Duplicate issue at src/dup.ts',
-        location: 'src/dup.ts:10',
         description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         kind: 'issue',
         relation: 'new',
+        ...verifiedSourceQuoteFields(projectCwd, 'src/dup.ts', 10),
       }),
       runCall('child-b', {
         rawFindingId: 'i-1',
@@ -842,11 +843,11 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         familyTag: 'security',
         severity: 'high',
         title: 'Duplicate issue at src/dup.ts',
-        location: 'src/dup.ts:10',
         description: 'The handle opened at src/dup.ts:10 is never released.',
         suggestion: '',
         kind: 'issue',
         relation: 'new',
+        ...verifiedSourceQuoteFields(projectCwd, 'src/dup.ts', 10),
       }),
     ]);
 
@@ -948,11 +949,11 @@ describe('runFindingManagerForStep stale rejection excluded from unmentioned fal
       familyTag: 'bug',
       severity: 'high',
       title: 'Restated existing issue',
-      location: 'src/a.ts:11',
       description: 'Same bug, reported again at a nearby line.',
       suggestion: '',
       kind: 'issue',
       relation: 'new',
+      ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/a.ts', 11),
     };
 
     const result = await runFindingManagerForStep({

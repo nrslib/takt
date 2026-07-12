@@ -15,6 +15,8 @@
 {{/if}}{{#if reviewerHasWaivedFindings}}- 台帳サマリで waived になっている指摘を再報告しないでください。waive の前提が崩れていると観測した場合は、relation を "reopened"、targetFindingId にその waived finding ID を設定して報告してください。
 {{/if}}{{#if isReviewer}}- rawFindingId はこの応答の中で一意にしてください。
 - Observed Findings の family_tag の値を、構造化された familyTag フィールドへそのまま写してください。分類・検索のヒントに過ぎず、既存 finding と同一かどうかの判断には使われません。
+- すべての finding に evidenceKind が必要です。`location` に実在するコードを引用する場合は "source_quote" にしてください。verbatimExcerpt には、その行の内容を一字一句そのまま — 記憶からの再入力・言い換え・翻訳をせず、読んだファイルからそのままコピーしてください。エンジンは verbatimExcerpt を現在のファイル内容とバイト単位で照合します。一致しない引用は確定した欠陥として扱われません（ブロックする指摘にはならず、レビューのため隔離されます）。source_quote の finding には、次の値をそのまま snapshotId にコピーしてください: {{reviewScopeSnapshotId}}
+- 「存在しないこと」自体が根拠の主張（存在すべきファイルが無い、配線されているべき処理が追加されていない等）のときだけ evidenceKind を "locationless" にしてください。存在しないコードは引用できません — その場合は location・verbatimExcerpt・snapshotId を空のままにしてください。
 - 次の raw findings スキーマに一致する structured output を返してください:
 {{rawFindingsJsonSchema}}
 {{/if}}- 台帳で `provisional` が付いたエントリは system finding です: 意味を確定できなかった観測（ラベリングの矛盾、reviewer 出力の上限超過、解釈の中断など）を表し、コード変更では修正できず、異議申告の対象にもなりません。後続ラウンドの clean なレビュー証拠が確定・解消するまで final gate を塞ぎ続けます。provisional finding を「修正」しようとしないでください。

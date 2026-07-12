@@ -47,12 +47,18 @@ describe('finding schemas', () => {
     expect(decisionsProperties.conflictDecisions.items.required).toEqual(Object.keys(decisionsProperties.conflictDecisions.items.properties));
   });
 
-  it('post-hoc 検証用の寛容版 schema は legacy kind だけを optional で追加した strict 版の上位集合になっている', () => {
+  it('post-hoc 検証用の寛容版 schema は legacy kind を optional で追加し、typed evidence protocol の3フィールドも required から外した strict 版の上位集合になっている', () => {
     const strictItem = RawFindingsOutputJsonSchema.properties.rawFindings.items;
     const lenientItem = RawFindingsOutputValidationJsonSchema.properties.rawFindings.items;
-    // required は strict 版と同一（kind は required に入らない = optional）。
-    expect(lenientItem.required).toEqual(strictItem.required);
-    // properties は strict 版 + kind のみ。
+    // required は strict 版から evidenceKind/verbatimExcerpt/snapshotId を除いたもの
+    // （codex 対策#4: schema が生成を拘束しない劣化経路のモデルがこれらを省略しても
+    // structured output 全体を無効にしない — finding-schemas.ts の doc コメント参照）。
+    const evidenceFields = ['evidenceKind', 'verbatimExcerpt', 'snapshotId'];
+    expect(lenientItem.required).toEqual(
+      strictItem.required.filter((key) => !evidenceFields.includes(key)),
+    );
+    // properties は strict 版 + kind のみ（typed evidence の3フィールドは
+    // properties としては残る — optional で受理するだけで、存在自体は許す）。
     expect(Object.keys(lenientItem.properties).sort()).toEqual(
       [...Object.keys(strictItem.properties), 'kind'].sort(),
     );

@@ -314,6 +314,13 @@ steps:
       # provisional が直前ラウンドから意味的な変化の無い fixpoint に達した場合、
       # 再計画では解消し得ない（対策バッチ B1: raw finding 梯子設計 v2 の収束性対策）。
       # plan への差し戻しの前に、要人手裁定の終端状態へルーティングする。
+      # review-integrity ゲート（codex 対策#4 / 検証ブロッカー#1）: product gate が
+      # 空（open finding 無し）でも未昇格の reviewer anomaly が残るなら、下の fix
+      # ルールへ落とさず final-gate へ渡す（final-gate が review-integrity 予算の
+      # 範囲で再レビューし、尽きたら裁定する）。直すものは無い（観測は検証不能として
+      # 隔離済み）ので、anomaly は fix ではなく再レビューへ送る。
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
       # 累積ラウンド数（または設定されていれば経過時間）が finding_contract.stop_budget
@@ -390,6 +397,20 @@ steps:
               format: summary
               use_judge: false
     rules:
+      # review-integrity ゲート（codex 対策#4 / 検証ブロッカー#1）: 未昇格の
+      # reviewer anomaly は、少なくとも1人のレビュアーが機械照合を通らない主張
+      # （引用不一致 / stale-snapshot）を出したことを意味する。anomaly は product
+      # finding ではないため product gate（open/conflicts）は塞がないが、レビュー
+      # 全体が anomaly に隔離された run はそのままだと product gate が空になり実質
+      # レビューされずに COMPLETE してしまう。よって未昇格 anomaly が残る限り
+      # COMPLETE せず、正しい引用による promote まで再レビュー（reviewers）へ送り、
+      # review-integrity 予算が尽きたら人手裁定（NEEDS_ADJUDICATION）へ回す
+      # （provisional の fixpoint / 停止予算の終端と同じ思想）。この配線を欠く
+      # custom workflow でも、エンジンの completion gate が fail-closed で拒否する。
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        next: NEEDS_ADJUDICATION
+      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+        next: reviewers
       - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
       # provisional が直前ラウンドから意味的な変化の無い fixpoint に達した場合、

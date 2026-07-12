@@ -61,6 +61,19 @@ export interface FindingContractStopBudgetConfig {
   maxMinutes?: number;
 }
 
+/**
+ * review-integrity 予算（codex 検証ブロッカー#1）の per-workflow 設定。二系統
+ * 台帳（codex 対策#4）で全指摘が reviewer anomaly に隔離された run は product gate
+ * が空になり「即 COMPLETE」で実質レビューされずに通り得た。これを防ぐため、
+ * 未昇格 anomaly が残る限り COMPLETE を許さず再レビューへ送る。その再レビューの
+ * 回数上限がこれ — 有限回で正しい引用による promote も anomaly 解消もできなければ
+ * NEEDS_ADJUDICATION へ収束させる（fixpoint/停止予算と同じ思想）。省略時は
+ * review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。
+ */
+export interface FindingContractReviewBudgetConfig {
+  maxReviewRounds?: number;
+}
+
 export interface FindingContractConfig {
   ledgerPath: string;
   rawFindingsPath: string;
@@ -69,6 +82,8 @@ export interface FindingContractConfig {
   adjudicator?: FindingContractAdjudicatorConfig;
   /** Optional per-workflow override of the bounded stop budget; see FindingContractStopBudgetConfig. */
   stopBudget?: FindingContractStopBudgetConfig;
+  /** Optional per-workflow override of the review-integrity re-review budget; see FindingContractReviewBudgetConfig. */
+  reviewBudget?: FindingContractReviewBudgetConfig;
 }
 
 export interface FindingObservation {
@@ -104,9 +119,14 @@ export const FINDING_PROVISIONAL_KINDS = [
   'interpretation-interrupted',
   'stale-precondition',
   /**
-   * clean raw の location 証拠が決定的検証（admission-validation.ts）に落ちた。
-   * 決定的に証明できるのは「location 証拠の不成立」だけで欠陥の虚偽は証明でき
-   * ないため、観測を drop せず gate-blocking で保持する（codex B3）。
+   * @deprecated レガシー専用（対策バッチ#4 以前に書かれた既存台帳の読み取り
+   * 互換のためだけに残す）。新規コードはこの kind をもう生成しない —
+   * location 証拠の不成立（存在しないファイル/範囲外行/verbatimExcerpt
+   * 不一致）は、product gate を無条件に塞ぐ provisional ではなく reviewer
+   * anomaly（二系統台帳の review-integrity 側。REVIEWER_ANOMALY_KINDS 参照）へ
+   * 隔離する（codex 対策#4: typed evidence protocol + verbatimExcerpt 機械照合）。
+   * 既存 v1 ledger にこの kind の provisional finding が残っていても
+   * migration なしで読める。
    */
   'invalid-location-evidence',
 ] as const;
@@ -243,6 +263,22 @@ export interface FindingLedgerStopBudgetState {
   exhausted: boolean;
 }
 
+/**
+ * review-integrity 予算（codex 検証ブロッカー#1）のラウンド跨ぎ累積状態。
+ * 未昇格 reviewer anomaly が残る限り product gate とは別の review-integrity gate が
+ * COMPLETE を拒否し再レビューへ送る — その再レビュー回数の消費を stop budget と
+ * 同じ round-marker 方式（適用済みマーカー集合。crash/replay 冪等）で追跡する。
+ * roundMarkers は「未昇格 anomaly が残ったまま完了した findings-manager
+ * ラウンド」の一意マーカー集合で、上限（DEFAULT_REVIEW_INTEGRITY_BUDGET または
+ * finding_contract.review_budget）に達したら exhausted=true になり、builtin は
+ * 再レビューではなく NEEDS_ADJUDICATION へルーティングする。
+ */
+export interface FindingLedgerReviewIntegrityState {
+  roundMarkers: string[];
+  firstRoundAt: string;
+  exhausted: boolean;
+}
+
 export interface FindingLedger {
   version: 1;
   workflowName: string;
@@ -272,6 +308,22 @@ export interface FindingLedger {
    * ここだけで完結する。optional なので既存 v1 ledger は migration なしで読める。
    */
   stopBudget?: FindingLedgerStopBudgetState;
+  /**
+   * 二系統台帳(codex 対策#4)の review-integrity 側。product finding
+   * (findings 配列)とは別の、監査専用・非 gate-blocking の隔離先。
+   * verbatimExcerpt 機械照合が「引用不一致」または「対象版が変化(stale)」と
+   * 判定した観測がここへ着地し、product gate(COMPLETE 判定)には一切影響しない。
+   * optional なので既存 v1 ledger は migration なしで読める。
+   */
+  reviewerAnomalies?: ReviewerAnomalyEntry[];
+  /**
+   * review-integrity 予算（codex 検証ブロッカー#1）の消費状況。未昇格 reviewer
+   * anomaly が残ったまま完了した findings-manager ラウンド数を stop budget と
+   * 同じ round-marker 方式で追跡する。fixpoint/stopBudget と同様に ledger 自体が
+   * run/resume を跨いで永続化されるため、resume を跨いだ累積もここだけで完結する。
+   * optional なので既存 v1 ledger は migration なしで読める。
+   */
+  reviewIntegrity?: FindingLedgerReviewIntegrityState;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +358,14 @@ export const RAW_AMBIGUITY_CODES = [
 ] as const;
 export type RawAmbiguityCode = typeof RAW_AMBIGUITY_CODES[number];
 
+/**
+ * typed evidence protocol(codex 対策#4)の discriminator。source_quote と
+ * locationless の2種で足りる(将来 EngineIssuedEvidence 等が増える想定の
+ * discriminated union だが、今回はこの2択で十分という codex 裁定)。
+ */
+export const RAW_FINDING_EVIDENCE_KINDS = ['source_quote', 'locationless'] as const;
+export type RawFindingEvidenceKind = typeof RAW_FINDING_EVIDENCE_KINDS[number];
+
 declare const candidateBrand: unique symbol;
 declare const canonicalBrand: unique symbol;
 declare const sameProofBrand: unique symbol;
@@ -336,6 +396,15 @@ export interface ReviewerRawFindingCandidate {
 
   /** legacy 入力の検証専用。新規 reviewer contract では出力させない。 */
   readonly legacyKind?: RawFindingKind;
+
+  /**
+   * typed evidence protocol(codex 対策#4)。candidate factory
+   * (createReviewerRawFindingCandidates)が provider-facing の flat wire
+   * フィールド(evidenceKind/verbatimExcerpt/snapshotId)を location と合わせて
+   * 組み立て済みの discriminated union にしてから保持する — location と違い
+   * candidate 段階でも既にネスト形（wire/canonical と同じ形）。
+   */
+  readonly evidence?: RawFindingEvidence;
 
   readonly sourceBytes: number;
 
@@ -369,6 +438,16 @@ interface CanonicalRawFindingBase {
   readonly stepName: string;
 
   readonly provenance: CanonicalRawFindingProvenance;
+
+  /**
+   * typed evidence protocol(codex 対策#4)。candidate の flat evidenceKind/
+   * verbatimExcerpt/snapshotId と location から canonicalizeReviewerRawFinding が
+   * 組み立てた discriminated union。欠損は「evidence なし」— location 付き claim
+   * なら admission-validation.ts の verifySourceQuoteEvidence が無条件で
+   * 不採用(reviewer anomaly)側に倒す。coherent/ambiguous どちらの raw も持ちうる
+   * (ambiguity は relation/target の構造的矛盾であり、evidence の有無とは直交する)。
+   */
+  readonly evidence?: RawFindingEvidence;
 }
 
 export interface CoherentCanonicalRawFinding extends CanonicalRawFindingBase {
@@ -518,6 +597,50 @@ export type RawFindingKind = typeof RAW_FINDING_KINDS[number];
 export const RAW_FINDING_RELATIONS = ['new', 'persists', 'resolution_confirmation', 'reopened'] as const;
 export type RawFindingRelation = typeof RAW_FINDING_RELATIONS[number];
 
+// ---------------------------------------------------------------------------
+// typed evidence protocol（codex 対策#4: admission control 強化）
+// ---------------------------------------------------------------------------
+
+/**
+ * code-backed な claim（欠陥がこの箇所に実在すると主張する finding）の証拠。
+ * エンジンが決定的に機械照合できる唯一の evidence 種別 — path/startLine/endLine
+ * が指す現在のファイル内容と verbatimExcerpt が完全一致するかを
+ * admission-validation.ts が検証する。snapshotId は reviewer にレビュー開始時点で
+ * 提示した review scope の識別子(snapshot.ts の computeReviewScopeSnapshotId)を
+ * そのまま echo させたもの — 検証時に再計算した現在値と食い違えば、レビュー後に
+ * 対象が変化した(stale)と判定し、一致/不一致のどちらとも判定しない。
+ */
+export interface SourceQuoteEvidence {
+  kind: 'source_quote';
+  path: string;
+  startLine: number;
+  endLine: number;
+  verbatimExcerpt: string;
+  /** reviewer に提示した review scope snapshot の識別子。echo 専用 — reviewer 側で計算しない。 */
+  snapshotId: string;
+}
+
+/**
+ * 「存在しないこと」が根拠の claim(欠落ファイル・配線漏れ等)の evidence。
+ * verbatimExcerpt で機械照合できないことを型で表現する — この kind の raw を
+ * source_quote の verbatimExcerpt 照合にかけない(存在しないものを引用させない)。
+ * explanation は自由文の根拠説明で、機械検証の対象ではない(reviewer の主張を
+ * そのまま product finding へ昇格させる権限は持たない)。
+ */
+export interface LocationlessEvidence {
+  kind: 'locationless';
+  explanation: string;
+}
+
+/**
+ * raw finding の evidence(証拠)。将来 EngineIssuedEvidence 等が増える想定の
+ * discriminated union だが、今回は source_quote と locationless の2種で足りる
+ * (codex 裁定)。省略可能 — 省略した raw は evidence なしとして扱われ、
+ * location 付き claim なら「引用不成立」(reviewer anomaly)の扱いになる
+ * (admission-validation.ts の verifySourceQuoteEvidence 参照)。
+ */
+export type RawFindingEvidence = SourceQuoteEvidence | LocationlessEvidence;
+
 export interface RawFinding {
   rawFindingId: string;
   stepName: string;
@@ -539,6 +662,72 @@ export interface RawFinding {
   relation?: RawFindingRelation;
   /** Ledger finding id this entry references (required for persists/reopened/resolution_confirmation; forbidden for new). */
   targetFindingId?: string;
+  /**
+   * 証拠契約(codex 対策#4)。既存 v1 台帳の raw finding には無いため optional —
+   * 欠損は「evidence なし」として扱う(migration 不要)。
+   */
+  evidence?: RawFindingEvidence;
+}
+
+// ---------------------------------------------------------------------------
+// reviewer anomaly（codex 対策#4: 二系統台帳の review-integrity 側）
+// ---------------------------------------------------------------------------
+
+export const REVIEWER_ANOMALY_KINDS = [
+  /**
+   * evidence.kind === 'source_quote' の claim が機械照合(admission-validation.ts
+   * の verifySourceQuoteEvidence)に落ちた — path が存在しない/範囲外/
+   * verbatimExcerpt が現在のファイル内容と一致しない、または location 付き
+   * claim なのに評価可能な evidence が一切無い(欠損は無条件で不採用側)。
+   * 「引用が不成立」であって「欠陥が虚偽」ではない — 安全側の分類名。
+   */
+  'quote-mismatch',
+  /**
+   * 検証時に再計算した review scope snapshot が、reviewer が echo した
+   * snapshotId と食い違った — レビュー後に対象が変化したため、幻覚か正当な
+   * 再観測かを判定不能。再取得(次ラウンドの再レビュー)対象として隔離する。
+   */
+  'stale-snapshot',
+] as const;
+export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
+
+/**
+ * 二系統台帳(codex 対策#4)の review-integrity レコード。product finding
+ * (FindingLedgerEntry)とは別の型 — status/lifecycle/revision/waivers を持たず、
+ * invalidated/resolved/waived という「決着した」語彙も持たない。安全不変条件
+ * (設計書 D):
+ *   - invalidated/resolved/waived として扱わない(この型にそもそもその状態がない)
+ *   - 既存 finding の状態・revision・evidence hash を変更しない(別配列)
+ *   - coder/fix ステップへは送らない(findings.open.items に一切現れない)
+ *   - 「引用が違うので問題は存在しない」と記録しない(reason は不成立の説明のみ)
+ *   - 後続ラウンドで一致する証跡が出れば promotedFindingId 経由で
+ *     product finding 側への昇格を追跡できる(このレコード自体は削除・改変しない
+ *     — 観測消去の禁止)
+ */
+export interface ReviewerAnomalyEntry {
+  id: string;
+  kind: ReviewerAnomalyKind;
+  /** 決定的な再発同定キー(sha256(reviewerStableKey, lineageKey, 'reviewer-anomaly', kind))。upsert のキー。 */
+  stableKey: string;
+  lineageKey: string;
+  sourceRawFindingIds: string[];
+  reviewers: string[];
+  title: string;
+  /** reviewer が主張した location(監査目的でそのまま保持。証拠としては採用されていない)。 */
+  claimedLocation?: string;
+  /** reviewer が主張した verbatimExcerpt(監査目的。文字数上限で切り詰める場合がある)。 */
+  claimedExcerpt?: string;
+  /** 機械照合が不成立と判定した理由(決定的な事実の記述。欠陥の真偽には言及しない)。 */
+  mismatchReason: string;
+  firstObserved: FindingObservation;
+  lastObserved: FindingObservation;
+  /** この stableKey で観測された回数(upsert のたびに +1)。 */
+  occurrences: number;
+  /**
+   * 後続ラウンドの clean な verbatimExcerpt 一致で product finding へ昇格した
+   * 場合の参照先。設定後もこのレコード自体は削除・改変しない(観測消去の禁止)。
+   */
+  promotedFindingId?: string;
 }
 
 export interface FindingManagerMatch {
@@ -830,6 +1019,26 @@ export interface FindingsRuleContext {
   /** Audit-only visibility: findings merged into a canonical duplicate. Not part of the blocking set. */
   superseded: {
     count: number;
+  };
+  /**
+   * Audit-only visibility (codex #4: two-track ledger, review-integrity side).
+   * Counts reviewer-anomaly entries (unverifiable location/evidence claims —
+   * quote-mismatch or stale-snapshot) that have not yet been promoted to a
+   * product finding. Never part of the blocking set: this bucket lives in a
+   * separate ledger array (reviewerAnomalies) from `findings`, so it cannot
+   * affect `open.count` / `provisional.count` / the COMPLETE gate by
+   * construction. Workflow rules may still read it for reporting/audit.
+   */
+  reviewerAnomalies: {
+    count: number;
+    /**
+     * review-integrity 予算（codex 検証ブロッカー#1）が尽きたか。未昇格 anomaly が
+     * 残る限り product gate とは別に COMPLETE を拒否し再レビューへ送るが、有限回で
+     * 補完（正しい引用による promote / anomaly 解消）できなければ true になり、
+     * builtin は再レビューではなく NEEDS_ADJUDICATION へルーティングする
+     * （fixpoint/budgetExhausted と同じ「有限で人手裁定へ」の最終防波堤）。
+     */
+    budgetExhausted: boolean;
   };
   conflicts: {
     count: number;

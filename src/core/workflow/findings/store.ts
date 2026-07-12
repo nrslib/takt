@@ -59,7 +59,7 @@ export interface FindingLedgerStore {
  * rule matched first. 'unclassified' covers a custom route to NEEDS_ADJUDICATION
  * whose condition references neither signal.
  */
-export type NeedsAdjudicationStopReason = 'fixpoint' | 'budget-exhausted' | 'unclassified';
+export type NeedsAdjudicationStopReason = 'fixpoint' | 'budget-exhausted' | 'review-integrity-exhausted' | 'unclassified';
 
 /**
  * Written when the workflow stops at NEEDS_ADJUDICATION (対策バッチ B1: a
@@ -90,6 +90,23 @@ export interface NeedsAdjudicationReport {
     reason: string;
     reviewers: string[];
     sourceRawFindingIds: string[];
+  }>;
+  /**
+   * 二系統台帳（codex 対策#4）の review-integrity 側の未昇格 anomaly。
+   * NEEDS_ADJUDICATION 自体は（従来どおり）provisional のみが引き起こすが、
+   * 到達したときにこの監査情報も同梱することで、人手裁定が「product gate を
+   * 塞いでいる provisional」と「引用不成立で監査だけされている anomaly」の
+   * 両方を1箇所で見られるようにする。anomaly 単体で NEEDS_ADJUDICATION を
+   * 引き起こすことはない（product gate を塞がないという安全不変条件どおり）。
+   */
+  reviewerAnomalies?: Array<{
+    id: string;
+    kind: string;
+    stableKey: string;
+    reason: string;
+    reviewers: string[];
+    sourceRawFindingIds: string[];
+    occurrences: number;
   }>;
 }
 
@@ -179,6 +196,14 @@ export interface ProvisionalLandingReport {
   sourceRawFindingIds: string[];
 }
 
+/** raw が reviewer anomaly（review-integrity 側の二系統台帳）として着地した記録（codex 対策#4）。ProvisionalLandingReport と同じ形だが、product gate を一切塞がない着地先であることを型で区別する。 */
+export interface ReviewerAnomalyLandingReport {
+  kind: string;
+  stableKey: string;
+  reason: string;
+  sourceRawFindingIds: string[];
+}
+
 /** ambiguous raw 解釈（manager interpretation）の観測メトリクス（v2 梯子設計 実装単位10）。 */
 export interface InterpretationStatsReport {
   ambiguousRawCount: number;
@@ -202,6 +227,8 @@ export interface FindingManagerValidationReport {
   unsupportedRawFindings?: UnsupportedRawFindingReport[];
   reviewerOutputOverflows?: ReviewerOutputOverflowReport[];
   provisionalLandings?: ProvisionalLandingReport[];
+  /** reviewer anomaly として着地した記録（codex 対策#4。product gate は塞がない）。 */
+  reviewerAnomalyLandings?: ReviewerAnomalyLandingReport[];
   /** 正規化前の元の主張の監査記録（変換が起きた raw のみ）。 */
   rawNormalizations?: RawNormalizationAuditRecord[];
   interpretationStats?: InterpretationStatsReport;

@@ -28,6 +28,7 @@ import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
 import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('workflow-engine');
@@ -158,6 +159,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ...(includeRawFindingsSchema
         ? {
             rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
+            // codex 対策#4: このラウンドの reviewer 全員へ同じ snapshot id を
+            // 配る。manager-runner.ts の runFindingManagerForStep が同じ cwd に
+            // 対して同じ関数をもう一度呼び、reviewer 呼び出しと検証呼び出しの
+            // 間に書き込みが起きない通常経路では同じ値になる（値の一致で
+            // 「reviewer が見た版のまま」を確認する — snapshot.ts 参照）。
+            reviewScopeSnapshotId: computeReviewScopeSnapshotId(params.getCwd()),
           }
         : {}),
     };

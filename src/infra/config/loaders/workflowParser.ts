@@ -132,6 +132,15 @@ function normalizeFindingContractConfig(
         },
       }
       : {}),
+    // review-integrity 予算（codex 検証ブロッカー#1）: 未指定分は
+    // review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。
+    ...(raw.review_budget
+      ? {
+        reviewBudget: {
+          ...(raw.review_budget.max_review_rounds !== undefined ? { maxReviewRounds: raw.review_budget.max_review_rounds } : {}),
+        },
+      }
+      : {}),
   };
 }
 

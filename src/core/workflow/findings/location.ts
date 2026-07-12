@@ -35,6 +35,32 @@ export function parseFindingLocation(location: string | undefined): ParsedFindin
   return { path: trimmed };
 }
 
+export interface ParsedFindingLocationRange {
+  path: string;
+  startLine: number;
+  endLine: number;
+}
+
+/**
+ * Parses a "path:start-end" range location string (the A-2 line-range shape;
+ * see admission-validation.ts). Returns undefined for any other shape,
+ * including a bare "path:line" (single line — callers that accept both should
+ * fall back to parseFindingLocation and treat startLine === endLine === line).
+ * Shared by admission-validation.ts (lenient path-only check) and
+ * raw-canonicalization.ts (typed evidence assembly, codex 対策#4) so the two
+ * callers can't drift on what counts as a range.
+ */
+export function parseFindingLocationRange(location: string | undefined): ParsedFindingLocationRange | undefined {
+  if (location === undefined) {
+    return undefined;
+  }
+  const match = /^(.+?):(\d+)-(\d+)$/.exec(location.trim());
+  if (!match) {
+    return undefined;
+  }
+  return { path: match[1]!.trim(), startLine: Number(match[2]), endLine: Number(match[3]) };
+}
+
 /** Normalizes free text for identity comparisons: trims and collapses internal whitespace. Case is preserved because exact-duplicate checks should not conflate differently-cased identifiers. */
 export function normalizeFindingText(value: string): string {
   return value.trim().replace(/\s+/g, ' ');

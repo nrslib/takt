@@ -86,6 +86,14 @@ interface WorkflowRunLoopDeps {
    */
   checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
   /**
+   * review-integrity gate 単独（codex 検証2巡目#1）: 未昇格 reviewer anomaly のみを
+   * 見る。returnValue 終端（`return: X`）に適用する。`return: need_replan` のような
+   * 「未解決 provisional を呼び出し元へハンドバックするシグナル」を provisional gate で
+   * 塞がないよう、returnValue 経路では product gate ではなくこの gate を使う。ただし
+   * 未昇格 anomaly が残ったまま 'completed' になるのはどの完了経路でも許さない。
+   */
+  checkReviewIntegrityGate: () => { ok: true } | { ok: false; reason: string };
+  /**
    * `next: NEEDS_ADJUDICATION` 到達時（対策バッチ B1、および有限停止予算拡張）に
    * 呼ぶ。現在 open な provisional finding とその発生元を監査レポートへ永続化し
    * （FindingLedgerStore.saveNeedsAdjudicationReport）、人間可読な abort reason
@@ -337,6 +345,30 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
     ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error)),
     { clearLastOutput: true },
   );
+}
+
+/**
+ * 全ての完了経路（COMPLETE 遷移・returnValue 終端）が必ず通る fail-closed の
+ * 一元判定（codex 検証2巡目#1）。渡された gate 結果を評価し、通れば state.status を
+ * 'completed' にして undefined を返す。塞がっていれば完了させず abort を返す。
+ * どの完了終端もこの関数だけで status='completed' を確定させることで、gate を
+ * 迂回する完了経路（かつて returnValue 終端が gate を呼ばず直接 completed にして
+ * いた穴）を構造的に無くす。
+ *
+ * gate 結果は呼び出し元が選ぶ:
+ *   - COMPLETE 遷移 → checkCompletionGate（product gate + review-integrity gate）
+ *   - returnValue 終端 → checkReviewIntegrityGate（未昇格 anomaly のみ。provisional の
+ *     ハンドバックは許すが、review integrity 違反はどの経路でも 'completed' を許さない）
+ */
+function finalizeCompletionOrAbort(
+  deps: WorkflowRunLoopDeps,
+  gate: { ok: true } | { ok: false; reason: string },
+): WorkflowAbortResult | undefined {
+  if (!gate.ok) {
+    return abortWorkflow(deps, 'provisional_findings', gate.reason);
+  }
+  deps.state.status = 'completed';
+  return undefined;
 }
 
 function validateUserInputRuntime(
@@ -620,8 +652,16 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (transition.returnValue !== undefined) {
+        // returnValue 終端も review-integrity gate を必ず通す（codex 検証2巡目#1:
+        // かつてここは gate を呼ばず直接 completed にしており、未昇格 anomaly を
+        // 残したまま完了できる迂回路だった）。provisional は returnValue で呼び出し元へ
+        // ハンドバックされ得るため product gate ではなく review-integrity gate を使う。
+        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReviewIntegrityGate());
+        if (gateAbort) {
+          abort = gateAbort;
+          break;
+        }
         returnValue = transition.returnValue;
-        deps.state.status = 'completed';
         deps.emit('workflow:complete', deps.state);
         break;
       }
@@ -646,12 +686,11 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       }
 
       if (nextStep === COMPLETE_STEP) {
-        const completionGate = deps.checkCompletionGate();
-        if (!completionGate.ok) {
-          abort = abortWorkflow(deps, 'provisional_findings', completionGate.reason);
+        const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+        if (gateAbort) {
+          abort = gateAbort;
           break;
         }
-        deps.state.status = 'completed';
         deps.emit('workflow:complete', deps.state);
         break;
       }
@@ -860,7 +899,11 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (transition.returnValue !== undefined) {
-    deps.state.status = 'completed';
+    // returnValue 終端も review-integrity gate を必ず通す（codex 検証2巡目#1）。
+    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkReviewIntegrityGate());
+    if (gateAbort) {
+      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
+    }
     return {
       response,
       nextStep: COMPLETE_STEP,
@@ -876,12 +919,10 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   if (!isComplete) {
     advanceActiveStep(deps, nextStep, deps.state.iteration);
   } else if (nextStep === COMPLETE_STEP) {
-    const completionGate = deps.checkCompletionGate();
-    if (!completionGate.ok) {
-      const abort = abortWorkflow(deps, 'provisional_findings', completionGate.reason);
-      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
+    const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
+    if (gateAbort) {
+      return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort: gateAbort };
     }
-    deps.state.status = 'completed';
   } else if (nextStep === NEEDS_ADJUDICATION_STEP) {
     const abort = abortWorkflow(
       deps,

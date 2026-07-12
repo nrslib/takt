@@ -22,6 +22,7 @@ import { parseFindingLedger, parseRawFindings } from '../core/models/finding-sch
 import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerEntry, FindingLedgerStore, FindingManagerDecisions, RawFinding } from '../core/workflow/findings/types.js';
+import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -377,7 +378,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     };
   }
 
-  it('Given a critical raw finding whose location does not exist When run Then it is never promoted to a confirmed finding but lands as a gate-blocking invalid-location-evidence provisional (codex B3)', async () => {
+  it('Given a critical raw finding whose location does not exist When run Then it is never promoted to a confirmed finding and lands as a non-blocking reviewer anomaly, not a gate-blocking provisional (codex 対策#4, supersedes B3)', async () => {
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
     const result = await harness.run({
       reviewerRawFindings: [{
@@ -397,18 +398,24 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(result.status).toBe('updated');
     expect(executeAgentMock).not.toHaveBeenCalled();
     const savedLedger = harness.savedLedgers.at(-1);
-    // 確定 finding には昇格しない（幻覚 location を confirmed に載せない）が、
-    // 決定的に証明できたのは「location 証拠の不成立」だけで欠陥の虚偽ではない
-    // ため、本文を保持した provisional として台帳に残り gate を塞ぐ。
-    const landed = savedLedger?.findings.find((f) => f.title === 'Hallucinated critical finding');
-    expect(landed?.status).toBe('open');
-    expect(landed?.provisional).toMatchObject({ kind: 'invalid-location-evidence', gateEffect: 'block' });
-    expect(landed?.description).toContain('does not correspond');
+    // 確定 finding には昇格しない（幻覚 location を confirmed に載せない）。
+    // codex 対策#4 以前は「location 証拠の不成立」を product gate 側の
+    // provisional として保持していたが、typed evidence protocol 導入後は
+    // review-integrity 側の reviewer anomaly（quote-mismatch）へ隔離する —
+    // 引用不成立は欠陥の虚偽そのものを証明しないため、観測は監査に残しつつ
+    // product gate は塞がない（三分類・§C）。
+    expect(savedLedger?.findings.some((f) => f.title === 'Hallucinated critical finding')).toBe(false);
+    const anomaly = savedLedger?.reviewerAnomalies?.find((a) => a.sourceRawFindingIds.some((id) => id.endsWith(':raw-hallucinated')));
+    expect(anomaly?.kind).toBe('quote-mismatch');
+    expect(anomaly?.promotedFindingId).toBeUndefined();
     expect(harness.savedValidationReports).toHaveLength(1);
     const report = harness.savedValidationReports[0] as { rawAdmissionRejections?: Array<{ rawFindingId: string; reason: string }> };
     expect(report.rawAdmissionRejections).toHaveLength(1);
     expect(report.rawAdmissionRejections?.[0]?.rawFindingId).toContain('raw-hallucinated');
-    expect(report.rawAdmissionRejections?.[0]?.reason).toContain('does not exist');
+    // codex 検証ブロッカー#2 以降、admission は location の実在ではなく検証可能な
+    // 証跡（source_quote の verbatimExcerpt 一致）の有無で判定する — 実在しても
+    // 引用が無ければ不採用。理由文言もそれを述べる。
+    expect(report.rawAdmissionRejections?.[0]?.reason).toContain('no verifiable source_quote evidence');
   });
 
   it('Given an existing critical open finding whose stored location does not exist When the manager invalidates it from the engine-offered candidate list Then it becomes invalidated and drops out of the blocking open set', async () => {
@@ -586,12 +593,15 @@ describe('item 1/4: raw admission validation and invalidate', () => {
         familyTag: 'bug',
         severity: 'high',
         title: 'Existing issue still present',
-        location: 'src/real.ts:2',
         description: 'Claims the already-resolved F-0001 still persists.',
         suggestion: '',
         kind: 'issue',
         relation: 'persists',
         targetFindingId: 'F-0001',
+        // 機械照合済み evidence（typed evidence protocol、codex 対策#4）で
+        // admission を通し、この試験の主眼（ambiguous ladder が manager の
+        // 壊れた応答をどう扱うか）を admission gate と独立に検証できるようにする。
+        ...verifiedSourceQuoteFields(projectDir, 'src/real.ts', 2),
       }],
     });
 

@@ -33,6 +33,10 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
     rawFindingsJsonSchema: contract.rawFindingsJsonSchema
       ? renderFencedJsonBlock(contract.rawFindingsJsonSchema)
       : '',
+    // codex 対策#4: reviewer step のときだけ設定される（instruction-context.ts
+    // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか
+    // 出さない。
+    reviewScopeSnapshotId: contract.reviewScopeSnapshotId ?? '',
     // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の
     // 段階（初回 implement 等）では無意味であり、無関係なプロトコル文が
     // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。

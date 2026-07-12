@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
-import { parseFindingLocation } from './location.js';
+import { parseFindingLocation, parseFindingLocationRange } from './location.js';
+import type { SourceQuoteEvidence } from '../../models/finding-types.js';
 
 /**
  * Deterministic, cwd-based verification that a "path:line" location string
@@ -36,7 +38,6 @@ const NO_LOCATION_RESULT: LocationAdmissionResult = { ok: true };
  *   （空文字は従来から admissible なので、N/A → none は新しい権限ではない）
  * - カンマ区切り複数 location → 曖昧なので正規化しない（従来どおり invalid）
  */
-const LINE_RANGE_PATTERN = /^(.+?):(\d+)-(\d+)$/;
 const NOT_APPLICABLE_PATTERN = /^n\/a$/i;
 
 export type LocationAdmissionNormalization = 'location-line-range-interpreted' | 'location-not-applicable';
@@ -56,7 +57,7 @@ export function classifyLocationAdmissionNormalization(
   if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
     return 'location-not-applicable';
   }
-  if (LINE_RANGE_PATTERN.test(trimmed)) {
+  if (parseFindingLocationRange(trimmed) !== undefined) {
     return 'location-line-range-interpreted';
   }
   return undefined;
@@ -81,31 +82,27 @@ function countLines(content: string): number {
   return content.endsWith('\n') ? segments.length - 1 : segments.length;
 }
 
-export function validateLocationAdmission(cwd: string, location: string | undefined): LocationAdmissionResult {
-  // A-2 機械正規化: N/A は locationless、行範囲は path + 範囲として解釈する。
-  const trimmed = location?.trim() ?? '';
-  if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
-    return NO_LOCATION_RESULT;
-  }
-  const rangeMatch = LINE_RANGE_PATTERN.exec(trimmed);
-  const parsed = rangeMatch !== null
-    // 行範囲の実在検証は path で行う（行番号の範囲チェックはしない — codex 裁定）。
-    ? { path: rangeMatch[1]!.trim() }
-    : parseFindingLocation(location);
-  if (parsed === undefined) {
-    // No location to validate (e.g. an architectural finding with no single
-    // site). Absence of a location is not itself a fabrication signal.
-    return NO_LOCATION_RESULT;
-  }
+type RealPathResolution =
+  | { ok: true; realPath: string }
+  | { ok: false; reason: string };
 
+/**
+ * project 境界内かつ symlink 脱出していない実体ファイルへ path を解決する。
+ * validateLocationAdmission（行範囲チェックなしの寛容版）と
+ * verifySourceQuoteEvidence（verbatimExcerpt 機械照合、codex 対策#4）の両方が
+ * 使う唯一の実装 — symlink 脱出検出は一度 codex に再現された実バグ
+ * （node_modules/... のようなプロジェクト外実体が受理されていた）があるため、
+ * 二重実装で片方だけ直った状態を防ぐ。
+ */
+function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolution {
   const resolvedBase = resolve(cwd);
-  const resolvedPath = resolve(resolvedBase, parsed.path);
+  const resolvedPath = resolve(resolvedBase, path);
   if (!isInsideBase(resolvedBase, resolvedPath)) {
     // Raw finding text is untrusted reviewer evidence (see manager-runner.ts).
     // A path that escapes the project is treated as inadmissible rather than
     // as a thrown error, matching the rest of this validation (evidence that
     // fails a deterministic check is dropped, not a hard failure of the run).
-    return { ok: false, reason: `location path "${parsed.path}" resolves outside the project` };
+    return { ok: false, reason: `location path "${path}" resolves outside the project` };
   }
 
   // 字句的な resolve() だけでは symlink 経由の脱出を検出できない（statSync が
@@ -122,24 +119,61 @@ export function validateLocationAdmission(cwd: string, location: string | undefi
   try {
     realPath = realpathSync(resolvedPath);
   } catch {
-    return { ok: false, reason: `location path "${parsed.path}" does not exist` };
+    return { ok: false, reason: `location path "${path}" does not exist` };
   }
   if (!isInsideBase(realBase, realPath)) {
-    return { ok: false, reason: `location path "${parsed.path}" resolves outside the project (via symlink)` };
+    return { ok: false, reason: `location path "${path}" resolves outside the project (via symlink)` };
   }
 
   let stat;
   try {
     stat = statSync(realPath);
   } catch {
-    return { ok: false, reason: `location path "${parsed.path}" does not exist` };
+    return { ok: false, reason: `location path "${path}" does not exist` };
   }
   if (!stat.isFile()) {
-    return { ok: false, reason: `location path "${parsed.path}" is not a file` };
+    return { ok: false, reason: `location path "${path}" is not a file` };
+  }
+
+  return { ok: true, realPath };
+}
+
+/**
+ * true if this location string asserts no location at all — either genuinely
+ * empty/undefined, or the A-2 N/A marker. Shared by manager-runner.ts's
+ * evidence admission gate (codex 対策#4) so a claim that legacy-normalizes to
+ * "no location" isn't held to the source_quote verbatim-evidence bar, which
+ * only makes sense for claims that assert code exists at a specific site.
+ */
+export function isLocationClaimAbsent(location: string | undefined): boolean {
+  const trimmed = location?.trim() ?? '';
+  return trimmed.length === 0 || NOT_APPLICABLE_PATTERN.test(trimmed);
+}
+
+export function validateLocationAdmission(cwd: string, location: string | undefined): LocationAdmissionResult {
+  // A-2 機械正規化: N/A は locationless、行範囲は path + 範囲として解釈する。
+  const trimmed = location?.trim() ?? '';
+  if (trimmed.length > 0 && NOT_APPLICABLE_PATTERN.test(trimmed)) {
+    return NO_LOCATION_RESULT;
+  }
+  const rangeMatch = parseFindingLocationRange(trimmed);
+  const parsed = rangeMatch !== undefined
+    // 行範囲の実在検証は path で行う（行番号の範囲チェックはしない — codex 裁定）。
+    ? { path: rangeMatch.path, line: undefined as number | undefined }
+    : parseFindingLocation(location);
+  if (parsed === undefined) {
+    // No location to validate (e.g. an architectural finding with no single
+    // site). Absence of a location is not itself a fabrication signal.
+    return NO_LOCATION_RESULT;
+  }
+
+  const resolution = resolveRealPathWithinProject(cwd, parsed.path);
+  if (!resolution.ok) {
+    return { ok: false, reason: resolution.reason };
   }
 
   if (parsed.line !== undefined) {
-    const lineCount = countLines(readFileSync(realPath, 'utf-8'));
+    const lineCount = countLines(readFileSync(resolution.realPath, 'utf-8'));
     if (parsed.line < 1 || parsed.line > lineCount) {
       return {
         ok: false,
@@ -149,4 +183,94 @@ export function validateLocationAdmission(cwd: string, location: string | undefi
   }
 
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// verbatimExcerpt 機械照合（codex 対策#4: typed evidence protocol）
+// ---------------------------------------------------------------------------
+
+/**
+ * 単一の verbatimExcerpt に許す最大行数。「極端に広い引用は不採用」（設計書）の
+ * 機械的な上限 — 引用は「この claim を裏づける最小限の証拠」であるべきで、
+ * ファイル丸ごとの貼り付けは証拠として機能しない。
+ */
+export const MAX_SOURCE_QUOTE_LINES = 200;
+
+export type SourceQuoteVerificationOutcome =
+  | { outcome: 'match'; fileHash: string }
+  | { outcome: 'quote-mismatch'; reason: string }
+  | { outcome: 'stale-snapshot'; reason: string };
+
+/**
+ * verbatimExcerpt の決定的機械照合（codex 対策#4 の中核）。三分類（設計書 §C）:
+ *   - match: path が project 内実在ファイルで、startLine/endLine が正順かつ
+ *     実在範囲内で、verbatimExcerpt がその行範囲の全文と完全一致し、かつ
+ *     snapshotId が検証時点の review scope と一致する。
+ *   - quote-mismatch: 上記のいずれかが不成立（path 不在・symlink 脱出・範囲外・
+ *     文字列不一致・空引用・広すぎる引用）。証拠が成立しないだけで、欠陥の
+ *     真偽そのものは証明しない — 呼び出し元は reviewer anomaly（review-integrity
+ *     側）へ隔離し、product gate は塞がない。
+ *   - stale-snapshot: snapshotId が現在の review scope と食い違う。レビュー後に
+ *     対象が変化した可能性があり、幻覚か正当な再観測かを判定できない —
+ *     呼び出し元は再取得対象として隔離する（match/quote-mismatch のどちらとも
+ *     確定しない）。
+ * snapshot 検証を最初に行う理由: 対象が変化していれば、その後の内容比較結果
+ * （一致・不一致のどちらであっても）は「今のコード」に対する判定であって
+ * 「reviewer が見た時点」の真偽を証明しない — 誤って match/quote-mismatch と
+ * 確定させないため、内容比較より先に判定して return する。
+ */
+export function verifySourceQuoteEvidence(
+  cwd: string,
+  evidence: SourceQuoteEvidence,
+  expectedSnapshotId: string,
+): SourceQuoteVerificationOutcome {
+  if (evidence.snapshotId !== expectedSnapshotId) {
+    return {
+      outcome: 'stale-snapshot',
+      reason: `evidence snapshotId "${evidence.snapshotId}" does not match the current review scope snapshot "${expectedSnapshotId}"`,
+    };
+  }
+
+  if (evidence.verbatimExcerpt.trim().length === 0) {
+    return { outcome: 'quote-mismatch', reason: 'verbatimExcerpt is empty' };
+  }
+  if (evidence.endLine < evidence.startLine) {
+    return {
+      outcome: 'quote-mismatch',
+      reason: `startLine ${evidence.startLine} is after endLine ${evidence.endLine}`,
+    };
+  }
+  const quotedLineSpan = evidence.endLine - evidence.startLine + 1;
+  if (quotedLineSpan > MAX_SOURCE_QUOTE_LINES) {
+    return {
+      outcome: 'quote-mismatch',
+      reason: `quoted range spans ${quotedLineSpan} lines, exceeding the ${MAX_SOURCE_QUOTE_LINES}-line limit for a single verbatim excerpt`,
+    };
+  }
+
+  const resolution = resolveRealPathWithinProject(cwd, evidence.path);
+  if (!resolution.ok) {
+    return { outcome: 'quote-mismatch', reason: resolution.reason };
+  }
+
+  const content = readFileSync(resolution.realPath, 'utf-8');
+  const lineCount = countLines(content);
+  if (evidence.startLine < 1 || evidence.endLine > lineCount) {
+    return {
+      outcome: 'quote-mismatch',
+      reason: `line range ${evidence.startLine}-${evidence.endLine} is out of range for "${evidence.path}" (file has ${lineCount} lines)`,
+    };
+  }
+
+  // 完全一致のみ採用（部分行・空白緩和なし）。行全体を要求するため
+  // 「部分行だけの恣意的引用」は構造的に排除される（設計書）。
+  const actualExcerpt = content.split('\n').slice(evidence.startLine - 1, evidence.endLine).join('\n');
+  if (actualExcerpt !== evidence.verbatimExcerpt) {
+    return {
+      outcome: 'quote-mismatch',
+      reason: `verbatimExcerpt does not exactly match "${evidence.path}" lines ${evidence.startLine}-${evidence.endLine}`,
+    };
+  }
+
+  return { outcome: 'match', fileHash: createHash('sha256').update(content).digest('hex') };
 }

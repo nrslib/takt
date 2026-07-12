@@ -25,6 +25,8 @@ import {
   INTERPRETATION_APPLICATION_RESULTS,
   INTERPRETATION_STAGES,
   RAW_DECISION_KINDS,
+  RAW_FINDING_EVIDENCE_KINDS,
+  REVIEWER_ANOMALY_KINDS,
 } from './finding-types.js';
 
 const nonEmptyString = z.string().min(1);
@@ -43,11 +45,17 @@ export const FindingContractStopBudgetRawSchema = z.object({
   max_minutes: z.number().int().positive().optional(),
 }).strict();
 
+/** review-integrity 予算（codex 検証ブロッカー#1）。省略可 — 省略時は review-integrity.ts の DEFAULT_REVIEW_INTEGRITY_BUDGET が補う。 */
+export const FindingContractReviewBudgetRawSchema = z.object({
+  max_review_rounds: z.number().int().positive().optional(),
+}).strict();
+
 export const FindingContractConfigRawSchema = z.object({
   ledger_path: nonEmptyString,
   raw_findings_path: nonEmptyString,
   manager: FindingContractManagerConfigRawSchema,
   stop_budget: FindingContractStopBudgetRawSchema.optional(),
+  review_budget: FindingContractReviewBudgetRawSchema.optional(),
 }).strict();
 
 export const FindingSeveritySchema = z.enum(FINDING_SEVERITIES);
@@ -58,6 +66,47 @@ export const FindingObservationSchema = z.object({
   runId: nonEmptyString,
   stepName: nonEmptyString,
   timestamp: nonEmptyString,
+}).strict();
+
+// ---------------------------------------------------------------------------
+// typed evidence protocol（codex 対策#4: admission control 強化）
+// ---------------------------------------------------------------------------
+
+export const SourceQuoteEvidenceSchema = z.object({
+  kind: z.literal('source_quote'),
+  path: nonEmptyString,
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  verbatimExcerpt: nonEmptyString,
+  snapshotId: nonEmptyString,
+}).strict();
+
+export const LocationlessEvidenceSchema = z.object({
+  kind: z.literal('locationless'),
+  explanation: nonEmptyString,
+}).strict();
+
+/** RawFinding.evidence の discriminated union。台帳保存形（組み立て済みネスト）を検証する — provider-facing の flat wire とは別（RawFindingsOutputJsonSchema 参照）。 */
+export const RawFindingEvidenceSchema = z.discriminatedUnion('kind', [
+  SourceQuoteEvidenceSchema,
+  LocationlessEvidenceSchema,
+]);
+
+export const ReviewerAnomalyEntrySchema = z.object({
+  id: nonEmptyString,
+  kind: z.enum(REVIEWER_ANOMALY_KINDS),
+  stableKey: nonEmptyString,
+  lineageKey: nonEmptyString,
+  sourceRawFindingIds: z.array(nonEmptyString),
+  reviewers: z.array(nonEmptyString),
+  title: nonEmptyString,
+  claimedLocation: nonEmptyString.optional(),
+  claimedExcerpt: nonEmptyString.optional(),
+  mismatchReason: nonEmptyString,
+  firstObserved: FindingObservationSchema,
+  lastObserved: FindingObservationSchema,
+  occurrences: z.number().int().positive(),
+  promotedFindingId: nonEmptyString.optional(),
 }).strict();
 
 /** provisional メタデータ（設計書 §7）。ledger v1 の optional field なので後方互換。 */
@@ -204,6 +253,9 @@ const RawFindingFieldsSchema = z.object({
   kind: z.enum(RAW_FINDING_KINDS).optional(),
   relation: z.enum(RAW_FINDING_RELATIONS).optional(),
   targetFindingId: nonEmptyString.optional(),
+  // typed evidence protocol（codex 対策#4）。既存 v1 台帳の raw finding には
+  // 無いため optional — 欠損は「evidence なし」として扱う（migration 不要）。
+  evidence: RawFindingEvidenceSchema.optional(),
 }).strict();
 
 export const RawFindingSchema = RawFindingFieldsSchema.transform(resolveRawFindingRelation);
@@ -223,6 +275,7 @@ const ReviewerRawFindingFieldsSchema = z.object({
   // 構造化出力の strict 様式では全プロパティが required になるため、
   // issue 行は空文字で埋める。空文字は未指定として扱う。
   targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
+  evidence: RawFindingEvidenceSchema.optional(),
 }).strict();
 
 export const ReviewerRawFindingSchema = ReviewerRawFindingFieldsSchema.transform(resolveRawFindingRelation);
@@ -364,6 +417,13 @@ export const FindingLedgerStopBudgetStateSchema = z.object({
   exhausted: z.boolean(),
 }).strict();
 
+/** review-integrity 予算（codex 検証ブロッカー#1）のラウンド跨ぎ累積状態。stopBudget と同形。 */
+export const FindingLedgerReviewIntegrityStateSchema = z.object({
+  roundMarkers: z.array(nonEmptyString),
+  firstRoundAt: nonEmptyString,
+  exhausted: z.boolean(),
+}).strict();
+
 export const FindingLedgerSchema = z.object({
   version: z.literal(1),
   workflowName: nonEmptyString,
@@ -375,6 +435,11 @@ export const FindingLedgerSchema = z.object({
   interpretations: z.array(FindingInterpretationRecordSchema).optional(),
   fixpoint: FindingLedgerFixpointStateSchema.optional(),
   stopBudget: FindingLedgerStopBudgetStateSchema.optional(),
+  // 二系統台帳（codex 対策#4）の review-integrity 側。optional なので既存
+  // v1 ledger は migration なしで読める。
+  reviewerAnomalies: z.array(ReviewerAnomalyEntrySchema).optional(),
+  // review-integrity 予算（codex 検証ブロッカー#1）。optional。
+  reviewIntegrity: FindingLedgerReviewIntegrityStateSchema.optional(),
 }).strict();
 
 /**
@@ -813,6 +878,17 @@ export function parseFindingConflictAdjudicationOutput(value: unknown): FindingC
   return FindingConflictAdjudicationOutputSchema.parse(value);
 }
 
+// NOTE (codex 検証ブロッカー#2): native structured output は「全 properties が
+// required」の strict 様式を要求するため、evidenceKind:'locationless' の raw でも
+// location/verbatimExcerpt/snapshotId フィールド自体は存在させねばならず、この
+// schema はそれらに空文字を許す（type:'string' のまま minLength を課さない）。
+// つまり「空文字の source_quote」を schema だけでは弾けない。その意味的検証は
+// admission 層が担う: manager-runner.ts の classifyLocationEvidence が、evidence
+// として成立しない（空の verbatimExcerpt/snapshotId、空/N-A location の source_quote、
+// 検証済み証跡の無い resolution_confirmation）raw を admit せず reviewer anomaly へ
+// 隔離する（raw-canonicalization.ts の resolveRawFindingEvidence が空フィールドを
+// undefined に落とし、admission が未検証扱いにする）。schema の寛容さは admission で
+// backstop されている。
 export const RawFindingsOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -823,7 +899,7 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
+        required: ['rawFindingId', 'relation', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'evidenceKind', 'verbatimExcerpt', 'snapshotId', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
           // v2 梯子設計 §2.2: relation が正本。legacy の `kind` はこの
@@ -850,7 +926,19 @@ export const RawFindingsOutputJsonSchema = {
           title: { type: 'string', minLength: 1 },
           location: {
             type: 'string',
-            description: 'file:line evidence. Empty string when not applicable. The line number is evidence of where you currently observed the issue, not part of its identity.',
+            description: 'file:line or file:startLine-endLine evidence. Empty string only when evidenceKind is locationless (a claim that something is ABSENT, e.g. a missing file or missing wiring — there is no single site to cite).',
+          },
+          evidenceKind: {
+            enum: RAW_FINDING_EVIDENCE_KINDS,
+            description: 'source_quote = you are citing code that exists at `location` and verbatimExcerpt must be the EXACT text of those lines, copied character-for-character from the file you read (not retyped from memory, not paraphrased). locationless = your claim is that something is ABSENT (a file that should exist but does not, a handler that was never wired up) — leave location, verbatimExcerpt, and snapshotId empty; you cannot quote something that is not there.',
+          },
+          verbatimExcerpt: {
+            type: 'string',
+            description: 'Required (non-empty) when evidenceKind is source_quote: the EXACT source text at location, copied verbatim from the file — the engine byte-compares it against the current file content and rejects any mismatch, so do not summarize, translate, or reformat it. Empty string when evidenceKind is locationless.',
+          },
+          snapshotId: {
+            type: 'string',
+            description: 'Required (non-empty) when evidenceKind is source_quote: copy the exact "Current review snapshot" value given to you elsewhere in this prompt, unchanged. Empty string when evidenceKind is locationless.',
           },
           description: { type: 'string', minLength: 1 },
           suggestion: {
@@ -874,7 +962,16 @@ export const RawFindingsOutputJsonSchema = {
  *   （v3-r3 resume 実測）ため、kind を optional で受理し、意味の検証
  *   （kind/relation 矛盾 → 正規化・claimedKind 監査・ambiguity taint）は intake
  *   の canonicalization に委ねる。
+ * - typed evidence protocol（codex 対策#4）の evidenceKind/verbatimExcerpt/
+ *   snapshotId も同じ理由で required から外す。schema が生成を拘束できない
+ *   経路のモデルがこれらを省略しても、structured output 全体を無効にしては
+ *   ならない — 欠損は intake の canonicalization が「evidence なし」として
+ *   寛容に扱い、location 付き claim なら reviewer anomaly へ隔離する
+ *   （manager-runner.ts）。ここで丸ごと reject すると、台帳へすら届かず
+ *   その安全な縮退経路自体が機能しない。
  */
+const LENIENT_RAW_FINDING_EVIDENCE_FIELDS = ['evidenceKind', 'verbatimExcerpt', 'snapshotId'] as const;
+
 export const RawFindingsOutputValidationJsonSchema = {
   ...RawFindingsOutputJsonSchema,
   properties: {
@@ -882,6 +979,9 @@ export const RawFindingsOutputValidationJsonSchema = {
       ...RawFindingsOutputJsonSchema.properties.rawFindings,
       items: {
         ...RawFindingsOutputJsonSchema.properties.rawFindings.items,
+        required: RawFindingsOutputJsonSchema.properties.rawFindings.items.required.filter(
+          (key: string) => !(LENIENT_RAW_FINDING_EVIDENCE_FIELDS as readonly string[]).includes(key),
+        ),
         properties: {
           ...RawFindingsOutputJsonSchema.properties.rawFindings.items.properties,
           kind: {

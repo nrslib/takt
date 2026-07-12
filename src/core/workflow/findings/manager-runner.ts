@@ -1,12 +1,22 @@
 /**
- * Finding Contract の取り込み実行（v2 梯子設計・実装単位8）。
+ * Finding Contract の取り込み実行（v2 梯子設計・実装単位8。codex 対策#4で
+ * typed evidence protocol + verbatimExcerpt 機械照合 + 二系統台帳を追加）。
  *
  * v2 パイプライン:
  *
  * 1. reviewer structured output → envelope 検査（件数 / byte / フィールド長。
  *    超過 reviewer は全量を単一 overflow provisional に置換）→ 寛容な candidate
- *    parse → canonicalizeReviewerRawFinding（唯一の canonical 生成関数）。
+ *    parse → canonicalizeReviewerRawFinding（唯一の canonical 生成関数。typed
+ *    evidence（evidenceKind/verbatimExcerpt/snapshotId）もここで組み立てる）。
  *    1件の不正 raw が配列全体の Zod parse 失敗として run を殺す経路は無い。
+ * 1.5. raw admission validation（codex 対策#4）: location 付き claim は
+ *    evidence.kind に応じて機械照合する — source_quote は verbatimExcerpt を
+ *    現在のファイル内容と完全一致検証（admission-validation.ts の
+ *    verifySourceQuoteEvidence）、locationless は検証不要（「存在しないこと」が
+ *    根拠の claim）、evidence 無しは無条件で「引用不成立」。一致した claim だけが
+ *    下記 2/3 の通常経路（product finding 候補）に進む。不一致・stale-snapshot は
+ *    reviewer anomaly（二系統台帳の review-integrity 側、reviewer-anomalies.ts）へ
+ *    隔離し、product gate（findings 配列・COMPLETE 判定）には一切影響しない。
  * 2. clean（ambiguity origin 無し）の coherent raw: 従来どおり機械分類 +
  *    decisions manager。ただし semantic retry は 0 回 — 不採用・欠落・unsupported
  *    の decision は provisional へ着地する（強制 new 化・監査のみの drop は廃止）。
@@ -15,7 +25,9 @@
  *    残りは WAL + 予算つきの manager 解釈（提案のみ）→ capability 検証 → 適用。
  * 4. 保存: updateLedger の排他区間で最新台帳へ再照合し、全 confirmation（および
  *    reopen / invalidate / supersede）に CAS を適用。stale は conflict / provisional
- *    へ着地し、黙って消えない。provisional は stable key で upsert。
+ *    へ着地し、黙って消えない。provisional は stable key で upsert。reviewer
+ *    anomaly も同じ排他区間内で別配列（reviewerAnomalies）へ stable key upsert する
+ *    — findings 配列には一切触れない。
  *
  * LLM 呼び出しは updateLedger の排他区間の外で行う（store.ts の契約）。
  */
@@ -29,24 +41,33 @@ import {
   parseFindingManagerDecisions,
 } from './schemas.js';
 import { buildFindingInterpretationStep, buildFindingManagerStep } from './manager-step.js';
-import { applyProvisionalFindingSpecsToLedger, reconcileFindingLedger, type ProvisionalFindingSpec } from './reconciler.js';
+import { reconcileFindingLedger, type ProvisionalFindingSpec } from './reconciler.js';
+import {
+  applyReviewerAnomalySpecsToLedger,
+  linkPromotedReviewerAnomalies,
+  type ReviewerAnomalyPromotionCandidate,
+  type ReviewerAnomalySpec,
+} from './reviewer-anomalies.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import {
   assembleManagerOutput,
   flattenManagerOutputToDecisions,
   type AssembleManagerOutputResult,
 } from './decision-assembly.js';
-import { classifyLocationAdmissionNormalization, validateLocationAdmission } from './admission-validation.js';
+import { classifyLocationAdmissionNormalization, isLocationClaimAbsent, validateLocationAdmission, verifySourceQuoteEvidence } from './admission-validation.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
+import { computeReviewScopeSnapshotId } from './snapshot.js';
 import { attachFixpointState } from './fixpoint.js';
 import { attachStopBudgetState, computeRoundMarker, resolveStopBudgetLimits } from './stop-budget.js';
+import { attachReviewIntegrityState, resolveReviewIntegrityLimits } from './review-integrity.js';
 import {
   canonicalizeReviewerRawFinding,
   computeInterpretationKey,
   computeLineageKey,
   computeOverflowStableKey,
   computeProvisionalStableKey,
+  computeReviewerAnomalyStableKey,
   computeReviewerStableKey,
   createOverflowRawCandidate,
   createReviewerRawFindingCandidates,
@@ -86,6 +107,7 @@ import type {
   ProvisionalLandingReport,
   RawAdmissionRejectionReport,
   RawNormalizationAuditRecord,
+  ReviewerAnomalyLandingReport,
   ReviewerOutputOverflowReport,
   UnsupportedRawFindingReport,
 } from './store.js';
@@ -101,6 +123,7 @@ import type {
   FindingObservation,
   InterpretationApplicationResult,
   RawFinding,
+  ReviewerAnomalyKind,
 } from './types.js';
 import {
   hasDisputeClaimsHeading,
@@ -635,6 +658,37 @@ function provisionalSpecForRaw(input: {
   };
 }
 
+/**
+ * reviewer anomaly spec builder（codex 対策#4）。provisionalSpecForRaw の
+ * anomaly 版 — verbatimExcerpt 機械照合が「引用不一致」または
+ * 「対象版が変化(stale)」と判定した観測を、product finding とは別の
+ * review-integrity 台帳（reviewerAnomalies）へ隔離するための spec を作る。
+ * gate-blocking な provisional には決してしない（reviewer-anomalies.ts の
+ * applyReviewerAnomalySpecsToLedger が product finding 側を一切変更しない）。
+ */
+function reviewerAnomalySpecForRaw(input: {
+  wire: RawFinding;
+  canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
+  anomalyKind: ReviewerAnomalyKind;
+  reason: string;
+}): ReviewerAnomalySpec {
+  return {
+    kind: input.anomalyKind,
+    stableKey: computeReviewerAnomalyStableKey({
+      reviewerStableKey: input.canonical.reviewerStableKey,
+      lineageKey: input.canonical.lineageKey,
+      anomalyKind: input.anomalyKind,
+    }),
+    lineageKey: input.canonical.lineageKey,
+    sourceRawFindingIds: [input.wire.rawFindingId],
+    reviewers: [input.wire.reviewer],
+    title: input.wire.title,
+    ...(input.wire.location !== undefined ? { claimedLocation: input.wire.location } : {}),
+    ...(input.wire.evidence?.kind === 'source_quote' ? { claimedExcerpt: input.wire.evidence.verbatimExcerpt } : {}),
+    mismatchReason: input.reason,
+  };
+}
+
 function stalePreconditionSpec(input: {
   workflowName: string;
   callNamespace: string;
@@ -748,6 +802,14 @@ function buildInterpretationInstruction(input: {
 
 async function runAmbiguousLadder(input: {
   tainted: readonly CanonicalIntakeItem[];
+  /**
+   * matching source_quote 無しで admit された tainted persists/reopened の
+   * rawFindingId 集合（codex 検証4巡目）。ladder ではこれらを provisional-only に
+   * 制限する — SameProof reattach / create_independent / open_conflict の全変異能力を
+   * 遮断し、gate-blocking provisional だけを生む。verified（source_quote match）な
+   * persists/reopened はここに含めず従来の能力を維持する。
+   */
+  provisionalOnlyRawFindingIds: ReadonlySet<string>;
   previousLedger: FindingLedger;
   ledgerStore: FindingLedgerStore;
   contract: FindingContractConfig;
@@ -786,6 +848,13 @@ async function runAmbiguousLadder(input: {
     ledger: input.previousLedger,
     ambiguousRawFindings: input.tainted.map((item) => item.canonical),
   });
+  // codex 検証4巡目: 未検証 tainted persists/reopened には SameProof を発行しない。
+  // SameProof は identity（path/title/description/suggestion）一致で発行されるため、
+  // locationless で title 等が既存 open finding と一致すると reattach（変異）できて
+  // しまう。matching source_quote 無しにこの経路を通さない。
+  for (const rawFindingId of input.provisionalOnlyRawFindingIds) {
+    proofsByRawId.delete(rawFindingId);
+  }
 
   const needsInterpretation: LadderTarget[] = [];
   for (const item of input.tainted) {
@@ -854,7 +923,12 @@ async function runAmbiguousLadder(input: {
       // no-op で放置すると reconciler の fallback へ流れ、別キーの provisional が
       // 増殖する（codex B1）。前回の着地種別に応じて既存エントリへ帰属させる。
       const priorResult = begin.appliedByKey.get(target.interpretationKey);
-      if (priorResult === 'created' || priorResult === 'matched_with_proof') {
+      // codex 検証4巡目: provisional-only（未検証 tainted persists/reopened）は
+      // reattach（既存 finding への添付 = 変異）させない。この修正より前の run で
+      // 誤って created/matched_with_proof として着地していた WAL を resume で拾っても、
+      // 変異経路には戻さず provisional upsert に落とす。
+      if ((priorResult === 'created' || priorResult === 'matched_with_proof')
+        && !input.provisionalOnlyRawFindingIds.has(target.canonical.rawFindingId)) {
         // 前回 confirmed finding として着地済み → その finding へ raw を添付。
         result.pendingAppliedReattach.push({ target });
       } else {
@@ -1052,11 +1126,19 @@ async function runAmbiguousLadder(input: {
   }
 
   // 検証済み decision を pending 適用へ変換する（fresh 検証は保存時）。
-  for (const [key, decision] of decidedByKey) {
+  for (const [key, rawDecision] of decidedByKey) {
     const target = interpretationTargets.find((candidate) => candidate.interpretationKey === key);
     if (target === undefined) {
       continue;
     }
+    // codex 検証4巡目: 未検証 tainted persists/reopened は provisional-only。manager が
+    // create_independent / same_with_proof / open_conflict を提案しても（あるいは
+    // pre-fix の WAL に残っていても）、既存 finding を変異させる着地は許さず
+    // provisional へ強制する。fresh 検証・WAL 再利用の双方を同じ場所で潰す。
+    const decision: AmbiguousInterpretation = input.provisionalOnlyRawFindingIds.has(target.canonical.rawFindingId)
+      && rawDecision.decision !== 'provisional'
+      ? { decision: 'provisional', rawFindingId: rawDecision.rawFindingId, reason: `Interpretation "${rawDecision.decision}" is not allowed for an unverified persists/reopened claim (no matching source_quote); restricted to a gate-blocking provisional so it cannot mutate an existing finding (codex #4)` }
+      : rawDecision;
     switch (decision.decision) {
       case 'create_independent':
         result.pendingIndependentNew.push({ wire: target.wire, viaInterpretationKey: key });
@@ -1123,6 +1205,9 @@ export async function runFindingManagerForStep(
     parentStepName: input.parentStep.name,
     stepIteration: input.stepIteration,
   });
+  // review-integrity 予算（codex 検証ブロッカー#1）: 未昇格 anomaly が残ったまま
+  // 完了したラウンドを stop budget と同じマーカーで数える。
+  const reviewIntegrityLimits = resolveReviewIntegrityLimits(input.contract.reviewBudget);
 
   // 1. intake: envelope → candidate → canonical（例外で死ぬ経路は無い）。
   const intake = intakeReviewerOutputs({
@@ -1177,33 +1262,162 @@ export async function runFindingManagerForStep(
   const clean = nonOverflow.filter((item) => item.canonical.coherence === 'coherent' && !item.canonical.provenance.ambiguityOrigin);
   const tainted = nonOverflow.filter((item) => item.canonical.provenance.ambiguityOrigin);
 
-  // 3. raw admission validation（location の決定的検証）。着地規則は clean /
-  //    tainted で共通の1つのハンドラに集約する（A-1: 二重ループの非対称が
-  //    tainted 側の confirmation 除外漏れ — 実台帳 F-0015/16/17 — を生んだ）:
-  //    - confirmation: 証拠不採用のみ（provisional を作らない。監査保存のみ）
+  // 3. raw admission validation（typed evidence の決定的検証、codex 対策#4）。
+  //    着地規則は clean / tainted で共通の1つのハンドラに集約する（A-1: 二重
+  //    ループの非対称が tainted 側の confirmation 除外漏れ — 実台帳
+  //    F-0015/16/17 — を生んだ）:
+  //    - confirmation: 証拠不採用のみ（anomaly を作らない。監査保存のみ）
   //    - persists → 実在する open target: target への監査添付（A-3。target が
-  //      既に gate を塞いでいるため独立 provisional を作らない。provisional
+  //      既に gate を塞いでいるため独立 blocker を作らない。provisional
   //      target ならその観測履歴に添付され、新規 blocker は増えない）
-  //    - それ以外: invalid-location-evidence provisional（B3 — 決定的に証明
-  //      できるのは location 証拠の不成立だけで、欠陥の虚偽は証明できない）
+  //    - それ以外: reviewer anomaly（review-integrity 側の二系統台帳へ隔離。
+  //      product gate は塞がない — 決定的に証明できるのは「引用が成立しない」
+  //      だけで、欠陥の虚偽は証明できない。旧実装はここを gate-blocking
+  //      provisional にしていた（B3 の invalid-location-evidence）が、path が
+  //      実在するのに内容が架空という漏れ（v3-r4 実測 F-0009: constants.ts:20
+  //      は実在するが引用内容は無関係）を塞げなかったため、evidence.kind が
+  //      'source_quote' で verbatimExcerpt が実ファイル内容と完全一致した
+  //      場合だけを admit とし、それ以外は evidence 種別を問わず anomaly。
   const admissionRejections: RawAdmissionRejectionReport[] = [];
-  const admissionProvisionalSpecs: ProvisionalFindingSpec[] = [];
+  const admissionAnomalySpecs: ReviewerAnomalySpec[] = [];
   const admissionRejectedItems: CanonicalIntakeItem[] = [];
   const pendingRejectedObservations: Array<{ item: CanonicalIntakeItem; targetFindingId: string; reason: string }> = [];
   const cleanAdmitted: CanonicalIntakeItem[] = [];
   const taintedAdmitted: CanonicalIntakeItem[] = [];
-  const ladderProvisionalSpecs: ProvisionalFindingSpec[] = [];
+  const ladderAnomalySpecs: ReviewerAnomalySpec[] = [];
   const previousFindingsById = new Map(previousLedger.findings.map((finding) => [finding.id, finding]));
+  const reviewScopeSnapshotId = computeReviewScopeSnapshotId(input.cwd);
+  // §8 相当の昇格リンク(codex 対策#4): このラウンドで実際に verbatimExcerpt が
+  // 一致した raw の lineageKey/rawFindingId。reconcile 完了後、同じ lineageKey を
+  // 持つ未昇格 anomaly があれば promotedFindingId を張る（linkPromotedReviewerAnomalies
+  // 参照）。「一致しなかった」候補を混ぜても reconcile 後に該当 finding が
+  // 見つからないだけで安全（no-op）。
+  const verifiedEvidenceCandidates: ReviewerAnomalyPromotionCandidate[] = [];
+  // codex 検証4巡目: matching source_quote 無しで ladder に載る tainted persists/
+  // reopened の rawFindingId。ambiguous ladder は provisional-only ではなく
+  // SameProof/create_independent/open_conflict の変異能力を持つため、これらの raw を
+  // ladder 内で provisional-only に制限する（既存 finding を変異させない）。
+  const provisionalOnlyLadderRawIds = new Set<string>();
 
-  const handleRejectedLocation = (item: CanonicalIntakeItem, reason: string, pool: 'clean' | 'tainted'): void => {
+  /**
+   * location/evidence 主張が機械照合を通って admission できるかを分類する
+   * （codex 対策#4 の中核判定 + codex 検証ブロッカー#2 の強化）。
+   *
+   * この関数は全 raw を対象にする（location の有無で先に無条件 admit する
+   * ショートカットは廃止した — 空/N-A の raw が evidence 検証を迂回して product
+   * finding や resolve に化ける穴だった。codex 検証ブロッカー#2）。
+   *
+   * admit（product 側パイプラインへ通す）条件:
+   *   - source_quote evidence が verbatimExcerpt 完全一致（match）した場合。
+   *   - 明示的な locationless evidence（kind:'locationless'）を持つ「非確認」
+   *     の claim。「存在しないことが根拠」の absence claim は verbatimExcerpt で
+   *     照合できない（codex 裁定）が、admit には reviewer の明示的な
+   *     evidenceKind:'locationless' 宣言を要求する — 自由文だけで product finding へ
+   *     昇格させない（空/N-A location の暗黙 admit は不可）。
+   *   - persists / reopened の relation claim で location が空（既存 finding を id で
+   *     参照するだけの再観測・再オープン主張）。これらは下流の機械分類・曖昧
+   *     梯子が governs し、「新規の clean な product finding」には決してならない
+   *     （provisional 化 or target 添付 or anomaly のいずれか）ため、id 参照の
+   *     absence は admission の抜け道にならない。
+   *
+   * それ以外（evidence 無し/不正の fresh claim、証跡不成立の source_quote、
+   * 検証済み evidence 無しの resolution_confirmation、location を引きながら引用の
+   * 無い claim）は not-admit。resolution_confirmation は検証済み source_quote
+   * evidence 無しには決して admit されない（＝機械照合を通らず既存 finding を
+   * 閉じられない。codex 検証ブロッカー#2）。
+   */
+  const classifyLocationEvidence = (
+    item: CanonicalIntakeItem,
+    pool: 'clean' | 'tainted',
+  ): { admit: true } | { admit: false; anomalyKind: ReviewerAnomalyKind; reason: string } => {
+    const evidence = item.canonical.evidence;
+    const relation = item.canonical.relation;
+    // 1. source_quote: verbatimExcerpt が現在のファイルと完全一致すれば admit
+    //    （既存 finding を変異させ得る唯一の検証済み証跡）。不一致/古い版は not-admit。
+    if (evidence?.kind === 'source_quote') {
+      const verification = verifySourceQuoteEvidence(input.cwd, evidence, reviewScopeSnapshotId);
+      if (verification.outcome === 'match') {
+        return { admit: true };
+      }
+      return { admit: false, anomalyKind: verification.outcome, reason: verification.reason };
+    }
+
+    // 以降は「matching source_quote 無し」— 明示 locationless・空フィールドの
+    // source_quote・evidence 未指定のいずれか。ここからは relation で分岐する。
+    // 既存 finding を参照して変異させる relation（persists/reopened/confirmation）は
+    // matching source_quote が無い限り admit しない。locationless（absence claim）を
+    // admit の根拠にできるのは、既存 finding を変異させない new の新規指摘だけ
+    // （codex 検証3巡目: 明示 locationless で persists/reopened の変異経路へ到達
+    // させない — locationless は new の absence finding 専用）。
+
+    if (relation === 'new') {
+      if (evidence?.kind === 'locationless') {
+        // 「存在しないことが根拠」の absence/process finding。本来 location を持た
+        // ない正当な新規指摘なので admit（新規 finding を立てるだけで既存 finding を
+        // 変異させない）。
+        return { admit: true };
+      }
+      // new で検証可能な evidence が無い → product finding へ昇格させない
+      //（codex 検証ブロッカー#2: 空文字 source_quote フィールドは resolveRawFindingEvidence
+      // が undefined に落とすためここへ来る）。
+      const reason = isLocationClaimAbsent(item.wire.location)
+        ? 'no verifiable evidence was supplied (an explicit locationless evidence declaration or a matching source_quote is required); a bare empty/N-A claim cannot become a product finding'
+        : `location "${item.wire.location ?? ''}" was cited but no verifiable source_quote evidence (verbatimExcerpt) was supplied`;
+      return { admit: false, anomalyKind: 'quote-mismatch', reason };
+    }
+
+    if (relation === 'persists' || relation === 'reopened') {
+      // matching source_quote が無いので、既存 finding を変異させる経路へは通さない:
+      //   - clean persists の open target への attach（lastSeen/revision の更新、
+      //     かつ同ラウンドの有効 confirmation との conflict 化 = close の妨害）
+      //   - clean reopened の resolved/waived target の reopen（status を open へ）
+      // 明示 locationless であっても同じ（codex 検証3巡目: locationless は new 専用で、
+      // persists/reopened の既存 finding 変異には使えない）。not-admit にすると
+      // handleUnverifiable が非変異の安全な着地へ回す（persists→open target は
+      // rejected observation の監査添付のみで canonical evidence/status/revision を
+      // 触らない、reopened は anomaly で reopen しない）。
+      //
+      // 例外は TAINTED（target の状態不整合 = ambiguous ladder 行き）で、かつ
+      // location を一切主張していない純粋な関係曖昧さ（absent location）だけ。
+      // ladder は provisional（新規の非変異 finding）にしか着地できず既存 finding を
+      // 変異させないため安全（codex: tainted かつ location 主張なしのみ ladder へ）。
+      if (pool === 'tainted' && isLocationClaimAbsent(item.wire.location)) {
+        return { admit: true };
+      }
+      const detail = evidence?.kind === 'locationless'
+        ? 'locationless evidence can justify only a "new" absence finding, not the mutation of an existing finding'
+        : 'no verified source_quote evidence was supplied';
+      return {
+        admit: false,
+        anomalyKind: 'quote-mismatch',
+        reason: `a "${relation}" claim cannot mutate the referenced existing finding without a matching source_quote (verbatimExcerpt): ${detail}, so the claim is not applied to the finding's state`,
+      };
+    }
+
+    // relation === 'resolution_confirmation' で matching source_quote 無し。解消確認は
+    // 「欠陥がもう無い」ことを検証済み証跡で示す必要があり、locationless その他では
+    // resolve させない（handleUnverifiable が監査保存のみにする）。
+    return {
+      admit: false,
+      anomalyKind: 'quote-mismatch',
+      reason: 'a resolution confirmation cannot close a finding without a source_quote whose verbatimExcerpt mechanically matches the current file (locationless or unverified evidence cannot serve as resolution evidence)',
+    };
+  };
+
+  const handleUnverifiableLocationEvidence = (
+    item: CanonicalIntakeItem,
+    anomalyKind: ReviewerAnomalyKind,
+    reason: string,
+    pool: 'clean' | 'tainted',
+  ): void => {
     admissionRejections.push({
       rawFindingId: item.wire.rawFindingId,
       location: item.wire.location ?? '',
       reason,
     });
-    // A-1（clean/tainted 共通）: 解消確認は問題の観測ではないため、location
-    // 証拠の不成立でも provisional を作らない（証拠不採用 + 監査保存のみ。
-    // target も resolve しない）。
+    // A-1（clean/tainted 共通）: 解消確認は問題の観測ではないため、evidence の
+    // 不成立でも anomaly を作らない（証拠不採用 + 監査保存のみ。target も
+    // resolve しない）。
     if (item.wire.kind === 'resolution_confirmation') {
       return;
     }
@@ -1212,8 +1426,8 @@ export async function runFindingManagerForStep(
       admissionRejectedItems.push(item);
     }
     // A-3: persists が実在する open target を指すなら、target への監査添付に
-    // する（独立 provisional を作らない）。target が terminal または不明なら
-    // 従来どおり provisional（B3 維持）。
+    // する（独立 blocker を作らない）。target が terminal または不明なら
+    // reviewer anomaly（review-integrity 側、product gate 非ブロッキング）。
     const targetFindingId = item.wire.targetFindingId;
     const target = targetFindingId !== undefined ? previousFindingsById.get(targetFindingId) : undefined;
     if (item.canonical.relation === 'persists' && target !== undefined && target.status === 'open') {
@@ -1224,38 +1438,46 @@ export async function runFindingManagerForStep(
       });
       return;
     }
-    const spec: ProvisionalFindingSpec = {
-      ...provisionalSpecForRaw({
-        wire: item.wire,
-        canonical: item.canonical,
-        reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${reason}); the observation is kept provisional because the location's failure does not prove the finding itself is false`,
-      }),
-      kind: 'invalid-location-evidence',
-      stableKey: computeProvisionalStableKey({
-        reviewerStableKey: item.canonical.reviewerStableKey,
-        lineageKey: item.canonical.lineageKey,
-        provisionalKind: 'invalid-location-evidence',
-      }),
-    };
-    (pool === 'clean' ? admissionProvisionalSpecs : ladderProvisionalSpecs).push(spec);
+    const spec = reviewerAnomalySpecForRaw({
+      wire: item.wire,
+      canonical: item.canonical,
+      anomalyKind,
+      reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${reason}); the observation is isolated as a reviewer anomaly because the evidence's failure does not prove the finding itself is false`,
+    });
+    (pool === 'clean' ? admissionAnomalySpecs : ladderAnomalySpecs).push(spec);
   };
 
+  // 全 raw を classifyLocationEvidence に通す（location の有無で先に admit する
+  // ショートカットは廃止。codex 検証ブロッカー#2 — 空/N-A の raw が evidence
+  // 検証を迂回する穴だった）。
   for (const item of clean) {
-    const location = item.wire.location;
-    const admission = location === undefined ? { ok: true as const } : validateLocationAdmission(input.cwd, location);
-    if (admission.ok) {
+    const classification = classifyLocationEvidence(item, 'clean');
+    if (classification.admit) {
       cleanAdmitted.push(item);
+      if (item.canonical.evidence?.kind === 'source_quote') {
+        verifiedEvidenceCandidates.push({ lineageKey: item.canonical.lineageKey, rawFindingId: item.wire.rawFindingId });
+      }
     } else {
-      handleRejectedLocation(item, admission.reason ?? 'invalid location', 'clean');
+      handleUnverifiableLocationEvidence(item, classification.anomalyKind, classification.reason, 'clean');
     }
   }
   for (const item of tainted) {
-    const location = item.wire.location;
-    const admission = location === undefined ? { ok: true as const } : validateLocationAdmission(input.cwd, location);
-    if (admission.ok) {
+    const classification = classifyLocationEvidence(item, 'tainted');
+    if (classification.admit) {
       taintedAdmitted.push(item);
+      if (item.canonical.evidence?.kind === 'source_quote') {
+        // matching source_quote で admit された tainted item は検証済み — ladder で
+        // 従来の変異能力（SameProof/create/conflict）を維持する。
+        verifiedEvidenceCandidates.push({ lineageKey: item.canonical.lineageKey, rawFindingId: item.wire.rawFindingId });
+      } else if (item.canonical.relation === 'persists' || item.canonical.relation === 'reopened') {
+        // matching source_quote 無しで admit された tainted persists/reopened
+        // （locationless / absent location の carve-out 経由）。ladder では
+        // provisional-only に制限し、既存 finding の変異（SameProof reattach /
+        // create_independent / open_conflict）を一切許さない（codex 検証4巡目）。
+        provisionalOnlyLadderRawIds.add(item.canonical.rawFindingId);
+      }
     } else {
-      handleRejectedLocation(item, admission.reason ?? 'invalid location', 'tainted');
+      handleUnverifiableLocationEvidence(item, classification.anomalyKind, classification.reason, 'tainted');
     }
   }
 
@@ -1404,6 +1626,7 @@ export async function runFindingManagerForStep(
   );
   const ladder = await runAmbiguousLadder({
     tainted: ladderTainted,
+    provisionalOnlyRawFindingIds: provisionalOnlyLadderRawIds,
     previousLedger,
     ledgerStore: input.ledgerStore,
     contract: input.contract,
@@ -1437,18 +1660,23 @@ export async function runFindingManagerForStep(
   let staleRejections: string[] = [];
   const interpretationResults = new Map<string, InterpretationApplicationResult>();
   const provisionalLandings: ProvisionalLandingReport[] = [];
+  const reviewerAnomalyLandings: ReviewerAnomalyLandingReport[] = [];
 
   const nextLedger = await input.ledgerStore.updateLedger((freshLedger) => {
     staleRejections = [];
     interpretationResults.clear();
     provisionalLandings.length = 0;
+    reviewerAnomalyLandings.length = 0;
     const specs: ProvisionalFindingSpec[] = [
       ...intake.overflowSpecs,
-      ...admissionProvisionalSpecs,
-      ...ladderProvisionalSpecs,
       ...cleanProvisionalSpecs,
       ...ladder.provisionalSpecs,
     ];
+    // codex 対策#4: 引用不成立/stale-snapshot は product provisional ではなく
+    // review-integrity 側の二系統台帳（reviewerAnomalies）へ隔離する。specs
+    // （findings 配列を作る reconcileFindingLedger の入力）には一切混ぜない —
+    // 別の適用（applyReviewerAnomalySpecsToLedger）で処理する（下記）。
+    const anomalySpecs: ReviewerAnomalySpec[] = [...admissionAnomalySpecs, ...ladderAnomalySpecs];
 
     for (const [key, spec] of ladder.provisionalByInterpretationKey) {
       const existsOpen = freshLedger.findings.some(
@@ -1619,6 +1847,14 @@ export async function runFindingManagerForStep(
         sourceRawFindingIds: spec.sourceRawFindingIds,
       });
     }
+    for (const spec of anomalySpecs) {
+      reviewerAnomalyLandings.push({
+        kind: spec.kind,
+        stableKey: spec.stableKey,
+        reason: spec.mismatchReason,
+        sourceRawFindingIds: spec.sourceRawFindingIds,
+      });
+    }
 
     const reconciled = reconcileFindingLedger({
       priorStepResponseText: input.priorStepResponseText,
@@ -1627,11 +1863,17 @@ export async function runFindingManagerForStep(
       managerOutput: merged,
       provisionalFindings: specs,
       rawProvenanceByRawFindingId,
-      // A-3 の証跡不成立 persists は reconcile 後に添付 or provisional として
-      // 着地する（下記）— fallback で二重着地させない。
-      excludedFromUnmentionedFallbackRawFindingIds: new Set(
-        pendingRejectedObservations.map((pending) => pending.item.wire.rawFindingId),
-      ),
+      // A-3 の証跡不成立 persists は reconcile 後に添付 or anomaly として
+      // 着地する（下記）— fallback で二重着地させない。reviewer anomaly へ
+      // 着地した raw（codex 対策#4）も同様: reconciler 自身の defense-in-depth
+      // fallback（「どの決定にも現れなかった raw → provisional」）はこの除外
+      // セットを知らないと、anomaly 着地済みの raw を "unmentioned" とみなして
+      // 別の raw-meaning-ambiguous provisional を作ってしまう（product gate を
+      // 誤って塞ぐ二重着地）。
+      excludedFromUnmentionedFallbackRawFindingIds: new Set([
+        ...pendingRejectedObservations.map((pending) => pending.item.wire.rawFindingId),
+        ...anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds),
+      ]),
       context: {
         workflowName: input.workflowName,
         stepName: input.parentStep.name,
@@ -1648,7 +1890,7 @@ export async function runFindingManagerForStep(
     // （gate 減少 — codex が直接実行で再現）。閉じていた場合は B3 の provisional へ
     // フォールバックする（矛盾する観測が同時に来ている保守側の着地）。
     const rejectedObservationAttachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }> = [];
-    const rejectedObservationFallbackSpecs: ProvisionalFindingSpec[] = [];
+    const rejectedObservationFallbackSpecs: ReviewerAnomalySpec[] = [];
     for (const pending of pendingRejectedObservations) {
       const reconciledTarget = settled.findings.find((finding) => finding.id === pending.targetFindingId);
       if (reconciledTarget !== undefined && reconciledTarget.status === 'open') {
@@ -1658,50 +1900,61 @@ export async function runFindingManagerForStep(
           reason: pending.reason,
         });
       } else {
-        rejectedObservationFallbackSpecs.push({
-          ...provisionalSpecForRaw({
-            wire: pending.item.wire,
-            canonical: pending.item.canonical,
-            reason: `${pending.reason}; the target is no longer open after this round, so the observation is kept provisional instead`,
-          }),
-          kind: 'invalid-location-evidence',
-          stableKey: computeProvisionalStableKey({
-            reviewerStableKey: pending.item.canonical.reviewerStableKey,
-            lineageKey: pending.item.canonical.lineageKey,
-            provisionalKind: 'invalid-location-evidence',
-          }),
-        });
+        rejectedObservationFallbackSpecs.push(reviewerAnomalySpecForRaw({
+          wire: pending.item.wire,
+          canonical: pending.item.canonical,
+          anomalyKind: 'quote-mismatch',
+          reason: `${pending.reason}; the target is no longer open after this round, so the observation is isolated as a reviewer anomaly instead`,
+        }));
       }
     }
     for (const spec of rejectedObservationFallbackSpecs) {
-      provisionalLandings.push({
+      reviewerAnomalyLandings.push({
         kind: spec.kind,
         stableKey: spec.stableKey,
-        reason: spec.reason,
+        reason: spec.mismatchReason,
         sourceRawFindingIds: spec.sourceRawFindingIds,
       });
     }
-    const withRejectedObservations = applyRejectedObservationAttachments(
-      applyProvisionalFindingSpecsToLedger(settled, rejectedObservationFallbackSpecs, {
+    // codex 対策#4: reviewer anomaly は product finding（settled.findings）に
+    // 一切触れない別配列への追記適用 — provisional 側の
+    // applyProvisionalFindingSpecsToLedger とは完全に独立している。
+    const withAnomalies = applyReviewerAnomalySpecsToLedger(
+      settled,
+      [...anomalySpecs, ...rejectedObservationFallbackSpecs],
+      {
         workflowName: input.workflowName,
         stepName: input.parentStep.name,
         runId: input.runId,
         timestamp: input.timestamp,
-      }),
+      },
+    );
+    const withRejectedObservations = applyRejectedObservationAttachments(
+      withAnomalies,
       rejectedObservationAttachments,
       observation,
     );
     const applied = markInterpretationsApplied(withRejectedObservations, interpretationResults, observation);
+    // codex 対策#4: このラウンドで実際に verbatimExcerpt が一致した raw の
+    // lineageKey と、未昇格の reviewer anomaly の lineageKey が一致すれば
+    // promotedFindingId を張る（安全不変条件 D: レコード自体は削除・改変しない）。
+    const withPromotions = linkPromotedReviewerAnomalies(applied, verifiedEvidenceCandidates);
     // 対策バッチ B1: このラウンドの最終状態を、ラウンド開始直前の fresh ledger
     // （= 直前ラウンド終了時点。lost-update 対策で再読込した値）と比較し、
     // fixpoint 到達を判定して次ラウンド比較用のスナップショットごと永続化する。
-    const withFixpoint = attachFixpointState(freshLedger, applied);
+    const withFixpoint = attachFixpointState(freshLedger, withPromotions);
     // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）: fixpoint と同じ
     // freshLedger を「直前ラウンド」として、このラウンドのマーカーを適用済み
     // 集合へ冪等に追記する。fixpoint が成立しない churn でも、この呼び出しは
     // reconcile が完了する限り毎ラウンド必ず起きるため、予算は fixpoint の
     // 成立可否と無関係に単調累積する（同一マーカーの再適用は no-op）。
-    return attachStopBudgetState(freshLedger, withFixpoint, stopBudgetLimits, stopBudgetRoundMarker, input.timestamp);
+    const withStopBudget = attachStopBudgetState(freshLedger, withFixpoint, stopBudgetLimits, stopBudgetRoundMarker, input.timestamp);
+    // review-integrity 予算（codex 検証ブロッカー#1）: このラウンド終了時点で
+    // 未昇格 anomaly が残っていれば、同じ round marker を review-integrity 側の
+    // 適用済み集合へ冪等に追記する（残っていなければ消費しない）。stop budget と
+    // 独立した別カウンタ — product 収束（provisional churn）と review-integrity
+    // 収束（未検証観測の補完）は別事象なので、有限予算も別々に数える。
+    return attachReviewIntegrityState(freshLedger, withStopBudget, reviewIntegrityLimits, stopBudgetRoundMarker, input.timestamp);
   });
 
   const reportNeeded = invalidAttempts.length > 0
@@ -1710,6 +1963,7 @@ export async function runFindingManagerForStep(
     || unsupportedRawFindingReports.length > 0
     || intake.overflowReports.length > 0
     || provisionalLandings.length > 0
+    || reviewerAnomalyLandings.length > 0
     || intake.clarifications.length > 0
     || intake.rawNormalizations.length > 0;
   if (reportNeeded) {
@@ -1724,6 +1978,7 @@ export async function runFindingManagerForStep(
       ...(unsupportedRawFindingReports.length > 0 ? { unsupportedRawFindings: unsupportedRawFindingReports } : {}),
       ...(intake.overflowReports.length > 0 ? { reviewerOutputOverflows: intake.overflowReports } : {}),
       ...(provisionalLandings.length > 0 ? { provisionalLandings } : {}),
+      ...(reviewerAnomalyLandings.length > 0 ? { reviewerAnomalyLandings } : {}),
       ...(intake.rawNormalizations.length > 0 ? { rawNormalizations: intake.rawNormalizations } : {}),
       ...(intake.clarifications.length > 0 ? { relationClarifications: intake.clarifications } : {}),
       interpretationStats: ladder.stats,
@@ -1745,6 +2000,7 @@ export async function runFindingManagerForStep(
     ambiguous: ladder.stats.ambiguousRawCount,
     managerCalls: ladder.stats.managerCalls,
     provisionalLandings: provisionalLandings.length,
+    reviewerAnomalyLandings: reviewerAnomalyLandings.length,
     overflowReviewers: intake.overflowReports.length,
     staleConfirmations: staleRejections.length,
   });

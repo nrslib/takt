@@ -32,6 +32,7 @@ import {
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -42,6 +43,13 @@ const executeAgentMock = vi.mocked(executeAgent);
 
 beforeEach(() => {
   executeAgentMock.mockReset();
+  // Round-trip harness tests below all use the ambiguous-persists vehicle
+  // (hallucinatedRaw), which needs one manager interpretation call per
+  // distinct-evidence round; this generic implementation answers any such
+  // call regardless of which round/harness triggered it. The pure-function
+  // describe blocks above never call runFindingManagerForStep, so this is
+  // simply unused for them.
+  executeAgentMock.mockImplementation(async (_persona, instruction) => interpretationRunAgentResponse(instruction as string));
 });
 
 // ---------------------------------------------------------------------------
@@ -270,17 +278,44 @@ function makeRoundHarness(
   };
 }
 
+// codex 対策#4: 幻覚 location（存在しないファイルへの claim）は verbatimExcerpt
+// 機械照合により reviewer anomaly（review-integrity 側、product gate
+// 非ブロッキング）へ隔離されるようになったため、この churn/budget e2e 群の
+// 「gate-blocking な provisional を作る」役割はもう果たせない（意図した修正）。
+// 構造的に矛盾した persists 参照（raw-meaning-ambiguous）で代替する — `path`
+// 引数は実ファイルパスの代わりに識別用の distinguishing marker として使う
+// （呼び出し側のシグネチャ・churn/repeat のセマンティクスは変えない）。
 function hallucinatedRaw(rawFindingId: string, title: string, path: string): Record<string, unknown> {
   return {
     rawFindingId,
     familyTag: 'bug',
     severity: 'high',
     title,
-    location: `${path}:5`,
-    description: `This describes a bug in "${path}", a file that does not exist in the reviewed tree.`,
-    suggestion: 'Add a null check.',
-    relation: 'new',
+    description: `Claims to persist a finding id the ledger has never seen (${path}).`,
+    suggestion: '',
+    relation: 'persists',
+    targetFindingId: `F-fake-${path}`,
   };
+}
+
+/** ambiguous ladder の interpretation 呼び出しへの汎用応答（'provisional' 提案）。instruction から正規化済み rawFindingId を動的に抽出する。 */
+function interpretationRunAgentResponse(instruction: string): AgentResponse {
+  const match = /"rawFindingId":\s*"([^"]+)"/.exec(instruction);
+  const rawFindingId = match?.[1];
+  if (rawFindingId === undefined) {
+    throw new Error(`Test setup error: rawFindingId not found in interpretation instruction: ${instruction}`);
+  }
+  return {
+    persona: 'findings-manager',
+    status: 'done',
+    content: '',
+    structuredOutput: {
+      interpretations: [
+        { decision: 'provisional', rawFindingId, proofId: '', targetFindingId: '', reason: 'Cannot determine the identity of this re-report.' },
+      ],
+    },
+    timestamp: new Date(),
+  } as unknown as AgentResponse;
 }
 
 function emptyLedger(): FindingLedger {
@@ -372,6 +407,9 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         description: 'Verified: the fix removes the issue.',
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
+        // codex 検証ブロッカー#2: confirmation は検証済み source_quote 証跡が
+        // 無いと resolve できない。
+        ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10),
       },
     ], '2026-07-01T00:00:00.000Z');
     expect(harness.currentLedger().findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');

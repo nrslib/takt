@@ -13,7 +13,9 @@ export {
   INTERPRETATION_STAGES,
   RAW_AMBIGUITY_CODES,
   RAW_DECISION_KINDS,
+  RAW_FINDING_EVIDENCE_KINDS,
   RAW_FINDING_RELATIONS,
+  REVIEWER_ANOMALY_KINDS,
 } from '../../models/finding-types.js';
 
 export type {
@@ -44,6 +46,7 @@ export type {
   FindingContractAdjudicatorConfig,
   FindingContractConfig,
   FindingContractManagerConfig,
+  FindingContractReviewBudgetConfig,
   FindingContractStopBudgetConfig,
   FindingConflictStatus,
   FindingLedger,
@@ -51,6 +54,7 @@ export type {
   FindingLedgerEntry,
   FindingLedgerFixpointSnapshot,
   FindingLedgerFixpointState,
+  FindingLedgerReviewIntegrityState,
   FindingLedgerStopBudgetState,
   FindingLifecycle,
   FindingManagerConflict,
@@ -75,8 +79,14 @@ export type {
   FindingSeverity,
   FindingsRuleContext,
   FindingStatus,
+  LocationlessEvidence,
   RawDecisionKind,
   RawFinding,
+  RawFindingEvidence,
+  RawFindingEvidenceKind,
   RawFindingKind,
   RawFindingRelation,
+  ReviewerAnomalyEntry,
+  ReviewerAnomalyKind,
+  SourceQuoteEvidence,
 } from '../../models/finding-types.js';

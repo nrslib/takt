@@ -307,6 +307,9 @@ describe('builtin takt-default provider_options refs', () => {
       const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
       expect(reviewers?.rules?.map((rule) => rule.condition)).toEqual([
         `all("approved", "${antipatternOk}", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)`,
+        // codex 対策#4 / 検証ブロッカー#1: product gate が空でも未昇格 anomaly が
+        // 残るなら fix へ落とさず final-gate（再レビュー/裁定）へ渡す。
+        'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)',
         // 対策バッチ B1: provisional が直前ラウンドから意味的な変化の無い
         // fixpoint に達した場合、再計画では解消し得ない。plan への差し戻しの
         // 前に、要人手裁定の終端状態へルーティングする。
@@ -330,7 +333,8 @@ describe('builtin takt-default provider_options refs', () => {
         aggregateType: 'all',
         aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
       });
-      expect(reviewers?.rules?.[4]).toMatchObject({
+      // review-integrity ルール（index 1）を差し込んだぶん any 集約は index 5 へ。
+      expect(reviewers?.rules?.[5]).toMatchObject({
         isAggregateCondition: true,
         aggregateType: 'any',
         aggregateGuardCondition: 'findings.conflicts.count == 0',
@@ -341,6 +345,17 @@ describe('builtin takt-default provider_options refs', () => {
       // 台帳に載らず fix に届かない（reviewers と同じ aggregate 形の rules になる）。
       const mergeReadiness = normalized.steps.find((step) => step.name === 'final-gate');
       expect(mergeReadiness?.rules).toEqual([
+        // codex 対策#4 / 検証ブロッカー#1: review-integrity gate は COMPLETE より前。
+        // 未昇格 anomaly が残る限り COMPLETE させず、予算切れなら NEEDS_ADJUDICATION、
+        // それ以外は再レビュー（reviewers）へ。
+        expect.objectContaining({
+          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)',
+          next: 'NEEDS_ADJUDICATION',
+        }),
+        expect.objectContaining({
+          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)',
+          next: 'reviewers',
+        }),
         expect.objectContaining({
           isAggregateCondition: true,
           aggregateType: 'all',
@@ -431,26 +446,32 @@ describe('builtin takt-default provider_options refs', () => {
         const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
         const reviewerRules = reviewers?.rules ?? [];
         expect(reviewerRules.map((rule) => rule.next), name).toEqual([
-          'final-gate', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
+          'final-gate', 'final-gate', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
         expect(reviewerRules[0], name).toMatchObject({
           isAggregateCondition: true,
           aggregateType: 'all',
           aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
         });
+        // review-integrity ルール（reviewerRules[1] = anomaly→final-gate）を差し込んだ
+        // ぶん、fixpoint/budget は +1 シフトする。
         expect(reviewerRules[1], name).toMatchObject({
+          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)',
+          next: 'final-gate',
+        });
+        expect(reviewerRules[2], name).toMatchObject({
           condition: 'when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)',
           next: 'NEEDS_ADJUDICATION',
         });
-        expect(reviewerRules[2], name).toMatchObject({
+        expect(reviewerRules[3], name).toMatchObject({
           condition: 'when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0)',
           next: 'NEEDS_ADJUDICATION',
         });
-        expect(reviewerRules[6], name).toMatchObject({
+        expect(reviewerRules[7], name).toMatchObject({
           condition: 'when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)',
           next: 'finding-conflict-adjudication',
         });
-        expect(reviewerRules[7], name).toMatchObject({
+        expect(reviewerRules[8], name).toMatchObject({
           condition: 'when(findings.conflicts.count > 0)',
           next: 'ABORT',
         });
@@ -458,9 +479,14 @@ describe('builtin takt-default provider_options refs', () => {
         const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
         const gateRules = finalGate?.rules ?? [];
         expect(gateRules.map((rule) => rule.next), name).toEqual([
-          'COMPLETE', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
+          'NEEDS_ADJUDICATION', 'reviewers', 'COMPLETE', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
+        // review-integrity ルール2本を先頭に差し込んだぶん、all 集約 COMPLETE は index 2 へ。
         expect(gateRules[0], name).toMatchObject({
+          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)',
+          next: 'NEEDS_ADJUDICATION',
+        });
+        expect(gateRules[2], name).toMatchObject({
           isAggregateCondition: true,
           aggregateType: 'all',
           aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',
@@ -488,7 +514,7 @@ describe('builtin takt-default provider_options refs', () => {
         const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
         const reviewerRules = reviewers?.rules ?? [];
         expect(reviewerRules.map((rule) => rule.next), name).toEqual([
-          'final-gate', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
+          'final-gate', 'final-gate', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
         expect(reviewerRules[0], name).toMatchObject({
           isAggregateCondition: true,
@@ -499,9 +525,10 @@ describe('builtin takt-default provider_options refs', () => {
         const finalGate = normalized.steps.find((step) => step.name === 'final-gate');
         const gateRules = finalGate?.rules ?? [];
         expect(gateRules.map((rule) => rule.next), name).toEqual([
-          'COMPLETE', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
+          'NEEDS_ADJUDICATION', 'reviewers', 'COMPLETE', 'NEEDS_ADJUDICATION', 'NEEDS_ADJUDICATION', 'plan', 'plan', 'fix', 'fix', 'finding-conflict-adjudication', 'ABORT',
         ]);
-        expect(gateRules[0], name).toMatchObject({
+        // review-integrity ルール2本を先頭に差し込んだぶん、all 集約 COMPLETE は index 2 へ。
+        expect(gateRules[2], name).toMatchObject({
           isAggregateCondition: true,
           aggregateType: 'all',
           aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0',

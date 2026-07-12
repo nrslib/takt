@@ -110,8 +110,12 @@ describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) 
       expect(step, `step "${stepName}" should exist`).toBeDefined();
       const rules = step!.rules ?? [];
 
-      const fixpointRuleIndex = rules.findIndex((rule) => rule.next === 'NEEDS_ADJUDICATION');
-      expect(fixpointRuleIndex, `step "${stepName}" should route to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
+      // final-gate は codex 対策#4 の review-integrity ルール（reviewerAnomalies の
+      // budgetExhausted → NEEDS_ADJUDICATION）も持つため、fixpoint ルールは
+      // condition で特定する（単なる next==NEEDS_ADJUDICATION では anomaly ルールに
+      // 先にヒットしてしまう）。
+      const fixpointRuleIndex = rules.findIndex((rule) => rule.next === 'NEEDS_ADJUDICATION' && rule.condition.includes('findings.provisional.fixpoint'));
+      expect(fixpointRuleIndex, `step "${stepName}" should route fixpoint to NEEDS_ADJUDICATION`).toBeGreaterThanOrEqual(0);
       expect(rules[fixpointRuleIndex]!.condition).toContain('findings.provisional.fixpoint');
 
       const replanRuleIndex = rules.findIndex((rule) => rule.next === 'plan' && rule.condition.includes('findings.provisional.count'));

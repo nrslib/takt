@@ -20,6 +20,7 @@
 import { createHash } from 'node:crypto';
 import {
   FINDING_SEVERITIES,
+  RAW_FINDING_EVIDENCE_KINDS,
   RAW_FINDING_KINDS,
   RAW_FINDING_RELATIONS,
 } from '../../models/finding-types.js';
@@ -33,12 +34,14 @@ import type {
   FindingSeverity,
   RawAmbiguityCode,
   RawFinding,
+  RawFindingEvidence,
+  RawFindingEvidenceKind,
   RawFindingKind,
   RawFindingRelation,
   ReviewerRawFindingCandidate,
 } from './types.js';
 import { deriveRawFindingRelation, kindForRelation } from './schemas.js';
-import { normalizeFindingText, parseFindingLocation } from './location.js';
+import { normalizeFindingText, parseFindingLocation, parseFindingLocationRange } from './location.js';
 import { RAW_LADDER_POLICY_VERSION } from './raw-finding-limits.js';
 
 // ---------------------------------------------------------------------------
@@ -149,6 +152,21 @@ export function computeProvisionalStableKey(input: {
   return sha256Of('provisional-stable-key', input.reviewerStableKey, input.lineageKey, input.provisionalKind, String(RAW_LADDER_POLICY_VERSION));
 }
 
+/**
+ * reviewer anomaly（codex 対策#4: 二系統台帳の review-integrity 側）の再発同定
+ * キー。computeProvisionalStableKey と同じ形だが名前空間を分ける
+ * （'reviewer-anomaly-stable-key' プレフィックス）ため、同じ
+ * (reviewerStableKey, lineageKey) でも provisional と anomaly の stableKey が
+ * 衝突しない。
+ */
+export function computeReviewerAnomalyStableKey(input: {
+  reviewerStableKey: string;
+  lineageKey: string;
+  anomalyKind: string;
+}): string {
+  return sha256Of('reviewer-anomaly-stable-key', input.reviewerStableKey, input.lineageKey, input.anomalyKind, String(RAW_LADDER_POLICY_VERSION));
+}
+
 /** reviewer 全量超過の単一 blocker 用（設計書 §10 の overflow stableKey 規則）。 */
 export function computeOverflowStableKey(reviewerStableKey: string): string {
   return sha256Of(reviewerStableKey, 'reviewer-output-overflow');
@@ -212,6 +230,64 @@ function pickKind(value: unknown): RawFindingKind | undefined {
     : undefined;
 }
 
+function pickEvidenceKind(value: unknown): RawFindingEvidenceKind | undefined {
+  return typeof value === 'string' && (RAW_FINDING_EVIDENCE_KINDS as readonly string[]).includes(value)
+    ? value as RawFindingEvidenceKind
+    : undefined;
+}
+
+/**
+ * typed evidence protocol(codex 対策#4)の組み立て。provider-facing の flat wire
+ * フィールド(evidenceKind/verbatimExcerpt/snapshotId)と location から、ネスト済み
+ * RawFindingEvidence を作る唯一の関数 — candidate factory
+ * (createReviewerRawFindingCandidates)だけがここを通す。
+ *
+ * - locationless: explanation は独立の wire フィールドを持たせず description を
+ *   流用する(弱いモデルへ要求する必須フィールドを増やさない設計判断)。location が
+ *   非空でも(「存在するはずの path」を主張する claim)組み立てる — 「存在しない
+ *   ことが根拠」の claim を無理に source_quote へ押し込めない、という codex の
+ *   要請どおり、verbatimExcerpt 照合の対象にしない。
+ * - source_quote: verbatimExcerpt・snapshotId が両方揃い、かつ location が
+ *   「path:line」か「path:start-end」のどちらかの形で行範囲を持つ場合のみ組み立てる。
+ *   1点でも欠けたら undefined(evidence なし)を返す — 呼び出し元
+ *   (admission-validation.ts の呼び出し側)は「evidence なし」を「location 付き
+ *   claim なら不採用」として扱う(欠損を有利に解釈しない)。
+ */
+export function resolveRawFindingEvidence(fields: {
+  evidenceKind?: RawFindingEvidenceKind;
+  verbatimExcerpt?: string;
+  snapshotId?: string;
+  location?: string;
+  description?: string;
+}): RawFindingEvidence | undefined {
+  if (fields.evidenceKind === 'locationless') {
+    return { kind: 'locationless', explanation: fields.description ?? '(no description)' };
+  }
+  if (fields.evidenceKind !== 'source_quote') {
+    return undefined;
+  }
+  if (fields.verbatimExcerpt === undefined || fields.snapshotId === undefined) {
+    return undefined;
+  }
+  const range = parseFindingLocationRange(fields.location) ?? singleLineRange(fields.location);
+  if (range === undefined) {
+    return undefined;
+  }
+  return {
+    kind: 'source_quote',
+    path: range.path,
+    startLine: range.startLine,
+    endLine: range.endLine,
+    verbatimExcerpt: fields.verbatimExcerpt,
+    snapshotId: fields.snapshotId,
+  };
+}
+
+function singleLineRange(location: string | undefined): { path: string; startLine: number; endLine: number } | undefined {
+  const parsed = parseFindingLocation(location);
+  return parsed?.line !== undefined ? { path: parsed.path, startLine: parsed.line, endLine: parsed.line } : undefined;
+}
+
 /** brand プロパティ（unique symbol）を型レベルで付与する唯一の cast 地点。runtime の同一性は WeakSet/WeakMap 登録が担保する。 */
 type UnbrandedCandidate = {
   [K in keyof ReviewerRawFindingCandidate as K extends symbol ? never : K]: ReviewerRawFindingCandidate[K];
@@ -269,6 +345,13 @@ export function createReviewerRawFindingCandidates(
     const intakeId = namespacedRawFindingId(context, reviewerRawFindingId ?? `item-${index + 1}`);
     // 構造化出力の strict 様式では該当なしの欄が空文字で埋まるため、空文字は
     // 未指定として扱う（pickString が弾く）。
+    const evidence = resolveRawFindingEvidence({
+      evidenceKind: pickEvidenceKind(record.evidenceKind),
+      verbatimExcerpt: pickString(record.verbatimExcerpt),
+      snapshotId: pickString(record.snapshotId),
+      location: pickString(record.location),
+      description: pickString(record.description),
+    });
     return registerCandidate({
       intakeId,
       reviewerStableKey,
@@ -282,6 +365,7 @@ export function createReviewerRawFindingCandidates(
       ...(pickRelation(record.relation) !== undefined ? { relation: pickRelation(record.relation)! } : {}),
       ...(pickString(record.targetFindingId) !== undefined ? { targetFindingId: pickString(record.targetFindingId)! } : {}),
       ...(pickKind(record.kind) !== undefined ? { legacyKind: pickKind(record.kind)! } : {}),
+      ...(evidence !== undefined ? { evidence } : {}),
       sourceBytes: Buffer.byteLength(JSON.stringify(item ?? null), 'utf-8'),
       reviewer: context.reviewerStepName,
       stepName: context.reviewerStepName,
@@ -311,6 +395,8 @@ export function candidateFromLegacyRawFinding(
     relation,
     ...(raw.targetFindingId !== undefined ? { targetFindingId: raw.targetFindingId } : {}),
     ...(raw.kind !== undefined ? { legacyKind: raw.kind } : {}),
+    // すでに組み立て済みのネスト形（wire と同じ形）なのでそのまま引き継ぐ。
+    ...(raw.evidence !== undefined ? { evidence: raw.evidence } : {}),
     sourceBytes: Buffer.byteLength(JSON.stringify(raw), 'utf-8'),
     reviewer: raw.reviewer,
     stepName: raw.stepName,
@@ -533,7 +619,9 @@ export function detectRawFindingAmbiguities(
  * 未検証の reviewer 出力1件から ambiguity 検出・candidate 生成に使うフィールドを
  * 寛容に抜き出す（絶対に throw しない）。
  */
-export function extractLenientRawFields(item: unknown): RawAmbiguityFields & { rawFindingId?: string; suggestion?: string } {
+export function extractLenientRawFields(
+  item: unknown,
+): RawAmbiguityFields & { rawFindingId?: string; suggestion?: string; verbatimExcerpt?: string; snapshotId?: string } {
   const record = typeof item === 'object' && item !== null && !Array.isArray(item)
     ? item as Record<string, unknown>
     : {};
@@ -548,6 +636,9 @@ export function extractLenientRawFields(item: unknown): RawAmbiguityFields & { r
     ...(pickString(record.familyTag) !== undefined ? { familyTag: pickString(record.familyTag)! } : {}),
     ...(pickString(record.location) !== undefined ? { location: pickString(record.location)! } : {}),
     ...(pickString(record.suggestion) !== undefined ? { suggestion: pickString(record.suggestion)! } : {}),
+    // typed evidence protocol（codex 対策#4）の envelope 検査対象フィールド。
+    ...(pickString(record.verbatimExcerpt) !== undefined ? { verbatimExcerpt: pickString(record.verbatimExcerpt)! } : {}),
+    ...(pickString(record.snapshotId) !== undefined ? { snapshotId: pickString(record.snapshotId)! } : {}),
   };
 }
 
@@ -615,6 +706,13 @@ export function canonicalizeReviewerRawFinding(
       clarificationAttempted,
       ambiguityCodes: allCodes,
     },
+    // typed evidence protocol(codex 対策#4)。coherent/ambiguous どちらの raw も
+    // 持ちうる(ambiguity は relation/target の構造的矛盾であり、evidence の有無とは
+    // 直交する — raw-canonicalization.ts のコメント参照)。evidenceHash とは独立に
+    // 保持する(evidenceHash は WAL/epoch 用の「同一 claim 判定」であり、
+    // verbatimExcerpt が変わっても既存の攻撃回帰の前提を壊さないようスコープ外に
+    // 保つ)。
+    ...(candidate.evidence !== undefined ? { evidence: candidate.evidence } : {}),
   };
 
   // 形式が完全（codes 空）なら coherent。ただし taint（priorCodes）は保持する:
@@ -690,5 +788,6 @@ export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
     ...(canonical.relation !== 'new' && canonical.targetFindingId !== undefined
       ? { targetFindingId: canonical.targetFindingId }
       : {}),
+    ...(canonical.evidence !== undefined ? { evidence: canonical.evidence } : {}),
   };
 }

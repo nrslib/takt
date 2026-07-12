@@ -16,6 +16,15 @@ export interface FindingContractInstructionContext {
   /** Whether the ledger currently has waived findings. */
   hasWaivedFindings: boolean;
   rawFindingsJsonSchema?: Record<string, unknown>;
+  /**
+   * codex 対策#4: reviewer が typed evidence protocol の source_quote 主張に
+   * echo する review scope snapshot id（snapshot.ts の
+   * computeReviewScopeSnapshotId）。reviewer step（includeRawFindingsSchema が
+   * true）のときだけ設定される — manager-runner.ts の runFindingManagerForStep が
+   * 同じ cwd に対して同じ関数を呼び直し、検証時点の値と比較する
+   * （admission-validation.ts の verifySourceQuoteEvidence 参照）。
+   */
+  reviewScopeSnapshotId?: string;
 }
 
 /**
