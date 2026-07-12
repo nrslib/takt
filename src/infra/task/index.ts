@@ -80,4 +80,5 @@ export { isStaleRunningTask } from './process.js';
 export {
   listStoredProjectRuns,
   type StoredProjectRun,
+  type StoredProjectRunWarningHandler,
 } from './worktree-run-storage.js';

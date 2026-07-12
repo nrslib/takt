@@ -40,6 +40,8 @@ export interface StoredProjectRun {
   readonly runPath: string;
 }
 
+export type StoredProjectRunWarningHandler = (warning: string) => void;
+
 function hashProjectIdentity(projectDir: string): string {
   const canonicalProjectDir = realpathSync(projectDir);
   return createHash('sha256').update(canonicalProjectDir).digest('hex').slice(0, 24);
@@ -106,7 +108,10 @@ function moveDirectory(source: string, destination: string): void {
   }
 }
 
-export function listStoredProjectRuns(projectDir: string): readonly StoredProjectRun[] {
+export function listStoredProjectRuns(
+  projectDir: string,
+  onWarning?: StoredProjectRunWarningHandler,
+): readonly StoredProjectRun[] {
   const projectId = hashProjectIdentity(projectDir);
   const projectStore = join(getGlobalRunStoreDir(), projectId);
   if (!existsSync(projectStore)) {
@@ -118,7 +123,13 @@ export function listStoredProjectRuns(projectDir: string): readonly StoredProjec
       continue;
     }
     const cloneStore = join(projectStore, cloneEntry.name);
-    readStoreManifest(join(cloneStore, 'store.json'), projectId, cloneEntry.name);
+    try {
+      readStoreManifest(join(cloneStore, 'store.json'), projectId, cloneEntry.name);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onWarning?.(`Skipping incomplete or invalid run store ${cloneEntry.name}: ${message}`);
+      continue;
+    }
     const runsPath = join(cloneStore, 'runs');
     if (!existsSync(runsPath)) {
       continue;

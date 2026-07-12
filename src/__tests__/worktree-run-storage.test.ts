@@ -133,6 +133,24 @@ describe('initializeWorktreeRunStorage', () => {
     }
   });
 
+  it('lists healthy preserved runs when an interrupted store has no manifest', () => {
+    const projectDir = join(root, 'project');
+    mkdirSync(projectDir);
+    const storage = initializeWorktreeRunStorage(projectDir, createClone('clone'), 'feature/healthy');
+    mkdirSync(join(storage.storePath, 'healthy-run'));
+    const projectStore = join(storage.storePath, '..', '..');
+    mkdirSync(join(projectStore, 'orphan-clone-id', 'runs', 'partial-run'), { recursive: true });
+    const warnings: string[] = [];
+
+    expect(listStoredProjectRuns(projectDir, (warning) => warnings.push(warning))).toContainEqual({
+      cloneId: storage.cloneId,
+      runSlug: 'healthy-run',
+      runPath: join(storage.storePath, 'healthy-run'),
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('orphan-clone-id');
+  });
+
   it('supports the canonical run path, metadata, and order readers through the link', () => {
     const projectDir = join(root, 'project');
     mkdirSync(projectDir);
