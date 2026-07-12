@@ -103,4 +103,32 @@ describe('workflow rule effects', () => {
       requires: { rule_effects: 1 },
     })).not.toThrow();
   });
+
+  it('rejects rule effects on parallel sub-steps because they have no transition executor', () => {
+    expect(() => WorkflowConfigRawSchema.parse({
+      name: 'parallel-rule-effects',
+      requires: { rule_effects: 1 },
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'review',
+        parallel: [{
+          name: 'security',
+          persona: 'security-reviewer',
+          instruction: 'review security',
+          rules: [{
+            condition: 'Go',
+            next: 'COMPLETE',
+            effects: [{
+              type: 'capture_artifacts',
+              allowed_patterns: ['specs/phase-*/plan.md'],
+              required_basenames: ['plan.md'],
+              same_parent: true,
+            }],
+          }],
+        }],
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    })).toThrow(/parallel sub-step rules do not support effects/);
+  });
 });

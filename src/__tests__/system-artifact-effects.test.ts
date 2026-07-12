@@ -185,6 +185,18 @@ describe('artifact transition effects', () => {
     )).toThrow('different task');
   });
 
+  it('replaces a stale manifest from another task during a new capture', () => {
+    createPlan();
+    capture('.takt/state/plan-artifacts.json');
+    options = { ...options, task: 'new task' };
+
+    expect(() => capture('.takt/state/plan-artifacts.json')).not.toThrow();
+    expect(() => commitArtifactsEffect(options, {
+      manifestPath: '.takt/state/plan-artifacts.json',
+      message: 'new task plan',
+    })).not.toThrow();
+  });
+
   it('uses the persisted parent to disambiguate a partial replan', () => {
     createPlan('specs/phase-1-current');
     capture('.takt/state/plan-artifacts.json');

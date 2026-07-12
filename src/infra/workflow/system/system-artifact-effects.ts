@@ -253,12 +253,12 @@ export function captureArtifactsEffect(
   }
   const candidatePaths = candidates.map((entry) => entry.path);
   const parents = new Set(candidatePaths.map((path) => dirname(path)));
-  const previousManifest = effect.manifestPath !== undefined
+  const persistedManifest = effect.manifestPath !== undefined
     ? readPersistedManifestIfPresent(options.cwd, effect.manifestPath)
     : undefined;
-  if (previousManifest !== undefined && previousManifest.task_hash !== hashText(options.task)) {
-    throw new Error('Persisted artifact manifest belongs to a different task');
-  }
+  const previousManifest = persistedManifest?.task_hash === hashText(options.task)
+    ? persistedManifest
+    : undefined;
   const previousParents = new Set(previousManifest?.artifacts.map((artifact) => dirname(artifact.path)) ?? []);
   const previousParent = previousParents.size === 1 ? [...previousParents][0] : undefined;
   const completeParents = [...parents].filter((parent) => {

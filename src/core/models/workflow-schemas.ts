@@ -323,6 +323,13 @@ const AgentParallelSubStepRawSchema = z.object({
         message: 'parallel sub-step rules do not allow "return"',
       });
     }
+    if (rule.effects !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rules', index, 'effects'],
+        message: 'parallel sub-step rules do not support effects',
+      });
+    }
   });
 });
 
