@@ -11,7 +11,8 @@ import {
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import type { WorkflowEffect } from '../../../core/models/types.js';
 import type { SystemStepServicesOptions } from '../../../core/workflow/system/system-step-services.js';
-import { commitExactPaths } from '../../task/git.js';
+import { commitExactSnapshots } from '../../task/git.js';
+import type { ExactPathSnapshot } from '../../task/git.js';
 
 interface GitStatusEntry {
   readonly status: string;
@@ -183,6 +184,20 @@ function createArtifactIdentity(cwd: string, repositoryPath: string): ArtifactId
   return { path: repositoryPath, sha256: sha256(canonicalPath) };
 }
 
+function readVerifiedArtifactSnapshot(
+  cwd: string,
+  artifact: ArtifactIdentity,
+): ExactPathSnapshot {
+  const canonicalPath = assertSafeRegularFile(cwd, artifact.path);
+  const contents = readFileSync(canonicalPath);
+  const actualHash = createHash('sha256').update(contents).digest('hex');
+  if (actualHash !== artifact.sha256) {
+    throw new Error(`Artifact changed after capture: ${artifact.path}`);
+  }
+  const mode = (lstatSync(canonicalPath).mode & 0o111) === 0 ? '100644' : '100755';
+  return { path: artifact.path, contents, mode };
+}
+
 function requireStringArray(value: unknown, field: string): readonly string[] {
   if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || item.length === 0)) {
     throw new Error(`Artifact manifest requires non-empty string array field "${field}"`);
@@ -270,9 +285,8 @@ export function captureArtifactsEffect(
       throw new Error(`capture_artifacts found unexpected artifact basename: ${candidate}`);
     }
   }
-
   const artifacts = requiredBasenames.map((name) => {
-    const path = `${parent}/${name}`;
+    const path = parent === '.' ? name : `${parent}/${name}`;
     if (!allowedPatterns.some((pattern) => pattern.test(path))) {
       throw new Error(`Required artifact is outside the allow patterns: ${path}`);
     }
@@ -304,21 +318,15 @@ export function commitArtifactsEffect(
   if (typeof payload.message !== 'string' || payload.message.trim().length === 0) {
     throw new Error('commit_artifacts requires non-empty string field "message"');
   }
-  const paths = manifest.artifacts.map((artifact) => {
-    const identity = createArtifactIdentity(options.cwd, artifact.path);
-    if (identity.sha256 !== artifact.sha256) {
-      throw new Error(`Artifact changed after capture: ${artifact.path}`);
-    }
-    return artifact.path;
-  });
+  const snapshots = manifest.artifacts.map((artifact) => (
+    readVerifiedArtifactSnapshot(options.cwd, artifact)
+  ));
+  const paths = snapshots.map((snapshot) => snapshot.path);
   if (new Set(paths).size !== paths.length) {
     throw new Error('Artifact manifest contains duplicate paths');
   }
 
-  const commit = commitExactPaths(options.cwd, payload.message, paths, {
-    allowGitHooks: false,
-    allowGitFilters: false,
-  });
+  const commit = commitExactSnapshots(options.cwd, payload.message, snapshots);
   return commit === undefined
     ? { status: 'already_committed', paths }
     : { status: 'committed', commit, paths };

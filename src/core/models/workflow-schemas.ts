@@ -22,6 +22,7 @@ import {
   StructuredOutputRawSchema,
   SystemInputRawSchema,
   validateSystemStepFields,
+  validateUniqueWorkflowEffectTypes,
   WorkflowEffectRawSchema,
 } from './workflow-system-schemas.js';
 import {
@@ -71,6 +72,9 @@ const WorkflowProviderOptionsWithExtendsSchema = z.object({
   runtime: RuntimeConfigSchema,
 }).optional();
 
+const WorkflowEffectsRawSchema = z.array(WorkflowEffectRawSchema)
+  .superRefine((effects, ctx) => validateUniqueWorkflowEffectTypes(effects, ctx, []));
+
 const WorkflowParamDeclarationRawSchema = z.object({
   type: z.enum(['facet_ref', 'facet_ref[]']),
   facet_kind: z.enum(['knowledge', 'policy', 'instruction', 'report_format']),
@@ -102,7 +106,7 @@ export const WorkflowRuleSchema = z.object({
   appendix: z.string().optional(),
   requires_user_input: z.boolean().optional(),
   interactive_only: z.boolean().optional(),
-  effects: z.array(WorkflowEffectRawSchema).min(1).optional(),
+  effects: WorkflowEffectsRawSchema.min(1).optional(),
 }).refine(
   (data) => (data.condition != null) !== (data.when != null),
   {
@@ -424,7 +428,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     delay_before_ms: z.number().int().min(0).optional(),
     structured_output: StructuredOutputRawSchema.optional(),
     system_inputs: z.array(SystemInputRawSchema).optional(),
-    effects: z.array(WorkflowEffectRawSchema).optional(),
+    effects: WorkflowEffectsRawSchema.optional(),
     rules: z.array(WorkflowRuleSchema).optional(),
     output_contracts: OutputContractsFieldSchema,
     quality_gates: QualityGatesSchema,

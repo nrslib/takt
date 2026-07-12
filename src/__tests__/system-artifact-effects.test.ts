@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
   captureArtifactsEffect,
   commitArtifactsEffect,
 } from '../infra/workflow/system/system-artifact-effects.js';
+import { commitExactSnapshots } from '../infra/task/git.js';
 
 describe('artifact transition effects', () => {
   let cwd: string;
@@ -111,10 +112,62 @@ describe('artifact transition effects', () => {
     createPlan();
     const captured = capture();
     writeFileSync(join(cwd, 'specs/phase-42-proof/plan.md'), 'changed after review\n');
+    const headBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' });
+    const statusBefore = execFileSync('git', ['status', '--porcelain=v1'], { cwd, encoding: 'utf8' });
     expect(() => commitArtifactsEffect(options, {
       manifest: captured.manifest,
       message: 'approve plan',
     })).toThrow('Artifact changed after capture');
+    expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' })).toBe(headBefore);
+    expect(execFileSync('git', ['status', '--porcelain=v1'], { cwd, encoding: 'utf8' })).toBe(statusBefore);
+  });
+
+  it('commits verified bytes without rereading a concurrently changed worktree file', () => {
+    const path = 'approved.md';
+    writeFileSync(join(cwd, path), 'approved\n');
+    const approved = readFileSync(join(cwd, path));
+    writeFileSync(join(cwd, path), 'changed after verification\n');
+
+    commitExactSnapshots(cwd, 'approved snapshot', [{
+      path,
+      contents: approved,
+      mode: '100644',
+    }]);
+
+    expect(execFileSync('git', ['show', `HEAD:${path}`], { cwd, encoding: 'utf8' })).toBe('approved\n');
+    expect(readFileSync(join(cwd, path), 'utf8')).toBe('changed after verification\n');
+    expect(execFileSync('git', ['status', '--porcelain=v1', '--', path], { cwd, encoding: 'utf8' }))
+      .toBe(` M ${path}\n`);
+  });
+
+  it('supports required artifacts at the repository root without adding a dot prefix', () => {
+    writeFileSync(join(cwd, 'plan.md'), 'root plan\n');
+    const result = captureArtifactsEffect(options, {
+      type: 'capture_artifacts',
+      allowedPatterns: ['plan.md'],
+      requiredBasenames: ['plan.md'],
+      sameParent: true,
+    });
+
+    expect(JSON.stringify(result)).toContain('"path":"plan.md"');
+    expect(JSON.stringify(result)).not.toContain('./plan.md');
+  });
+
+  it('rejects traversal patterns and symlink artifacts at the capture boundary', () => {
+    expect(() => captureArtifactsEffect(options, {
+      type: 'capture_artifacts',
+      allowedPatterns: ['../plan.md'],
+      requiredBasenames: ['plan.md'],
+      sameParent: true,
+    })).toThrow('safe repository-relative path');
+
+    const parent = join(cwd, 'specs/phase-42-proof');
+    mkdirSync(parent, { recursive: true });
+    writeFileSync(join(cwd, 'source.md'), 'source\n');
+    symlinkSync('../../source.md', join(parent, 'plan.md'));
+    writeFileSync(join(parent, 'task.md'), 'task\n');
+    writeFileSync(join(parent, 'test-plan.md'), 'tests\n');
+    expect(() => capture()).toThrow('must not contain symlinks');
   });
 
   it('persists a task-bound manifest for process restart and rejects another task', () => {

@@ -3,7 +3,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { devNull } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { devNull, tmpdir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 import { createLogger } from '../../shared/utils/index.js';
 
 const log = createLogger('git');
@@ -14,6 +16,12 @@ export const NON_FAST_FORWARD_PUSH_HINT =
 export interface StageAndCommitOptions {
   allowGitHooks?: boolean;
   allowGitFilters?: boolean;
+}
+
+export interface ExactPathSnapshot {
+  readonly path: string;
+  readonly contents: Buffer;
+  readonly mode: '100644' | '100755';
 }
 
 export function getCurrentBranch(cwd: string): string {
@@ -73,40 +81,99 @@ export function getSafeGitEnv(cwd: string, options: StageAndCommitOptions): Node
   return env;
 }
 
-export function commitExactPaths(
-  cwd: string,
-  message: string,
-  paths: readonly string[],
-  options: StageAndCommitOptions = {},
-): string | undefined {
-  if (paths.length === 0) {
-    throw new Error('Exact-path commit requires at least one path');
-  }
-  const env = getSafeGitEnv(cwd, options);
-  const literal = ['--literal-pathspecs'] as const;
-  execFileSync('git', [...literal, 'add', '--', ...paths], { cwd, stdio: 'pipe', env });
-
-  const staged = execFileSync('git', [...literal, 'diff', '--cached', '--name-only', 'HEAD', '--', ...paths], {
+function gitOutput(cwd: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
+  return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
     stdio: 'pipe',
     env,
   }).trim();
-  if (staged.length === 0) {
-    return undefined;
-  }
+}
 
-  execFileSync('git', [...literal, 'commit', '--no-verify', '--only', '-m', message, '--', ...paths], {
+function writeIndexEntries(
+  cwd: string,
+  snapshots: readonly ExactPathSnapshot[],
+  blobs: readonly string[],
+  env: NodeJS.ProcessEnv,
+): void {
+  const records = snapshots.map((snapshot, index) => (
+    `${snapshot.mode} ${blobs[index]}\t${snapshot.path}\0`
+  )).join('');
+  execFileSync('git', ['update-index', '-z', '--index-info'], {
     cwd,
-    stdio: 'pipe',
+    input: records,
+    stdio: ['pipe', 'pipe', 'pipe'],
     env,
   });
-  return execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd,
-    encoding: 'utf8',
-    stdio: 'pipe',
-    env,
-  }).trim();
+}
+
+export function commitExactSnapshots(
+  cwd: string,
+  message: string,
+  snapshots: readonly ExactPathSnapshot[],
+): string | undefined {
+  if (snapshots.length === 0) {
+    throw new Error('Exact-snapshot commit requires at least one path');
+  }
+  if (new Set(snapshots.map((snapshot) => snapshot.path)).size !== snapshots.length) {
+    throw new Error('Exact-snapshot commit requires unique paths');
+  }
+  const baseEnv = getSafeGitEnv(cwd, {
+    allowGitHooks: false,
+    allowGitFilters: false,
+  }) ?? process.env;
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'takt-exact-index-'));
+  const temporaryIndex = join(temporaryDirectory, 'index');
+  const temporaryEnv = { ...baseEnv, GIT_INDEX_FILE: temporaryIndex };
+  const head = gitOutput(cwd, ['rev-parse', 'HEAD'], baseEnv);
+  const headTree = gitOutput(cwd, ['rev-parse', 'HEAD^{tree}'], baseEnv);
+  const rawIndexPath = gitOutput(cwd, ['rev-parse', '--git-path', 'index'], baseEnv);
+  const indexPath = isAbsolute(rawIndexPath) ? rawIndexPath : join(cwd, rawIndexPath);
+  const hadIndex = existsSync(indexPath);
+  const originalIndex = hadIndex ? readFileSync(indexPath) : undefined;
+
+  try {
+    const blobs = snapshots.map((snapshot) => execFileSync(
+      'git',
+      ['hash-object', '-w', '--stdin'],
+      {
+        cwd,
+        input: snapshot.contents,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: baseEnv,
+      },
+    ).trim());
+    execFileSync('git', ['read-tree', head], { cwd, stdio: 'pipe', env: temporaryEnv });
+    writeIndexEntries(cwd, snapshots, blobs, temporaryEnv);
+    const tree = gitOutput(cwd, ['write-tree'], temporaryEnv);
+    if (tree === headTree) {
+      writeIndexEntries(cwd, snapshots, blobs, baseEnv);
+      return undefined;
+    }
+    const commit = execFileSync('git', ['commit-tree', tree, '-p', head, '-F', '-'], {
+      cwd,
+      input: `${message}\n`,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: baseEnv,
+    }).trim();
+
+    try {
+      writeIndexEntries(cwd, snapshots, blobs, baseEnv);
+      execFileSync('git', ['update-ref', 'HEAD', commit, head], { cwd, stdio: 'pipe', env: baseEnv });
+    } catch (error) {
+      if (originalIndex !== undefined) {
+        writeFileSync(indexPath, originalIndex);
+      } else if (existsSync(indexPath)) {
+        unlinkSync(indexPath);
+      }
+      throw error;
+    }
+    return commit;
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 /**

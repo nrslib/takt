@@ -104,6 +104,8 @@ describe('rule-bound artifact effects integration', () => {
         return makeResponse({ persona: 'plan', content: 'ready' });
       })
       .mockImplementationOnce(async (persona, task, options) => {
+        expect(execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd, encoding: 'utf8' }).trim())
+          .toBe('1');
         prompts.push(task);
         options?.onPromptResolved?.({
           systemPrompt: typeof persona === 'string' ? persona : '',
@@ -136,5 +138,50 @@ describe('rule-bound artifact effects integration', () => {
       'specs/phase-42-proof/task.md',
       'specs/phase-42-proof/test-plan.md',
     ]);
+  });
+
+  it('aborts the workflow before transition when artifact capture fails', async () => {
+    const config: WorkflowConfig = {
+      name: 'artifact-capture-failure',
+      maxSteps: 1,
+      initialStep: 'plan',
+      steps: [makeStep('plan', {
+        instruction: 'plan',
+        rules: [{
+          condition: 'ready',
+          next: 'COMPLETE',
+          effects: [{
+            type: 'capture_artifacts',
+            allowedPatterns: ['specs/phase-*/plan.md'],
+            requiredBasenames: ['plan.md'],
+            sameParent: true,
+          }],
+        }],
+      })],
+    };
+    vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeResponse({ persona: 'plan', content: 'ready' });
+    });
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    engine = new WorkflowEngine(config, cwd, 'test task', {
+      projectCwd: cwd,
+      provider: 'mock',
+      systemStepServicesFactory: createDefaultSystemStepServices,
+    });
+    let abortReason = '';
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = String(reason);
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toContain('capture_artifacts found no dirty allowed artifact paths');
+    expect(execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd, encoding: 'utf8' }).trim())
+      .toBe('1');
   });
 });

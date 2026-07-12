@@ -30,16 +30,50 @@ describe('workflow rule effects', () => {
     });
   });
 
-  it('rejects unknown or incomplete effect contracts', () => {
+  it('rejects an incomplete capture effect contract', () => {
     expect(() => WorkflowRuleSchema.parse({
       condition: 'plan ready',
       next: 'plan-review',
       effects: [{ type: 'capture_artifacts' }],
     })).toThrow();
+  });
+
+  it('rejects an unknown effect contract', () => {
     expect(() => WorkflowRuleSchema.parse({
       condition: 'plan ready',
       next: 'plan-review',
       effects: [{ type: 'shell', command: 'git add -A' }],
     })).toThrow();
+  });
+
+  it('rejects duplicate effect types that would overwrite the result binding', () => {
+    const capture = {
+      type: 'capture_artifacts',
+      allowed_patterns: ['specs/phase-*/plan.md'],
+      required_basenames: ['plan.md'],
+      same_parent: true,
+    };
+    expect(() => WorkflowRuleSchema.parse({
+      condition: 'plan ready',
+      next: 'plan-review',
+      effects: [capture, capture],
+    })).toThrow(/Duplicate effect type/);
+  });
+
+  it('requires exactly one commit manifest source', () => {
+    const baseRule = { condition: 'Go', next: 'COMPLETE' };
+    expect(() => WorkflowRuleSchema.parse({
+      ...baseRule,
+      effects: [{ type: 'commit_artifacts', message: 'approve' }],
+    })).toThrow(/exactly one/);
+    expect(() => WorkflowRuleSchema.parse({
+      ...baseRule,
+      effects: [{
+        type: 'commit_artifacts',
+        manifest: '{effect:plan.capture_artifacts.manifest}',
+        manifest_path: '.takt/state/plan-artifacts.json',
+        message: 'approve',
+      }],
+    })).toThrow(/exactly one/);
   });
 });

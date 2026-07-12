@@ -202,6 +202,25 @@ export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
   }).strict(),
 ]);
 
+export function validateUniqueWorkflowEffectTypes(
+  effects: readonly { readonly type: string }[],
+  ctx: z.core.$RefinementCtx,
+  pathPrefix: readonly PropertyKey[] = ['effects'],
+): void {
+  const effectTypes = new Set<string>();
+  for (const [index, effect] of effects.entries()) {
+    if (effectTypes.has(effect.type)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...pathPrefix, index, 'type'],
+        message: `Duplicate effect type "${effect.type}" is not allowed`,
+      });
+      continue;
+    }
+    effectTypes.add(effect.type);
+  }
+}
+
 export function validateSystemStepFields(
   data: {
     kind?: 'agent' | 'system' | 'workflow_call';
@@ -323,16 +342,5 @@ export function validateSystemStepFields(
     }
   }
 
-  const effectTypes = new Set<string>();
-  for (const [index, effect] of (data.effects ?? []).entries()) {
-    if (effectTypes.has(effect.type)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['effects', index, 'type'],
-        message: `Duplicate effect type "${effect.type}" is not allowed in a single step`,
-      });
-      continue;
-    }
-    effectTypes.add(effect.type);
-  }
+  validateUniqueWorkflowEffectTypes(data.effects ?? [], ctx);
 }
