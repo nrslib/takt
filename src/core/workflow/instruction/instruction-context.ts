@@ -46,6 +46,16 @@ export interface InstructionContext {
   previousResponseText?: string;
   /** Report directory path */
   reportDir?: string;
+  /**
+   * run の reports ルート（namespace なし）。workflow_call の子の {report:X} が
+   * 親成果物へ read-only フォールバックするために engine から明示的に渡す。
+   */
+  reportsRootDir?: string;
+  /**
+   * {report:X} の存在検証を無効化する（`takt prompt` プレビューなど実 run が
+   * 存在しない文脈のみ）。既定は検証あり。
+   */
+  validateReportReferences?: boolean;
   /** Latest report paths for the current step */
   currentReport?: string;
   /** Most recent versioned report paths for the current step */

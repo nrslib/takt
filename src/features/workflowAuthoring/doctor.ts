@@ -2,6 +2,10 @@ import { error, success, warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { COMPLETE_STEP, ABORT_STEP } from '../../core/workflow/constants.js';
+// 実行時（escape.ts の {report:X} リゾルバ）と同じ parser を共用し、
+// 静的解析と実行時の構文解釈を揃える。
+import { extractReportReferences } from '../../core/workflow/instruction/report-reference.js';
+import { isReservedReportFileName } from '../../core/models/reserved-report-names.js';
 import { validateWorkflowConfig } from '../../core/workflow/engine/WorkflowValidator.js';
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../../infra/config/loaders/workflowDoctor.js';
@@ -101,17 +105,6 @@ function warnOnMissingProvisionalRouting(
       + 'while any provisional finding is open aborts the workflow. '
       + 'Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0) -> <replan step>` before your COMPLETE rule.',
   });
-}
-
-const REPORT_REFERENCE_PATTERN = /\{report:([^}]+)\}/g;
-
-function extractReportReferences(instruction: string | undefined): string[] {
-  if (!instruction) {
-    return [];
-  }
-  return [...instruction.matchAll(REPORT_REFERENCE_PATTERN)]
-    .map((match) => (match[1] ?? '').trim())
-    .filter((name) => name.length > 0);
 }
 
 function collectContractReportNames(step: WorkflowStep, into: Set<string>): void {
@@ -288,6 +281,14 @@ function warnOnUnproducibleReportReferences(
       }
     }
     for (const reference of references) {
+      if (isReservedReportFileName(reference)) {
+        report.diagnostics.push({
+          level: 'error',
+          message: `step "${step.name}" references {report:${reference}}, which is a reserved internal file `
+            + '(resume-artifacts.json holds the resume snapshot manifest) and cannot be used as a report.',
+        });
+        continue;
+      }
       if (!allProducedReports.has(reference) && !allProducedReports.has(WILDCARD_REPORT)) {
         warnReference(reference, `step "${step.name}"`, 'no step\'s output_contracts produce that report.');
         continue;
@@ -309,6 +310,14 @@ function warnOnUnproducibleReportReferences(
     }
     for (const reference of extractReportReferences(monitor.judge.instruction)) {
       const location = `loop monitor judge for cycle [${monitor.cycle.join(' -> ')}]`;
+      if (isReservedReportFileName(reference)) {
+        report.diagnostics.push({
+          level: 'error',
+          message: `${location} references {report:${reference}}, which is a reserved internal file `
+            + '(resume-artifacts.json holds the resume snapshot manifest) and cannot be used as a report.',
+        });
+        continue;
+      }
       if (!allProducedReports.has(reference) && !allProducedReports.has(WILDCARD_REPORT)) {
         warnReference(reference, location, 'no step\'s output_contracts produce that report.');
         continue;

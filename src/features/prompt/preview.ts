@@ -102,6 +102,9 @@ function buildInstructionContext(
     workflowSteps: config.steps,
     currentStepIndex: stepIndex,
     reportDir: step.outputContracts && step.outputContracts.length > 0 ? '.takt/runs/preview/reports' : undefined,
+    // プレビューは実 run を持たないため {report:X} の存在検証を無効化する
+    // （containment 検証は維持される）。
+    validateReportReferences: false,
     language,
   };
 }

@@ -4,6 +4,7 @@
  * Note: Uses zod v4 syntax for SDK compatibility.
  */
 
+import { isReservedReportFileName, RESUME_ARTIFACTS_FILE_NAME } from './reserved-report-names.js';
 import { z } from 'zod/v4';
 import { STATUS_VALUES } from './status.js';
 import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, COPILOT_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
@@ -295,7 +296,12 @@ export const WorkflowProviderOptionsSchema = z.object({
  * Output contract item schema (new structured format).
  */
 export const OutputContractItemSchema = z.object({
-  name: z.string().min(1),
+  // resume-artifacts.json は resume スナップショット manifest の内部予約名。
+  // workflow が同名レポートを定義できると、resume 時にスナップショットの
+  // 予約名除外で正当な成果物が黙って消えるため、ロード時に落とす。
+  name: z.string().min(1).refine((name) => !isReservedReportFileName(name), {
+    message: `output contract report name is reserved for the internal resume snapshot manifest (${RESUME_ARTIFACTS_FILE_NAME}); choose a different name`,
+  }),
   format: z.union([
     z.string().min(1),
     z.object({

@@ -479,6 +479,10 @@ export class StepExecutor {
     const workflowSteps = this.deps.getWorkflowSteps();
     const workflowDefinitionSteps = this.deps.getWorkflowDefinitionSteps();
     const reportDir = join(this.deps.getCwd(), this.deps.getReportDir());
+    // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
+    // read-only フォールバックするための reports ルート。engine の runPaths から
+    // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
+    const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
     const reportHandles = resolveReportHandles({
       step,
       reportDir,
@@ -494,6 +498,7 @@ export class StepExecutor {
       userInputs: state.userInputs,
       previousOutput: getPreviousOutput(state),
       reportDir,
+      reportsRootDir,
       currentReport: reportHandles.currentReport,
       previousReport: reportHandles.previousReport,
       reportHistory: reportHandles.reportHistory,

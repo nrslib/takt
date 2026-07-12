@@ -1,0 +1,7 @@
+[
+  { "status": "done", "content": "Issues found." },
+  { "status": "done", "content": "REJECT: hardcoded literal in src/x.ts" },
+  { "persona": "conductor", "status": "done", "content": "[FIRST-REVIEW:1]" },
+  { "persona": "conductor", "status": "done", "content": "[FIRST-REVIEW:1]" },
+  { "status": "error", "content": "Simulated provider failure before arbitration" }
+]

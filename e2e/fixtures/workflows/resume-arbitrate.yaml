@@ -1,0 +1,37 @@
+name: resume-arbitrate
+description: Producer report then arbitrate consumer, for resume report inheritance E2E
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+personas:
+  test-reviewer: |
+    You are the E2E first reviewer.
+  test-arbitrator: |
+    You are the E2E arbitrator.
+max_steps: 4
+steps:
+  - name: first-review
+    persona: test-reviewer
+    instruction: |
+      {task}
+    output_contracts:
+      report:
+        - name: first-review.md
+          format: report
+    rules:
+      - condition: Issues found
+        next: arbitrate
+      - condition: Clean
+        next: COMPLETE
+  - name: arbitrate
+    persona: test-arbitrator
+    instruction: |
+      Arbitrate the disagreement. Review report: {report:first-review.md}
+    rules:
+      - condition: Reviewer is right
+        next: COMPLETE
+      - condition: Coder is right
+        next: COMPLETE

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
+import { isReservedReportFileName, reservedReportFileNameMessage } from '../models/reserved-report-names.js';
 
 function formatHistoryTimestamp(date: Date): string {
   const year = date.getUTCFullYear();
@@ -34,6 +35,11 @@ function backupExistingReport(reportDir: string, fileName: string, targetPath: s
 }
 
 export function writeReportFile(reportDir: string, fileName: string, content: string): string {
+  // 予約名（resume スナップショット manifest）への書き込みは防御の第二層と
+  // して明示エラーで拒否する（第一層は出力契約の Zod 検証）。
+  if (isReservedReportFileName(fileName)) {
+    throw new Error(`Cannot write report: ${reservedReportFileNameMessage(fileName)}`);
+  }
   const baseDir = resolve(reportDir);
   const targetPath = resolve(reportDir, fileName);
   const basePrefix = baseDir.endsWith(sep) ? baseDir : baseDir + sep;

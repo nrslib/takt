@@ -30,12 +30,15 @@ export interface RunMeta {
   resumePoint?: WorkflowResumePoint;
   sourceRunSlug?: string;
   resumeMode?: 'requeue' | 'retry' | 'instruct';
+  /** resume-artifacts.json（継承 manifest）への相対パス。SSOT は manifest 側。 */
+  resumeArtifacts?: string;
 }
 
 interface RawRunMeta extends RunMeta {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
   resume_mode?: 'requeue' | 'retry' | 'instruct';
+  resume_artifacts?: string;
 }
 
 export type RunMetaWarningHandler = (warning: string) => void;
@@ -46,6 +49,7 @@ function normalizeRunMeta(raw: RawRunMeta): RunMeta {
     resumePoint: raw.resumePoint ?? raw.resume_point,
     sourceRunSlug: raw.sourceRunSlug ?? raw.source_run_slug,
     resumeMode: raw.resumeMode ?? raw.resume_mode,
+    resumeArtifacts: raw.resumeArtifacts ?? raw.resume_artifacts,
   };
 }
 

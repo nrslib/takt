@@ -39,6 +39,7 @@ export const mockE2eSpecs = [
   'e2e/specs/repertoire-real.e2e.ts',
   'e2e/specs/workflow-selection-branches.e2e.ts',
   'e2e/specs/clone-branch-resolution.e2e.ts',
+  'e2e/specs/resume-report-inheritance.e2e.ts',
 ];
 
 export const mockE2eShards = [
@@ -63,6 +64,7 @@ export const mockE2eShards = [
     'e2e/specs/session-log.e2e.ts',
     'e2e/specs/cycle-detection.e2e.ts',
     'e2e/specs/workflow-error-handling.e2e.ts',
+    'e2e/specs/resume-report-inheritance.e2e.ts',
   ],
   [
     'e2e/specs/cli-catalog.e2e.ts',

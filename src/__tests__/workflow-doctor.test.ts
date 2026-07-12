@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../infra/config/loaders/workflowDoctor.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -59,9 +60,14 @@ function writeConfigForCase(rootCase: WorktreeRootCase): void {
 
 describe('workflow doctor', () => {
   let projectDir: string;
+  // 共有 tmp 直下（../takt-worktrees）に作った branch dir の追跡リスト。
+  // afterEach で「自分が作った dir だけ」を削除する（並走テストの dir には
+  // 触れない）。
+  let createdWorktreeDirs: string[] = [];
   const previousConfigDir = process.env.TAKT_CONFIG_DIR;
 
   beforeEach(() => {
+    createdWorktreeDirs = [];
     projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-'));
     process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-global-'));
     invalidateGlobalConfigCache();
@@ -72,6 +78,9 @@ describe('workflow doctor', () => {
   });
 
   afterEach(() => {
+    for (const dir of createdWorktreeDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
     rmSync(projectDir, { recursive: true, force: true });
     if (process.env.TAKT_CONFIG_DIR) {
       rmSync(process.env.TAKT_CONFIG_DIR, { recursive: true, force: true });
@@ -511,6 +520,109 @@ steps:
 
     expect(mockWarn).not.toHaveBeenCalledWith(expect.stringContaining('{report:'));
     expect(mockError).not.toHaveBeenCalled();
+  });
+
+  // 予約名の強制（codex 3巡目）: resume-artifacts.json は resume スナップショット
+  // manifest の内部予約名。出力契約に使うとロード時（Zod 検証）に落ちる。
+  it('rejects workflows whose output contract uses the reserved resume-artifacts.json name', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-contract-name.yaml', `name: reserved-contract-name
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: do the work
+    rules:
+      - condition: done
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: Resume-Artifacts.JSON
+          format: simple-report
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved for the internal resume snapshot manifest'));
+  });
+
+  // codex 4巡目回帰: Windows 形式の区切り（sub\Resume-Artifacts.JSON）でも
+  // basename 判定が効き、Zod 検証を迂回できない。
+  it('rejects output contracts using the reserved name behind a backslash separator', async () => {
+    writeWorkflow(projectDir, '.takt/facets/output-contracts/simple-report.md', 'Write a short report.');
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-contract-backslash.yaml', `name: reserved-contract-backslash
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: do the work
+    rules:
+      - condition: done
+        next: COMPLETE
+    output_contracts:
+      report:
+        - name: 'sub\\Resume-Artifacts.JSON'
+          format: simple-report
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved for the internal resume snapshot manifest'));
+  });
+
+  it('reports an error when an instruction references the reserved name behind a backslash separator', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-reference-backslash.yaml', `name: reserved-reference-backslash
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: 'inspect {report:sub\\Resume-Artifacts.JSON}'
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved internal file'));
+  });
+
+  it('reports an error when an instruction references the reserved resume-artifacts.json', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/reserved-reference.yaml', `name: reserved-reference
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    instruction: "inspect {report:resume-artifacts.json}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('reserved internal file'));
+  });
+
+  // 回帰: builtin workflow / facet が予約名を使っていないこと。
+  it('no builtin workflow or facet uses the reserved resume-artifacts.json name', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const roots = ['builtins/en', 'builtins/ja'];
+    const offenders: string[] = [];
+    const scan = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const abs = join(dir, entry);
+        if (statSync(abs).isDirectory()) {
+          scan(abs);
+          continue;
+        }
+        if (!/\.(ya?ml|md)$/.test(entry)) continue;
+        if (readFileSync(abs, 'utf-8').toLowerCase().includes('resume-artifacts.json')) {
+          offenders.push(abs);
+        }
+      }
+    };
+    for (const root of roots) {
+      scan(join(process.cwd(), root));
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('warns when an instruction references a report that no step produces at all', async () => {
@@ -1434,7 +1546,11 @@ steps:
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'prepare.yaml');
       mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
       writeFileSync(worktreeWorkflowPath, `name: prepare
@@ -1466,7 +1582,11 @@ steps:
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'commit.yaml');
       mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
       writeFileSync(worktreeWorkflowPath, `name: commit
@@ -1496,7 +1616,11 @@ steps:
       const validateContractsSpy = vi.spyOn(workflowResolver, 'validateWorkflowCallContracts');
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
 
       writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
@@ -1547,7 +1671,11 @@ steps:
       writeConfigForCase(rootCase);
       const { rootDirRelativePath } = rootCase;
       const rootDir = join(projectDir, rootDirRelativePath);
-      const worktreeDir = join(rootDir, 'feature-branch');
+      // 共有 tmp 配下（../takt-worktrees は $TMPDIR 直下で全テストファイルが
+      // 同一パスを共有する）での並走衝突を避けるため、branch dir 名は
+      // テストごとに一意にする。
+      const worktreeDir = join(rootDir, `feature-branch-${randomUUID()}`);
+      createdWorktreeDirs.push(worktreeDir);
       const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
 
       mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });

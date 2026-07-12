@@ -18,11 +18,29 @@ import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 
 // --- Mocks ---
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
-  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
-  runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
-}));
+vi.mock('../core/workflow/phase-runner.js', async () => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { dirname, resolve } = await import('node:path');
+  return {
+    needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
+    // phase 2 の実行はスキップするが、契約されたレポートはダミー内容で書く。
+    // {report:X} リゾルバは実在を検証する（resume 境界バグの再発防止）ため、
+    // 「producer が書いた後に consumer が参照する」実行順序の実態を保つ。
+    runReportPhase: vi.fn().mockImplementation(async (
+      step: { outputContracts?: Array<{ name: string }> },
+      _stepIteration: number,
+      ctx: { reportDir: string },
+    ) => {
+      for (const contract of step.outputContracts ?? []) {
+        const target = resolve(ctx.reportDir, contract.name);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, `mock report: ${contract.name}`);
+      }
+      return undefined;
+    }),
+    runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+  };
+});
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),

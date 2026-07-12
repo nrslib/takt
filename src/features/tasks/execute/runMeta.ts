@@ -18,12 +18,15 @@ export interface DirectResumeMetadata {
 
 export interface RunMetaManagerOptions {
   readonly traceDiscovery?: WorkflowTraceDiscovery;
+  /** resume-artifacts.json（継承 manifest）への相対パス。SSOT は manifest 側。 */
+  readonly resumeArtifactsRel?: string;
 }
 
-type PersistedRunMeta = Omit<RunMeta, 'resumePoint' | 'sourceRunSlug' | 'resumeMode'> & {
+type PersistedRunMeta = Omit<RunMeta, 'resumePoint' | 'sourceRunSlug' | 'resumeMode' | 'resumeArtifacts'> & {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
   resume_mode?: DirectResumeMetadata['resumeMode'];
+  resume_artifacts?: string;
 };
 
 export class RunMetaManager {
@@ -53,6 +56,7 @@ export class RunMetaManager {
         sourceRunSlug: directResume.sourceRunSlug,
         resumeMode: directResume.resumeMode,
       } : {}),
+      ...(options?.resumeArtifactsRel ? { resumeArtifacts: options.resumeArtifactsRel } : {}),
       ...(options?.traceDiscovery ? {
         observability: {
           traceDiscovery: options.traceDiscovery,
@@ -99,13 +103,14 @@ export class RunMetaManager {
 
   private writeRunMeta(meta: RunMeta): void {
     const updatedAt = new Date().toISOString();
-    const { resumePoint, sourceRunSlug, resumeMode, ...baseMeta } = meta;
+    const { resumePoint, sourceRunSlug, resumeMode, resumeArtifacts, ...baseMeta } = meta;
     const serialized: PersistedRunMeta = {
       ...baseMeta,
       updatedAt,
       ...(resumePoint ? { resume_point: resumePoint } : {}),
       ...(sourceRunSlug ? { source_run_slug: sourceRunSlug } : {}),
       ...(resumeMode ? { resume_mode: resumeMode } : {}),
+      ...(resumeArtifacts ? { resume_artifacts: resumeArtifacts } : {}),
     };
     this.runMeta.updatedAt = updatedAt;
     writeFileAtomic(this.metaAbs, JSON.stringify(serialized, null, 2));

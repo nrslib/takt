@@ -185,6 +185,15 @@ function hasTasksYamlWrite(): boolean {
   return mockWriteFileAtomic.mock.calls.some((call) => String(call[0]).endsWith('/.takt/tasks.yaml'));
 }
 
+function seedSourceRun(projectDir: string, slug: string, files: Record<string, string>): void {
+  const reportsDir = join(projectDir, '.takt/runs', slug, 'reports');
+  mkdirSync(reportsDir, { recursive: true });
+  writeFileSync(join(projectDir, '.takt/runs', slug, 'meta.json'), '{}');
+  for (const [rel, content] of Object.entries(files)) {
+    writeFileSync(join(reportsDir, rel), content);
+  }
+}
+
 describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -745,8 +754,11 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
   });
 
   it('Given directResume is passed, When bootstrap creates run meta, Then source metadata is persisted in meta.json', async () => {
-    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', '/project', {
-      projectCwd: '/project',
+    const projectDir = createTempProject();
+    seedSourceRun(projectDir, '20260524-source-run', { 'plan.md': 'plan from the aborted run' });
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
+      projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'direct-resume',
       directResume: {
@@ -756,19 +768,79 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     });
 
     const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
-      call[0] === '/project/.takt/runs/direct-resume/meta.json'
+      call[0] === join(projectDir, '.takt/runs/direct-resume/meta.json')
     );
     expect(metaWrite).toBeDefined();
     const meta = JSON.parse(String(metaWrite![1])) as {
       source_run_slug?: string;
       resume_mode?: string;
+      resume_artifacts?: string;
     };
     expect(meta.source_run_slug).toBe('20260524-source-run');
     expect(meta.resume_mode).toBe('retry');
+    // meta.json は manifest への参照のみ（一覧と hash の SSOT は manifest 側）。
+    // manifest は reports スナップショットの内側の予約名。
+    expect(meta.resume_artifacts).toBe('.takt/runs/direct-resume/reports/resume-artifacts.json');
+  });
+
+  // resume は新しい run slug を作るため、旧 run の reports/ を継承しないと
+  // {report:X} 参照が必ず壊れる（v3-r4 の resume 境界バグ）。継承は bootstrap
+  // を一元境界とし、requeue / retry / instruct と attachment 有無（reportDirName
+  // 先行生成の有無）で同一処理になることを固定する。
+  it.each([
+    ['requeue', undefined],
+    ['retry', 'attached-run'],
+    ['instruct', undefined],
+  ] as const)('Given directResume (%s, reportDirName=%s), When bootstrap runs, Then the source reports snapshot is inherited', async (resumeMode, reportDirName) => {
+    const projectDir = createTempProject();
+    seedSourceRun(projectDir, 'source-run', {
+      'ai-antipattern-review-1st.md': 'first review from the aborted run',
+      'plan.md': 'plan from the aborted run',
+    });
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      // attachment 経路は resume feature 側で slug を先行生成して渡す。
+      // 非 attachment 経路は bootstrap が生成する（generateReportDir モックは
+      // 'generated-run' を返す）。どちらも同じ継承処理を通る。
+      ...(reportDirName ? { reportDirName } : {}),
+      directResume: {
+        sourceRunSlug: 'source-run',
+        resumeMode,
+      },
+    });
+
+    const targetSlug = reportDirName ?? 'generated-run';
+    const targetReports = join(projectDir, '.takt/runs', targetSlug, 'reports');
+    expect(readFileSync(join(targetReports, 'ai-antipattern-review-1st.md'), 'utf-8'))
+      .toBe('first review from the aborted run');
+    expect(readFileSync(join(targetReports, 'plan.md'), 'utf-8')).toBe('plan from the aborted run');
+    const manifest = JSON.parse(readFileSync(
+      join(projectDir, '.takt/runs', targetSlug, 'reports', 'resume-artifacts.json'),
+      'utf-8',
+    )) as { sourceRunSlug: string; files: Array<{ path: string }> };
+    expect(manifest.sourceRunSlug).toBe('source-run');
+    expect(manifest.files.map((f) => f.path).sort()).toEqual(['ai-antipattern-review-1st.md', 'plan.md']);
+  });
+
+  it('Given directResume with a missing source run, When bootstrap runs, Then it fails fast before engine init', async () => {
+    const projectDir = createTempProject();
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'direct-resume',
+      directResume: {
+        sourceRunSlug: 'no-such-run',
+        resumeMode: 'retry',
+      },
+    })).rejects.toThrow(/source run "no-such-run" does not exist/);
   });
 
   it('Given no tasks.yaml exists, When direct resume bootstrap runs, Then tasks.yaml is not created', async () => {
     const projectDir = createTempProject();
+    seedSourceRun(projectDir, '20260524-source-run', {});
 
     await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
       projectCwd: projectDir,
@@ -786,6 +858,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
   it('Given tasks.yaml already exists, When direct resume bootstrap runs, Then tasks.yaml remains unchanged', async () => {
     const projectDir = createTempProject();
+    seedSourceRun(projectDir, '20260524-source-run', {});
     const tasksDir = join(projectDir, '.takt');
     const tasksPath = join(tasksDir, 'tasks.yaml');
     const initialTasks = 'tasks:\n  - name: keep-existing\n    status: pending\n';

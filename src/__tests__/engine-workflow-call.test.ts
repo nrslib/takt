@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -2904,7 +2905,9 @@ steps:
   });
 
   it('default worktree root 上の parent path は worktree workflow を non-project trust として解決する', () => {
-    const worktreeDir = join(tmpDir, '..', 'takt-worktrees', 'feature-branch');
+    // 共有 tmp 直下の takt-worktrees を他テストファイルと共有するため、
+    // branch dir は一意にし、削除も自分の branch dir に限定する。
+    const worktreeDir = join(tmpDir, '..', 'takt-worktrees', `feature-branch-${randomUUID()}`);
     cleanupDirs.push(worktreeDir);
     const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
     mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
@@ -2986,7 +2989,9 @@ steps:
         next: COMPLETE
 `, 'utf-8');
 
-    const worktreeDir = join(tmpDir, '..', 'takt-worktrees', 'feature-branch');
+    // 共有 tmp 直下の takt-worktrees を他テストファイルと共有するため、
+    // branch dir は一意にし、削除も自分の branch dir に限定する。
+    const worktreeDir = join(tmpDir, '..', 'takt-worktrees', `feature-branch-${randomUUID()}`);
     cleanupDirs.push(worktreeDir);
     const worktreeWorkflowPath = join(worktreeDir, '.takt', 'workflows', 'parent.yaml');
     mkdirSync(dirname(worktreeWorkflowPath), { recursive: true });
