@@ -7,6 +7,7 @@ import {
   type TaskInfo,
 } from '../../../infra/task/index.js';
 import { syncProjectLocalTaktForRetry } from '../../../infra/task/projectLocalTaktSync.js';
+import { initializeWorktreeRunStorage } from '../../../infra/task/worktree-run-storage.js';
 import { isRealPathInside } from '../../../shared/utils/index.js';
 
 export interface ReusedWorktreeExecution {
@@ -59,6 +60,7 @@ export function resolveReusedWorktreeExecution(
   ) {
     syncProjectLocalTaktForRetry(projectDir, worktreePath);
   }
+  initializeWorktreeRunStorage(projectDir, worktreePath, task.data?.branch ?? '(unknown)');
 
   return {
     execCwd: worktreePath,

@@ -25,6 +25,7 @@ import {
 } from './clone-exec.js';
 import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
 import { syncProjectLocalTaktForRetry } from './projectLocalTaktSync.js';
+import { initializeWorktreeRunStorage } from './worktree-run-storage.js';
 
 export type { WorktreeOptions, WorktreeResult };
 export {
@@ -178,6 +179,7 @@ export class CloneManager {
     }
 
     syncProjectLocalTaktForRetry(projectDir, clonePath);
+    initializeWorktreeRunStorage(projectDir, clonePath, branch);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 
@@ -227,6 +229,7 @@ export class CloneManager {
     }
 
     syncProjectLocalTaktForRetry(projectDir, clonePath);
+    initializeWorktreeRunStorage(projectDir, clonePath, branch);
     this.saveCloneMeta(projectDir, branch, clonePath);
     log.info('Clone created', { path: clonePath, branch });
 

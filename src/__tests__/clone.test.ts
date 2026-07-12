@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 
-const { mockLogInfo, mockLogDebug, mockLogError, mockSyncProjectLocalTaktForRetry } = vi.hoisted(() => ({
+const { mockLogInfo, mockLogDebug, mockLogError, mockSyncProjectLocalTaktForRetry, mockInitializeWorktreeRunStorage } = vi.hoisted(() => ({
   mockLogInfo: vi.fn(),
   mockLogDebug: vi.fn(),
   mockLogError: vi.fn(),
   mockSyncProjectLocalTaktForRetry: vi.fn(),
+  mockInitializeWorktreeRunStorage: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -61,6 +62,10 @@ vi.mock('../infra/config/index.js', () => ({
 
 vi.mock('../infra/task/projectLocalTaktSync.js', () => ({
   syncProjectLocalTaktForRetry: mockSyncProjectLocalTaktForRetry,
+}));
+
+vi.mock('../infra/task/worktree-run-storage.js', () => ({
+  initializeWorktreeRunStorage: mockInitializeWorktreeRunStorage,
 }));
 
 import { execFileSync, spawn } from 'node:child_process';
@@ -2343,6 +2348,11 @@ describe('auto clone path allocation', () => {
 
     expect(result.path).toBe('/tmp/takt-command-gate-clone');
     expect(mockSyncProjectLocalTaktForRetry).toHaveBeenCalledWith('/project', '/tmp/takt-command-gate-clone');
+    expect(mockInitializeWorktreeRunStorage).toHaveBeenCalledWith(
+      '/project',
+      '/tmp/takt-command-gate-clone',
+      expect.any(String),
+    );
   });
 
   it('should sync project-local quality gate assets after creating an abortable shared clone', async () => {
@@ -2372,6 +2382,11 @@ describe('auto clone path allocation', () => {
       '/project',
       '/tmp/takt-command-gate-abortable-clone',
     );
+    expect(mockInitializeWorktreeRunStorage).toHaveBeenCalledWith(
+      '/project',
+      '/tmp/takt-command-gate-abortable-clone',
+      'feature/local-command-gate',
+    );
   });
 
   it('should sync project-local quality gate assets after creating a temp clone', () => {
@@ -2394,6 +2409,7 @@ describe('auto clone path allocation', () => {
 
     expect(result.path).toContain('/tmp/takt-worktrees/tmp-');
     expect(mockSyncProjectLocalTaktForRetry).toHaveBeenCalledWith('/project', result.path);
+    expect(mockInitializeWorktreeRunStorage).not.toHaveBeenCalled();
   });
 
   it('should allocate a suffixed path when the generated clone path already exists', () => {

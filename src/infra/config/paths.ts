@@ -53,6 +53,11 @@ export function getGlobalLogsDir(): string {
   return join(getGlobalConfigDir(), 'logs');
 }
 
+/** Get durable run storage root outside TAKT-managed worktrees. */
+export function getGlobalRunStoreDir(): string {
+  return join(getGlobalConfigDir(), 'run-store');
+}
+
 /** Get takt global config file path */
 export function getGlobalConfigPath(): string {
   return join(getGlobalConfigDir(), 'config.yaml');
