@@ -1,11 +1,14 @@
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { readRunContextOrderContent } from '../core/workflow/run/order-content.js';
 import { readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
-import { initializeWorktreeRunStorage } from '../infra/task/worktree-run-storage.js';
+import {
+  initializeWorktreeRunStorage,
+  listStoredProjectRuns,
+} from '../infra/task/worktree-run-storage.js';
 
 describe('initializeWorktreeRunStorage', () => {
   let root: string;
@@ -52,6 +55,11 @@ describe('initializeWorktreeRunStorage', () => {
 
     rmSync(join(root, 'clone-a'), { recursive: true, force: true });
     expect(readFileSync(join(first.storePath, 'same-slug', 'meta.json'), 'utf8')).toBe('first');
+    expect(listStoredProjectRuns(projectDir)).toContainEqual({
+      cloneId: first.cloneId,
+      runSlug: 'same-slug',
+      runPath: join(first.storePath, 'same-slug'),
+    });
   });
 
   it('migrates an existing runs directory without losing its contents', () => {
@@ -65,6 +73,30 @@ describe('initializeWorktreeRunStorage', () => {
     const storage = initializeWorktreeRunStorage(projectDir, clonePath, 'feature/existing');
     expect(readFileSync(join(runsPath, 'keep.txt'), 'utf8')).toBe('keep');
     expect(readFileSync(join(storage.storePath, 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('migrates a legacy runs directory across filesystems on Linux', () => {
+    if (process.platform !== 'linux' || !existsSync('/dev/shm')) {
+      return;
+    }
+    expect(statSync('/dev/shm').dev).not.toBe(statSync(root).dev);
+    const externalConfigRoot = mkdtempSync('/dev/shm/takt-run-store-');
+    process.env.TAKT_CONFIG_DIR = externalConfigRoot;
+    try {
+      const projectDir = join(root, 'project');
+      mkdirSync(projectDir);
+      const clonePath = createClone('cross-device-clone');
+      const runsPath = join(clonePath, '.takt', 'runs');
+      mkdirSync(runsPath);
+      writeFileSync(join(runsPath, 'keep.txt'), 'cross-device');
+
+      const storage = initializeWorktreeRunStorage(projectDir, clonePath, 'feature/cross-device');
+      expect(readFileSync(join(storage.storePath, 'keep.txt'), 'utf8')).toBe('cross-device');
+      expect(readFileSync(join(runsPath, 'keep.txt'), 'utf8')).toBe('cross-device');
+    } finally {
+      rmSync(externalConfigRoot, { recursive: true, force: true });
+      process.env.TAKT_CONFIG_DIR = join(root, 'global');
+    }
   });
 
   it('stores only hashed project identity in the manifest', () => {

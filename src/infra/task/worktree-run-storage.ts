@@ -1,9 +1,11 @@
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -32,9 +34,35 @@ export interface WorktreeRunStorage {
   readonly storePath: string;
 }
 
+export interface StoredProjectRun {
+  readonly cloneId: string;
+  readonly runSlug: string;
+  readonly runPath: string;
+}
+
 function hashProjectIdentity(projectDir: string): string {
   const canonicalProjectDir = realpathSync(projectDir);
   return createHash('sha256').update(canonicalProjectDir).digest('hex').slice(0, 24);
+}
+
+function readStoreManifest(
+  manifestPath: string,
+  projectId: string,
+  cloneId?: string,
+): RunStoreManifest {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Partial<RunStoreManifest>;
+  if (
+    manifest.schema_version !== 1
+    || manifest.project_id !== projectId
+    || typeof manifest.clone_id !== 'string'
+    || manifest.clone_id.length === 0
+    || (cloneId !== undefined && manifest.clone_id !== cloneId)
+    || typeof manifest.created_at !== 'string'
+    || typeof manifest.branch !== 'string'
+  ) {
+    throw new Error(`Run store manifest is invalid: ${manifestPath}`);
+  }
+  return manifest as RunStoreManifest;
 }
 
 function readExistingStorage(linkPath: string, projectId: string): WorktreeRunStorage | undefined {
@@ -50,15 +78,7 @@ function readExistingStorage(linkPath: string, projectId: string): WorktreeRunSt
       throw new Error(`Existing worktree run link points outside the TAKT run store: ${linkPath}`);
     }
     const manifestPath = join(storePath, '..', 'store.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Partial<RunStoreManifest>;
-    if (
-      manifest.schema_version !== 1
-      || manifest.project_id !== projectId
-      || typeof manifest.clone_id !== 'string'
-      || manifest.clone_id.length === 0
-    ) {
-      throw new Error(`Existing worktree run store manifest is invalid: ${manifestPath}`);
-    }
+    const manifest = readStoreManifest(manifestPath, projectId);
     return { cloneId: manifest.clone_id, linkPath, storePath };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -67,6 +87,53 @@ function readExistingStorage(linkPath: string, projectId: string): WorktreeRunSt
     }
     throw error;
   }
+}
+
+function moveDirectory(source: string, destination: string): void {
+  try {
+    renameSync(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') {
+      throw error;
+    }
+    cpSync(source, destination, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      preserveTimestamps: true,
+    });
+    rmSync(source, { recursive: true, force: true });
+  }
+}
+
+export function listStoredProjectRuns(projectDir: string): readonly StoredProjectRun[] {
+  const projectId = hashProjectIdentity(projectDir);
+  const projectStore = join(getGlobalRunStoreDir(), projectId);
+  if (!existsSync(projectStore)) {
+    return [];
+  }
+  const runs: StoredProjectRun[] = [];
+  for (const cloneEntry of readdirSync(projectStore, { withFileTypes: true })) {
+    if (!cloneEntry.isDirectory()) {
+      continue;
+    }
+    const cloneStore = join(projectStore, cloneEntry.name);
+    readStoreManifest(join(cloneStore, 'store.json'), projectId, cloneEntry.name);
+    const runsPath = join(cloneStore, 'runs');
+    if (!existsSync(runsPath)) {
+      continue;
+    }
+    for (const runEntry of readdirSync(runsPath, { withFileTypes: true })) {
+      if (runEntry.isDirectory()) {
+        runs.push({
+          cloneId: cloneEntry.name,
+          runSlug: runEntry.name,
+          runPath: join(runsPath, runEntry.name),
+        });
+      }
+    }
+  }
+  return runs;
 }
 
 function isLegacyRunsDirectory(linkPath: string): boolean {
@@ -128,7 +195,7 @@ export function initializeWorktreeRunStorage(
     chmodSync(projectStore, STORE_DIRECTORY_MODE);
     mkdirSync(storeContainer, { mode: STORE_DIRECTORY_MODE });
     if (migrateLegacyRuns) {
-      renameSync(linkPath, storePath);
+      moveDirectory(linkPath, storePath);
     } else {
       mkdirSync(storePath, { mode: STORE_DIRECTORY_MODE });
     }
@@ -159,7 +226,7 @@ export function initializeWorktreeRunStorage(
       // The link may not have been created.
     }
     if (migrateLegacyRuns && existsSync(storePath) && !existsSync(linkPath)) {
-      renameSync(storePath, linkPath);
+      moveDirectory(storePath, linkPath);
     }
     rmSync(storeContainer, { recursive: true, force: true });
     throw error;

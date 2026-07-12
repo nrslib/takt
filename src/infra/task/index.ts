@@ -77,3 +77,7 @@ export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
 export { summarizeTaskName } from './summarize.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';
 export { isStaleRunningTask } from './process.js';
+export {
+  listStoredProjectRuns,
+  type StoredProjectRun,
+} from './worktree-run-storage.js';
