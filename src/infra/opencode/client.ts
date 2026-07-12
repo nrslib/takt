@@ -5,6 +5,7 @@
  * Follows the same patterns as the Codex client.
  */
 
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createOpencode } from '@opencode-ai/sdk/v2';
 import { createServer } from 'node:net';
@@ -65,12 +66,13 @@ import {
 import {
   buildUnavailableToolRetryPrompt,
   createUnavailableToolRecoveryState,
-  listEnabledPromptTools,
   markUnavailableToolRecoveryUsed,
+  parseServerAvailableTools,
   shouldRecoverUnavailableToolLoop,
 } from './unavailable-tool-recovery.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import { isSensitiveKeyName, sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
 
 export type { OpenCodeCallOptions } from './types.js';
 
@@ -213,6 +215,40 @@ const log = createLogger('opencode-sdk');
  */
 function coerceToolArgsPluginPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), 'plugins', 'coerce-tool-args.js');
+}
+
+function listToolShimPluginPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'plugins', 'list-tool.js');
+}
+
+/**
+ * opencode バイナリのバージョン（`opencode --version`）。プロセス内で1回だけ
+ * 解決する。バイナリはプロセス寿命中に変わらない前提。失敗（未インストール・
+ * タイムアウト）は undefined = シム登録の fail-closed。
+ */
+let opencodeBinaryVersionPromise: Promise<string | undefined> | undefined;
+
+function resolveOpenCodeBinaryVersion(): Promise<string | undefined> {
+  opencodeBinaryVersionPromise ??= new Promise((resolvePromise) => {
+    execFile('opencode', ['--version'], { timeout: 10_000 }, (error, stdout) => {
+      resolvePromise(error ? undefined : String(stdout).trim());
+    });
+  });
+  return opencodeBinaryVersionPromise;
+}
+
+/**
+ * 'list' 互換シムを登録してよいか（upstream 衝突ガード）。
+ * 判定基準と fail-closed の設計は list-tool-shim-guard.ts を参照。
+ */
+async function shouldRegisterListToolShim(): Promise<boolean> {
+  const version = await resolveOpenCodeBinaryVersion();
+  if (version === undefined) {
+    return false;
+  }
+  const allowed = versionAllowsListToolShim(version);
+  log.debug('OpenCode list tool shim decision', { version, allowed });
+  return allowed;
 }
 
 /**
@@ -367,6 +403,9 @@ async function createSharedServer(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): Promise<SharedServer> {
   const port = await getFreePort();
+  // v3-r4: ローカルモデルが実在しない 'list' を呼び続けて確定失敗した。
+  // registry に 'list' が無いと実測済みのバージョンに限り、互換シムを登録する。
+  const registerListToolShim = await shouldRegisterListToolShim();
   const { client, server } = await runWithNestedObservabilityProcessEnv(childProcessEnv, () =>
     createOpencode({
       port,
@@ -376,7 +415,10 @@ async function createSharedServer(
         // ローカルモデルが送る数値の型違い（"290.0"）を実行直前に矯正する。
         // OpenCode 本体は強制変換せず SchemaError で落とすため、これが無いと
         // 弱いモデルは同じ呼び出しを繰り返して cycle budget を使い切る。
-        plugin: [coerceToolArgsPluginPath()],
+        plugin: [
+          coerceToolArgsPluginPath(),
+          ...(registerListToolShim ? [listToolShimPluginPath()] : []),
+        ],
         // Session-level permission rules are rewritten whenever a prompt
         // carries a tools map (OpenCode materializes the map into
         // session.permission), so session-scoped denies do not survive the
@@ -1211,10 +1253,16 @@ export class OpenCodeClient {
           : prompt;
         // unavailable-tool recovery 後の attempt は、さらに再試行前置文
         // （幻覚ツール名の指摘・有効ツール一覧・workspace 継続の警告）で包む。
-        // 有効ツール一覧は promptTools（buildOpenCodePromptTools() の結果）から
-        // 動的に生成する。
+        // 有効ツール一覧は**サーバ申告**（エラー文の "Available tools: ..."）を
+        // 正とし、取れない場合のみ promptTools（buildOpenCodePromptTools() の
+        // 結果、ワイヤ専用 ID 除外済み）へフォールバックする。写像由来の一覧が
+        // 実在しない 'list' を「利用可能」と再誘導した v3-r4 の再発防止。
         const unavailableWrappedPromptText = unavailableToolRecovery.used && unavailableToolRecovery.tool !== undefined
-          ? buildUnavailableToolRetryPrompt(basePromptText, unavailableToolRecovery.tool, listEnabledPromptTools(promptTools))
+          ? buildUnavailableToolRetryPrompt(
+              basePromptText,
+              unavailableToolRecovery.tool,
+              unavailableToolRecovery.serverAvailableTools,
+            )
           : basePromptText;
         // tool-guard recovery の attempt:
         // - correction: 同一セッション再開なので元プロンプトは再送しない
@@ -1263,6 +1311,7 @@ export class OpenCodeClient {
         // （呼ばれたツールが正確に StructuredOutput か）と、一般 unavailable-tool
         // recovery の対象判定（StructuredOutput 以外か）の両方に使う。
         let unavailableLoopToolName: string | undefined;
+        let unavailableLoopServerTools: readonly string[] | undefined;
         const state = createStreamTrackingState();
         // 新しい attempt = 新しいストリーム。セッション固有の短期カウンタだけ
         // リセットする（絶対台帳は call 全体で引き継ぐ — tool-guard.ts 参照）。
@@ -1399,6 +1448,10 @@ export class OpenCodeClient {
                 if (failure !== undefined) {
                   if (failure.kind === 'unavailable_tool_loop') {
                     unavailableLoopToolName = failure.tool;
+                    // サーバのエラー文が申告する利用可能一覧を実測として保持する。
+                    // recovery 前置文はこれを正とする（TAKT の写像には旧バージョン
+                    // 互換のワイヤ専用 ID が含まれ、v3-r4 で 'list' を誤誘導した）。
+                    unavailableLoopServerTools = parseServerAvailableTools(failure.message);
                   }
                   toolGuardFailure = failure;
                   loopError = failure.message;
@@ -1777,7 +1830,11 @@ export class OpenCodeClient {
             unavailableLoopToolName !== undefined
             && shouldRecoverUnavailableToolLoop(unavailableToolRecovery, unavailableLoopToolName)
           ) {
-            unavailableToolRecovery = markUnavailableToolRecoveryUsed(unavailableToolRecovery, unavailableLoopToolName);
+            unavailableToolRecovery = markUnavailableToolRecoveryUsed(
+              unavailableToolRecovery,
+              unavailableLoopToolName,
+              unavailableLoopServerTools,
+            );
             maxAttempts = Math.max(maxAttempts, attempt + 1);
             log.debug('OpenCode unavailable tool loop detected; retrying prompt once in a fresh session with a retry preamble', {
               agentType,

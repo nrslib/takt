@@ -261,9 +261,19 @@ function makeOpenCodeClientMock(sessionId: string, responses: string[]) {
   return { sessionCreate, promptAsync, subscribe };
 }
 
-/** UnavailableToolLoopDetector が拾う「unavailable tool」形式のツールエラーイベントを作る。 */
-function unavailableToolErrorEvent(partId: string, callID: string, tool: string) {
-  const error = `Model tried to call unavailable tool '${tool}'. Available tools: glob, grep, read.`;
+/**
+ * UnavailableToolLoopDetector が拾う「unavailable tool」形式のツールエラーイベントを作る。
+ * Available tools はサーバ申告の実測形（opencode 1.17.18 の既定有効集合 +
+ * 内部擬似ツール 'invalid'）を既定とする。recovery 前置文の有効ツール一覧は
+ * この申告を正とするため、テストごとに上書きできる。
+ */
+function unavailableToolErrorEvent(
+  partId: string,
+  callID: string,
+  tool: string,
+  availableTools = 'bash, edit, glob, grep, invalid, read, skill, todowrite, webfetch, write',
+) {
+  const error = `Model tried to call unavailable tool '${tool}'. Available tools: ${availableTools}.`;
   return {
     type: 'message.part.updated',
     properties: {
@@ -1131,6 +1141,73 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(stream.returnSpy).toHaveBeenCalled();
     expect(retryStream.returnSpy).toHaveBeenCalled();
+  });
+
+  // v3-r4 実測形の回帰: opencode 1.17.18 に存在しない 'list' を呼び続け、
+  // recovery（fresh session 1回）後も同名再発 → 確定失敗。修正前は recovery
+  // 前置文の有効ツール一覧が TAKT の写像（'list' を含む）から生成され、
+  // 「'list' は存在しない」と言った直後に 'list' を利用可能と再誘導していた。
+  // 前置文はサーバ申告（エラー文の Available tools）を正とし、'invalid'
+  // （内部擬似ツール）を除外し、'list' の具体的な代替（glob / bash ls）へ
+  // 誘導することを固定する。
+  it('should not re-advertise the phantom list tool in the recovery preamble (v3-r4 regression)', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const listUnavailableError = "Model tried to call unavailable tool 'list'. Available tools: bash, edit, glob, grep, invalid, read, skill, todowrite, webfetch, write.";
+    const listErrorPart = (index: number) => ({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: `list-part-${index}`,
+          type: 'tool',
+          callID: `call-list-${index}`,
+          tool: 'list',
+          state: { status: 'error', input: { path: '.' }, error: listUnavailableError },
+        },
+      },
+    });
+    const stream = new MockEventStream([listErrorPart(1), listErrorPart(2)]);
+    const retryStream = new MockEventStream([listErrorPart(3), listErrorPart(4)]);
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-list-loop' } });
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream })
+      .mockResolvedValueOnce({ stream: retryStream });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'fix the findings', {
+      cwd: '/tmp',
+      model: 'opencode/qwen3-coder-next',
+    });
+
+    // recovery 後の同名再発は本物の失敗として確定する（v3-r4 と同じ結末）。
+    expect(result.status).toBe('error');
+    expect(result.content).toContain("'list'");
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+
+    // recovery 前置文（2回目のプロンプト）の検証。
+    const retryPrompt = promptTextOfCall(promptAsync, 1);
+    expect(retryPrompt).toContain('repeatedly called a tool named "list"');
+    // 有効ツール一覧はサーバ申告そのもの（'invalid' と 'list' を含まない）。
+    expect(retryPrompt).toContain(
+      'Only the following tools are available in this session: bash, edit, glob, grep, read, skill, todowrite, webfetch, write.',
+    );
+    const availableLine = retryPrompt.split('\n').find((line) => line.includes('available in this session')) ?? '';
+    expect(availableLine).not.toMatch(/\blist\b/);
+    expect(availableLine).not.toMatch(/\binvalid\b/);
+    // 具体的な代替（ディレクトリ一覧は glob か bash の ls）へ誘導する。
+    expect(retryPrompt).toContain('There is no "list" tool');
+    expect(retryPrompt).toContain('"glob"');
+    expect(retryPrompt).toContain('`ls`');
   });
 
   // OpenCode は拒否したツール呼び出しを `invalid` 擬似ツールの status='completed'
@@ -3276,8 +3353,9 @@ describe('OpenCodeClient stream cleanup', () => {
   it('should suppress the bash alias hint when bash is not among the enabled tools', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
-      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
-      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+      // bash の無いレビュー系ステップでは、サーバ申告一覧にも bash が現れない。
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run', 'glob, grep, invalid, read, skill'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run', 'glob, grep, invalid, read, skill'),
     ]);
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-no-bash' } },
@@ -3311,15 +3389,17 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(retryText).toContain('"run"');
     expect(retryText).not.toContain('Use "bash"');
     expect(retryText).not.toContain('Use "');
-    expect(retryText).toContain('glob, grep, list, read, skill');
+    // 一覧はサーバ申告そのもの（'invalid' は除外、実在しない 'list' は載らない）。
+    expect(retryText).toContain('glob, grep, read, skill');
+    expect(retryText).not.toContain('list');
     expect(retryText).not.toContain('bash');
   });
 
   it('should suppress the todowrite alias hint when todowrite is not among the enabled tools', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
-      unavailableToolErrorEvent('tool-part-1', 'call-1', 'todo_write'),
-      unavailableToolErrorEvent('tool-part-2', 'call-2', 'todo_write'),
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'todo_write', 'glob, grep, invalid, read, skill'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'todo_write', 'glob, grep, invalid, read, skill'),
     ]);
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-no-todo' } },
@@ -3350,7 +3430,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(retryText).toContain('"todo_write"');
     expect(retryText).not.toContain('Use "todowrite"');
     expect(retryText).not.toContain('Use "');
-    expect(retryText).toContain('glob, grep, list, read, skill');
+    expect(retryText).toContain('glob, grep, read, skill');
   });
 
   it('should route a StructuredOutput loop only through the stale-session recovery, never the general one', async () => {

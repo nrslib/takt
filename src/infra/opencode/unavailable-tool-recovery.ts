@@ -23,6 +23,13 @@ export interface UnavailableToolRecoveryState {
   readonly used: boolean;
   /** 発火時の幻覚ツール名。再試行前置文の生成に使う。 */
   readonly tool?: string;
+  /**
+   * サーバのエラー文（"Available tools: ..."）から実測した利用可能ツール一覧。
+   * TAKT の写像ではなくサーバ申告を正とする — v3-r4 では写像由来の一覧が
+   * 実在しない 'list' を「利用可能」と再誘導し、fresh session 後も同名再発で
+   * 確定失敗した。内部擬似ツール 'invalid' は除外済み。
+   */
+  readonly serverAvailableTools?: readonly string[];
 }
 
 export function createUnavailableToolRecoveryState(): UnavailableToolRecoveryState {
@@ -50,8 +57,42 @@ export function shouldRecoverUnavailableToolLoop(
 export function markUnavailableToolRecoveryUsed(
   state: UnavailableToolRecoveryState,
   tool: string,
+  serverAvailableTools?: readonly string[],
 ): UnavailableToolRecoveryState {
-  return { ...state, used: true, tool };
+  return { ...state, used: true, tool, ...(serverAvailableTools ? { serverAvailableTools } : {}) };
+}
+
+/**
+ * OpenCode のエラー文 "Model tried to call unavailable tool 'X'. Available
+ * tools: a, b, c." から、サーバが申告する利用可能ツール一覧を取り出す。
+ * 'invalid' はサーバ内部の不正呼び出しルーティング用擬似ツール（1.17.18 が
+ * 自身の列挙に含めてくるが、モデルが呼ぶべきものではない）なので除外する。
+ * 形式が変わって解析できない場合は undefined（呼び出し側が写像由来の一覧へ
+ * フォールバックする）。
+ */
+const SERVER_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/i;
+
+export function parseServerAvailableTools(message: string): string[] | undefined {
+  // 列挙はメッセージ末尾（終端ピリオドは任意）まで丸ごと取る。`[^.]+` は
+  // "foo.bar, read." を "foo" に切り詰めて解析成功と誤認する（codex 指摘）。
+  const match = /Available tools:\s*(.+?)\.?\s*$/i.exec(message);
+  const body = match?.[1];
+  if (!body) {
+    return undefined;
+  }
+  const tokens = body.split(',').map((token) => token.trim());
+  // 全トークンをツール名文法で検証し、1件でも契約外なら列挙全体を破棄する。
+  // "bash; read" のような壊れトークンや、"none"（列挙なしの明示であって
+  // ツール名ではない）を解析成功として返さない。
+  if (tokens.length === 0) {
+    return undefined;
+  }
+  if (tokens.some((token) => !SERVER_TOOL_NAME_PATTERN.test(token) || token.toLowerCase() === 'none')) {
+    return undefined;
+  }
+  // 'invalid' はサーバ内部の擬似ツール（大文字小文字不問で除外）。
+  const tools = tokens.filter((token) => token.toLowerCase() !== 'invalid');
+  return tools.length > 0 ? tools.sort() : undefined;
 }
 
 /** 既知エイリアスの変換先ツールと案内文。変換先が実際に使える場合だけ提示する。 */
@@ -70,19 +111,12 @@ interface ToolAliasHint {
 const KNOWN_TOOL_ALIAS_HINTS: ReadonlyMap<string, ToolAliasHint> = new Map([
   ['run', { target: 'bash', hint: 'Use "bash" for shell commands.' }],
   ['todo_write', { target: 'todowrite', hint: 'Use "todowrite" to manage the todo list.' }],
+  // v3-r4 実測: opencode 1.17.18 に 'list' は存在しない（削除。'ls' でもない）。
+  // ディレクトリ一覧の具体的な代替へ誘導する。
+  ['list', { target: 'glob', hint: 'There is no "list" tool. To list directory contents, use "glob" (e.g. pattern "*" under the target path) or run `ls` via the "bash" tool.' }],
+  ['ls', { target: 'bash', hint: 'There is no "ls" tool. Run `ls` via the "bash" tool, or use "glob" to enumerate files.' }],
 ]);
 
-/**
- * buildOpenCodePromptTools() が返す per-prompt tools マップから、有効な
- * ツール名だけを取り出す。前置文の有効ツール一覧は静的な焼き込みではなく
- * 常にこのマップから動的に生成する（phase ごとの制限を正しく反映するため）。
- */
-export function listEnabledPromptTools(promptTools: Readonly<Record<string, boolean>>): string[] {
-  return Object.entries(promptTools)
-    .filter(([, enabled]) => enabled)
-    .map(([tool]) => tool)
-    .sort();
-}
 
 /**
  * 再試行 attempt 用のプロンプトを組み立てる。
@@ -95,21 +129,26 @@ export function listEnabledPromptTools(promptTools: Readonly<Record<string, bool
 export function buildUnavailableToolRetryPrompt(
   prompt: string,
   invalidTool: string,
-  enabledTools: readonly string[],
+  serverAvailableTools: readonly string[] | undefined,
 ): string {
   const alias = KNOWN_TOOL_ALIAS_HINTS.get(invalidTool.toLowerCase());
   // エイリアス案内は変換先ツールがこの attempt で有効な場合だけ出す。
   // 例: allowed_tools に bash が無いレビュー系ステップで 'run' が発火した
   // とき、無条件に「Use "bash"」と案内すると有効一覧（bash なし）と矛盾し、
-  // 唯一の救済 attempt を誤誘導する。使えない変換先なら未知名と同じ扱い
-  // （有効一覧のみ提示）に落とす。
-  const aliasHint = alias !== undefined && enabledTools.includes(alias.target)
+  // 唯一の救済 attempt を誤誘導する。サーバ申告一覧が取れないときは検証の
+  // しようがないため、既知エイリアスの案内はそのまま出す（標準ツールへの
+  // 誘導であり、誤誘導リスクより価値が大きい）。
+  const aliasHint = alias !== undefined && (serverAvailableTools === undefined || serverAvailableTools.includes(alias.target))
     ? alias.hint
     : undefined;
+  // 「利用可能ツールの完全一覧」はサーバ申告（エラー文の Available tools）が
+  // 解析できたときだけ断定する。TAKT の静的写像はワイヤ専用 ID や旧バージョン
+  // 互換の ID を含み、完全一覧としては誇大宣伝になる（codex 指摘）。
   return loadTemplate('parts/unavailable_tool_retry_instruction', 'en', {
     instruction: prompt,
     invalidTool: JSON.stringify(invalidTool),
-    validTools: enabledTools.join(', '),
+    validTools: serverAvailableTools !== undefined ? serverAvailableTools.join(', ') : false,
+    noServerToolList: serverAvailableTools === undefined,
     aliasHint: aliasHint ?? false,
   });
 }
