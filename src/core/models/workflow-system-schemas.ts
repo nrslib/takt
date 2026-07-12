@@ -206,6 +206,7 @@ export function validateUniqueWorkflowEffectTypes(
   effects: readonly { readonly type: string }[],
   ctx: z.core.$RefinementCtx,
   pathPrefix: readonly PropertyKey[] = ['effects'],
+  scope = 'in a single step',
 ): void {
   const effectTypes = new Set<string>();
   for (const [index, effect] of effects.entries()) {
@@ -213,7 +214,7 @@ export function validateUniqueWorkflowEffectTypes(
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [...pathPrefix, index, 'type'],
-        message: `Duplicate effect type "${effect.type}" is not allowed`,
+        message: `Duplicate effect type "${effect.type}" is not allowed ${scope}`,
       });
       continue;
     }

@@ -72,8 +72,7 @@ const WorkflowProviderOptionsWithExtendsSchema = z.object({
   runtime: RuntimeConfigSchema,
 }).optional();
 
-const WorkflowEffectsRawSchema = z.array(WorkflowEffectRawSchema)
-  .superRefine((effects, ctx) => validateUniqueWorkflowEffectTypes(effects, ctx, []));
+const WorkflowEffectsRawSchema = z.array(WorkflowEffectRawSchema);
 
 const WorkflowParamDeclarationRawSchema = z.object({
   type: z.enum(['facet_ref', 'facet_ref[]']),
@@ -106,7 +105,9 @@ export const WorkflowRuleSchema = z.object({
   appendix: z.string().optional(),
   requires_user_input: z.boolean().optional(),
   interactive_only: z.boolean().optional(),
-  effects: WorkflowEffectsRawSchema.min(1).optional(),
+  effects: WorkflowEffectsRawSchema.min(1)
+    .superRefine((effects, ctx) => validateUniqueWorkflowEffectTypes(effects, ctx, [], 'in a single rule'))
+    .optional(),
 }).refine(
   (data) => (data.condition != null) !== (data.when != null),
   {
