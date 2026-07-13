@@ -16,9 +16,40 @@
  *     （reviewer-anomalies.ts）: 二系統台帳の upsert と昇格リンク（設計書 D の
  *     安全不変条件: 観測を削除・改変しない、既存 finding に触れない）
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const snapshotFsHook = vi.hoisted(() => ({
+  beforeRead: undefined as ((fd: number) => void) | undefined,
+  beforeOpen: undefined as ((path: string | Buffer | URL) => void) | undefined,
+  beforeLstat: undefined as ((path: string | Buffer | URL) => import('node:fs').Stats | undefined) | undefined,
+  replaceLstat: undefined as ((path: string | Buffer | URL, stat: import('node:fs').Stats) => import('node:fs').Stats | undefined) | undefined,
+}));
+
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  return {
+    ...actual,
+    readSync(fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: number | null): number {
+      snapshotFsHook.beforeRead?.(fd);
+      return actual.readSync(fd, buffer, offset, length, position);
+    },
+    openSync(...args: Parameters<typeof actual.openSync>): number {
+      snapshotFsHook.beforeOpen?.(args[0]);
+      return actual.openSync(...args);
+    },
+    lstatSync(...args: Parameters<typeof actual.lstatSync>): import('node:fs').Stats {
+      const intercepted = snapshotFsHook.beforeLstat?.(args[0]);
+      if (intercepted !== undefined) {
+        return intercepted;
+      }
+      const stat = actual.lstatSync(...args);
+      return snapshotFsHook.replaceLstat?.(args[0], stat) ?? stat;
+    },
+  };
+});
+
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
@@ -76,14 +107,23 @@ describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
   });
 
   afterEach(() => {
+    snapshotFsHook.beforeRead = undefined;
+    snapshotFsHook.beforeOpen = undefined;
+    snapshotFsHook.beforeLstat = undefined;
+    snapshotFsHook.replaceLstat = undefined;
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('non-git な cwd では書き込みが起きても常に同じ定数値へ縮退する', () => {
-    const before = computeReviewScopeSnapshotId(dir);
-    writeFileSync(join(dir, 'untracked.txt'), 'anything');
-    const after = computeReviewScopeSnapshotId(dir);
-    expect(after).toBe(before);
+  it('non-git な cwd は git 収集エラーを黙殺せず fail-loud する', () => {
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: git .* failed/);
+  });
+
+  it('壊れた git metadata は git 収集エラーを fail-loud する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    rmSync(join(dir, '.git'), { recursive: true, force: true });
+    writeFileSync(join(dir, '.git'), 'gitdir: missing-git-dir\n');
+
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: git .* failed/);
   });
 
   it('同じ working tree の状態に対しては決定的に同じ値を返す', () => {
@@ -167,6 +207,30 @@ describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
     expect(afterAdd).not.toBe(beforeAdd);
   });
 
+  it('未追跡の埋め込み repository 内の同サイズ内容変更を検出する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+
+    const embedded = join(dir, 'embedded');
+    mkdirSync(embedded);
+    execFileSync('git', ['init'], { cwd: embedded });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: embedded });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: embedded });
+    const child = join(embedded, 'child.txt');
+    writeFileSync(child, 'AAAA\n');
+    execFileSync('git', ['add', '.'], { cwd: embedded });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: embedded });
+    const before = computeReviewScopeSnapshotId(dir);
+
+    writeFileSync(child, 'BBBB\n');
+
+    expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
+  }, 120_000);
+
   it('.gitignore 済みファイル（node_modules 等）は snapshot に含めない（--exclude-standard）', () => {
     execFileSync('git', ['init'], { cwd: dir });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
@@ -183,23 +247,18 @@ describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
     expect(afterIgnored).toBe(beforeIgnored);
   });
 
-  it('untracked ファイルは複数チャンクにまたがっても全量ハッシュされ、同サイズの後方改変を検出する（codex 検証2巡目#3a: サイズだけのハッシュはしない）', () => {
+  it('65 MiB超の tracked ファイルを固定バッファで全量ハッシュし、同サイズのバイナリ改変を検出する', () => {
     execFileSync('git', ['init'], { cwd: dir });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    const big = Buffer.alloc(65 * 1024 * 1024 + 1, 0x41);
+    writeFileSync(join(dir, 'big-tracked.bin'), big);
     execFileSync('git', ['add', '.'], { cwd: dir });
     execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
-
-    // チャンクバッファ（1 MiB）を跨ぐ大きさ。最終チャンクの1バイトだけを、
-    // 全体サイズを変えずに書き換える → サイズ近似では取りこぼす改変。
-    const big = Buffer.alloc(3 * 1024 * 1024 + 7, 0x41); // 'A' で埋める
-    writeFileSync(join(dir, 'big-untracked.bin'), big);
     const before = computeReviewScopeSnapshotId(dir);
 
-    const sameSizeEdited = Buffer.from(big);
-    sameSizeEdited[sameSizeEdited.length - 3] = 0x42; // 末尾付近の1バイトを 'B' へ（サイズ不変）
-    writeFileSync(join(dir, 'big-untracked.bin'), sameSizeEdited);
+    big[big.length - 3] = 0x42;
+    writeFileSync(join(dir, 'big-tracked.bin'), big);
     const after = computeReviewScopeSnapshotId(dir);
 
     expect(after).not.toBe(before);
@@ -244,6 +303,293 @@ describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
     symlinkSync('does-not-exist-b', join(dir, 'broken.ts'));
     const after = computeReviewScopeSnapshotId(dir);
     expect(after).not.toBe(before);
+  });
+
+  it('tracked ファイルの実行権限変更を検出する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    const path = join(dir, 'script.sh');
+    writeFileSync(path, '#!/bin/sh\necho ok\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const before = computeReviewScopeSnapshotId(dir);
+
+    chmodSync(path, 0o755);
+
+    expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
+  });
+
+  it('tracked ファイルの削除を index path と mode を含む削除状態として検出する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    const path = join(dir, 'deleted.txt');
+    writeFileSync(path, 'present\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const before = computeReviewScopeSnapshotId(dir);
+
+    unlinkSync(path);
+
+    expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
+  });
+
+  it('tracked symlink は追従せず、リンク先文字列の変更を検出する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'target-a.txt'), 'same\n');
+    writeFileSync(join(dir, 'target-b.txt'), 'same\n');
+    symlinkSync('target-a.txt', join(dir, 'link.ts'));
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const before = computeReviewScopeSnapshotId(dir);
+
+    unlinkSync(join(dir, 'link.ts'));
+    symlinkSync('target-b.txt', join(dir, 'link.ts'));
+
+    expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
+  });
+
+  it('同一 tree の別 commit を HEAD inventory として検出する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'same-tree.txt'), 'content\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const before = computeReviewScopeSnapshotId(dir);
+
+    const nextHead = execFileSync('git', ['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'same tree'], { cwd: dir })
+      .toString('ascii')
+      .trim();
+    execFileSync('git', ['update-ref', 'HEAD', nextHead], { cwd: dir });
+
+    expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
+  }, 120000);
+
+  it('gitlink の symlink working tree を拒否する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const head = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: dir }).toString('ascii').trim();
+    symlinkSync('.', join(dir, 'submodule'), 'dir');
+    execFileSync('git', ['update-index', '--add', '--cacheinfo', `160000,${head},submodule`], { cwd: dir });
+
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: submodule path failed/);
+  }, 120000);
+
+  it('gitlink の非 directory working tree を拒否する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const head = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: dir }).toString('ascii').trim();
+    writeFileSync(join(dir, 'submodule'), 'not a directory\n');
+    execFileSync('git', ['update-index', '--add', '--cacheinfo', `160000,${head},submodule`], { cwd: dir });
+
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: submodule path failed/);
+  }, 120000);
+
+  it('不正 UTF-8 の gitlink path を置換文字名の別 repository に解決せず拒否する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+
+    const rawGitlinkName = Buffer.concat([Buffer.from('gitlink-'), Buffer.from([0xff])]);
+    const rawGitlinkPath = Buffer.concat([Buffer.from(dir), Buffer.from('/'), rawGitlinkName]);
+    const replacementRepository = join(dir, rawGitlinkName.toString('utf8'));
+    mkdirSync(replacementRepository);
+    execFileSync('git', ['init'], { cwd: replacementRepository });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: replacementRepository });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: replacementRepository });
+    writeFileSync(join(replacementRepository, 'child.txt'), 'child\n');
+    execFileSync('git', ['add', '.'], { cwd: replacementRepository });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: replacementRepository });
+    const replacementHead = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: replacementRepository }).toString('ascii').trim();
+    const indexRecord = Buffer.concat([Buffer.from(`160000 ${replacementHead}\t`), rawGitlinkName, Buffer.from([0])]);
+    execFileSync('git', ['update-index', '-z', '--index-info'], { cwd: dir, input: indexRecord });
+    const replacementStat = lstatSync(replacementRepository);
+    snapshotFsHook.beforeLstat = (path) => Buffer.isBuffer(path) && path.equals(rawGitlinkPath) ? replacementStat : undefined;
+
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: submodule digest failed.*path encoding failed/);
+  }, 120_000);
+
+  it('gitlink が親と同じ dev/ino へ再帰すると fail-loud する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+
+    const submodule = join(dir, 'submodule');
+    mkdirSync(submodule);
+    execFileSync('git', ['init'], { cwd: submodule });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: submodule });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: submodule });
+    writeFileSync(join(submodule, 'child.txt'), 'child\n');
+    execFileSync('git', ['add', '.'], { cwd: submodule });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: submodule });
+    const submoduleHead = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: submodule }).toString('ascii').trim();
+    execFileSync('git', ['update-index', '--add', '--cacheinfo', `160000,${submoduleHead},submodule`], { cwd: dir });
+
+    const parentStat = lstatSync(dir);
+    snapshotFsHook.replaceLstat = (path) => Buffer.from(path).toString() === submodule ? parentStat : undefined;
+
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: submodule digest failed.*capture recursion failed/);
+  }, 120000);
+
+  it('lstat 後に外部 target への symlink へ差し替えられても target 内容を読まず fail-loud する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    const victim = join(dir, 'victim.txt');
+    const external = mkdtempSync(join(tmpdir(), 'takt-snapshot-external-target-'));
+    writeFileSync(victim, 'original\n');
+    const externalTarget = join(external, 'replacement.txt');
+    writeFileSync(externalTarget, 'external replacement\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const externalStat = statSync(externalTarget);
+    let readExternalTarget = false;
+    snapshotFsHook.beforeRead = (fd) => {
+      const opened = fstatSync(fd);
+      readExternalTarget ||= opened.dev === externalStat.dev && opened.ino === externalStat.ino;
+    };
+    snapshotFsHook.beforeOpen = (openedPath) => {
+      if (Buffer.from(openedPath).toString() !== victim) {
+        return;
+      }
+      snapshotFsHook.beforeOpen = undefined;
+      unlinkSync(victim);
+      symlinkSync(externalTarget, victim);
+    };
+
+    try {
+      expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: open failed/);
+      expect(readExternalTarget).toBe(false);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
+  });
+
+  it('lstat 後に別の regular file を rename で差し替えても fstat identity 照合で fail-loud する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    const victim = join(dir, 'victim.txt');
+    writeFileSync(victim, 'original\n');
+    writeFileSync(join(dir, 'replacement.txt'), 'replacement\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    snapshotFsHook.beforeOpen = (openedPath) => {
+      if (Buffer.from(openedPath).toString() !== victim) {
+        return;
+      }
+      snapshotFsHook.beforeOpen = undefined;
+      renameSync(join(dir, 'replacement.txt'), victim);
+    };
+
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: verify opened file failed/);
+  }, 120000);
+
+  it('submodule の gitlink と再帰 working tree digest を含める', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const submodule = join(dir, 'submodule');
+    mkdirSync(submodule);
+    execFileSync('git', ['init'], { cwd: submodule });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: submodule });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: submodule });
+    writeFileSync(join(submodule, 'child.txt'), 'initial\n');
+    execFileSync('git', ['add', '.'], { cwd: submodule });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: submodule });
+    const submoduleHead = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: submodule }).toString('ascii').trim();
+    execFileSync('git', ['update-index', '--add', '--cacheinfo', `160000,${submoduleHead},submodule`], { cwd: dir });
+    const before = computeReviewScopeSnapshotId(dir);
+
+    writeFileSync(join(submodule, 'child.txt'), 'changed without commit\n');
+
+    expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
+  }, 120_000);
+
+  it('submodule が同一 tree の別 commit へ進むと、親の gitlink が同じでも値が変わる', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    const submodule = join(dir, 'submodule');
+    mkdirSync(submodule);
+    execFileSync('git', ['init'], { cwd: submodule });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: submodule });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: submodule });
+    writeFileSync(join(submodule, 'child.txt'), 'initial\n');
+    execFileSync('git', ['add', '.'], { cwd: submodule });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: submodule });
+    const submoduleHead = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: submodule }).toString('ascii').trim();
+    execFileSync('git', ['update-index', '--add', '--cacheinfo', `160000,${submoduleHead},submodule`], { cwd: dir });
+    const before = computeReviewScopeSnapshotId(dir);
+
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'same tree, different commit'], { cwd: submodule });
+
+    expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
+  }, 120_000);
+
+  it('収集中の変更を検出すると、次の安定した連続 capture で再試行に成功する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    const path = join(dir, 'tracked.txt');
+    writeFileSync(path, 'before\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    let reads = 0;
+    snapshotFsHook.beforeRead = () => {
+      reads += 1;
+      if (reads === 2) {
+        writeFileSync(path, 'after\n');
+      }
+    };
+
+    const snapshot = computeReviewScopeSnapshotId(dir);
+    snapshotFsHook.beforeRead = undefined;
+
+    expect(snapshot).toBe(computeReviewScopeSnapshotId(dir));
+    expect(reads).toBe(8);
+  });
+
+  it('収集中の変更が3試行続くと ReviewScopeSnapshotError を送出する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    const path = join(dir, 'tracked.txt');
+    writeFileSync(path, 'value-0\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+    let reads = 0;
+    snapshotFsHook.beforeRead = () => {
+      reads += 1;
+      writeFileSync(path, `value-${reads}\n`);
+    };
+
+    expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: capture failed/);
+    expect(reads).toBeGreaterThanOrEqual(12);
   });
 });
 

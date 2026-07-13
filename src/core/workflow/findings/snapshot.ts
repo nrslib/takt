@@ -1,140 +1,405 @@
-/**
- * review scope snapshot id（codex 対策#4: typed evidence protocol の snapshotId
- * フィールドを支える機構）。
- *
- * reviewer は自分でハッシュを計算できない（コードを読むだけの LLM であり、
- * TAKT は review step にファイル内容を直接埋め込まない — reviewer は自分の
- * ツール呼び出しでリポジトリを探索する）。そこでエンジンが「このラウンドの
- * reviewer が見ている working tree の状態」を表す不透明なトークンを1つだけ
- * 計算し、reviewer 向け instruction に埋め込んで丸ごと echo させる
- * （raw-capabilities.ts の same_with_proof が availableSameProofId を echo
- * させるのと同じ「エンジン発行トークンをそのまま返させる」パターン）。
- *
- * 検証側（manager-runner.ts）は同じ cwd に対してこの関数をもう一度呼ぶ —
- * reviewer 呼び出しと検証呼び出しの間に書き込みが起きない通常経路では
- * 同じ値になる。値が違えば「reviewer が見た版と今の版が違う」ことが
- * 決定的にわかる（stale-snapshot、admission-validation.ts の
- * verifySourceQuoteEvidence 参照）。
- *
- * ハッシュには3系統を畳み込む:
- *   1. HEAD の commit sha（`git rev-parse HEAD`）
- *   2. tracked ファイルの未コミット差分（`git diff HEAD`）
- *   3. untracked（未追跡・非 .gitignore）ファイルの内容
- * 3 が必須なのは、実レビュー対象には coder が新規作成した untracked な src/
- * ファイルが含まれるため（codex 検証ブロッカー#4）。HEAD + diff HEAD だけだと
- * untracked ファイルは snapshot の外になり、「引用行はそのままで周辺行を
- * 書き換える」改変が snapshot も verbatimExcerpt 照合も一致したまま admission を
- * 通り抜けてしまう。untracked ファイルの内容をハッシュに含めることで、
- * レビュー対象ファイルが1バイトでも変われば snapshot 値が変わり stale 判定が
- * 効く（内容アドレス方式）。.gitignore 済み（node_modules 等）は
- * `--exclude-standard` で除外する。
- *
- * untracked ファイルの扱いで2つの穴を塞いでいる（codex 検証2巡目#3）:
- *   (a) 内容はサイズに依らず最後まで畳み込む。チャンク読みでメモリを固定するので、
- *       巨大ファイルでも「サイズだけ一致する改変（同サイズ書き換え）」を確実に
- *       検出できる（サイズだけの近似ハッシュはしない）。
- *   (b) symlink は追従しない。lstat で symlink を判定し、readlink の向き先文字列を
- *       ハッシュする。追従して target 内容を読むと、参照先すり替え（broken
- *       symlink の張り替え・スコープ外ファイルへの差し替え）を取りこぼす。
- *
- * git が使えない cwd（git コマンドが失敗する）では tracked 部分は空文字列に
- * フォールバックする — この場合スナップショット比較は常に一致する（同一の
- * 定数ハッシュ）が、verbatimExcerpt 自体の完全一致検証は独立して効き続けるため
- * 安全側に縮退する（stale 判定が効かないだけで、幻覚した引用は依然として
- * 不一致で弾かれる）。
- */
 import { execFileSync } from 'node:child_process';
-import { createHash, type Hash } from 'node:crypto';
-import { closeSync, lstatSync, openSync, readSync, readlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readlinkSync, type Stats } from 'node:fs';
 
-/**
- * untracked ファイル内容を畳み込むときのチャンクバッファサイズ。ファイルの
- * サイズに依らずメモリをこの固定分だけに抑えつつ、内容を全量ハッシュする。
- */
 const HASH_CHUNK_BYTES = 1024 * 1024;
+const CAPTURE_ATTEMPTS = 3;
+const SNAPSHOT_FORMAT = Buffer.from('review-scope-snapshot-v2');
 
-function runGit(cwd: string, args: string[]): string | undefined {
-  try {
-    return execFileSync('git', args, {
-      cwd,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      maxBuffer: 64 * 1024 * 1024,
-    });
-  } catch {
-    return undefined;
+class ReviewScopeSnapshotError extends Error {
+  constructor(operation: string, path: string, cause: unknown) {
+    super(`ReviewScopeSnapshotError: ${operation} failed for ${path}: ${describeCause(cause)}`, { cause });
+    this.name = 'ReviewScopeSnapshotError';
   }
 }
 
-/**
- * ファイル内容をチャンク読みで全量ハッシュへ畳み込む（メモリはチャンク分で固定。
- * サイズに依らず内容の1バイト変化も検出する。codex 検証2巡目#3a）。
- */
-function hashFileContentInto(hash: Hash, absPath: string): void {
-  const fd = openSync(absPath, 'r');
+interface TrackedEntry {
+  indexMode: Buffer;
+  indexObject: Buffer;
+  path: Buffer;
+  stage: Buffer;
+}
+
+interface SnapshotEntry {
+  path: Buffer;
+  record: Buffer;
+  sortOrder: number;
+  stage: Buffer;
+}
+
+interface CapturedSnapshot {
+  inventory: Buffer;
+  snapshotId: string;
+}
+
+function describeCause(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function fail(operation: string, path: string, cause: unknown): never {
+  throw new ReviewScopeSnapshotError(operation, path, cause);
+}
+
+function displayPath(path: Buffer): string {
+  return `0x${path.toString('hex')}`;
+}
+
+function absolutePath(cwd: string, path: Buffer): Buffer {
+  return Buffer.concat([Buffer.from(cwd), Buffer.from('/'), path]);
+}
+
+function decodeRepositoryPath(path: Buffer): string {
+  const decoded = path.toString('utf8');
+  if (!Buffer.from(decoded, 'utf8').equals(path)) {
+    return fail('path encoding', displayPath(path), new Error('repository path is not reversibly UTF-8 encoded'));
+  }
+  return decoded;
+}
+
+function runGit(cwd: string, args: string[]): Buffer {
+  const operation = `git ${args.join(' ')}`;
   try {
+    return execFileSync('git', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch (cause) {
+    return fail(operation, cwd, cause);
+  }
+}
+
+function parseNulEntries(output: Buffer, operation: string, path: string): Buffer[] {
+  if (output.length === 0) {
+    return [];
+  }
+  if (output[output.length - 1] !== 0) {
+    return fail(operation, path, new Error('NUL-terminated output is missing its final delimiter'));
+  }
+
+  const entries: Buffer[] = [];
+  let start = 0;
+  while (start < output.length) {
+    const end = output.indexOf(0, start);
+    if (end < 0) {
+      return fail(operation, path, new Error('NUL-terminated output contains an unterminated entry'));
+    }
+    if (end === start) {
+      return fail(operation, path, new Error('NUL-terminated output contains an empty path'));
+    }
+    entries.push(Buffer.from(output.subarray(start, end)));
+    start = end + 1;
+  }
+  return entries;
+}
+
+function parseTrackedEntry(record: Buffer, cwd: string): TrackedEntry {
+  const firstSpace = record.indexOf(0x20);
+  const secondSpace = record.indexOf(0x20, firstSpace + 1);
+  const tab = record.indexOf(0x09, secondSpace + 1);
+  if (firstSpace <= 0 || secondSpace <= firstSpace + 1 || tab <= secondSpace + 1 || tab === record.length - 1) {
+    return fail('git ls-files --cached --stage -z parse', cwd, new Error('invalid index stage record'));
+  }
+
+  const indexMode = record.subarray(0, firstSpace);
+  const indexObject = record.subarray(firstSpace + 1, secondSpace);
+  const stage = record.subarray(secondSpace + 1, tab);
+  if (!/^[0-7]{6}$/.test(indexMode.toString('ascii')) || !/^[0-9a-f]{40,64}$/.test(indexObject.toString('ascii')) || !/^[0-3]$/.test(stage.toString('ascii'))) {
+    return fail('git ls-files --cached --stage -z parse', cwd, new Error('invalid index stage fields'));
+  }
+
+  return {
+    indexMode: Buffer.from(indexMode),
+    indexObject: Buffer.from(indexObject),
+    path: Buffer.from(record.subarray(tab + 1)),
+    stage: Buffer.from(stage),
+  };
+}
+
+function lengthPrefixed(value: Buffer | string | number): Buffer {
+  const bytes = typeof value === 'number'
+    ? Buffer.from(String(value))
+    : typeof value === 'string'
+      ? Buffer.from(value)
+      : value;
+  const length = Buffer.allocUnsafe(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  return Buffer.concat([length, bytes]);
+}
+
+function normalizeRecord(fields: Array<[string, Buffer | string | number]>): Buffer {
+  return Buffer.concat([
+    lengthPrefixed(SNAPSHOT_FORMAT),
+    ...fields.flatMap(([name, value]) => [lengthPrefixed(name), lengthPrefixed(value)]),
+  ]);
+}
+
+function actualMode(stat: Stats): number {
+  return stat.mode;
+}
+
+function fileKind(stat: Stats): string {
+  if (stat.isFile()) {
+    return 'file';
+  }
+  if (stat.isSymbolicLink()) {
+    return 'symlink';
+  }
+  if (stat.isDirectory()) {
+    return 'directory';
+  }
+  if (stat.isBlockDevice()) {
+    return 'block-device';
+  }
+  if (stat.isCharacterDevice()) {
+    return 'character-device';
+  }
+  if (stat.isFIFO()) {
+    return 'fifo';
+  }
+  if (stat.isSocket()) {
+    return 'socket';
+  }
+  return 'other';
+}
+
+function hasMatchingFileIdentity(expected: Stats, actual: Stats): boolean {
+  return expected.dev === actual.dev
+    && expected.ino === actual.ino
+    && actualMode(expected) === actualMode(actual)
+    && fileKind(expected) === fileKind(actual);
+}
+
+function hashFileContent(absPath: Buffer, path: Buffer, expectedStat: Stats): Buffer {
+  if (constants.O_NOFOLLOW === undefined) {
+    return fail('open', displayPath(path), new Error('O_NOFOLLOW is unavailable on this platform'));
+  }
+
+  let fd: number;
+  try {
+    fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (cause) {
+    return fail('open', displayPath(path), cause);
+  }
+
+  const hash = createHash('sha256');
+  let failure: unknown;
+  try {
+    let openedStat: Stats;
+    try {
+      openedStat = fstatSync(fd);
+    } catch (cause) {
+      failure = cause;
+      return fail('fstat', displayPath(path), cause);
+    }
+    if (!hasMatchingFileIdentity(expectedStat, openedStat) || !openedStat.isFile()) {
+      failure = new Error('lstat and fstat file identities differ');
+      return fail('verify opened file', displayPath(path), failure);
+    }
+
     const buffer = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
     for (;;) {
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
-      if (bytesRead <= 0) {
+      let bytesRead: number;
+      try {
+        bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      } catch (cause) {
+        failure = cause;
+        return fail('read', displayPath(path), cause);
+      }
+      if (bytesRead === 0) {
         break;
       }
       hash.update(buffer.subarray(0, bytesRead));
     }
   } finally {
-    closeSync(fd);
+    try {
+      closeSync(fd);
+    } catch (cause) {
+      if (failure === undefined) {
+        return fail('close', displayPath(path), cause);
+      }
+    }
+  }
+  return hash.digest();
+}
+
+function readSymlinkTarget(absPath: Buffer, path: Buffer): Buffer {
+  try {
+    return readlinkSync(absPath, { encoding: 'buffer' });
+  } catch (cause) {
+    return fail('readlink', displayPath(path), cause);
+  }
+}
+
+function lstatPath(absPath: Buffer, path: Buffer, allowMissing: true): Stats | undefined;
+function lstatPath(absPath: Buffer, path: Buffer, allowMissing: false): Stats;
+function lstatPath(absPath: Buffer, path: Buffer, allowMissing: boolean): Stats | undefined {
+  try {
+    return lstatSync(absPath);
+  } catch (cause) {
+    if (allowMissing && isMissingPath(cause)) {
+      return undefined;
+    }
+    return fail('lstat', displayPath(path), cause);
+  }
+}
+
+function isMissingPath(cause: unknown): boolean {
+  return typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'ENOENT';
+}
+
+function assertGitlinkDirectory(stat: Stats, path: Buffer): void {
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    return fail('submodule path', displayPath(path), new Error('gitlink working tree must be a non-symlink directory'));
+  }
+}
+
+function trackedSnapshotEntry(cwd: string, entry: TrackedEntry, visitedDirectories: Set<string>): SnapshotEntry {
+  const absPath = absolutePath(cwd, entry.path);
+  const stat = lstatPath(absPath, entry.path, true);
+  const baseFields: Array<[string, Buffer | string | number]> = [
+    ['path', entry.path],
+    ['tracked', 1],
+    ['indexMode', entry.indexMode],
+    ['indexObject', entry.indexObject],
+    ['stage', entry.stage],
+  ];
+  if (stat === undefined) {
+    return {
+      path: entry.path,
+      record: normalizeRecord([
+        ...baseFields,
+        ['kind', 'deleted'],
+        ['actualMode', ''],
+        ['deleted', 1],
+      ]),
+      sortOrder: 0,
+      stage: entry.stage,
+    };
+  }
+
+  const fields = [...baseFields, ['kind', fileKind(stat)], ['actualMode', actualMode(stat)], ['deleted', 0]] as Array<[string, Buffer | string | number]>;
+  if (entry.indexMode.equals(Buffer.from('160000'))) {
+    assertGitlinkDirectory(stat, entry.path);
+    let digest: string;
+    try {
+      digest = computeStableSnapshot(decodeRepositoryPath(absPath), visitedDirectories);
+    } catch (cause) {
+      return fail('submodule digest', displayPath(entry.path), cause);
+    }
+    fields[5] = ['kind', 'submodule'];
+    fields.push(['submoduleGitlink', entry.indexObject], ['submoduleWorkingTreeDigest', digest]);
+  } else if (stat.isSymbolicLink()) {
+    fields.push(['symlinkTarget', readSymlinkTarget(absPath, entry.path)]);
+  } else if (stat.isFile()) {
+    fields.push(['contentDigest', hashFileContent(absPath, entry.path, stat)]);
+  }
+
+  return {
+    path: entry.path,
+    record: normalizeRecord(fields),
+    sortOrder: 0,
+    stage: entry.stage,
+  };
+}
+
+function untrackedSnapshotEntry(cwd: string, path: Buffer, visitedDirectories: Set<string>): SnapshotEntry {
+  const absPath = absolutePath(cwd, path);
+  const stat = lstatPath(absPath, path, false);
+
+  const fields: Array<[string, Buffer | string | number]> = [
+    ['path', path],
+    ['tracked', 0],
+    ['kind', fileKind(stat)],
+    ['actualMode', actualMode(stat)],
+    ['indexMode', ''],
+    ['indexObject', ''],
+    ['stage', ''],
+    ['deleted', 0],
+  ];
+  if (stat.isSymbolicLink()) {
+    fields.push(['symlinkTarget', readSymlinkTarget(absPath, path)]);
+  } else if (stat.isFile()) {
+    fields.push(['contentDigest', hashFileContent(absPath, path, stat)]);
+  } else if (stat.isDirectory()) {
+    let digest: string;
+    try {
+      digest = computeStableSnapshot(decodeRepositoryPath(absPath), visitedDirectories);
+    } catch (cause) {
+      return fail('embedded repository digest', displayPath(path), cause);
+    }
+    fields.push(['embeddedRepositoryWorkingTreeDigest', digest]);
+  }
+
+  return { path, record: normalizeRecord(fields), sortOrder: 1, stage: Buffer.alloc(0) };
+}
+
+function captureSnapshot(cwd: string, visitedDirectories: Set<string>): CapturedSnapshot {
+  const trackedOutput = runGit(cwd, ['ls-files', '--cached', '--stage', '-z']);
+  const untrackedOutput = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']);
+  const head = runGit(cwd, ['rev-parse', '--verify', 'HEAD']);
+  const tracked = parseNulEntries(trackedOutput, 'git ls-files --cached --stage -z parse', cwd)
+    .map((record) => parseTrackedEntry(record, cwd));
+  const untracked = parseNulEntries(untrackedOutput, 'git ls-files --others --exclude-standard -z parse', cwd);
+  const entries = [
+    ...tracked.map((entry) => trackedSnapshotEntry(cwd, entry, visitedDirectories)),
+    ...untracked.map((path) => untrackedSnapshotEntry(cwd, path, visitedDirectories)),
+  ];
+  entries.sort((left, right) => Buffer.compare(left.path, right.path)
+    || left.sortOrder - right.sortOrder
+    || Buffer.compare(left.stage, right.stage));
+
+  const inventory = Buffer.concat([
+    lengthPrefixed(normalizeRecord([['repositoryHead', head]])),
+    ...entries.map((entry) => lengthPrefixed(entry.record)),
+  ]);
+  const hash = createHash('sha256');
+  hash.update(lengthPrefixed(SNAPSHOT_FORMAT));
+  hash.update(lengthPrefixed(inventory));
+  return { inventory, snapshotId: hash.digest('hex') };
+}
+
+function directoryIdentity(stat: Stats): string {
+  return `${stat.dev}:${stat.ino}`;
+}
+
+function captureDirectoryIdentity(cwd: string): string {
+  let stat: Stats;
+  try {
+    stat = lstatSync(cwd);
+  } catch (cause) {
+    return fail('lstat capture directory', cwd, cause);
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    return fail('capture directory', cwd, new Error('expected a non-symlink directory'));
+  }
+  return directoryIdentity(stat);
+}
+
+function computeStableSnapshot(cwd: string, visitedDirectories: Set<string>): string {
+  const identity = captureDirectoryIdentity(cwd);
+  if (visitedDirectories.has(identity)) {
+    return fail('capture recursion', cwd, new Error('directory cycle detected'));
+  }
+  visitedDirectories.add(identity);
+  try {
+    for (let attempt = 0; attempt < CAPTURE_ATTEMPTS; attempt += 1) {
+      const first = captureSnapshot(cwd, visitedDirectories);
+      const second = captureSnapshot(cwd, visitedDirectories);
+      if (first.snapshotId === second.snapshotId && first.inventory.equals(second.inventory)) {
+        return second.snapshotId;
+      }
+    }
+    return fail('capture', cwd, new Error(`working tree changed during ${CAPTURE_ATTEMPTS} consecutive capture attempts`));
+  } finally {
+    visitedDirectories.delete(identity);
   }
 }
 
 /**
- * cwd の working tree（tracked ファイルの未コミット差分 + untracked ファイルの
- * 内容）を内容アドレスする不透明なトークン。同じ cwd に対して書き込みが
- * 起きない限り決定的に同じ値を返す。
+ * cwd のレビュー対象を内容アドレスする不透明なトークン。追跡・未追跡（ignored
+ * を除く）を実体から収集し、連続する2回の完全一致を確認してから返す。
  */
 export function computeReviewScopeSnapshotId(cwd: string): string {
-  const head = runGit(cwd, ['rev-parse', 'HEAD']) ?? '';
-  const dirtyDiff = runGit(cwd, ['diff', 'HEAD']) ?? '';
-  // -z: NUL 区切り。ファイル名に空白・改行・特殊文字があっても曖昧にならない。
-  const untrackedList = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']) ?? '';
-
-  const hash = createHash('sha256').update(head).update('\0').update(dirtyDiff).update('\0');
-  const untrackedFiles = untrackedList.split('\0').filter((name) => name.length > 0).sort();
-  for (const file of untrackedFiles) {
-    hash.update(file).update('\0');
-    const absPath = join(cwd, file);
-    let stat;
-    try {
-      stat = lstatSync(absPath); // lstat: symlink を追従しない
-    } catch {
-      // 一覧取得と検査の間に消えた/読めないファイルは定数で畳み込む。
-      hash.update('__unreadable__').update('\0');
-      continue;
-    }
-    if (stat.isSymbolicLink()) {
-      // symlink は追従せず、リンクの向き先文字列そのものをハッシュする。参照先を
-      // すり替えれば readlink 値が変わり snapshot も変わる。追従して target 内容を
-      // 読むと、target 差し替えや broken symlink の張り替えを取りこぼす
-      // （codex 検証2巡目#3b）。
-      try {
-        hash.update('__symlink__:').update(readlinkSync(absPath));
-      } catch {
-        hash.update('__broken-symlink__');
-      }
-    } else if (stat.isFile()) {
-      // 内容を最後まで畳み込む（サイズだけの近似はしない。同サイズ改変も検出。
-      // codex 検証2巡目#3a）。
-      try {
-        hashFileContentInto(hash, absPath);
-      } catch {
-        hash.update('__unreadable__');
-      }
-    } else {
-      // ls-files --others は通常ファイル/symlink のみ列挙するが、防御的に種別だけ
-      // 畳み込む（dir/socket/fifo 等）。
-      hash.update('__non-file__');
-    }
-    hash.update('\0');
-  }
-  return hash.digest('hex');
+  return computeStableSnapshot(cwd, new Set());
 }
