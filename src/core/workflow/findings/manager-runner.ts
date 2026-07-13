@@ -12,8 +12,8 @@
  * 1.5. raw admission validation（codex 対策#4）: location 付き claim は
  *    evidence.kind に応じて機械照合する — source_quote は verbatimExcerpt を
  *    現在のファイル内容と完全一致検証（admission-validation.ts の
- *    verifySourceQuoteEvidence）、locationless は検証不要（「存在しないこと」が
- *    根拠の claim）、evidence 無しは無条件で「引用不成立」。一致した claim だけが
+ *    verifySourceQuoteEvidence）、new + locationless は raw 観測を保持した
+ *    gate-blocking provisional、evidence 無しは「引用不成立」。一致した claim だけが
  *    下記 2/3 の通常経路（product finding 候補）に進む。不一致・stale-snapshot は
  *    reviewer anomaly（二系統台帳の review-integrity 側、reviewer-anomalies.ts）へ
  *    隔離し、product gate（findings 配列・COMPLETE 判定）には一切影響しない。
@@ -121,6 +121,7 @@ import type {
   FindingManagerDecisions,
   FindingManagerOutput,
   FindingObservation,
+  FindingProvisionalKind,
   InterpretationApplicationResult,
   RawFinding,
   ReviewerAnomalyKind,
@@ -632,18 +633,27 @@ function describeRejections(assembly: AssembleManagerOutputResult): string[] {
 // provisional spec builders
 // ---------------------------------------------------------------------------
 
-function provisionalSpecForRaw(input: {
+type RawProvisionalSpecInput = {
   wire: RawFinding;
   canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
   reason: string;
   addInterpretationEpochs?: number;
-}): ProvisionalFindingSpec {
+};
+
+function provisionalSpecForRaw(input: RawProvisionalSpecInput): ProvisionalFindingSpec {
+  return provisionalSpecForRawKind(input, 'raw-meaning-ambiguous');
+}
+
+function provisionalSpecForRawKind(
+  input: RawProvisionalSpecInput,
+  kind: FindingProvisionalKind,
+): ProvisionalFindingSpec {
   return {
-    kind: 'raw-meaning-ambiguous',
+    kind,
     stableKey: computeProvisionalStableKey({
       reviewerStableKey: input.canonical.reviewerStableKey,
       lineageKey: input.canonical.lineageKey,
-      provisionalKind: 'raw-meaning-ambiguous',
+      provisionalKind: kind,
     }),
     lineageKey: input.canonical.lineageKey,
     sourceRawFindingIds: [input.wire.rawFindingId],
@@ -1281,6 +1291,7 @@ export async function runFindingManagerForStep(
   const admissionRejections: RawAdmissionRejectionReport[] = [];
   const admissionAnomalySpecs: ReviewerAnomalySpec[] = [];
   const admissionRejectedItems: CanonicalIntakeItem[] = [];
+  const locationlessProvisionalItems: Array<{ item: CanonicalIntakeItem; reason: string }> = [];
   const pendingRejectedObservations: Array<{ item: CanonicalIntakeItem; targetFindingId: string; reason: string }> = [];
   const cleanAdmitted: CanonicalIntakeItem[] = [];
   const taintedAdmitted: CanonicalIntakeItem[] = [];
@@ -1309,11 +1320,6 @@ export async function runFindingManagerForStep(
    *
    * admit（product 側パイプラインへ通す）条件:
    *   - source_quote evidence が verbatimExcerpt 完全一致（match）した場合。
-   *   - 明示的な locationless evidence（kind:'locationless'）を持つ「非確認」
-   *     の claim。「存在しないことが根拠」の absence claim は verbatimExcerpt で
-   *     照合できない（codex 裁定）が、admit には reviewer の明示的な
-   *     evidenceKind:'locationless' 宣言を要求する — 自由文だけで product finding へ
-   *     昇格させない（空/N-A location の暗黙 admit は不可）。
    *   - persists / reopened の relation claim で location が空（既存 finding を id で
    *     参照するだけの再観測・再オープン主張）。これらは下流の機械分類・曖昧
    *     梯子が governs し、「新規の clean な product finding」には決してならない
@@ -1329,7 +1335,9 @@ export async function runFindingManagerForStep(
   const classifyLocationEvidence = (
     item: CanonicalIntakeItem,
     pool: 'clean' | 'tainted',
-  ): { admit: true } | { admit: false; anomalyKind: ReviewerAnomalyKind; reason: string } => {
+  ): { admit: true }
+    | { admit: false; provisionalKind: 'unverified-locationless'; reason: string }
+    | { admit: false; anomalyKind: ReviewerAnomalyKind; reason: string } => {
     const evidence = item.canonical.evidence;
     const relation = item.canonical.relation;
     // 1. source_quote: verbatimExcerpt が現在のファイルと完全一致すれば admit
@@ -1345,17 +1353,17 @@ export async function runFindingManagerForStep(
     // 以降は「matching source_quote 無し」— 明示 locationless・空フィールドの
     // source_quote・evidence 未指定のいずれか。ここからは relation で分岐する。
     // 既存 finding を参照して変異させる relation（persists/reopened/confirmation）は
-    // matching source_quote が無い限り admit しない。locationless（absence claim）を
-    // admit の根拠にできるのは、既存 finding を変異させない new の新規指摘だけ
-    // （codex 検証3巡目: 明示 locationless で persists/reopened の変異経路へ到達
-    // させない — locationless は new の absence finding 専用）。
+    // matching source_quote が無い限り admit しない。locationless（absence claim）は
+    // new なら provisional として保持し、persists/reopened の既存 finding 変異には
+    // 決して使わない。
 
     if (relation === 'new') {
       if (evidence?.kind === 'locationless') {
-        // 「存在しないことが根拠」の absence/process finding。本来 location を持た
-        // ない正当な新規指摘なので admit（新規 finding を立てるだけで既存 finding を
-        // 変異させない）。
-        return { admit: true };
+        return {
+          admit: false,
+          provisionalKind: 'unverified-locationless',
+          reason: 'a new locationless claim has no mechanically verifiable source_quote evidence, so it is retained as a gate-blocking provisional observation rather than admitted as a confirmed product finding',
+        };
       }
       // new で検証可能な evidence が無い → product finding へ昇格させない
       //（codex 検証ブロッカー#2: 空文字 source_quote フィールドは resolveRawFindingEvidence
@@ -1385,7 +1393,7 @@ export async function runFindingManagerForStep(
         return { admit: true };
       }
       const detail = evidence?.kind === 'locationless'
-        ? 'locationless evidence can justify only a "new" absence finding, not the mutation of an existing finding'
+        ? 'locationless evidence is retained only as a provisional new observation and cannot mutate an existing finding'
         : 'no verified source_quote evidence was supplied';
       return {
         admit: false,
@@ -1457,6 +1465,8 @@ export async function runFindingManagerForStep(
       if (item.canonical.evidence?.kind === 'source_quote') {
         verifiedEvidenceCandidates.push({ lineageKey: item.canonical.lineageKey, rawFindingId: item.wire.rawFindingId });
       }
+    } else if ('provisionalKind' in classification) {
+      locationlessProvisionalItems.push({ item, reason: classification.reason });
     } else {
       handleUnverifiableLocationEvidence(item, classification.anomalyKind, classification.reason, 'clean');
     }
@@ -1476,6 +1486,8 @@ export async function runFindingManagerForStep(
         // create_independent / open_conflict）を一切許さない（codex 検証4巡目）。
         provisionalOnlyLadderRawIds.add(item.canonical.rawFindingId);
       }
+    } else if ('provisionalKind' in classification) {
+      locationlessProvisionalItems.push({ item, reason: classification.reason });
     } else {
       handleUnverifiableLocationEvidence(item, classification.anomalyKind, classification.reason, 'tainted');
     }
@@ -1643,10 +1655,16 @@ export async function runFindingManagerForStep(
   // 6. 保存: 排他区間で最新台帳へ再照合し、CAS を適用して反映する。
   //    LLM 呼び出しはここまでで全て完了している（mutator は同期処理のみ）。
   const capturedPreconditions = captureFindingPreconditions(previousLedger);
+  const locationlessProvisionalRawIds = new Set(
+    locationlessProvisionalItems.map(({ item }) => item.wire.rawFindingId),
+  );
   const reconcileRawFindings = [
     ...cleanWire,
+    ...locationlessProvisionalItems.map(({ item }) => item.wire),
     ...admissionRejectedItems.map((item) => item.wire),
-    ...tainted.map((item) => item.wire),
+    ...tainted
+      .filter((item) => !locationlessProvisionalRawIds.has(item.wire.rawFindingId))
+      .map((item) => item.wire),
     ...intake.items.filter((item) => intake.overflowRawFindingIds.has(item.canonical.rawFindingId)).map((item) => item.wire),
   ];
   // B1-b: reconciler の defense-in-depth fallback が別の reviewerStableKey を
@@ -1669,6 +1687,10 @@ export async function runFindingManagerForStep(
     reviewerAnomalyLandings.length = 0;
     const specs: ProvisionalFindingSpec[] = [
       ...intake.overflowSpecs,
+      ...locationlessProvisionalItems.map(({ item, reason }) => provisionalSpecForRawKind(
+        { wire: item.wire, canonical: item.canonical, reason },
+        'unverified-locationless',
+      )),
       ...cleanProvisionalSpecs,
       ...ladder.provisionalSpecs,
     ];

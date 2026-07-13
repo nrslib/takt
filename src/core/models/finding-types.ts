@@ -114,6 +114,11 @@ export interface FindingDisputeRecord {
  */
 export const FINDING_PROVISIONAL_KINDS = [
   'raw-meaning-ambiguous',
+  /**
+   * 新規 locationless claim は source_quote で機械検証できないため、確定
+   * product finding に昇格せず観測として gate-blocking に保持する。
+   */
+  'unverified-locationless',
   'reviewer-output-overflow',
   'manager-budget-exhausted',
   'interpretation-interrupted',

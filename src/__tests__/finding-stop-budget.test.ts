@@ -16,6 +16,7 @@
  *   時間予算の発火を検証する
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -197,6 +198,9 @@ function writeFixtureFile(relativePath: string, lineCount: number): void {
   writeFileSync(fullPath, `${Array.from({ length: lineCount }, (_, index) => `// line ${index + 1}`).join('\n')}\n`);
 }
 writeFixtureFile('src/real.ts', 60);
+execFileSync('git', ['init', '--quiet'], { cwd: FIXTURE_CWD });
+execFileSync('git', ['add', 'src/real.ts'], { cwd: FIXTURE_CWD });
+execFileSync('git', ['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: FIXTURE_CWD });
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
