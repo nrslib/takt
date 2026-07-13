@@ -36,7 +36,13 @@ function makeContext(options: {
       reportLedgerSummary: '{}',
       hasOpenFindings: options.hasOpenFindings,
       hasWaivedFindings: options.hasWaivedFindings ?? false,
-      ...(options.rawFindingsJsonSchema !== undefined ? { rawFindingsJsonSchema: options.rawFindingsJsonSchema } : {}),
+      // codex 対策#4: rawFindingsJsonSchema と reviewScopeSnapshotId は常に
+      // セットで生成される（WorkflowEngineSetup.buildFindingContractInstructionContext
+      // 参照）。片方だけの fixture は finding-contract-instruction.ts の
+      // fail-loud ガードに引っかかるため、実際の生成規則に合わせて両方立てる。
+      ...(options.rawFindingsJsonSchema !== undefined
+        ? { rawFindingsJsonSchema: options.rawFindingsJsonSchema, reviewScopeSnapshotId: 'test-snapshot-id' }
+        : {}),
     },
   } as unknown as InstructionContext;
 }

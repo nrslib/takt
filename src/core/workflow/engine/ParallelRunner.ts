@@ -38,12 +38,11 @@ import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type { FindingContractConfig } from '../../models/types.js';
 import type { FindingLedgerStore } from '../findings/store.js';
-import { RawFindingsStructuredOutput, type FindingManagerRunResult } from '../findings/manager-runner.js';
+import type { FindingManagerRunResult } from '../findings/manager-runner.js';
 import {
   ingestFindingContractResults,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
-import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
@@ -242,7 +241,19 @@ export class ParallelRunner {
     if (semaphore) {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
-    const findingLedgerCopyPath = this.prepareFindingContractLedgerCopy();
+    // WorkflowEngineSetup.buildFindingContractInstructionContext と同じヘルパを
+    // ラウンドの先頭で1回だけ呼ぶ（sub-step ごとに再計算しない）。ledgerCopyPath /
+    // reviewScopeSnapshotId は「このラウンドの reviewer 全員が同じ値を見る」ことが
+    // 前提の値であり（後者は manager 検証時の再計算と一致する必要がある —
+    // WorkflowEngineSetup.ts・snapshot.ts 参照）、ここで inline に再実装すると
+    // reviewScopeSnapshotId の付与漏れのような配線バグを繰り返す。
+    // findingContract 未設定のワークフローが大半のため、クロージャ呼び出し自体を
+    // 避ける早期リターンは維持する（OptionsBuilder 側でも undefined を返すが、
+    // 呼び出しコストを避けたい）。
+    const findingContractContext = this.deps.findingContract
+      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(step, true)
+      : undefined;
+    const findingLedgerCopyPath = findingContractContext?.ledgerCopyPath;
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
     const routedProviderInfoByStep = this.deps.engineOptions.autoRouting
       ? await resolveAutoRoutingBatch({
@@ -297,16 +308,7 @@ export class ParallelRunner {
             task,
             maxSteps,
             subRuntime?.fallback,
-            findingLedgerCopyPath
-              ? {
-                  ledgerCopyPath: findingLedgerCopyPath,
-                  ledgerSummary: this.renderFindingLedgerSummary(),
-                  reportLedgerSummary: this.renderFindingLedgerReportSummary(),
-                  hasOpenFindings: this.ledgerHasOpenFindings(),
-                  hasWaivedFindings: this.ledgerHasWaivedFindings(),
-                  rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
-                }
-              : undefined,
+            findingContractContext,
           );
           const phase1Instruction = findingLedgerCopyPath
             ? this.deps.stepExecutor.buildPhase1Instruction(subInstruction, executableSubStep, subRuntime)
@@ -936,44 +938,6 @@ export class ParallelRunner {
         this.deps.getWorkflowName(),
       );
     }
-  }
-
-  private prepareFindingContractLedgerCopy(): string | undefined {
-    if (!this.deps.findingContract) {
-      return undefined;
-    }
-    if (!this.deps.findingLedgerStore) {
-      throw new Error('Finding contract is configured but finding ledger store is not available');
-    }
-    return this.deps.findingLedgerStore.createRunCopy();
-  }
-
-  private ledgerHasOpenFindings(): boolean {
-    if (!this.deps.findingLedgerStore) {
-      return false;
-    }
-    return ledgerHasOpenFindings(this.deps.findingLedgerStore.loadLedger());
-  }
-
-  private ledgerHasWaivedFindings(): boolean {
-    if (!this.deps.findingLedgerStore) {
-      return false;
-    }
-    return ledgerHasWaivedFindings(this.deps.findingLedgerStore.loadLedger());
-  }
-
-  private renderFindingLedgerSummary(): string {
-    if (!this.deps.findingLedgerStore) {
-      throw new Error('Finding contract is configured but finding ledger store is not available');
-    }
-    return renderFindingLedgerInstructionSummary(this.deps.findingLedgerStore.loadLedger());
-  }
-
-  private renderFindingLedgerReportSummary(): string {
-    if (!this.deps.findingLedgerStore) {
-      throw new Error('Finding contract is configured but finding ledger store is not available');
-    }
-    return renderFindingLedgerReportSummary(this.deps.findingLedgerStore.loadLedger());
   }
 
   private buildParallelLoggerOptions(
