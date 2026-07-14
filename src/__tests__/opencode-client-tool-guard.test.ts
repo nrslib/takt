@@ -117,6 +117,48 @@ function genericErrorEvent(index: number): MockStreamEvent {
   };
 }
 
+function completedToolEvent(
+  tool: string,
+  input: Record<string, unknown>,
+  output: string,
+  callID?: string,
+): MockStreamEvent {
+  toolCallSeq += 1;
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `part-${toolCallSeq}`,
+        type: 'tool',
+        tool,
+        callID: callID ?? `tc-${toolCallSeq}`,
+        state: { status: 'completed', input, output, title: tool },
+      },
+    },
+  };
+}
+
+function invalidCompletedToolEvent(): MockStreamEvent {
+  toolCallSeq += 1;
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `part-${toolCallSeq}`,
+        type: 'tool',
+        tool: 'invalid',
+        callID: `tc-${toolCallSeq}`,
+        state: {
+          status: 'completed',
+          input: { tool: 'read', error: "Required argument 'filePath' is missing or invalid" },
+          output: 'OpenCode rejected the tool call',
+          title: 'invalid',
+        },
+      },
+    },
+  };
+}
+
 function successEvents(sessionId: string, text: string): MockStreamEvent[] {
   return [
     {
@@ -140,6 +182,85 @@ describe('OpenCodeClient tool guard recovery', () => {
 
   afterEach(() => {
     delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
+    delete process.env.TAKT_OPENCODE_TOOL_SUCCESS_REPEATS;
+  });
+
+  it('completed の成功反復は recovery や transient retry をせず1回の prompt で error になる', async () => {
+    process.env.TAKT_OPENCODE_TOOL_SUCCESS_REPEATS = '3';
+    runPlans = [[
+      completedToolEvent('bash', { command: 'git diff -- src/a.ts' }, 'unchanged'),
+      completedToolEvent('bash', { command: 'git diff -- src/b.ts' }, 'unchanged'),
+      completedToolEvent('bash', { command: 'git diff -- src/a.ts' }, 'unchanged'),
+      completedToolEvent('bash', { command: 'git diff -- src/b.ts' }, 'unchanged'),
+      completedToolEvent('bash', { command: 'git diff -- src/a.ts' }, 'unchanged'),
+    ]];
+
+    const { sessionCreate, promptAsync } = installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('successful tool result loop');
+    expect(result.error).not.toContain('git diff');
+    expect(result.error).not.toContain('unchanged');
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('completed invalid は成功台帳へ入れず既存の引数エラー検出へ流れる', async () => {
+    process.env.TAKT_OPENCODE_TOOL_SUCCESS_REPEATS = '2';
+    runPlans = [[
+      invalidCompletedToolEvent(),
+      invalidCompletedToolEvent(),
+      invalidCompletedToolEvent(),
+      invalidCompletedToolEvent(),
+    ]];
+
+    const { promptAsync } = installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('invalid');
+    expect(result.error).not.toContain('successful tool result loop');
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('同一 session の correction attempt をまたいで成功反復を数える', async () => {
+    process.env.TAKT_OPENCODE_TOOL_SUCCESS_REPEATS = '3';
+    runPlans = [
+      [
+        completedToolEvent('bash', { command: 'git diff -- src/a.ts' }, 'unchanged'),
+        completedToolEvent('bash', { command: 'git diff -- src/a.ts' }, 'unchanged'),
+        editErrorEvent('src/target.ts', 'stubborn wrong span'),
+        editErrorEvent('src/target.ts', 'stubborn wrong span'),
+        editErrorEvent('src/target.ts', 'stubborn wrong span'),
+      ],
+      [
+        completedToolEvent('bash', { command: 'git diff -- src/a.ts' }, 'unchanged'),
+      ],
+    ];
+
+    const { sessionCreate, promptAsync } = installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('successful tool result loop');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    const calls = promptAsync.mock.calls.map((call) => call[0] as { sessionID: string });
+    expect(calls[0]?.sessionID).toBe('session-1');
+    expect(calls[1]?.sessionID).toBe('session-1');
   });
 
   it('edit conflict: 同一セッション correction 1回 → 再発で fresh session 1回 → 成功で done', async () => {

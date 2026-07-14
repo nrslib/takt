@@ -50,6 +50,7 @@ export type ToolGuardFailure =
   | { kind: 'unavailable_tool_loop'; tool: string; message: string }
   | { kind: 'invalid_argument_loop'; tool: string; message: string }
   | { kind: 'edit_conflict_loop'; tool: 'edit'; signature: string; filePath: string; message: string }
+  | { kind: 'tool_success_loop'; tool: string; message: string }
   | { kind: 'tool_error_burst'; stats: ToolHealthStats; message: string }
   | { kind: 'absolute_cost_limit'; stats: ToolHealthStats; message: string };
 
@@ -72,6 +73,8 @@ export interface ToolGuardConfig {
   consecutiveErrors: number;
   /** burst: 非 edit ツールの同一署名短期反復の発火閾値。 */
   sameSignatureRepeats: number;
+  /** 同一入力・同一結果の成功ツール呼び出し反復の発火閾値。 */
+  successRepeats: number;
   /** edit_conflict_loop: 同一署名（filePath + oldString）の失敗反復の発火閾値。 */
   editConflictRepeats: number;
   /** edit_conflict_loop への同一セッション内 correction のコール全体での上限。 */
@@ -89,6 +92,7 @@ export function resolveToolGuardConfig(): ToolGuardConfig {
     recentWindowErrorRatePercent: resolveEnvInt('TAKT_OPENCODE_TOOL_ERROR_WINDOW_RATE', 90),
     consecutiveErrors: resolveEnvInt('TAKT_OPENCODE_TOOL_ERROR_CONSECUTIVE', 10),
     sameSignatureRepeats: resolveEnvInt('TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS', 8),
+    successRepeats: resolveEnvInt('TAKT_OPENCODE_TOOL_SUCCESS_REPEATS', 12),
     editConflictRepeats: resolveEnvInt('TAKT_OPENCODE_EDIT_CONFLICT_REPEATS', 3),
     // correction 中に別署名の conflict が新たに起きた場合、その署名は自身の
     // correction 段階から始める（codex 裁定）。ただし無限 correction にしない
@@ -131,10 +135,40 @@ function extractEditConflictInput(input: unknown): { filePath: string; oldString
   return { filePath, oldString };
 }
 
+function stableSerializeToolInput(value: unknown): string {
+  if (value === null) {
+    return 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerializeToolInput(item)).join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const properties = Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerializeToolInput(record[key])}`);
+    return `{${properties.join(',')}}`;
+  }
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return 'number:NaN';
+    if (Object.is(value, -0)) return 'number:-0';
+    return `number:${value}`;
+  }
+  if (typeof value === 'bigint') {
+    return `bigint:${value}`;
+  }
+  return `${typeof value}:${JSON.stringify(value)}`;
+}
+
+function computeToolSuccessOutputHash(output: unknown): string {
+  return createHash('sha256').update(stableSerializeToolInput(output)).digest('hex');
+}
+
 /**
  * 1回の call() 全体を見守る tool ガード。attempt（transient retry / recovery）を
- * またいで1インスタンスを使い回し、attempt 開始時に resetSessionCounters() で
- * セッション固有の短期カウンタだけをリセットする。絶対台帳はリセットしない。
+ * またいで1インスタンスを使い回す。attempt 開始時は短期カウンタをリセットし、
+ * 成功台帳は実際のセッション ID が変わった場合だけリセットする。絶対台帳は
+ * リセットしない。
  */
 export class OpenCodeToolGuard {
   // --- 絶対台帳（call 全体。recovery でリセットしない） ---
@@ -145,14 +179,17 @@ export class OpenCodeToolGuard {
   private recoveriesUsed = 0;
   private readonly absoluteSignatureCounts = new Map<string, number>();
 
-  // --- セッション固有の短期カウンタ（resetSessionCounters() でリセット） ---
+  // --- セッション固有の短期カウンタ（resetSessionCounters() で毎 attempt リセット） ---
   private consecutiveErrors = 0;
   private toolEventsSinceLastProgress = 0;
   private recentWindow: boolean[] = []; // true = error
   private readonly sessionSignatureCounts = new Map<string, number>();
   private readonly unavailableDetector = new UnavailableToolLoopDetector();
   private readonly invalidArgumentDetector = new InvalidToolArgumentLoopDetector();
-  private lastCallId: string | undefined;
+  private lastErrorCallId: string | undefined;
+  private successfulLedgerSessionId: string | undefined;
+  private readonly successfulCallIds = new Set<string>();
+  private readonly successfulToolResults = new Map<string, { outputHash: string; repeats: number }>();
 
   /** テキスト生成の観測。既存挙動の維持: unavailable 検出器の連続性だけを切る。 */
   noteTextActivity(): void {
@@ -165,18 +202,23 @@ export class OpenCodeToolGuard {
   }
 
   /**
-   * fresh-session recovery / 新 attempt 開始時のリセット。セッション固有の
-   * 短期カウンタのみ。絶対台帳（総数・最大値・絶対署名・recovery 数）は
-   * 引き継ぐ（codex 裁定: 絶対台帳を recovery でリセットしない）。
+   * 新 attempt 開始時の短期カウンタリセット。絶対台帳（総数・最大値・絶対署名・
+   * recovery 数）は引き継ぐ。成功台帳は実際のセッションが変わったときだけ
+   * クリアする。
    */
-  resetSessionCounters(): void {
+  resetSessionCounters(activeSessionId: string): void {
     this.consecutiveErrors = 0;
     this.toolEventsSinceLastProgress = 0;
     this.recentWindow = [];
     this.sessionSignatureCounts.clear();
     this.unavailableDetector.reset();
     this.invalidArgumentDetector.reset();
-    this.lastCallId = undefined;
+    this.lastErrorCallId = undefined;
+    if (this.successfulLedgerSessionId !== activeSessionId) {
+      this.successfulLedgerSessionId = activeSessionId;
+      this.successfulCallIds.clear();
+      this.successfulToolResults.clear();
+    }
   }
 
   stats(): ToolHealthStats {
@@ -194,11 +236,16 @@ export class OpenCodeToolGuard {
   }
 
   /** ツール成功の観測。進捗は2段階（強: リセット / 弱: 緩和）。 */
-  observeSuccess(toolCallId: string, tool: string): void {
-    if (toolCallId === this.lastCallId) {
-      return;
+  observeSuccess(
+    toolCallId: string,
+    tool: string,
+    input: unknown,
+    output: unknown,
+  ): ToolGuardFailure | undefined {
+    if (this.successfulCallIds.has(toolCallId)) {
+      return undefined;
     }
-    this.lastCallId = toolCallId;
+    this.successfulCallIds.add(toolCallId);
     this.totalSuccesses += 1;
     this.toolEventsSinceLastProgress = 0;
     this.unavailableDetector.reset();
@@ -218,6 +265,28 @@ export class OpenCodeToolGuard {
       this.pushWindow(false);
       this.consecutiveErrors = Math.floor(this.consecutiveErrors / 2);
     }
+
+    const normalizedTool = tool.toLowerCase();
+    if (normalizedTool === 'edit' || normalizedTool === 'write' || normalizedTool === 'patch') {
+      this.successfulToolResults.clear();
+      return undefined;
+    }
+
+    const inputSignature = `${normalizedTool}\0${stableSerializeToolInput(input)}`;
+    const outputHash = computeToolSuccessOutputHash(output);
+    const previous = this.successfulToolResults.get(inputSignature);
+    const repeats = previous?.outputHash === outputHash ? previous.repeats + 1 : 1;
+    this.successfulToolResults.set(inputSignature, { outputHash, repeats });
+
+    const config = resolveToolGuardConfig();
+    if (repeats >= config.successRepeats) {
+      return {
+        kind: 'tool_success_loop',
+        tool: normalizedTool,
+        message: `OpenCode successful tool result loop detected: tool "${normalizedTool}" completed with the same input and result ${repeats} times in this session`,
+      };
+    }
+    return undefined;
   }
 
   /**
@@ -237,8 +306,8 @@ export class OpenCodeToolGuard {
     const unavailable = this.unavailableDetector.observe(toolCallId, tool, message);
     const invalidArgument = this.invalidArgumentDetector.observe(toolCallId, tool, message);
 
-    if (toolCallId !== this.lastCallId) {
-      this.lastCallId = toolCallId;
+    if (toolCallId !== this.lastErrorCallId) {
+      this.lastErrorCallId = toolCallId;
       this.totalErrors += 1;
       this.consecutiveErrors += 1;
       this.maxConsecutiveErrors = Math.max(this.maxConsecutiveErrors, this.consecutiveErrors);

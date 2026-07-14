@@ -1313,9 +1313,9 @@ export class OpenCodeClient {
         let unavailableLoopToolName: string | undefined;
         let unavailableLoopServerTools: readonly string[] | undefined;
         const state = createStreamTrackingState();
-        // 新しい attempt = 新しいストリーム。セッション固有の短期カウンタだけ
-        // リセットする（絶対台帳は call 全体で引き継ぐ — tool-guard.ts 参照）。
-        toolGuard.resetSessionCounters();
+        // 新しい attempt ごとに短期カウンタをリセットする。成功台帳は実セッション
+        // ID が変わったときだけ tool-guard 内でリセットされる。
+        toolGuard.resetSessionCounters(activeSessionId);
         let toolGuardFailure: ToolGuardFailure | undefined;
         const echoState = { remainingPrompts: buildPromptEchoCandidates(promptText, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
@@ -1459,10 +1459,20 @@ export class OpenCodeClient {
               } else if (toolPart.state.status === 'completed') {
                 // 進捗は2段階（強: write/edit/bash → 短期カウンタリセット、
                 // 弱: read/glob/grep 等 → 密度緩和のみ — tool-guard.ts 参照）。
-                toolGuard.observeSuccess(toolPart.callID || toolPart.id, toolPart.tool);
-                // ツールが1つでも成功したなら作業は前に進んでいる。
-                // 空転の計数をここで戻す（下の cyclesWithoutToolSuccess を参照）。
-                cyclesWithoutToolSuccess = 0;
+                const failure = toolGuard.observeSuccess(
+                  toolPart.callID || toolPart.id,
+                  toolPart.tool,
+                  toolPart.state.input,
+                  toolPart.state.output,
+                );
+                if (failure !== undefined) {
+                  toolGuardFailure = failure;
+                  loopError = failure.message;
+                } else {
+                  // ツールが1つでも成功したなら作業は前に進んでいる。
+                  // 空転の計数をここで戻す（下の cyclesWithoutToolSuccess を参照）。
+                  cyclesWithoutToolSuccess = 0;
+                }
               }
               handlePartUpdated(partForDownstream, delta, options.onStream, state);
               if (loopError !== undefined) {
