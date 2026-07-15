@@ -200,7 +200,7 @@ steps:
     policy:
       - coding
       - testing
-    session: refresh
+    session: compact
     knowledge:
       - takt
       - architecture
