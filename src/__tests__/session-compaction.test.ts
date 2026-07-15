@@ -46,7 +46,7 @@ describe('compactSessionBeforePhase1', () => {
     const step = makeCompactStep();
     const agentOptions = makeAgentOptions();
 
-    await compactSessionBeforePhase1(step, agentOptions, { getProvider, warn });
+    await expect(compactSessionBeforePhase1(step, agentOptions, { getProvider, warn })).resolves.toBe('reused');
 
     expect(getProvider).toHaveBeenCalledWith('opencode');
     expect(compactSession).toHaveBeenCalledWith({
@@ -71,7 +71,7 @@ describe('compactSessionBeforePhase1', () => {
       session: session as WorkflowStep['session'],
     });
 
-    await compactSessionBeforePhase1(step, makeAgentOptions(), { getProvider, warn: vi.fn() });
+    await expect(compactSessionBeforePhase1(step, makeAgentOptions(), { getProvider, warn: vi.fn() })).resolves.toBe('reused');
 
     expect(getProvider).not.toHaveBeenCalled();
     expect(compactSession).not.toHaveBeenCalled();
@@ -81,11 +81,11 @@ describe('compactSessionBeforePhase1', () => {
     const compactSession = vi.fn().mockResolvedValue(undefined);
     const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
 
-    await compactSessionBeforePhase1(
+    await expect(compactSessionBeforePhase1(
       makeCompactStep(),
       makeAgentOptions({ sessionId: undefined }),
       { getProvider, warn: vi.fn() },
-    );
+    )).resolves.toBe('reused');
 
     expect(getProvider).not.toHaveBeenCalled();
     expect(compactSession).not.toHaveBeenCalled();
@@ -97,13 +97,13 @@ describe('compactSessionBeforePhase1', () => {
     const getProvider = vi.fn().mockReturnValue(provider);
     const warn = vi.fn();
 
-    await compactSessionBeforePhase1(makeCompactStep(), makeAgentOptions(), { getProvider, warn });
+    await expect(compactSessionBeforePhase1(makeCompactStep(), makeAgentOptions(), { getProvider, warn })).resolves.toBe('reused');
 
     expect(getProvider).toHaveBeenCalledWith('opencode');
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('Given provider compaction fails When Phase 1 starts Then the failure is warned and not rethrown', async () => {
+  it('Given provider compaction fails When Phase 1 starts Then it requests a fresh session and sanitizes the warning', async () => {
     const compactSession = vi.fn().mockRejectedValue(
       new Error('summarize failed with api_key=top-secret and Authorization: Bearer sk-secret123456'),
     );
@@ -114,10 +114,10 @@ describe('compactSessionBeforePhase1', () => {
       makeCompactStep(),
       makeAgentOptions(),
       { getProvider, warn },
-    )).resolves.toBeUndefined();
+    )).resolves.toBe('fresh');
 
     expect(warn).toHaveBeenCalledWith(
-      'Session compaction failed; continuing with the existing session',
+      'Session compaction failed; switching to a fresh session',
       expect.objectContaining({
         step: 'review',
         provider: 'opencode',
@@ -139,7 +139,7 @@ describe('compactSessionBeforePhase1', () => {
       makeCompactStep(),
       makeAgentOptions({ resolvedProvider: undefined }),
       { getProvider, warn },
-    )).resolves.toBeUndefined();
+    )).resolves.toBe('reused');
 
     expect(getProvider).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(1);
@@ -148,5 +148,23 @@ describe('compactSessionBeforePhase1', () => {
       step: 'review',
       sessionId: 'session-1',
     });
+  });
+
+  it('Given external abort during compaction When Phase 1 starts Then it rethrows without selecting a fresh session', async () => {
+    const abortController = new AbortController();
+    const compactSession = vi.fn().mockImplementation(async () => {
+      abortController.abort();
+      throw new Error('OpenCode execution aborted');
+    });
+    const getProvider = vi.fn().mockReturnValue(makeProvider(compactSession));
+    const warn = vi.fn();
+
+    await expect(compactSessionBeforePhase1(
+      makeCompactStep(),
+      makeAgentOptions({ abortSignal: abortController.signal }),
+      { getProvider, warn },
+    )).rejects.toThrow('OpenCode execution aborted');
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });

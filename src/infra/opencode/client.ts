@@ -681,8 +681,81 @@ export function resetSharedServer(): void {
 }
 
 /** 要約は本文量に比例して伸びるため、対話 RPC より長く待つ。 */
-const OPENCODE_SUMMARY_WAIT_TIMEOUT_MS = 3 * 60 * 1000;
+const OPENCODE_COMPACTION_TIMEOUT_MS = 3 * 60 * 1000;
 const OPENCODE_SUMMARY_POLL_INTERVAL_MS = 500;
+
+type CompactionDeadline = {
+  signal: AbortSignal;
+  run: <T>(operation: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  waitForPollInterval: () => Promise<void>;
+  cleanup: () => void;
+};
+
+function createCompactionDeadline(externalAbortSignal: AbortSignal | undefined): CompactionDeadline {
+  const controller = new AbortController();
+  let abortError: Error | undefined;
+  let rejectAbort: (error: Error) => void;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const abort = (error: Error): void => {
+    if (abortError !== undefined) {
+      return;
+    }
+    abortError = error;
+    controller.abort();
+    rejectAbort(error);
+  };
+  const timeoutId = setTimeout(() => {
+    abort(new Error('OpenCode session summarize timed out'));
+  }, OPENCODE_COMPACTION_TIMEOUT_MS);
+  const onExternalAbort = (): void => {
+    abort(new Error(OPENCODE_STREAM_ABORTED_MESSAGE));
+  };
+
+  if (externalAbortSignal?.aborted === true) {
+    onExternalAbort();
+  } else {
+    externalAbortSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
+
+  const run = async <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const operationPromise = Promise.resolve()
+      .then(() => operation(controller.signal))
+      .catch((error: unknown) => {
+        if (abortError !== undefined) {
+          return new Promise<never>(() => {});
+        }
+        throw error;
+      });
+    return Promise.race([operationPromise, abortPromise]);
+  };
+
+  return {
+    signal: controller.signal,
+    run,
+    waitForPollInterval: () => run((signal) => new Promise<void>((resolve, reject) => {
+      const pollTimeoutId = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, OPENCODE_SUMMARY_POLL_INTERVAL_MS);
+      const onAbort = (): void => {
+        clearTimeout(pollTimeoutId);
+        signal.removeEventListener('abort', onAbort);
+        reject(new Error('OpenCode session summarize timed out'));
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    })),
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      externalAbortSignal?.removeEventListener('abort', onExternalAbort);
+    },
+  };
+}
 
 /**
  * summarize() を呼ぶ前に存在していた要約メッセージの id を控える。
@@ -696,13 +769,10 @@ async function collectExistingSummaryIds(
   client: OpencodeClient,
   sessionID: string,
   directory: string,
-  abortSignal?: AbortSignal,
+  deadline: CompactionDeadline,
 ): Promise<ReadonlySet<string>> {
-  const result = await withTimeout(
+  const result = await deadline.run(
     (signal) => client.session.messages({ sessionID, directory }, { signal }),
-    OPENCODE_INTERACTION_TIMEOUT_MS,
-    'OpenCode session messages timed out',
-    abortSignal,
   );
   if (result.data === undefined) {
     throw new Error(`OpenCode session messages not readable before summarize: ${sessionID}`);
@@ -728,20 +798,11 @@ async function waitForSummaryToComplete(
   sessionID: string,
   directory: string,
   existingSummaryIds: ReadonlySet<string>,
-  abortSignal?: AbortSignal,
+  deadline: CompactionDeadline,
 ): Promise<void> {
-  const deadline = Date.now() + OPENCODE_SUMMARY_WAIT_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
-    if (abortSignal?.aborted === true) {
-      throw new Error('OpenCode session summarize aborted');
-    }
-
-    const result = await withTimeout(
+  while (true) {
+    const result = await deadline.run(
       (signal) => client.session.messages({ sessionID, directory }, { signal }),
-      OPENCODE_INTERACTION_TIMEOUT_MS,
-      'OpenCode session messages timed out',
-      abortSignal,
     );
 
     // data が無いのは「要約が無い」ではなく「読めなかった」。
@@ -770,7 +831,7 @@ async function waitForSummaryToComplete(
       // 必ず要約メッセージを作る（実測: メッセージ 0 件のセッションでも 1 秒後に
       // 1 件現れる）。したがって現れないのは異常であり、勝手に「要約不要」と
       // みなして先へ進めてはいけない。全体タイムアウトまで待つ。
-      await new Promise((resolve) => setTimeout(resolve, OPENCODE_SUMMARY_POLL_INTERVAL_MS));
+      await deadline.waitForPollInterval();
       continue;
     }
 
@@ -788,10 +849,8 @@ async function waitForSummaryToComplete(
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, OPENCODE_SUMMARY_POLL_INTERVAL_MS));
+    await deadline.waitForPollInterval();
   }
-
-  throw new Error('OpenCode session summarize did not finish in time');
 }
 
 async function withTimeout<T>(
@@ -2055,46 +2114,47 @@ export class OpenCodeClient {
   async compactSession(options: OpenCodeCompactSessionOptions): Promise<void> {
     const parsedModel = parseProviderModel(options.model, 'OpenCode model');
     const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
-    const acquired = await acquireClient(
-      fullModel,
-      options.opencodeApiKey,
-      options.childProcessEnv,
-      options.abortSignal,
-    );
+    const deadline = createCompactionDeadline(options.abortSignal);
+    let acquired: AcquiredOpenCodeClient | undefined;
 
     try {
+      const acquiredClient = await deadline.run(() => acquireClient(
+        fullModel,
+        options.opencodeApiKey,
+        options.childProcessEnv,
+        deadline.signal,
+      ));
+      acquired = acquiredClient;
       const existingSummaryIds = await collectExistingSummaryIds(
-        acquired.client,
+        acquiredClient.client,
         options.sessionId,
         options.cwd,
-        options.abortSignal,
+        deadline,
       );
 
-      await withTimeout(
-        (signal) => acquired.client.session.summarize({
+      await deadline.run(
+        (signal) => acquiredClient.client.session.summarize({
           sessionID: options.sessionId,
           directory: options.cwd,
           providerID: parsedModel.providerID,
           modelID: parsedModel.modelID,
           auto: false,
         }, { signal }),
-        OPENCODE_INTERACTION_TIMEOUT_MS,
-        'OpenCode session summarize timed out',
-        options.abortSignal,
       );
 
       // summarize は要約ジョブを投入して即座に返る。要約中のセッションは
       // ツール呼び出しを "Tool call not allowed while generating summary" で
       // 拒否するため、完了を待たずに次のプロンプトを送ると最初の edit で落ちる。
       await waitForSummaryToComplete(
-        acquired.client,
+        acquiredClient.client,
         options.sessionId,
         options.cwd,
         existingSummaryIds,
-        options.abortSignal,
+        deadline,
       );
     } finally {
-      acquired.release();
+      acquired?.release();
+      deadline.cleanup();
     }
   }
 

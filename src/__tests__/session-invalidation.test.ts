@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, WorkflowState } from '../core/models/types.js';
-import { invalidateExpectedPersonaSession } from '../core/workflow/engine/session-invalidation.js';
+import {
+  invalidateExpectedPersonaSession,
+  invalidatePersonaSessionIfExpected,
+} from '../core/workflow/engine/session-invalidation.js';
 
 function makeState(sessionId?: string): WorkflowState {
   return {
@@ -61,5 +64,27 @@ describe('invalidateExpectedPersonaSession', () => {
     invalidateExpectedPersonaSession(state, 'coder:opencode', makeResponse(), 'new', updatePersonaSession);
 
     expect(updatePersonaSession).not.toHaveBeenCalled();
+  });
+
+  it('clears only the compacted session when a parallel sibling has not replaced it', () => {
+    const state = makeState('session-old');
+    const updatePersonaSession = vi.fn((key: string, sessionId: string | undefined) => {
+      if (sessionId === undefined) state.personaSessions.delete(key);
+    });
+
+    invalidatePersonaSessionIfExpected(state, 'coder:opencode', 'session-old', updatePersonaSession);
+
+    expect(updatePersonaSession).toHaveBeenCalledWith('coder:opencode', undefined);
+    expect(state.personaSessions.has('coder:opencode')).toBe(false);
+  });
+
+  it('keeps a newer parallel sibling session during compact failure invalidation', () => {
+    const state = makeState('session-newer');
+    const updatePersonaSession = vi.fn();
+
+    invalidatePersonaSessionIfExpected(state, 'coder:opencode', 'session-old', updatePersonaSession);
+
+    expect(updatePersonaSession).not.toHaveBeenCalled();
+    expect(state.personaSessions.get('coder:opencode')).toBe('session-newer');
   });
 });

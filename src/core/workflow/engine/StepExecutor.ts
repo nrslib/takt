@@ -63,7 +63,7 @@ import {
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
-import { invalidateExpectedPersonaSession } from './session-invalidation.js';
+import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 
 const log = createLogger('step-executor');
 
@@ -726,9 +726,18 @@ export class StepExecutor {
       sequence: 1,
     });
     const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(executableStep, runtime);
-    await compactSessionBeforePhase1(executableStep, baseAgentOptions);
+    const compactionOutcome = await compactSessionBeforePhase1(executableStep, baseAgentOptions);
+    if (compactionOutcome === 'fresh') {
+      invalidatePersonaSessionIfExpected(
+        state,
+        sessionKey,
+        baseAgentOptions.sessionId,
+        updatePersonaSession,
+      );
+    }
     const agentOptions = {
       ...baseAgentOptions,
+      ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
       onPromptResolved: (promptParts: PhasePromptParts) => {
         resolvedPromptParts = promptParts;
         this.deps.onPhaseStart?.(step, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, state.iteration);
@@ -802,7 +811,7 @@ export class StepExecutor {
         persona: executableStep.persona,
         response,
         ledger: this.deps.findingLedgerStore.loadLedger(),
-        agentOptions: baseAgentOptions,
+        agentOptions,
         normalize: (candidate: AgentResponse) => this.normalizeStructuredOutputWithDiagnostics(executableStep, candidate, runtime),
       });
       response = clarified.response;

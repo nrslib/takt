@@ -48,7 +48,7 @@ import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } 
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
-import { invalidateExpectedPersonaSession } from './session-invalidation.js';
+import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { StructuredOutputSchemaError } from './structured-output-schema-validator.js';
 
 const log = createLogger('parallel-runner');
@@ -334,7 +334,15 @@ export class ParallelRunner {
 
         // Phase 1: main execution (Write excluded if sub-step has report)
         const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subRuntime);
-        await compactSessionBeforePhase1(executableSubStep, baseOptions);
+        const compactionOutcome = await compactSessionBeforePhase1(executableSubStep, baseOptions);
+        if (compactionOutcome === 'fresh') {
+          invalidatePersonaSessionIfExpected(
+            state,
+            subSessionKey,
+            baseOptions.sessionId,
+            updatePersonaSession,
+          );
+        }
         let didEmitPhaseStart = false;
         let resolvedPromptParts: PhasePromptParts | undefined;
         const phaseExecutionId = buildPhaseExecutionId({
@@ -347,8 +355,15 @@ export class ParallelRunner {
 
         // Override onStream with parallel logger's prefixed handler (immutable)
         const agentOptions = parallelLogger
-          ? { ...baseOptions, onStream: parallelLogger.createStreamHandler(subStep.name, index) }
-          : { ...baseOptions };
+          ? {
+              ...baseOptions,
+              ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
+              onStream: parallelLogger.createStreamHandler(subStep.name, index),
+            }
+          : {
+              ...baseOptions,
+              ...(compactionOutcome === 'fresh' ? { sessionId: undefined } : {}),
+            };
         agentOptions.onPromptResolved = (promptParts: PhasePromptParts) => {
           resolvedPromptParts = promptParts;
           this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, parentIteration);
@@ -375,7 +390,11 @@ export class ParallelRunner {
           error: result.error,
           providerUsage: result.providerUsage,
         }));
-        if (subResponse.status === 'error' && subResponse.errorKind !== 'rate_limit') {
+        if (
+          compactionOutcome !== 'fresh'
+          && subResponse.status === 'error'
+          && subResponse.errorKind !== 'rate_limit'
+        ) {
           // 並列レビューの1席のプロバイダ障害で走行全体を落とさない。
           // 空転はセッション文脈起因のことが多いため（長文脈での生成品質
           // 崩壊を実測）、再試行は resume を切った新しいセッションで行う。

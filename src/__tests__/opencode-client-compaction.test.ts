@@ -224,22 +224,11 @@ describe('OpenCodeClient compactSession', () => {
       abortSignal: abortController.signal,
     })).rejects.toThrow('SDK summarize failed synchronously');
 
-    // collectExistingSummaryIds()（summarize 前の snapshot 読み取り）と
-    // summarize() 自身は、どちらも withTimeout() 経由で abortSignal を
-    // 個別に購読・解除する。summarize が同期的に投げても snapshot 側の
-    // 購読はすでに完了・解除済みのため、この1回の失敗だけで add/remove は
-    // 2組（snapshot 用・summarize 用）発生する。
-    expect(addAbortListener).toHaveBeenCalledTimes(2);
-    expect(removeAbortListener).toHaveBeenCalledTimes(2);
-    expect(removeAbortListener).toHaveBeenNthCalledWith(
-      1,
+    expect(addAbortListener).toHaveBeenCalledTimes(1);
+    expect(removeAbortListener).toHaveBeenCalledTimes(1);
+    expect(removeAbortListener).toHaveBeenCalledWith(
       'abort',
       addAbortListener.mock.calls[0]?.[1],
-    );
-    expect(removeAbortListener).toHaveBeenNthCalledWith(
-      2,
-      'abort',
-      addAbortListener.mock.calls[1]?.[1],
     );
 
     await client.compactSession({
@@ -253,7 +242,40 @@ describe('OpenCodeClient compactSession', () => {
     expect(createOpencodeMock).toHaveBeenCalledTimes(1);
   });
 
-  it('Given session summarize does not settle When compactSession runs Then the SDK call receives an interaction timeout signal', async () => {
+  it('Given summarize exceeds the interaction timeout but completes before the compact deadline When compactSession runs Then it succeeds', async () => {
+    vi.useFakeTimers();
+    const summarize = vi.fn().mockImplementation(async () => new Promise((resolve) => {
+      setTimeout(() => resolve({ data: { id: 'session-1' } }), 5001);
+    }));
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn(),
+          promptAsync: vi.fn(),
+          summarize,
+          messages: createAutoCompletingMessagesMock(),
+        },
+        event: { subscribe: vi.fn() },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const client = new OpenCodeClient();
+    const compactPromise = client.compactSession({
+      cwd: '/repo',
+      sessionId: 'session-1',
+      model: 'opencode/big-pickle',
+    });
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(summarize).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(compactPromise).resolves.toBeUndefined();
+  });
+
+  it('Given compact reaches its single deadline while summarize is running When compactSession runs Then the SDK signal is aborted and its lease is released', async () => {
     const summarize = vi.fn()
       .mockResolvedValueOnce({ data: { id: 'session-0' } })
       .mockImplementationOnce((_payload: unknown, requestOptions: SummarizeRequestOptions) => {
@@ -308,10 +330,122 @@ describe('OpenCodeClient compactSession', () => {
     expect(requestOptions.signal).not.toBe(abortController.signal);
     expect(requestOptions.signal?.aborted).toBe(false);
 
-    const compactRejection = expect(compactPromise).rejects.toThrow();
-    await vi.advanceTimersByTimeAsync(5000);
+    const compactRejection = expect(compactPromise).rejects.toThrow('OpenCode session summarize timed out');
+    await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
 
     expect(requestOptions.signal?.aborted).toBe(true);
+    await compactRejection;
+
+    summarize.mockResolvedValueOnce({ data: { id: 'session-2' } });
+    await expect(client.compactSession({
+      cwd: '/repo',
+      sessionId: 'session-2',
+      model: 'opencode/big-pickle',
+    })).resolves.toBeUndefined();
+    expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given acquire, snapshot, summarize, and poll consume time When compactSession runs Then they share one end-to-end deadline', async () => {
+    const warmupSessionId = 'session-warmup';
+    const blockingSessionId = 'session-blocking';
+    const targetSessionId = 'session-target';
+    const stageDelayMs = 45 * 1000;
+    const messageCallCounts = new Map<string, number>();
+    let pollSignal: AbortSignal | undefined;
+    const messages = vi.fn().mockImplementation((
+      { sessionID }: { sessionID: string },
+      requestOptions: SummarizeRequestOptions,
+    ) => {
+      const messageCallCount = messageCallCounts.get(sessionID) ?? 0;
+      messageCallCounts.set(sessionID, messageCallCount + 1);
+
+      if (sessionID === targetSessionId && messageCallCount === 0) {
+        return new Promise((resolve) => {
+          setTimeout(() => resolve({ data: [] }), stageDelayMs);
+        });
+      }
+
+      if (sessionID === targetSessionId) {
+        pollSignal = requestOptions.signal;
+        return new Promise<never>((_resolve, reject) => {
+          requestOptions.signal?.addEventListener('abort', () => {
+            reject(new Error('SDK poll aborted'));
+          });
+        });
+      }
+
+      return Promise.resolve({
+        data: messageCallCount === 0 ? [] : [{
+          info: {
+            id: `summary-${sessionID}`,
+            role: 'assistant',
+            summary: true,
+            time: { completed: 1 },
+          },
+        }],
+      });
+    });
+    const summarize = vi.fn().mockImplementation(({ sessionID }: { sessionID: string }) => (
+      sessionID === blockingSessionId || sessionID === targetSessionId
+        ? new Promise((resolve) => {
+          setTimeout(() => resolve({ data: { id: sessionID } }), stageDelayMs);
+        })
+        : Promise.resolve({ data: { id: sessionID } })
+    ));
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn(),
+          promptAsync: vi.fn(),
+          summarize,
+          messages,
+        },
+        event: { subscribe: vi.fn() },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const client = new OpenCodeClient();
+
+    await client.compactSession({
+      cwd: '/repo',
+      sessionId: warmupSessionId,
+      model: 'opencode/big-pickle',
+    });
+
+    vi.useFakeTimers();
+    const blockingCompactPromise = client.compactSession({
+      cwd: '/repo',
+      sessionId: blockingSessionId,
+      model: 'opencode/big-pickle',
+    });
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+    expect(summarize).toHaveBeenCalledWith(expect.objectContaining({ sessionID: blockingSessionId }), expect.anything());
+
+    const compactPromise = client.compactSession({
+      cwd: '/repo',
+      sessionId: targetSessionId,
+      model: 'opencode/big-pickle',
+    });
+
+    await vi.advanceTimersByTimeAsync(stageDelayMs);
+    await expect(blockingCompactPromise).resolves.toBeUndefined();
+    expect(messages).toHaveBeenCalledWith(expect.objectContaining({ sessionID: targetSessionId }), expect.anything());
+
+    await vi.advanceTimersByTimeAsync(stageDelayMs);
+    expect(summarize).toHaveBeenCalledWith(expect.objectContaining({ sessionID: targetSessionId }), expect.anything());
+
+    await vi.advanceTimersByTimeAsync(stageDelayMs);
+    expect(messageCallCounts.get(targetSessionId)).toBe(2);
+    expect(pollSignal?.aborted).toBe(false);
+
+    const compactRejection = expect(compactPromise).rejects.toThrow('OpenCode session summarize timed out');
+    await vi.advanceTimersByTimeAsync(stageDelayMs);
+
+    expect(pollSignal?.aborted).toBe(true);
     await compactRejection;
   });
 
@@ -841,9 +975,7 @@ describe('OpenCodeClient compactSession', () => {
     // 超えるまで時間を進める。
     let settled = false;
     compactPromise.then(() => { settled = true; }, () => { settled = true; });
-    const compactRejection = expect(compactPromise).rejects.toThrow(
-      'OpenCode session summarize did not finish in time',
-    );
+    const compactRejection = expect(compactPromise).rejects.toThrow('OpenCode session summarize timed out');
 
     // ポーリング間隔（実装内の OPENCODE_SUMMARY_POLL_INTERVAL_MS = 500ms）
     // 1回分だけ進めた時点では、まだ確定していないはず。
@@ -854,7 +986,7 @@ describe('OpenCodeClient compactSession', () => {
     // 最低2回は呼ばれている。
     expect(callsAfterFirstPoll).toBeGreaterThan(1);
 
-    // 全体タイムアウト（実装内の OPENCODE_SUMMARY_WAIT_TIMEOUT_MS = 3分）を
+    // 全体タイムアウト（実装内の OPENCODE_COMPACTION_TIMEOUT_MS = 3分）を
     // 超えるまで進める。
     await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
 
