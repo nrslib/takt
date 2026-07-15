@@ -18,6 +18,7 @@ Define the shared judgment criteria and behavioral principles for all reviewers.
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
 | Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix |
+| Defect-class re-scan | Before recognizing a defect as resolved, re-scan every path in the same defect class for the original acceptance criteria |
 | Concern handling | Any concern recognized in the prose must either become a finding or be explicitly classified with evidence as non-finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Boy Scout | Have problems fixed within the task scope when they are in changed code or in areas directly affecting correctness, contracts, or wiring of the change |

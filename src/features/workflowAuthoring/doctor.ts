@@ -1,17 +1,26 @@
 import { error, success, warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
-import { COMPLETE_STEP, ABORT_STEP } from '../../core/workflow/constants.js';
+import { COMPLETE_STEP, ABORT_STEP, NEEDS_ADJUDICATION_STEP } from '../../core/workflow/constants.js';
 // 実行時（escape.ts の {report:X} リゾルバ）と同じ parser を共用し、
 // 静的解析と実行時の構文解釈を揃える。
 import { extractReportReferences } from '../../core/workflow/instruction/report-reference.js';
 import { isReservedReportFileName } from '../../core/models/reserved-report-names.js';
 import { validateWorkflowConfig } from '../../core/workflow/engine/WorkflowValidator.js';
+import {
+  hasUnquotedFindingsReference,
+  hasUnquotedIdentifierReference,
+  isDeferredDeterministicCondition,
+  isDeterministicCondition,
+  unwrapWhenCondition,
+} from '../../core/workflow/evaluation/rule-utils.js';
+import { evaluateWhenExpression } from '../../core/workflow/evaluation/when-evaluator.js';
+import { splitTopLevelClausesOrThrow } from '../../core/models/workflow-condition-expression.js';
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../../infra/config/loaders/workflowDoctor.js';
 import { isMissingWorkflowCallArgError } from '../../infra/config/loaders/workflowCallableArgResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from '../../infra/config/loaders/workflowResolvedLoader.js';
-import type { WorkflowConfig, WorkflowStep } from '../../core/models/types.js';
+import type { WorkflowConfig, WorkflowRule, WorkflowState, WorkflowStep } from '../../core/models/types.js';
 import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/config/loaders/workflowDoctor.js';
 
 function reportHasErrors(report: WorkflowDoctorReport): boolean {
@@ -69,6 +78,7 @@ function validateWorkflowRuntimeContract(
     warnOnMissingProvisionalRouting(report, workflow);
     warnOnMissingFixpointRouting(report, workflow);
     warnOnMissingStopBudgetRouting(report, workflow);
+    warnOnMissingReviewerAnomalyRouting(report, workflow);
     warnOnUnproducibleReportReferences(report, workflow);
   } catch (validationError) {
     report.diagnostics.push({
@@ -180,6 +190,255 @@ function warnOnMissingStopBudgetRouting(
       + 'Add a rule such as `when(findings.rounds.budgetExhausted == true && findings.conflicts.count == 0) -> NEEDS_ADJUDICATION` '
       + 'after your findings.provisional.fixpoint rule and before your findings.provisional.count replan rule.',
   });
+}
+
+/**
+ * review-integrity の配線漏れ警告: reviewer anomaly は product finding ではないため、
+ * open/conflicts だけを COMPLETE 条件にした workflow では、再レビューまたは予算切れ時の
+ * 人手裁定へ送らなければ、検証不能な観測を残したまま完了できてしまう。完了ゲートを持つ
+ * Finding Contract workflow に限定して、各 COMPLETE gate より先に実際に選ばれる
+ * anomaly 経路を検査する。
+ */
+function warnOnMissingReviewerAnomalyRouting(
+  report: WorkflowDoctorReport,
+  workflow: ReturnType<typeof loadWorkflowForRuntimeValidation>,
+): void {
+  if (workflow.findingContract === undefined) {
+    return;
+  }
+  const hasUnsafeCompletionGate = workflow.steps.some((step) => (
+    (step.rules ?? []).some((rule, completeRuleIndex) => (
+      rule.next === COMPLETE_STEP
+      && isReviewerOrFindingsCompletionGate(step, rule)
+      && !hasEffectiveReviewerAnomalyRouting(workflow, step, completeRuleIndex)
+    ))
+  ));
+  if (!hasUnsafeCompletionGate) {
+    return;
+  }
+  report.diagnostics.push({
+    level: 'warning',
+    message: 'finding_contract workflow has a COMPLETE gate without an effective reviewer-anomaly route. '
+      + 'Reviewer anomalies are not product findings, so an empty product gate can otherwise COMPLETE without a mechanically verified review. '
+      + 'Route findings.reviewerAnomalies.count directly to NEEDS_ADJUDICATION or ABORT, or to a review-tagged re-review step '
+      + 'with a preceding findings.reviewerAnomalies.budgetExhausted route to NEEDS_ADJUDICATION or ABORT. A '
+      + 'findings.reviewerAnomalies.count route to COMPLETE or an arbitrary fix step is not safe.',
+  });
+}
+
+function isReviewerOrFindingsCompletionGate(step: WorkflowStep, rule: WorkflowRule): boolean {
+  return hasReviewTag(step)
+    || ruleHasFindingsGuard(rule)
+    || (isDeterministicCondition(rule.condition)
+      && hasUnquotedFindingsReference(rule.condition));
+}
+
+function hasReviewTag(step: WorkflowStep): boolean {
+  return step.tags?.includes('review') === true
+    || step.parallel?.some((child) => child.tags?.includes('review') === true) === true;
+}
+
+function ruleHasFindingsGuard(rule: WorkflowRule): boolean {
+  return (rule.aggregateGuardCondition !== undefined
+    && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
+    || (rule.guardCondition !== undefined
+      && hasUnquotedFindingsReference(rule.guardCondition));
+}
+
+function hasEffectiveReviewerAnomalyRouting(
+  workflow: WorkflowConfig,
+  step: WorkflowStep,
+  completeRuleIndex: number,
+): boolean {
+  const rules = step.rules ?? [];
+  const completeRule = rules[completeRuleIndex];
+  if (completeRule === undefined) {
+    return false;
+  }
+  validateReviewerAnomalyExpressions(rules);
+  if (!isCompletionReachable(step, completeRuleIndex)) {
+    return true;
+  }
+
+  const terminalRoute = rules[completeRuleIndex - 2];
+  const reReviewRoute = rules[completeRuleIndex - 1];
+  return terminalRoute !== undefined
+    && reReviewRoute !== undefined
+    && isSafeReviewerAnomalyBudgetTerminalRoute(terminalRoute)
+    && isReReviewRoute(workflow, reReviewRoute)
+    && hasExpectedReviewerAnomalyGuard(terminalRoute, completeRule, true)
+    && hasExpectedReviewerAnomalyGuard(reReviewRoute, completeRule, false)
+    && aggregateRouteCoversCompletion(step, terminalRoute, completeRule)
+    && aggregateRouteCoversCompletion(step, reReviewRoute, completeRule);
+}
+
+function validateReviewerAnomalyExpressions(rules: readonly WorkflowRule[]): void {
+  for (const rule of rules) {
+    const condition = getRuleGuardCondition(rule);
+    if (condition === undefined || !hasUnquotedIdentifierReference(condition, 'findings.reviewerAnomalies')) {
+      continue;
+    }
+    for (const count of [0, 1]) {
+      for (const budgetExhausted of [false, true]) {
+        evaluateWhenExpression(condition, createReviewerAnomalyValidationState(count, budgetExhausted));
+      }
+    }
+  }
+}
+
+function createReviewerAnomalyValidationState(count: number, budgetExhausted: boolean): WorkflowState {
+  return {
+    findings: {
+      open: { count: 0 },
+      provisional: { count: 0, fixpoint: false },
+      rounds: { budgetExhausted: false },
+      reviewerAnomalies: { count, budgetExhausted },
+      conflicts: { count: 0, unadjudicated: { count: 0 } },
+    },
+  } as WorkflowState;
+}
+
+function hasExpectedReviewerAnomalyGuard(
+  rule: WorkflowRule,
+  completeRule: WorkflowRule,
+  requiresBudgetExhaustion: boolean,
+): boolean {
+  const condition = getRuleGuardCondition(rule);
+  if (condition === undefined) {
+    return false;
+  }
+  const expected = splitTopLevelClausesOrThrow(
+    getRuleGuardCondition(completeRule) ?? 'true',
+    '&&',
+    'COMPLETE condition',
+  );
+  expected.push('findings.reviewerAnomalies.count > 0');
+  if (requiresBudgetExhaustion) {
+    expected.push('findings.reviewerAnomalies.budgetExhausted == true');
+  }
+  const actual = splitTopLevelClausesOrThrow(condition, '&&', 'reviewer anomaly condition');
+  return actual.length === expected.length && actual.every((clause) => expected.includes(clause));
+}
+
+function getRuleGuardCondition(rule: WorkflowRule): string | undefined {
+  if (rule.isAggregateCondition) {
+    return rule.aggregateGuardCondition;
+  }
+  return rule.guardCondition
+    ?? (isDeterministicCondition(rule.condition) ? unwrapWhenCondition(rule.condition) : undefined);
+}
+
+function aggregateRouteCoversCompletion(
+  step: WorkflowStep,
+  route: WorkflowRule,
+  completeRule: WorkflowRule,
+): boolean {
+  if (!route.isAggregateCondition || !completeRule.isAggregateCondition || step.parallel === undefined) {
+    return false;
+  }
+  const completionOutputs = getPossibleCompletionOutputs(step.parallel, completeRule);
+  if (completionOutputs === undefined) {
+    return false;
+  }
+  if (route.aggregateType === 'any') {
+    const routeTargets = getAggregateTargets(route);
+    return completeRule.aggregateType === 'all'
+      ? completionOutputs.some((output) => routeTargets.has(output))
+      : completionOutputs.every((output) => routeTargets.has(output));
+  }
+  if (route.aggregateType === 'all' && completeRule.aggregateType === 'all') {
+    const routeOutputs = getPossibleCompletionOutputs(step.parallel, route);
+    return routeOutputs !== undefined
+      && routeOutputs.length === completionOutputs.length
+      && routeOutputs.every((output, index) => output === completionOutputs[index]);
+  }
+  return false;
+}
+
+function getPossibleCompletionOutputs(
+  parallel: readonly WorkflowStep[],
+  completeRule: WorkflowRule,
+): string[] | undefined {
+  if (parallel.length === 0) {
+    return undefined;
+  }
+  const aggregateCondition = completeRule.aggregateConditionText;
+  const targets = getAggregateTargets(completeRule);
+  if (aggregateCondition === undefined || targets.size === 0 || completeRule.aggregateType === undefined) {
+    return undefined;
+  }
+  if (completeRule.aggregateType === 'any') {
+    const possible = parallel.flatMap((child) => (
+      (child.rules ?? []).map((rule) => rule.condition).filter((condition) => targets.has(condition))
+    ));
+    return possible.length === 0 ? undefined : possible;
+  }
+  const allTargets = Array.isArray(aggregateCondition)
+    ? aggregateCondition
+    : parallel.map(() => aggregateCondition);
+  if (allTargets.length !== parallel.length) {
+    return undefined;
+  }
+  return parallel.every((child, index) => (
+    (child.rules ?? []).some((rule) => rule.condition === allTargets[index])
+  ))
+    ? allTargets
+    : undefined;
+}
+
+function getAggregateTargets(rule: WorkflowRule): Set<string> {
+  const targets = rule.aggregateConditionText;
+  if (targets === undefined) {
+    return new Set();
+  }
+  return new Set(Array.isArray(targets) ? targets : [targets]);
+}
+
+function isSafeReviewerAnomalyBudgetTerminalRoute(rule: WorkflowRule): boolean {
+  return rule.next === NEEDS_ADJUDICATION_STEP || rule.next === ABORT_STEP;
+}
+
+function isReReviewRoute(workflow: WorkflowConfig, rule: WorkflowRule): boolean {
+  return rule.next !== undefined
+    && workflow.steps.some((step) => step.name === rule.next && hasReviewTag(step));
+}
+
+function isCompletionReachable(step: WorkflowStep, completeRuleIndex: number): boolean {
+  const completeRule = step.rules?.[completeRuleIndex];
+  if (completeRule?.isAggregateCondition) {
+    return getPossibleCompletionOutputs(step.parallel ?? [], completeRule) !== undefined
+      && !(step.rules ?? []).slice(0, completeRuleIndex).some((rule) => (
+        isEarlierAggregateTerminalRoute(step, rule, completeRule)
+      ));
+  }
+  return !(step.rules ?? []).slice(0, completeRuleIndex).some((rule) => (
+    rule.next !== undefined
+    && rule.next !== COMPLETE_STEP
+    && isKnownAlwaysMatchingImmediateCondition(rule)
+  ));
+}
+
+function isEarlierAggregateTerminalRoute(
+  step: WorkflowStep,
+  rule: WorkflowRule,
+  completeRule: WorkflowRule,
+): boolean {
+  if (rule.next === undefined || rule.next === COMPLETE_STEP || !rule.isAggregateCondition) {
+    return false;
+  }
+  const terminalGuard = getRuleGuardCondition(rule);
+  const completionGuard = getRuleGuardCondition(completeRule);
+  return (terminalGuard === undefined || terminalGuard === completionGuard)
+    && aggregateRouteCoversCompletion(step, rule, completeRule);
+}
+
+function isKnownAlwaysMatchingImmediateCondition(rule: WorkflowRule): boolean {
+  if (!isDeterministicCondition(rule.condition) || isDeferredDeterministicCondition(rule.condition)) {
+    return false;
+  }
+  const condition = unwrapWhenCondition(rule.condition);
+  return condition === 'true'
+    || condition === 'findings.open.count >= 0';
 }
 
 function collectContractReportNames(step: WorkflowStep, into: Set<string>): void {

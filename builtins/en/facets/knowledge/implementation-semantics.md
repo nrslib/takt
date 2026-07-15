@@ -2,6 +2,16 @@
 
 Knowledge for judging the micro-level design flaws that remain even when every test passes. The targets are data structure choice, state normalization, naming-meaning alignment, and fail-fast at boundaries. Each is a question of whether the meaning is correct, not whether the code runs, which is why tests are structurally bad at catching them.
 
+## Test Expectations Follow the Original Requirement
+
+Expected behavior comes from the original requirement and specification, not from whatever the current implementation happens to do. Tests that merely reproduce current behavior can preserve a defect.
+
+| Criterion | Verdict |
+|-----------|---------|
+| A test expectation is derived only from the current implementation | REJECT |
+| A passing test encodes behavior that conflicts with the original requirement or specification | REJECT |
+| Expected behavior is traced to the original requirement or specification, including failure behavior | OK |
+
 ## Meaning-Driven Data Structure Choice
 
 Choose collection and dictionary types that match the meaning of the data. In particular, implementing a dictionary keyed by externally supplied strings as a plain object lets inherited prototype properties leak in.

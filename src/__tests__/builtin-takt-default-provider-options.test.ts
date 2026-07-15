@@ -306,10 +306,10 @@ describe('builtin takt-default provider_options refs', () => {
       const antipatternNg = locale === 'ja' ? 'AI特有の問題あり' : 'AI-specific issues found';
       const reviewers = normalized.steps.find((step) => step.name === 'reviewers');
       expect(reviewers?.rules?.map((rule) => rule.condition)).toEqual([
-        `all("approved", "${antipatternOk}", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)`,
+        `all("approved", "${antipatternOk}", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)`,
         // codex 対策#4 / 検証ブロッカー#1: product gate が空でも未昇格 anomaly が
         // 残るなら fix へ落とさず final-gate（再レビュー/裁定）へ渡す。
-        'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)',
+        `any("approved", "needs_fix", "${antipatternOk}", "${antipatternNg}") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)`,
         // 対策バッチ B1: provisional が直前ラウンドから意味的な変化の無い
         // fixpoint に達した場合、再計画では解消し得ない。plan への差し戻しの
         // 前に、要人手裁定の終端状態へルーティングする。
@@ -320,7 +320,7 @@ describe('builtin takt-default provider_options refs', () => {
         // v2 梯子設計: provisional（意味を確定できなかった観測）は fixer が直接
         // 直せないため、fix ループへ入れず再計画へ返す。
         'when(findings.provisional.count > 0 && findings.conflicts.count == 0)',
-        `any("needs_fix", "${antipatternNg}", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)`,
+        `any("needs_fix", "${antipatternNg}", "needs_fix", "needs_fix", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)`,
         'when(findings.conflicts.count == 0 && findings.open.count > 0)',
         // Phase B (codex B1): actionable かどうかの判断は裁定ステップ自身が
         // 構造化出力で担うため、旧 ai() conflict ルールは削除済み。未裁定の
@@ -349,11 +349,17 @@ describe('builtin takt-default provider_options refs', () => {
         // 未昇格 anomaly が残る限り COMPLETE させず、予算切れなら NEEDS_ADJUDICATION、
         // それ以外は再レビュー（reviewers）へ。
         expect.objectContaining({
-          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)',
+          condition: 'any("approved", "needs_fix", "need_replan") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)',
+          isAggregateCondition: true,
+          aggregateType: 'any',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true',
           next: 'NEEDS_ADJUDICATION',
         }),
         expect.objectContaining({
-          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)',
+          condition: 'any("approved", "needs_fix", "need_replan") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)',
+          isAggregateCondition: true,
+          aggregateType: 'any',
+          aggregateGuardCondition: 'findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0',
           next: 'reviewers',
         }),
         expect.objectContaining({
@@ -456,7 +462,7 @@ describe('builtin takt-default provider_options refs', () => {
         // review-integrity ルール（reviewerRules[1] = anomaly→final-gate）を差し込んだ
         // ぶん、fixpoint/budget は +1 シフトする。
         expect(reviewerRules[1], name).toMatchObject({
-          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)',
+          ...(name === 'takt-default-for-local-llm' ? { isAggregateCondition: true } : {}),
           next: 'final-gate',
         });
         expect(reviewerRules[2], name).toMatchObject({
@@ -483,7 +489,9 @@ describe('builtin takt-default provider_options refs', () => {
         ]);
         // review-integrity ルール2本を先頭に差し込んだぶん、all 集約 COMPLETE は index 2 へ。
         expect(gateRules[0], name).toMatchObject({
-          condition: 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)',
+          condition: name === 'takt-default-for-local-llm'
+            ? 'any("approved", "needs_fix", "need_replan") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)'
+            : 'when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)',
           next: 'NEEDS_ADJUDICATION',
         });
         expect(gateRules[2], name).toMatchObject({
@@ -548,6 +556,8 @@ describe('builtin takt-default provider_options refs', () => {
         'ai-antipattern-review',
         'coding-review',
         'implementation-semantics-review',
+        'contract-lifecycle-review',
+        'robustness-review',
       ];
       expect(reviewerFormats).toEqual(
         expectedReviewerContracts.map((contract) => `${contract}-finding-contract`),

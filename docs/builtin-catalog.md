@@ -66,7 +66,7 @@ Organized by category.
 | | `takt-default-team-leader` | TAKT development workflow with team leader: plan → write tests → team-leader draft → peer-review (specialists + merge-readiness + fix) → supervise → complete. |
 | | `review-fix-takt-default` | TAKT development code review + fix loop: gather → plan → tests → draft → peer-review (specialists + merge-readiness + fix) → supervise. |
 | | `peer-review-for-local-llm` | peer-review with an added implementation-semantics reviewer, aligned with the for-local-llm lineage. Specialist parallel reviewers ⇄ fix loop, followed by the parallel merge-readiness/supervise final gate. |
-| 🖥️ Local LLM | `takt-default-for-local-llm` | TAKT development workflow for local LLMs. Four parallel specialist reviewers (architecture / AI anti-pattern / coding / implementation semantics) plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally. |
+| 🖥️ Local LLM | `takt-default-for-local-llm` | TAKT development workflow for local LLMs. Six parallel specialist reviewers (architecture / AI anti-pattern / coding / implementation semantics / contract lifecycle / robustness) plus the Finding Contract (ledger, resolution confirmations, dispute adjudication) build discipline for weak models structurally. |
 | | `frontend-for-local-llm` | Frontend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |
 | | `backend-for-local-llm` | Backend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |
 | | `backend-cqrs-for-local-llm` | CQRS+ES backend development workflow for local LLMs. Four parallel specialist reviewers plus the Finding Contract. |
@@ -100,6 +100,8 @@ Run `takt` to choose a workflow interactively.
 | **test-planner** | Test strategy analysis and comprehensive test planning |
 | **testing-reviewer** | Testing-focused code review with integration test requirements analysis |
 | **merge-readiness-reviewer** | Cross-cutting quality review for whether the change is ready to merge into a codebase that must be maintained |
+| **contract-lifecycle-reviewer** | Contract lifecycle review across definition, producer, consumer, validation, and migration paths |
+| **robustness-reviewer** | Robustness review for failure handling, boundary conditions, and operational resilience |
 | **terraform-coder** | Terraform IaC implementation |
 | **terraform-reviewer** | Terraform IaC review |
 | **melchior** | MAGI deliberation system: MELCHIOR-1 (scientist perspective) |

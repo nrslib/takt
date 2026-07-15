@@ -28,6 +28,10 @@ function isReferenceBoundary(char: string | undefined): boolean {
   return char === undefined || !/[A-Za-z0-9_.]/.test(char);
 }
 
+function isIdentifierEndBoundary(char: string | undefined): boolean {
+  return char === '.' || isReferenceBoundary(char);
+}
+
 export function hasUnquotedFindingsReference(condition: string): boolean {
   let inString = false;
 
@@ -52,7 +56,8 @@ export function hasUnquotedFindingsReference(condition: string): boolean {
 /**
  * Whether `identifier` appears in `condition` as a real, unquoted, COMPLETE
  * reference — not inside a quoted string literal and not as a substring of a
- * longer identifier. Shares the same quote-skipping and identifier-boundary
+ * longer path segment. A following dot is accepted because it qualifies the
+ * referenced state object. Shares the same quote-skipping and identifier-boundary
  * handling as hasUnquotedFindingsReference (and thus the when-evaluator's
  * tokenizer), so callers classifying a condition by which references it names
  * cannot be fooled by `... != "some.identifier"` (a valid string literal) or by
@@ -72,7 +77,7 @@ export function hasUnquotedIdentifierReference(condition: string, identifier: st
     if (inString || !condition.startsWith(identifier, index)) {
       continue;
     }
-    if (isReferenceBoundary(condition[index - 1]) && isReferenceBoundary(condition[index + identifier.length])) {
+    if (isReferenceBoundary(condition[index - 1]) && isIdentifierEndBoundary(condition[index + identifier.length])) {
       return true;
     }
   }

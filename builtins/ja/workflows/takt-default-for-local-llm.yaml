@@ -1,5 +1,5 @@
 name: takt-default-for-local-llm
-description: ローカルLLM向けの TAKT 開発ワークフロー。takt-default と同じ流れ（計画 → テスト作成 → 実装 + AI自己レビュー → 観点別並列レビュー ⇄ 修正 → 並列最終ゲート）を、観点別レビュー4並列 + Finding Contract（台帳・解消確認・異議裁定）で組み、弱いモデルの規律を構造で作る
+description: ローカルLLM向けの TAKT 開発ワークフロー。takt-default と同じ流れ（計画 → テスト作成 → 実装 + AI自己レビュー → 観点別並列レビュー ⇄ 修正 → 並列最終ゲート）を、観点別レビュー6並列 + Finding Contract（台帳・解消確認・異議裁定）で組み、弱いモデルの規律を構造で作る
 finding_contract:
   ledger_path: .takt/findings/takt-default-for-local-llm.json
   raw_findings_path: .takt/findings/takt-default-for-local-llm/raw
@@ -160,6 +160,7 @@ steps:
     provider_options:
       extends: edit
     required_permission_mode: edit
+    session: compact
     instruction: implement
     rules:
       - condition: 実装完了
@@ -239,6 +240,7 @@ steps:
         tags:
           - review
         edit: false
+        session: compact
         persona: architecture-reviewer
         policy:
           - review
@@ -258,6 +260,7 @@ steps:
         tags:
           - review
         edit: false
+        session: compact
         persona: ai-antipattern-reviewer
         policy:
           - review
@@ -276,6 +279,7 @@ steps:
         tags:
           - review
         edit: false
+        session: compact
         persona: coding-reviewer
         policy:
           - review
@@ -294,6 +298,7 @@ steps:
         tags:
           - review
         edit: false
+        session: compact
         persona: implementation-semantics-reviewer
         policy:
           - review
@@ -308,8 +313,48 @@ steps:
           report:
             - name: implementation-semantics-review.md
               format: implementation-semantics-review-finding-contract
+
+      - name: contract-lifecycle-review
+        tags:
+          - review
+        edit: false
+        session: compact
+        persona: contract-lifecycle-reviewer
+        policy:
+          - review
+        knowledge:
+          - contract-lifecycle
+        pass_previous_response: false
+        instruction: contract-lifecycle-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: contract-lifecycle-review.md
+              format: contract-lifecycle-review-finding-contract
+
+      - name: robustness-review
+        tags:
+          - review
+        edit: false
+        session: compact
+        persona: robustness-reviewer
+        policy:
+          - review
+        knowledge:
+          - robustness
+        pass_previous_response: false
+        instruction: robustness-review
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: robustness-review.md
+              format: robustness-review-finding-contract
     rules:
-      - condition: all("approved", "AI特有の問題なし", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
+      - condition: all("approved", "AI特有の問題なし", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: final-gate
       # provisional が直前ラウンドから意味的な変化の無い fixpoint に達した場合、
       # 再計画では解消し得ない（対策バッチ B1: raw finding 梯子設計 v2 の収束性対策）。
@@ -319,7 +364,7 @@ steps:
       # ルールへ落とさず final-gate へ渡す（final-gate が review-integrity 予算の
       # 範囲で再レビューし、尽きたら裁定する）。直すものは無い（観測は検証不能として
       # 隔離済み）ので、anomaly は fix ではなく再レビューへ送る。
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+      - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
         next: final-gate
       - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
         next: NEEDS_ADJUDICATION
@@ -333,7 +378,7 @@ steps:
       # fix ループへ入れず再計画へ返す（raw finding 梯子設計 v2）。
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: plan
-      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
+      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
         next: fix
       - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
         next: fix
@@ -407,9 +452,9 @@ steps:
       # review-integrity 予算が尽きたら人手裁定（NEEDS_ADJUDICATION）へ回す
       # （provisional の fixpoint / 停止予算の終端と同じ思想）。この配線を欠く
       # custom workflow でも、エンジンの completion gate が fail-closed で拒否する。
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+      - condition: any("approved", "needs_fix", "need_replan") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
         next: NEEDS_ADJUDICATION
-      - condition: when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+      - condition: any("approved", "needs_fix", "need_replan") && when(findings.open.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
         next: reviewers
       - condition: all("approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE
@@ -453,6 +498,7 @@ steps:
     provider_options:
       extends: edit
     required_permission_mode: edit
+    session: compact
     instruction: fix
     rules:
       - condition: 修正完了
