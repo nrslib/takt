@@ -351,26 +351,28 @@ describe('OpenCodeClient session queue', () => {
     expect(result2.status).toBe('done');
   });
 
-  it('should use acquired session ID as queue key on retry', async () => {
+  it('should create new session on each retry when no explicit sessionId', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
 
-    const retryHeld = deferred<void>();
-    const call2Held = deferred<void>();
     const sessionCreate = vi.fn()
-      .mockResolvedValue({ data: { id: 'session-retry-key' } });
-
+      .mockResolvedValueOnce({ data: { id: 'session-retry-1' } })
+      .mockResolvedValueOnce({ data: { id: 'session-retry-2' } });
     let promptCount = 0;
     const promptAsync = vi.fn().mockImplementation(() => {
       promptCount++;
       if (promptCount === 1) return Promise.reject(new Error('transport error'));
-      if (promptCount === 2) return retryHeld.promise;
-      return call2Held.promise;
+      return Promise.resolve(undefined);
     });
-    const subscribe = vi.fn().mockImplementation(() => Promise.resolve({
-      stream: new MockEventStream([
-        { type: 'session.idle', properties: { sessionID: 'session-retry-key' } },
-      ]),
-    }));
+    let subCount = 0;
+    const subscribe = vi.fn().mockImplementation(() => {
+      subCount++;
+      const sid = subCount === 1 ? 'session-retry-1' : 'session-retry-2';
+      return Promise.resolve({
+        stream: new MockEventStream([
+          { type: 'session.idle', properties: { sessionID: sid } },
+        ]),
+      });
+    });
 
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -383,39 +385,17 @@ describe('OpenCodeClient session queue', () => {
     });
 
     const client = new OpenCodeClient();
-    const call1 = client.call('coder', 'task1', {
+    const result = await client.call('coder', 'task', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
     });
 
-    await vi.waitFor(() => {
-      expect(promptAsync).toHaveBeenCalledTimes(2);
-    });
-    expect(sessionCreate).toHaveBeenCalledTimes(1);
-
-    const call2 = client.call('coder', 'task2', {
-      cwd: '/tmp',
-      model: 'opencode/big-pickle',
-      sessionId: 'session-retry-key',
-    });
-
-    // Yield to microtask queue; call2 must NOT start promptAsync
-    // while retry is still pending — otherwise the queue key didn't switch.
-    await new Promise(resolve => setImmediate(resolve));
+    expect(result.status).toBe('done');
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(promptAsync).toHaveBeenCalledTimes(2);
-
-    retryHeld.resolve();
-    const result1 = await call1;
-    expect(result1.status).toBe('done');
-
-    // Yield to microtask queue; after retry completes, call2 should start.
-    await new Promise(resolve => setImmediate(resolve));
-    expect(promptAsync).toHaveBeenCalledTimes(3);
-
-    call2Held.resolve();
-    const result2 = await call2;
-    expect(result2.status).toBe('done');
-
-    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(promptAsync.mock.calls[0][0].sessionID).toBe('session-retry-1');
+    expect(promptAsync.mock.calls[1][0].sessionID).toBe('session-retry-2');
+    expect(promptAsync.mock.calls[0][0].sessionID).not.toBe(promptAsync.mock.calls[1][0].sessionID);
   });
 });

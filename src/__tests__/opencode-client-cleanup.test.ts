@@ -3196,8 +3196,8 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('done');
     expect(result.content).toBe('recovered');
     expect(firstStream).toBeDefined();
-    // Session is reused on retry (not created again)
-    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    // Each retry creates a new session (not reused)
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(subscribe).toHaveBeenCalledTimes(2);
   });

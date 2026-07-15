@@ -750,7 +750,6 @@ export class OpenCodeClient {
     const provisionalKey = options.sessionId === undefined
       ? `provisional-${nextProvisionalId++}`
       : undefined;
-    let resolvedSessionId: string | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
@@ -760,7 +759,7 @@ export class OpenCodeClient {
       let diagRef: StreamDiagnostics | undefined;
       let release: (() => void) | undefined;
       let opencodeApiClient: OpencodeClient | undefined;
-      let sessionId: string | undefined = resolvedSessionId ?? options.sessionId;
+      let sessionId: string | undefined = options.sessionId;
       let promptCompletion: Promise<unknown> | undefined;
       let promptCompletionWait: Promise<void> | undefined;
       let promptError: string | undefined;
@@ -874,7 +873,6 @@ export class OpenCodeClient {
           if (!sessionId) {
             throw new Error('Failed to create OpenCode session');
           }
-          resolvedSessionId = sessionId;
         }
 
         const activeSessionId = sessionId;
