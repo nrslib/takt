@@ -16,6 +16,31 @@ export function parseLastJsonBlock(content: string): unknown {
   return JSON.parse(lastJsonBlock) as unknown;
 }
 
+function requireJsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Structured output JSON must be an object');
+  }
+
+  return value as Record<string, unknown>;
+}
+
+/**
+ * Parses a structured response only when the whole response is one JSON object.
+ * A final fenced JSON block remains supported for prompt-based compatibility.
+ */
+export function parseStructuredOutputObject(content: string): Record<string, unknown> {
+  const trimmed = content.trim();
+  let wholeResponse: unknown;
+
+  try {
+    wholeResponse = JSON.parse(trimmed) as unknown;
+  } catch {
+    return requireJsonObject(parseLastJsonBlock(content));
+  }
+
+  return requireJsonObject(wholeResponse);
+}
+
 export function buildPromptBasedStructuredInstruction(baseInstruction: string): string {
   return loadTemplate('parts/structured_json_step_instruction', 'en', { baseInstruction });
 }

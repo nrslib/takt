@@ -24,6 +24,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -34,6 +35,7 @@ import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import {
   applyWorkflowCallOverridesToPersonaProviders,
   applyWorkflowCallOverridesToProviderRouting,
@@ -5281,7 +5283,7 @@ steps:
     expect(parentOutput?.content).not.toContain('did not return session updates');
   });
 
-  it('parallel 内 workflow_call は child session を sub-step 定義順で決定的に merge する', async () => {
+  it('parallel 内 workflow_call は競合する child session 更新を順序依存で上書きしない', async () => {
     writeWorkflow(tmpDir, 'shared/slow-review.yaml', `name: shared/slow-review
 subworkflow:
   callable: true
@@ -5360,10 +5362,10 @@ steps:
 
     const state = await engine.run();
 
-    expect(state.status).toBe('completed');
+    expect(state.status).toBe('aborted');
     expect(state.stepOutputs.get('slow-delegate')?.content).toBe('Slow review complete');
     expect(state.stepOutputs.get('fast-delegate')?.content).toBe('Fast review complete');
-    expect(state.personaSessions.get('child-reviewer:mock')).toBe('fast-session');
+    expect(state.personaSessions.has('child-reviewer:mock')).toBe(false);
   });
 
   it('parallel 内 workflow_call は更新していない inherited child session を merge しない', async () => {
@@ -5456,5 +5458,285 @@ steps:
     expect(state.personaSessions.get('child-reviewer:mock')).toBe('updated-session');
     expect(sessionUpdates).toHaveBeenCalledOnce();
     expect(sessionUpdates).toHaveBeenCalledWith('child-reviewer:mock', 'updated-session');
+  });
+
+  it('direct workflow_call は子で無効化されたsessionを親からも削除して後続stepへ引き継がない', async () => {
+    writeWorkflow(tmpDir, 'shared/failing-review.yaml', `name: shared/failing-review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: coder
+    instruction: "Fail child review"
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: retry
+        next: ABORT
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'shared/failing-review',
+          rules: [{ condition: 'ABORT', next: 'continue-after-child' }],
+        },
+        {
+          name: 'continue-after-child',
+          persona: 'after-child',
+          instruction: 'Continue after child abort',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+    });
+    const onSessionUpdate = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (prompt.includes('Fail child review')) {
+        return makeResponse({ persona: String(persona), content: 'unclear', sessionId: 'session-old' });
+      }
+      if (prompt.includes('Continue after child abort')) {
+        return makeResponse({ persona: String(persona), content: 'done', sessionId: 'after-session' });
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    vi.mocked(detectMatchedRule)
+      .mockRejectedValueOnce(new RuleDetectionExhaustedError('child-review'))
+      .mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+    engine = new WorkflowEngine(config, tmpDir, 'Run child failure continuation', createWorkflowCallOptions(tmpDir, {
+      initialSessions: {
+        'coder:mock': 'session-old',
+        'inherited:mock': 'keep-session',
+      },
+      onSessionUpdate,
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.personaSessions.has('coder:mock')).toBe(false);
+    expect(state.personaSessions.get('inherited:mock')).toBe('keep-session');
+    expect(state.personaSessions.get('after-child:mock')).toBe('after-session');
+    expect(onSessionUpdate).toHaveBeenCalledWith('coder:mock', undefined);
+    expect(onSessionUpdate.mock.calls.filter(([key, value]) => key === 'coder:mock' && value === undefined)).toHaveLength(1);
+  });
+
+  it('direct workflow_call は更新・追加・未更新継承sessionを子の最終stateへ同期する', async () => {
+    writeWorkflow(tmpDir, 'shared/update-and-add.yaml', `name: shared/update-and-add
+subworkflow:
+  callable: true
+initial_step: update
+max_steps: 3
+steps:
+  - name: update
+    persona: coder
+    instruction: "Update child session"
+    rules:
+      - condition: next
+        next: add
+  - name: add
+    persona: reviewer
+    instruction: "Add child session"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 3,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'shared/update-and-add',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
+    });
+    const onSessionUpdate = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (prompt.includes('Update child session')) {
+        return makeResponse({ persona: String(persona), content: 'next', sessionId: 'coder-new' });
+      }
+      if (prompt.includes('Add child session')) {
+        return makeResponse({ persona: String(persona), content: 'done', sessionId: 'reviewer-new' });
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run direct child session sync', createWorkflowCallOptions(tmpDir, {
+      initialSessions: {
+        'coder:mock': 'coder-old',
+        'inherited:mock': 'keep-session',
+      },
+      onSessionUpdate,
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.personaSessions).toEqual(new Map([
+      ['coder:mock', 'coder-new'],
+      ['inherited:mock', 'keep-session'],
+      ['reviewer:mock', 'reviewer-new'],
+    ]));
+    expect(onSessionUpdate).toHaveBeenCalledTimes(2);
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(1, 'coder:mock', 'coder-new');
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(2, 'reviewer:mock', 'reviewer-new');
+  });
+
+  it('parallel isolated workflow_call は子で無効化されたsessionを親へ削除として伝播する', async () => {
+    writeWorkflow(tmpDir, 'shared/failing-parallel-review.yaml', `name: shared/failing-parallel-review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: coder
+    instruction: "Fail isolated child review"
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: retry
+        next: ABORT
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run isolated child review',
+        parallel: [{
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'shared/failing-parallel-review',
+          rules: [{ condition: 'ABORT', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("ABORT")', next: 'COMPLETE' }],
+      }],
+    });
+    const onSessionUpdate = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (prompt.includes('Fail isolated child review')) {
+        return makeResponse({ persona: String(persona), content: 'unclear', sessionId: 'session-old' });
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    vi.mocked(detectMatchedRule)
+      .mockRejectedValueOnce(new RuleDetectionExhaustedError('child-review'))
+      .mockResolvedValueOnce({ index: 0, method: 'aggregate' });
+    engine = new WorkflowEngine(config, tmpDir, 'Run isolated child session invalidation', createWorkflowCallOptions(tmpDir, {
+      initialSessions: { 'coder:mock': 'session-old' },
+      onSessionUpdate,
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.personaSessions.has('coder:mock')).toBe(false);
+    expect(onSessionUpdate).toHaveBeenCalledWith('coder:mock', undefined);
+  });
+
+  it.each([
+    ['更新を先に定義し削除を先に完了する', ['update-session', 'delete-session'], 'update-session'],
+    ['削除を先に定義し更新を先に完了する', ['delete-session', 'update-session'], 'delete-session'],
+  ])('parallel isolated workflow_call は同一sessionの更新と古い削除で新sessionを失わない: %s', async (_name, order, delayedStep) => {
+    writeWorkflow(tmpDir, 'shared/update-isolated-session.yaml', `name: shared/update-isolated-session
+subworkflow:
+  callable: true
+initial_step: child-update
+max_steps: 3
+steps:
+  - name: child-update
+    persona: coder
+    instruction: "Update isolated child session"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'shared/delete-isolated-session.yaml', `name: shared/delete-isolated-session
+subworkflow:
+  callable: true
+initial_step: child-delete
+max_steps: 3
+steps:
+  - name: child-delete
+    persona: coder
+    instruction: "Delete isolated child session"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const stepsByName = {
+      'update-session': {
+        name: 'update-session',
+        kind: 'workflow_call' as const,
+        call: 'shared/update-isolated-session',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      },
+      'delete-session': {
+        name: 'delete-session',
+        kind: 'workflow_call' as const,
+        call: 'shared/delete-isolated-session',
+        rules: [{ condition: 'ABORT', next: 'COMPLETE' }],
+      },
+    };
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run isolated children',
+        parallel: order.map((name) => stepsByName[name]),
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (prompt.includes('Update isolated child session')) {
+        if (delayedStep === 'update-session') {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return makeResponse({ persona: String(persona), content: 'done', sessionId: 'session-new' });
+      }
+      if (prompt.includes('Delete isolated child session')) {
+        if (delayedStep === 'delete-session') {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return makeResponse({ persona: String(persona), content: 'done', sessionId: 'session-old' });
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    vi.mocked(detectMatchedRule).mockImplementation(async (step) => {
+      if (step.name === 'child-delete') {
+        throw new RuleDetectionExhaustedError('child-delete');
+      }
+      return { index: 0, method: step.name === 'reviewers' ? 'aggregate' : 'phase1_tag' };
+    });
+    const onSessionUpdate = vi.fn();
+    engine = new WorkflowEngine(config, tmpDir, 'Run isolated session update and deletion', createWorkflowCallOptions(tmpDir, {
+      initialSessions: { 'coder:mock': 'session-old' },
+      onSessionUpdate,
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.personaSessions.get('coder:mock')).toBe('session-new');
+    expect(onSessionUpdate).toHaveBeenCalledWith('coder:mock', 'session-new');
+    expect(onSessionUpdate).not.toHaveBeenCalledWith('coder:mock', undefined);
   });
 });

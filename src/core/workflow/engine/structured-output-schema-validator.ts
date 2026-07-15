@@ -8,6 +8,20 @@ const ajv = new Ajv({
 
 const validatorCache = new WeakMap<Record<string, unknown>, ValidateFunction>();
 
+export class StructuredOutputSchemaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StructuredOutputSchemaError';
+  }
+}
+
+export class StructuredOutputValueValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StructuredOutputValueValidationError';
+  }
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value != null && !Array.isArray(value);
 }
@@ -67,22 +81,27 @@ function getValidator(schema: Record<string, unknown>): ValidateFunction {
     return validate;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Structured output schema is invalid: ${detail}`);
+    throw new StructuredOutputSchemaError(`Structured output schema is invalid: ${detail}`);
   }
+}
+
+export function assertStructuredOutputSchema(schema: Record<string, unknown>): void {
+  if (!isPlainObject(schema)) {
+    throw new StructuredOutputSchemaError('Structured output schema must be an object');
+  }
+
+  getValidator(schema);
 }
 
 export function validateStructuredOutputAgainstSchema(
   value: unknown,
   schema: Record<string, unknown>,
 ): void {
-  if (!isPlainObject(schema)) {
-    throw new Error('Structured output schema must be an object');
-  }
-
+  assertStructuredOutputSchema(schema);
   const validate = getValidator(schema);
   if (validate(value)) {
     return;
   }
 
-  throw new Error(formatValidationError(validate.errors?.[0]));
+  throw new StructuredOutputValueValidationError(formatValidationError(validate.errors?.[0]));
 }

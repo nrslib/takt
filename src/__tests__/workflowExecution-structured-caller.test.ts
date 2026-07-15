@@ -338,7 +338,7 @@ beforeEach(() => {
       persona: 'default',
       status: 'done',
       content: '[JUDGE:1]',
-      structuredOutput: { matched_index: 2 },
+      structuredOutput: { matched_index: 2, reason: 'needs_fix matched' },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 
@@ -459,7 +459,7 @@ beforeEach(() => {
       persona: 'conductor',
       status: 'done',
       content: '{"step":1}',
-      structuredOutput: { step: 1 },
+      structuredOutput: { step: 1, reason: 'approved matched' },
       timestamp: new Date('2026-04-01T00:00:00.000Z'),
     });
 

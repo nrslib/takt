@@ -24,6 +24,7 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
 import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
@@ -38,7 +39,10 @@ import { parseLastJsonBlock } from '../../../agents/structured-caller/shared.js'
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
 } from './engine-provider-options.js';
-import { validateStructuredOutputAgainstSchema } from './structured-output-schema-validator.js';
+import {
+  StructuredOutputSchemaError,
+  validateStructuredOutputAgainstSchema,
+} from './structured-output-schema-validator.js';
 import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
 import { resolveReportHandles } from '../instruction/report-handles.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
@@ -59,6 +63,7 @@ import {
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
+import { invalidateExpectedPersonaSession } from './session-invalidation.js';
 
 const log = createLogger('step-executor');
 
@@ -594,6 +599,9 @@ export class StepExecutor {
         ? await runStatusJudgmentPhase(step, phaseCtx)
         : undefined;
     } catch (error) {
+      if (error instanceof StructuredOutputSchemaError) {
+        throw error;
+      }
       log.info('Phase 3 status judgment failed, falling back to phase1 rule evaluation', {
         step: step.name,
         error: getErrorMessage(error),
@@ -820,14 +828,27 @@ export class StepExecutor {
       });
     }
 
-    response = await this.applyPostExecutionPhases(
-      step,
-      state,
-      stepIteration,
-      response,
-      updatePersonaSession,
-      runtime,
-    );
+    try {
+      response = await this.applyPostExecutionPhases(
+        step,
+        state,
+        stepIteration,
+        response,
+        updatePersonaSession,
+        runtime,
+      );
+    } catch (error) {
+      if (error instanceof RuleDetectionExhaustedError) {
+        invalidateExpectedPersonaSession(
+          state,
+          sessionKey,
+          response,
+          baseAgentOptions.sessionId,
+          updatePersonaSession,
+        );
+      }
+      throw error;
+    }
 
     state.stepOutputs.set(step.name, response);
     state.lastOutput = response;

@@ -19,6 +19,7 @@ import { isWorkflowCallStep } from '../step-kind.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
 import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
@@ -47,6 +48,8 @@ import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } 
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
+import { invalidateExpectedPersonaSession } from './session-invalidation.js';
+import { StructuredOutputSchemaError } from './structured-output-schema-validator.js';
 
 const log = createLogger('parallel-runner');
 
@@ -423,7 +426,13 @@ export class ParallelRunner {
           if (subResponse.sessionId === undefined) {
             // 再試行がセッションIDを返さなかった場合、劣化していた旧セッションを
             // resume 対象に残さない（残すと次の実行で文脈崩壊が再発する）
-            updatePersonaSession(subSessionKey, undefined);
+            invalidateExpectedPersonaSession(
+              state,
+              subSessionKey,
+              subResponse,
+              baseOptions.sessionId,
+              updatePersonaSession,
+            );
           }
         }
         if (findingLedgerCopyPath) {
@@ -596,6 +605,9 @@ export class ParallelRunner {
             ? await runStatusJudgmentPhase(subStep, phaseCtx)
             : undefined;
         } catch (error) {
+          if (error instanceof StructuredOutputSchemaError) {
+            throw error;
+          }
           log.info('Phase 3 status judgment failed for sub-step, falling back to phase1 rule evaluation', {
             step: subStep.name,
             error: getErrorMessage(error),
@@ -625,7 +637,21 @@ export class ParallelRunner {
         if (subPhase3 && !subPhase3GuardFailed) {
           finalResponse = { ...subResponse, matchedRuleIndex: subPhase3.ruleIndex, matchedRuleMethod: subPhase3.method };
         } else {
-          const match = await detectMatchedRule(subStep, subResponse.content, '', subRuleCtx);
+          let match;
+          try {
+            match = await detectMatchedRule(subStep, subResponse.content, '', subRuleCtx);
+          } catch (error) {
+            if (error instanceof RuleDetectionExhaustedError) {
+              invalidateExpectedPersonaSession(
+                state,
+                subSessionKey,
+                subResponse,
+                baseOptions.sessionId,
+                updatePersonaSession,
+              );
+            }
+            throw error;
+          }
           finalResponse = match
             ? { ...subResponse, matchedRuleIndex: match.index, matchedRuleMethod: match.method }
             : subResponse;
@@ -870,12 +896,47 @@ export class ParallelRunner {
         this.deps.updateMaxSteps(result.workflowCallStateSync.maxSteps);
       }
       didSyncWorkflowCallState = true;
-      for (const [sessionKey, sessionId] of result.workflowCallSessionUpdates) {
-        updatePersonaSession(sessionKey, sessionId);
-      }
     }
+    this.mergeWorkflowCallSessionUpdates(subResults, state, updatePersonaSession);
     if (didSyncWorkflowCallState) {
       this.deps.setActiveResumePoint(step, state.iteration);
+    }
+  }
+
+  private mergeWorkflowCallSessionUpdates(
+    subResults: ParallelSubStepResult[],
+    state: WorkflowState,
+    updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+  ): void {
+    const updatesBySessionKey = new Map<string, Array<{ expectedSessionId: string | undefined; sessionId: string | undefined }>>();
+    for (const result of subResults) {
+      if (!result.workflowCallSessionUpdates || result.workflowCallExecutionRejected) {
+        continue;
+      }
+      for (const [sessionKey, update] of result.workflowCallSessionUpdates) {
+        const updates = updatesBySessionKey.get(sessionKey) ?? [];
+        updates.push(update);
+        updatesBySessionKey.set(sessionKey, updates);
+      }
+    }
+
+    for (const [sessionKey, updates] of updatesBySessionKey) {
+      const currentSessionId = state.personaSessions.get(sessionKey);
+      const applicableUpdates = updates.filter((update) => update.expectedSessionId === currentSessionId);
+      const replacementSessionIds = [...new Set(
+        applicableUpdates
+          .map((update) => update.sessionId)
+          .filter((sessionId): sessionId is string => sessionId !== undefined),
+      )];
+
+      if (replacementSessionIds.length > 1) {
+        throw new Error(`Conflicting parallel workflow_call session updates for "${sessionKey}"`);
+      }
+      if (replacementSessionIds.length === 1) {
+        updatePersonaSession(sessionKey, replacementSessionIds[0]);
+      } else if (applicableUpdates.length > 0) {
+        updatePersonaSession(sessionKey, undefined);
+      }
     }
   }
 

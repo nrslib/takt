@@ -15,7 +15,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
-import { parseLastJsonBlock } from '../../agents/structured-caller/shared.js';
+import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
@@ -1963,15 +1963,10 @@ export class OpenCodeClient {
         emitResult(options.onStream, true, trimmed, activeSessionId);
 
         // format 要求時に structured がイベントで捕捉できなかった場合は、
-        // 本文の末尾 JSON をフォールバックとして採取する（検証は下流で行う）。
+        // 応答全体のJSON object、または従来のfenced JSONを採取する（検証は下流で行う）。
         if (capturedStructuredOutput === undefined && options.outputSchema !== undefined) {
           try {
-            const parsed = parseLastJsonBlock(trimmed);
-            if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-              capturedStructuredOutput = parsed as Record<string, unknown>;
-            } else {
-              log.debug('Structured output fallback found non-object JSON', { agentType });
-            }
+            capturedStructuredOutput = parseStructuredOutputObject(trimmed);
           } catch (fallbackError) {
             // フォールバック採取の失敗は握りつぶすが、調査用に痕跡は残す
             // （下流の検証と是正リトライに委ねる）。

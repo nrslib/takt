@@ -2628,9 +2628,25 @@ describe('OpenCodeClient stream cleanup', () => {
       text: '```json\n{"first": true}\n```\nmore text\n```json\n{"rawFindings": []}\n```',
       expected: { rawFindings: [] },
     },
-  ])('structured fallback edge case: $name', async ({ text, expected }) => {
+    {
+      name: 'explanation followed by bare JSON',
+      text: 'report text\n{"rawFindings": []}',
+      expected: undefined,
+    },
+    {
+      name: 'formatless object accepted before downstream validation',
+      text: '{"rawFindings": [], "extra": true}',
+      expected: { rawFindings: [], extra: true },
+      schema: {
+        type: 'object',
+        required: ['rawFindings'],
+        properties: { rawFindings: { type: 'array' } },
+        additionalProperties: false,
+      },
+    },
+  ])('structured fallback edge case: $name', async ({ text, expected, schema: testSchema }) => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = testSchema ?? { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
     const stream = new MockEventStream([
       {
         type: 'message.part.updated',
@@ -2693,8 +2709,8 @@ describe('OpenCodeClient stream cleanup', () => {
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
-              delta: 'report\n```json\n{"rawFindings": []}\n```'
+              part: { id: 'p-1', type: 'text', text: '{"rawFindings": []}' },
+              delta: '{"rawFindings": []}'
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-fmt' } },
@@ -2943,7 +2959,12 @@ describe('OpenCodeClient stream cleanup', () => {
 
   it('should degrade native structured output failures to a fresh formatless session, not reusing the resumed session id', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
+    const schema = {
+      type: 'object',
+      required: ['step', 'reason'],
+      properties: { step: { type: 'integer' }, reason: { type: 'string' } },
+      additionalProperties: false,
+    };
     const subscribe = vi.fn()
       .mockResolvedValueOnce({
         stream: new MockEventStream([
@@ -2964,8 +2985,8 @@ describe('OpenCodeClient stream cleanup', () => {
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
-              delta: 'report\n```json\n{"rawFindings": []}\n```',
+              part: { id: 'p-1', type: 'text', text: '{"step":2,"reason":"second rule"}' },
+              delta: '{"step":2,"reason":"second rule"}',
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-fresh-format' } },
@@ -2993,6 +3014,7 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('session-fresh-format');
+    expect(result.structuredOutput).toEqual({ step: 2, reason: 'second rule' });
     expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({ sessionID: 'session-old' });
     expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');

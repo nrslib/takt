@@ -27,7 +27,12 @@ import type {
 } from '../types.js';
 import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
 
-export type WorkflowCallSessionUpdates = ReadonlyMap<string, string | undefined>;
+export interface WorkflowCallSessionUpdate {
+  expectedSessionId: string | undefined;
+  sessionId: string | undefined;
+}
+
+export type WorkflowCallSessionUpdates = ReadonlyMap<string, WorkflowCallSessionUpdate>;
 export interface WorkflowCallIsolatedStateSync {
   iteration: number;
   maxSteps?: WorkflowMaxSteps;
@@ -268,7 +273,12 @@ export class WorkflowCallExecutor {
       this.deps.updateMaxSteps(this.deps.sharedRuntime.maxSteps);
     }
     this.deps.state.iteration = childState.iteration;
-    for (const [sessionKey, sessionId] of childState.personaSessions.entries()) {
+    // direct 子は親の session 全体を initialSessions として継承する。したがって
+    // 子の最終 map は、この workflow_call 後の親 session の正しい状態である。
+    // 子実行中に onSessionUpdate が外部永続化を済ませているため、ここでは親 state
+    // だけを置換し、同じ更新を callback へ重複通知しない。
+    this.deps.state.personaSessions.clear();
+    for (const [sessionKey, sessionId] of childState.personaSessions) {
       this.deps.state.personaSessions.set(sessionKey, sessionId);
     }
     this.deps.setActiveResumePoint(step, this.deps.state.iteration);
@@ -286,7 +296,8 @@ export class WorkflowCallExecutor {
     const options = this.deps.getOptions();
     const parentConfig = this.deps.getConfig();
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
-    const sessionUpdates = new Map<string, string | undefined>();
+    const inheritedSessions = new Map(this.deps.state.personaSessions);
+    const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
     const childAutoStrategyOverride = workflowUsesAutoProvider({
       workflowConfig: request.childWorkflow,
       effectiveProvider: request.childProviderInfo.provider,
@@ -317,7 +328,13 @@ export class WorkflowCallExecutor {
       onSessionUpdate: executeOptions.syncParentState
         ? options.onSessionUpdate
         : (persona, sessionId) => {
-            sessionUpdates.set(persona, sessionId);
+            const priorUpdate = sessionUpdates.get(persona);
+            sessionUpdates.set(persona, {
+              expectedSessionId: priorUpdate
+                ? priorUpdate.expectedSessionId
+                : inheritedSessions.get(persona),
+              sessionId,
+            });
           },
       personaProviders: request.personaProviders,
       providerRouting: request.providerRouting,

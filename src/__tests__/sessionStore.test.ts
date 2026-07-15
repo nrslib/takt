@@ -81,6 +81,21 @@ describe('updatePersonaSession', () => {
     expect(data.personaSessions['interactive:claude']).toBeUndefined();
   });
 
+  it('scoped key入力でもprovider付きlegacy/scoped keyを両方削除する', () => {
+    const testDir = join(tmpdir(), `takt-session-store-${randomUUID()}`);
+    createdDirs.push(testDir);
+    mkdirSync(testDir, { recursive: true });
+
+    updatePersonaSession(testDir, 'coder:opencode', 'session-1', 'opencode');
+    updatePersonaSession(testDir, 'coder:opencode', undefined, 'opencode');
+
+    const data = JSON.parse(readFileSync(getPersonaSessionsPath(testDir), 'utf-8')) as {
+      personaSessions: Record<string, string>;
+    };
+    expect(data.personaSessions['coder:opencode']).toBeUndefined();
+    expect(data.personaSessions['coder:opencode:opencode']).toBeUndefined();
+  });
+
   it('worktree sessionIdがundefinedの場合はlegacy/scoped keyを同時に削除する', () => {
     const testDir = join(tmpdir(), `takt-session-store-${randomUUID()}`);
     const worktreePath = join(testDir, 'worktree');

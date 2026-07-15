@@ -40,6 +40,10 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
+import { needsStatusJudgmentPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
 import {
   makeResponse,
   makeStep,
@@ -112,6 +116,60 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       expect(state.status).toBe('completed');
       expect(state.personaSessions.get('coder:mock')).toBe('existing-session');
       expect(onSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should invalidate only the failed normal step session after rule detection is exhausted', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 1,
+        initialStep: 'implement',
+        steps: [
+          makeStep('implement', {
+            persona: 'coder',
+            rules: [makeRule('done', 'COMPLETE'), makeRule('retry', 'implement')],
+          }),
+        ],
+      });
+      const onSessionUpdate = vi.fn();
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        initialSessions: { 'coder:mock': 'session-old' },
+        onSessionUpdate,
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'coder', content: 'unclear', sessionId: 'session-new' }),
+      ]);
+      vi.mocked(detectMatchedRule).mockRejectedValue(new RuleDetectionExhaustedError('implement'));
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(state.personaSessions.has('coder:mock')).toBe(false);
+      expect(onSessionUpdate).toHaveBeenLastCalledWith('coder:mock', undefined);
+    });
+
+    it('should fail fast on a Phase 3 schema error even when Phase 1 content has a matching tag', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 1,
+        initialStep: 'implement',
+        steps: [makeStep('implement', {
+          persona: 'coder',
+          rules: [makeRule('done', 'COMPLETE'), makeRule('retry', 'implement')],
+        })],
+      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
+      vi.mocked(runStatusJudgmentPhase).mockRejectedValue(new StructuredOutputSchemaError('Structured output schema is invalid'));
+      mockRunAgentSequence([
+        makeResponse({ persona: 'coder', content: '[IMPLEMENT:1] done' }),
+      ]);
+      vi.mocked(detectMatchedRule).mockResolvedValue({ index: 0, method: 'phase1_tag' });
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+      expect(detectMatchedRule).not.toHaveBeenCalled();
     });
 
     it('should complete: plan → implement → ai_review → reviewers(all approved) → supervise → COMPLETE', async () => {
