@@ -138,4 +138,28 @@ describe('assistant provider entry gates', () => {
     expect(mockInitializeSession).toHaveBeenCalledWith('/project', 'retry');
     expect(mockRunConversationLoop).toHaveBeenCalled();
   });
+
+  it('Given initializeSession rejects missing provider, When instruct starts, Then the error propagates', async () => {
+    mockInitializeSession.mockImplementation(() => {
+      throw new Error('Provider is not configured.');
+    });
+
+    await expect(
+      runInstructMode('/project', 'branch context', 'feature-branch', 'my-task', 'Do something', ''),
+    ).rejects.toThrow('Provider is not configured.');
+
+    expect(mockRunConversationLoop).not.toHaveBeenCalled();
+  });
+
+  it('Given initializeSession rejects missing provider, When retry starts, Then the error propagates', async () => {
+    mockInitializeSession.mockImplementation(() => {
+      throw new Error('Provider is not configured.');
+    });
+
+    await expect(
+      runTaskRetryMode('/project', buildRetryContext()),
+    ).rejects.toThrow('Provider is not configured.');
+
+    expect(mockRunConversationLoop).not.toHaveBeenCalled();
+  });
 });
