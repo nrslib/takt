@@ -20,6 +20,8 @@ describe('phase usage event mapper', () => {
         'takt.model.name': 'gpt-5',
         'takt.step.name': 'implement',
         'takt.step.type': 'agent',
+        'takt.step.persona': 'coder',
+        'takt.step.tags': ['coding', 'review'],
         'takt.phase.number': 1,
         'takt.phase.name': 'execute',
         'takt.phase.execution_id': 'implement:1:1:1',
@@ -41,6 +43,8 @@ describe('phase usage event mapper', () => {
       provider_model: 'gpt-5',
       step: 'implement',
       step_type: 'agent',
+      persona: 'coder',
+      tags: ['coding', 'review'],
       phase: 'phase1_execute',
       phase_name: 'execute',
       phase_execution_id: 'implement:1:1:1',
@@ -95,6 +99,8 @@ describe('phase usage event mapper', () => {
         'takt.model.name': 'claude-sonnet-4',
         'takt.step.name': 'implement',
         'takt.step.type': 'agent',
+        'takt.step.persona': 'conductor',
+        'takt.step.tags': ['review'],
         'takt.phase.execution_id': 'implement:3:1:1',
         'takt.judge.stage': 3,
         'takt.judge.method': 'ai_judge',
@@ -110,6 +116,8 @@ describe('phase usage event mapper', () => {
       phase_execution_id: 'implement:3:1:1',
       judge_stage: 3,
       judge_method: 'ai_judge',
+      persona: 'conductor',
+      tags: ['review'],
       usage_missing: false,
       usage: {
         input_tokens: 5,
@@ -140,6 +148,35 @@ describe('phase usage event mapper', () => {
         'takt.phase.name': 'execute',
       },
     }, context)).toBeUndefined();
+  });
+
+  it.each([
+    [],
+    'coding',
+    ['coding', 1],
+    ['coding', ''],
+    null,
+    {},
+  ])('omits malformed tags from phase usage records', (tags) => {
+    const record = mapSpanEndToPhaseUsageEvent({
+      name: 'phase.implement.execute',
+      attributes: {
+        'takt.provider.name': 'mock',
+        'takt.step.name': 'implement',
+        'takt.step.type': 'agent',
+        'takt.step.persona': '',
+        'takt.step.tags': tags,
+        'takt.phase.number': 1,
+        'takt.phase.name': 'execute',
+        'takt.phase.status': 'done',
+        'gen_ai.usage.input_tokens': 3,
+        'gen_ai.usage.output_tokens': 2,
+        'gen_ai.usage.total_tokens': 5,
+      },
+    }, context);
+
+    expect(record).not.toHaveProperty('persona');
+    expect(record).not.toHaveProperty('tags');
   });
 
   it('turns partial token attributes into usage_tokens_missing', () => {

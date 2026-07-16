@@ -56,6 +56,8 @@ describe('UsageEventsSpanProcessor', () => {
         run_id: 'run-1',
         session_id: 'session-1',
         phase: 'phase1_execute',
+        persona: 'coder',
+        tags: ['coding', 'review'],
       }),
     ]);
     expect(readRecords(secondLogPath)).toEqual([
@@ -173,6 +175,8 @@ function makePhaseSpan(runId: string): Record<string, unknown> {
       'takt.model.name': 'mock-model',
       'takt.step.name': 'implement',
       'takt.step.type': 'agent',
+      'takt.step.persona': 'coder',
+      'takt.step.tags': ['coding', 'review'],
       'takt.phase.number': 1,
       'takt.phase.name': 'execute',
       'takt.phase.status': 'done',

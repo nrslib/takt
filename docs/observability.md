@@ -109,6 +109,8 @@ Records are grouped by workflow phase:
 
 Missing usage is recorded with `usage_missing: true` and a reason. Missing usage is not treated as zero tokens by the analysis command.
 
+Each record also includes the step's `persona` and `tags` when defined. `persona` is a string, and `tags` is an array of strings. Missing values are omitted.
+
 ## Analyze Usage
 
 Build the project first:
@@ -159,5 +161,7 @@ For before/after comparisons, run the command separately for each set of run dir
 ```
 
 By default it scans both `../takt-worktrees/` and `.takt/runs/`. Requires `observability.usage_events_phase: true` in config.
+
+CSV output includes `persona` and `tags` columns after `step`. Tags are joined with `|`, and records with different persona or tags are kept in separate rows.
 
 Dependencies: `node`, `jq`
