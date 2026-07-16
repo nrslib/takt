@@ -25,7 +25,7 @@ vi.mock('@opencode-ai/sdk/v2', async () => {
 const INTEGRATION_ENV = 'TAKT_OPENCODE_PARALLEL_INTEGRATION';
 const SERVER_START_TIMEOUT = 60_000;
 const SESSION_TIMEOUT = 240_000;
-const NO_UPSTREAM_REQUEST_WINDOW_MS = 1_000;
+
 const DUMMY_API_KEY = 'takt-test-dummy-api-key';
 const MODEL = { providerID: 'opencode', modelID: 'deepseek-v4-flash-free' } as const;
 const RESPONSE_MODEL = 'opencode/deepseek-v4-flash-free';
@@ -928,6 +928,7 @@ describe.skipIf(shouldSkip)('OpenCode parallel sessions', () => {
     await upstream.waitForMarkerRequest('SESSION-FIFO-1', 60_000);
     expect(upstream.requests.length).toBe(1);
 
+    const prePrompt2EventCount = allEvents.length;
     const prompt2 = ocClient.session.promptAsync({
       sessionID: sessionId,
       directory: dir,
@@ -935,15 +936,22 @@ describe.skipIf(shouldSkip)('OpenCode parallel sessions', () => {
       parts: [{ type: 'text' as const, text: 'SESSION-FIFO-2 second prompt' }],
     });
 
-    // FIFO-2 must not reach upstream while FIFO-1 is still gated.
-    // OpenCode SDK provides no acknowledgement when it accepts FIFO-2, so in this
-    // real-process integration test we use a bounded observation window instead.
-    await expect(
-      upstream.waitForBodyMatch(
-        'SESSION-FIFO-2',
-        NO_UPSTREAM_REQUEST_WINDOW_MS,
+    await waitForCondition(
+      () => allEvents.slice(prePrompt2EventCount).some(
+        (event) =>
+          extractSessionID(event) === sessionId &&
+          getEventTextFragments(event).some((text) =>
+            text.includes('SESSION-FIFO-2'),
+          ),
       ),
-    ).rejects.toThrow(/Timed out waiting for request body/);
+      30_000,
+      'timed out waiting for second prompt acknowledgement',
+      () => `events=[${describeRecentEvents(allEvents.slice(prePrompt2EventCount))}]`,
+    );
+
+    // FIFO-2 must not reach the upstream provider while FIFO-1 is still
+    // gated — the gate is released below.
+    expect(upstream.hasBodyContaining('SESSION-FIFO-2')).toBe(false);
 
     upstream.releaseGate('SESSION-FIFO-1');
     await upstream.waitForBodyMatch('SESSION-FIFO-2', 60_000);
@@ -1199,6 +1207,9 @@ describe.skipIf(shouldSkip)('OpenCodeClient via Takt adapter (integration)', () 
     taktUpstream.activateGate('TAKT-FIFO-1');
     taktUpstream.activateBodyGate('TAKT-FIFO-2');
 
+    const ac2 = new AbortController();
+    const registerAbortSpy = vi.spyOn(ac2.signal, 'addEventListener');
+
     const call1 = taktOcClient.call('coder', 'TAKT-FIFO-1 first', {
       cwd: process.cwd(),
       model: RESPONSE_MODEL,
@@ -1208,11 +1219,22 @@ describe.skipIf(shouldSkip)('OpenCodeClient via Takt adapter (integration)', () 
       cwd: process.cwd(),
       model: RESPONSE_MODEL,
       sessionId,
+      abortSignal: ac2.signal,
     });
 
-    // Hold the first call's response via marker gate so we can verify
-    // that the second call has not reached upstream before the first
-    // completes (FIFO queuing at OpenCodeClient level).
+    // Wait for call2 to be enqueued — visible via the abort listener
+    // registration in acquireSharedServer.  This ensures call2 has been
+    // accepted by the queue before we assert it hasn't reached upstream.
+    await vi.waitFor(() => {
+      expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    expect(registerAbortSpy.mock.calls[1]).toEqual([
+      'abort',
+      expect.any(Function),
+      { once: true },
+    ]);
+
     await taktUpstream.waitForMarkerRequest('TAKT-FIFO-1', 60_000);
     expect(taktUpstream.pendingRequests()).toBe(1);
     expect(taktUpstream.hasBodyContaining('TAKT-FIFO-2')).toBe(false);
@@ -1239,12 +1261,15 @@ describe.skipIf(shouldSkip)('OpenCodeClient via Takt adapter (integration)', () 
     taktUpstream.activateBodyGate('TAKT-INIT-SECOND');
 
     let call2Promise: Promise<AgentResponse> | undefined;
+    const ac2 = new AbortController();
+    const registerAbortSpy = vi.spyOn(ac2.signal, 'addEventListener');
     const onStream = vi.fn((event) => {
       if (event.type === 'init' && typeof event.data?.sessionId === 'string') {
         call2Promise = taktOcClient!.call('coder', 'TAKT-INIT-SECOND follow-up', {
           cwd: process.cwd(),
           model: RESPONSE_MODEL,
           sessionId: event.data.sessionId,
+          abortSignal: ac2.signal,
         });
       }
     });
@@ -1257,7 +1282,17 @@ describe.skipIf(shouldSkip)('OpenCodeClient via Takt adapter (integration)', () 
 
     await taktUpstream.waitForMarkerRequest('TAKT-INIT-FIRST', 60_000);
 
-    expect(call2Promise).toBeDefined();
+    await vi.waitFor(() => {
+      expect(call2Promise).toBeDefined();
+      expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    expect(registerAbortSpy.mock.calls[1]).toEqual([
+      'abort',
+      expect.any(Function),
+      { once: true },
+    ]);
+
     expect(taktUpstream.hasBodyContaining('TAKT-INIT-SECOND')).toBe(false);
     expect(taktUpstream.pendingRequests()).toBe(1);
 

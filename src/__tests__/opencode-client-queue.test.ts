@@ -443,12 +443,15 @@ describe('OpenCodeClient session queue', () => {
     const client = new OpenCodeClient();
 
     let call2Promise: Promise<AgentResponse> | undefined;
+    const ac2 = new AbortController();
+    const registerAbortSpy = vi.spyOn(ac2.signal, 'addEventListener');
     const onStream = vi.fn((event) => {
       if (event.type === 'init' && event.data.sessionId === SID) {
         call2Promise = client.call('coder', 'second', {
           cwd: '/tmp',
           model: 'opencode/test-model',
           sessionId: SID,
+          abortSignal: ac2.signal,
         });
       }
     });
@@ -468,7 +471,14 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(call2Promise).toBeDefined();
+      expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
+
+    expect(registerAbortSpy.mock.calls[1]).toEqual([
+      'abort',
+      expect.any(Function),
+      { once: true },
+    ]);
 
     expect(promptCallCount).toBe(1);
 
