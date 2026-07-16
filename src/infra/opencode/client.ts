@@ -284,6 +284,30 @@ function extractOpenCodeToolRejection(
   return { tool: attemptedTool, error };
 }
 
+type CompletedToolExit =
+  | { known: false }
+  | { known: true; exit: number | null };
+
+function getCompletedToolExit(toolPart: OpenCodeToolPart): CompletedToolExit {
+  if (toolPart.state.status !== 'completed') {
+    return { known: false };
+  }
+  const metadata = toolPart.state.metadata;
+  if (
+    metadata === undefined
+    || typeof metadata !== 'object'
+    || metadata === null
+    || !Object.prototype.hasOwnProperty.call(metadata, 'exit')
+  ) {
+    return { known: false };
+  }
+  const exit = metadata.exit;
+  if (exit === null || typeof exit === 'number') {
+    return { known: true, exit };
+  }
+  return { known: false };
+}
+
 /** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
 function resolveMessageCycleBudget(): number {
   const fromEnv = Number(process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET);
@@ -1526,6 +1550,7 @@ export class OpenCodeClient {
             if (part.type === 'tool') {
               const toolPart = part as OpenCodeToolPart;
               const rejection = extractOpenCodeToolRejection(toolPart);
+              const completedExit = getCompletedToolExit(toolPart);
               let loopError: string | undefined;
               // onStream（→ provider event logging 有効時は *-provider-events.jsonl
               // へ永続化される）にも raw エラー文を流さない。マスク済みの
@@ -1573,18 +1598,27 @@ export class OpenCodeClient {
                   loopError = failure.message;
                 }
               } else if (toolPart.state.status === 'completed') {
-                // 進捗は2段階（強: write/edit/bash → 短期カウンタリセット、
-                // 弱: read/glob/grep 等 → 密度緩和のみ — tool-guard.ts 参照）。
-                const failure = toolGuard.observeSuccess(
-                  toolPart.callID || toolPart.id,
-                  toolPart.tool,
-                  toolPart.state.input,
-                  toolPart.state.output,
+                const callId = toolPart.callID || toolPart.id;
+                const failure = completedExit.known && completedExit.exit !== 0
+                  ? toolGuard.observeToolResultStagnation(
+                    callId,
+                    toolPart.tool,
+                    toolPart.state.input,
+                    toolPart.state.output,
+                  )
+                  : toolGuard.observeSuccess(
+                    callId,
+                    toolPart.tool,
+                    toolPart.state.input,
+                    toolPart.state.output,
                 );
+                if (completedExit.known && completedExit.exit === 0) {
+                  toolGuard.clearToolResultStagnation(toolPart.tool, toolPart.state.input);
+                }
                 if (failure !== undefined) {
                   toolGuardFailure = failure;
                   loopError = failure.message;
-                } else {
+                } else if (!completedExit.known || completedExit.exit === 0) {
                   // ツールが1つでも成功したなら作業は前に進んでいる。
                   // 空転の計数をここで戻す（下の cyclesWithoutToolSuccess を参照）。
                   cyclesWithoutToolSuccess = 0;

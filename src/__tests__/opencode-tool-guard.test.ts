@@ -21,6 +21,7 @@ const ENV_KEYS = [
   'TAKT_OPENCODE_TOOL_ERROR_CONSECUTIVE',
   'TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS',
   'TAKT_OPENCODE_TOOL_SUCCESS_REPEATS',
+  'TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS',
   'TAKT_OPENCODE_EDIT_CONFLICT_REPEATS',
 ] as const;
 
@@ -162,6 +163,79 @@ describe('OpenCodeToolGuard: 成功結果反復', () => {
     expect(success(guard, 'write', { filePath: 'src/a.ts' }, 'written')).toBeUndefined();
     expect(success(guard, 'read', input, 'stable')).toBeUndefined();
     expect(success(guard, 'read', input, 'stable')).toBeUndefined();
+  });
+});
+
+describe('OpenCodeToolGuard: tool_result_stagnation', () => {
+  function failedResult(
+    guard: OpenCodeToolGuard,
+    tool: string,
+    input: unknown,
+    output: unknown,
+    callId = nextCallId(),
+  ): ToolGuardFailure | undefined {
+    return guard.observeToolResultStagnation(callId, tool, input, output);
+  }
+
+  it('同一の失敗結果は edit 成功を挟んでも12回目で停止し、11回では停止しない', () => {
+    const guard = new OpenCodeToolGuard();
+    const input = { command: 'verify' };
+    for (let index = 0; index < 11; index += 1) {
+      expect(failedResult(guard, 'bash', input, 'verification failed')).toBeUndefined();
+      expect(success(guard, 'edit', { filePath: 'src/a.ts' }, 'changed')).toBeUndefined();
+    }
+    guard.resetSessionCounters('session-1');
+    guard.resetSessionCounters('session-2');
+    expect(failedResult(guard, 'bash', input, 'verification failed')?.kind).toBe('tool_result_stagnation');
+  });
+
+  it('同じ入力でも output が変われば反復数を1へ戻す', () => {
+    process.env.TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS = '3';
+    const guard = new OpenCodeToolGuard();
+    const input = { command: 'verify' };
+    expect(failedResult(guard, 'bash', input, 'failure A')).toBeUndefined();
+    expect(failedResult(guard, 'bash', input, 'failure A')).toBeUndefined();
+    expect(failedResult(guard, 'bash', input, 'failure B')).toBeUndefined();
+    expect(failedResult(guard, 'bash', input, 'failure B')).toBeUndefined();
+  });
+
+  it('同じキーが意味上の成功になれば停滞台帳から消える', () => {
+    process.env.TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS = '3';
+    const guard = new OpenCodeToolGuard();
+    const input = { command: 'verify' };
+    expect(failedResult(guard, 'bash', input, 'failure')).toBeUndefined();
+    expect(failedResult(guard, 'bash', input, 'failure')).toBeUndefined();
+    guard.clearToolResultStagnation('bash', input);
+    expect(failedResult(guard, 'bash', input, 'failure')).toBeUndefined();
+    expect(failedResult(guard, 'bash', input, 'failure')).toBeUndefined();
+  });
+
+  it('別 input は別の停滞台帳として扱う', () => {
+    process.env.TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS = '2';
+    const guard = new OpenCodeToolGuard();
+    expect(failedResult(guard, 'bash', { command: 'verify A' }, 'failure')).toBeUndefined();
+    expect(failedResult(guard, 'bash', { command: 'verify B' }, 'failure')).toBeUndefined();
+  });
+
+  it('同じ callID の再送は停滞回数へ二重計上しない', () => {
+    process.env.TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS = '2';
+    const guard = new OpenCodeToolGuard();
+    const callId = nextCallId();
+    expect(failedResult(guard, 'bash', { command: 'verify' }, 'failure', callId)).toBeUndefined();
+    expect(failedResult(guard, 'bash', { command: 'verify' }, 'failure', callId)).toBeUndefined();
+    expect(failedResult(guard, 'bash', { command: 'verify' }, 'failure')).toMatchObject({ kind: 'tool_result_stagnation' });
+  });
+
+  it('別 session で再利用された callID は同じ失敗結果として計上する', () => {
+    process.env.TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS = '2';
+    const guard = new OpenCodeToolGuard();
+    const callId = 'call-1';
+    const input = { command: 'verify' };
+
+    guard.resetSessionCounters('session-1');
+    expect(failedResult(guard, 'bash', input, 'failure', callId)).toBeUndefined();
+    guard.resetSessionCounters('session-2');
+    expect(failedResult(guard, 'bash', input, 'failure', callId)?.kind).toBe('tool_result_stagnation');
   });
 });
 

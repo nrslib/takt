@@ -133,6 +133,7 @@ function completedToolEvent(
   input: Record<string, unknown>,
   output: string,
   callID?: string,
+  metadata?: Record<string, unknown>,
 ): MockStreamEvent {
   toolCallSeq += 1;
   return {
@@ -143,7 +144,13 @@ function completedToolEvent(
         type: 'tool',
         tool,
         callID: callID ?? `tc-${toolCallSeq}`,
-        state: { status: 'completed', input, output, title: tool },
+        state: {
+          status: 'completed',
+          input,
+          output,
+          title: tool,
+          ...(metadata !== undefined ? { metadata } : {}),
+        },
       },
     },
   };
@@ -197,6 +204,7 @@ describe('OpenCodeClient tool guard recovery', () => {
   afterEach(() => {
     delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
     delete process.env.TAKT_OPENCODE_TOOL_SUCCESS_REPEATS;
+    delete process.env.TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS;
   });
 
   it('completed の成功反復は recovery や transient retry をせず1回の prompt で error になる', async () => {
@@ -222,6 +230,73 @@ describe('OpenCodeClient tool guard recovery', () => {
     expect(result.error).not.toContain('unchanged');
     expect(promptAsync).toHaveBeenCalledTimes(1);
     expect(sessionCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([1, null])('metadata.exit=%s の同一結果は edit 成功を挟んでも12回目で terminal error になり、本文を漏らさず recovery しない', async (exit) => {
+    const sensitiveInput = 'verify --token secret-input-body';
+    const sensitiveOutput = 'verification failed: secret-output-body';
+    runPlans = [[
+      ...Array.from({ length: 12 }, () => [
+        completedToolEvent('bash', { command: sensitiveInput }, sensitiveOutput, undefined, { exit }),
+        completedToolEvent('edit', { filePath: 'src/a.ts' }, 'changed', undefined, { exit: 0 }),
+      ]).flat(),
+    ]];
+
+    const { sessionCreate, promptAsync } = installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('tool result stagnation');
+    expect(result.error).not.toContain(sensitiveInput);
+    expect(result.error).not.toContain(sensitiveOutput);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('metadata.exit=0 は同じキーの結果停滞を消去する', async () => {
+    process.env.TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS = '3';
+    const input = { command: 'verify' };
+    runPlans = [[
+      completedToolEvent('bash', input, 'failed', undefined, { exit: 1 }),
+      completedToolEvent('bash', input, 'failed', undefined, { exit: 1 }),
+      completedToolEvent('bash', input, 'passed', undefined, { exit: 0 }),
+      completedToolEvent('bash', input, 'failed', undefined, { exit: 1 }),
+      completedToolEvent('bash', input, 'failed', undefined, { exit: 1 }),
+      ...successEvents('never', 'done').slice(0, 1),
+      { type: 'session.idle', properties: {} },
+    ]];
+
+    installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+  });
+
+  it('metadata 欠落または exit 型不正の completed は従来どおり成功として扱う', async () => {
+    process.env.TAKT_OPENCODE_TOOL_SUCCESS_REPEATS = '2';
+    runPlans = [[
+      completedToolEvent('bash', { command: 'verify' }, 'unchanged'),
+      completedToolEvent('bash', { command: 'verify' }, 'unchanged', undefined, { exit: '1' }),
+    ]];
+
+    installOpenCodeMock();
+    const client = new OpenCodeClient();
+    const result = await client.call('coder', 'implement the task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('successful tool result loop');
+    expect(result.error).not.toContain('tool result stagnation');
   });
 
   it('completed invalid は成功台帳へ入れず既存の引数エラー検出へ流れる', async () => {
