@@ -25,7 +25,7 @@ function makeRecord(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
-function runCsv(records: Array<Record<string, unknown>>): string[] {
+function runTokenUsage(records: Array<Record<string, unknown>>, args: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-token-usage-csv-'));
   tempDirs.add(dir);
   writeFileSync(
@@ -33,7 +33,11 @@ function runCsv(records: Array<Record<string, unknown>>): string[] {
     `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
     'utf-8',
   );
-  return execFileSync('bash', [SCRIPT_PATH, dir, '--csv'], { encoding: 'utf-8' })
+  return execFileSync('bash', [SCRIPT_PATH, dir, ...args], { encoding: 'utf-8' });
+}
+
+function runCsv(records: Array<Record<string, unknown>>): string[] {
+  return runTokenUsage(records, ['--csv'])
     .trim()
     .split('\n');
 }
@@ -45,7 +49,7 @@ afterEach(() => {
   tempDirs.clear();
 });
 
-describe('token-usage.sh CSV output', () => {
+describe('token-usage.sh output', () => {
   it('groups the same step separately by persona and tags', () => {
     const [header, ...rows] = runCsv([
       makeRecord({ persona: 'coder', tags: ['coding'] }),
@@ -83,5 +87,19 @@ describe('token-usage.sh CSV output', () => {
     ]);
 
     expect(row).toBe('-,run-1,codex,gpt-5,implement,,,10,5,15,0,1');
+  });
+
+  it('distinguishes text rows with the same step by persona and tags', () => {
+    const output = runTokenUsage([
+      makeRecord({ persona: 'coder', tags: ['coding', 'review'] }),
+      makeRecord({ persona: 'reviewer' }),
+      makeRecord({ tags: ['validation'] }),
+      makeRecord(),
+    ], []);
+
+    expect(output).toContain('implement [persona: coder; tags: coding|review] (×1)');
+    expect(output).toContain('implement [persona: reviewer] (×1)');
+    expect(output).toContain('implement [tags: validation] (×1)');
+    expect(output).toContain('implement (×1)');
   });
 });

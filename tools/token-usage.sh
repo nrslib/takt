@@ -234,7 +234,11 @@ for (const run of shown) {
 
   const steps = [...run.steps.values()].sort((a, b) => b.total - a.total);
   for (const s of steps) {
-    const label = `    ${s.step} (×${s.count})`;
+    const metadata = [
+      s.persona ? `persona: ${s.persona}` : "",
+      s.tags.length > 0 ? `tags: ${s.tags.join("|")}` : "",
+    ].filter(Boolean).join("; ");
+    const label = `    ${s.step}${metadata ? ` [${metadata}]` : ""} (×${s.count})`;
     const val = fmt(s.total);
     const dots = Math.max(2, W - 4 - label.length - val.length);
     console.log(`  ${label}  ${"·".repeat(dots)}  ${val}`);
