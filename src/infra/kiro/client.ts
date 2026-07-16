@@ -54,6 +54,10 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
     ...buildTrustArgs(options),
   ];
 
+  if (options.model) {
+    args.push('--model', options.model);
+  }
+
   if (options.agent) {
     validateAgentName(options.agent);
     args.push('--agent', options.agent);

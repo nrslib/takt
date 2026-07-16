@@ -414,7 +414,7 @@ In workflow YAML, `model: null` is an explicit model omission for a normal step,
 
 **GitHub Copilot CLI** forwards `model` directly to `copilot --model <model>`. If omitted, Copilot CLI default is used.
 
-**Kiro CLI** does not receive `model` as a CLI flag in the initial implementation. Configure Kiro's default model on the Kiro side.
+**Kiro CLI** forwards `model` directly to `kiro-cli chat --model <model>`. If omitted, Kiro CLI default is used.
 
 ### Example
 

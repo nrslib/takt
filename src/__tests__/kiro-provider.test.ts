@@ -72,7 +72,7 @@ describe('KiroProvider', () => {
 
     await agent.call('implement', {
       cwd: '/tmp/work',
-      model: 'gpt-ignored',
+      model: 'claude-3-opus',
       sessionId: 'sess-1',
       permissionMode: 'full',
     });
@@ -82,6 +82,7 @@ describe('KiroProvider', () => {
       'implement',
       expect.objectContaining({
         cwd: '/tmp/work',
+        model: 'claude-3-opus',
         sessionId: 'sess-1',
         permissionMode: 'full',
         kiroApiKey: 'resolved-key',
@@ -187,6 +188,36 @@ describe('KiroProvider', () => {
     expect(options.agent).toBeUndefined();
   });
 
+  it('Given a model, When agent is called, Then passes it through to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      model: 'claude-3-opus',
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.model).toBe('claude-3-opus');
+    expect(mockLogger.info).not.toHaveBeenCalledWith('Kiro provider does not support model CLI flag; ignoring');
+  });
+
+  it('Given no model, When agent is called, Then passes undefined model to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+    });
+
+    const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.model).toBeUndefined();
+  });
+
   it('Given unsupported provider options, When agent is called, Then does not pass them to callKiro', async () => {
     mockCallKiro.mockResolvedValue(doneResponse('coder'));
 
@@ -195,7 +226,6 @@ describe('KiroProvider', () => {
 
     await agent.call('implement', {
       cwd: '/tmp/work',
-      model: 'gpt-ignored',
       allowedTools: ['Read', 'Write'],
       mcpServers: {
         docs: {
@@ -210,7 +240,6 @@ describe('KiroProvider', () => {
     });
 
     const options = mockCallKiro.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(options.model).toBeUndefined();
     expect(options.allowedTools).toBeUndefined();
     expect(options.mcpServers).toBeUndefined();
     expect(options.maxTurns).toBeUndefined();
