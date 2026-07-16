@@ -33,6 +33,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 }));
 
 import { loadWorkflow } from '../infra/config/loaders/workflowLoader.js';
+import { createPartStep } from '../core/workflow/engine/team-leader-common.js';
 
 const DEV_WORKFLOWS = [
   'takt-default-for-local-llm',
@@ -43,6 +44,32 @@ const DEV_WORKFLOWS = [
 ] as const;
 
 describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) => {
+  it('should route implementation work through a sequential Team Leader with isolated member sessions', () => {
+    languageState.value = lang;
+    const workflow = loadWorkflow('takt-default-for-local-llm', process.cwd());
+
+    for (const name of ['implement', 'ai-antipattern-fix', 'fix']) {
+      const step = workflow!.steps.find((candidate) => candidate.name === name);
+      expect(step?.tags).toEqual(['leader']);
+      expect(step?.teamLeader).toEqual(expect.objectContaining({
+        initialMaxParts: 1,
+        maxConcurrency: 1,
+        maxTotalParts: 6,
+        partTags: ['coding'],
+        failOnPartError: false,
+      }));
+      const member = createPartStep(step!, {
+        id: 'member-1',
+        title: 'member',
+        instruction: 'implement assigned work',
+      });
+      expect(member.tags).toEqual(['coding']);
+      expect(member.session).toBe('refresh');
+    }
+    expect(workflow!.steps.find((step) => step.name === 'implement')?.passPreviousResponse).toBe(true);
+    expect(workflow!.steps.find((step) => step.name === 'ai-antipattern-fix')?.passPreviousResponse).toBe(true);
+  });
+
   it.each(DEV_WORKFLOWS)('should route fix dead ends to plan and keep abort as the last resort when %s is loaded', (name) => {
     languageState.value = lang;
     const workflow = loadWorkflow(name, process.cwd());

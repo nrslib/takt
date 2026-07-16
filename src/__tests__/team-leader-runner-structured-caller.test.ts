@@ -325,11 +325,18 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     ]));
   });
 
-  it('fails closed before post-execution judgment when an opted-in member fails even after a recovery part succeeds', async () => {
+  it.each([
+    { failOnPartError: true, expectedStatus: 'error', postExecutionCalls: 0 },
+    { failOnPartError: false, expectedStatus: 'done', postExecutionCalls: 1 },
+  ])('handles a failed member followed by a successful recovery part when failOnPartError=$failOnPartError', async ({
+    failOnPartError,
+    expectedStatus,
+    postExecutionCalls,
+  }) => {
     mockExecuteAgent.mockImplementation(async (_persona, instruction: string) => ({
       persona: 'coder',
       status: instruction.includes('part-1') ? 'error' : 'done',
-      content: instruction.includes('part-1') ? '' : 'part-2 complete',
+      content: instruction.includes('part-1') ? '' : 'recovery complete',
       error: instruction.includes('part-1') ? 'member failed' : undefined,
       timestamp: new Date(),
     }));
@@ -338,18 +345,19 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'leader instruction' });
         return [
           { id: 'part-1', title: 'first', instruction: 'part-1' },
-          { id: 'part-2', title: 'second', instruction: 'part-2' },
         ];
       }),
       requestMoreParts: vi.fn()
         .mockResolvedValueOnce({
           done: false,
           reasoning: 'run a recovery part',
-          parts: [{ id: 'part-3', title: 'recovery', instruction: 'part-3' }],
+          parts: [{ id: 'part-2', title: 'recovery', instruction: 'part-2' }],
         })
         .mockResolvedValue({ done: true, reasoning: 'recovery completed', parts: [] }),
     };
-    const applyPostExecutionPhases = vi.fn();
+    const applyPostExecutionPhases = vi.fn().mockImplementation(
+      async (_step: WorkflowStep, _state: WorkflowState, _iteration: number, response: AgentResponse) => response,
+    );
     const runner = new TeamLeaderRunner({
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({ cwd: '/tmp/project' }),
@@ -380,18 +388,23 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       name: 'implement', persona: 'coder', personaDisplayName: 'coder', instruction: 'leader instruction',
       passPreviousResponse: false,
       teamLeader: {
-        maxConcurrency: 2, initialMaxParts: 2, maxTotalParts: 4, failOnPartError: true,
+        maxConcurrency: 1, initialMaxParts: 1, maxTotalParts: 6, failOnPartError,
         timeoutMs: 1000,
       },
     }, state, 'fix issue', 5, vi.fn());
 
-    expect(structuredCaller.decomposeTask).toHaveBeenCalledWith('leader instruction', 2, expect.any(Object));
+    expect(structuredCaller.decomposeTask).toHaveBeenCalledWith('leader instruction', 1, expect.any(Object));
     expect(structuredCaller.requestMoreParts).toHaveBeenCalledWith(
-      'leader instruction', expect.any(Array), expect.any(Array), 2, expect.any(Object),
+      'leader instruction', expect.any(Array), expect.any(Array), 5, expect.any(Object),
     );
-    expect(mockExecuteAgent).toHaveBeenCalledWith('coder', 'part-3', expect.any(Object));
-    expect(result.response).toMatchObject({ status: 'error', error: 'Team leader part failed: part-1: member failed' });
-    expect(applyPostExecutionPhases).not.toHaveBeenCalled();
+    expect(mockExecuteAgent).toHaveBeenCalledWith('coder', 'part-2', expect.any(Object));
+    expect(result.response.status).toBe(expectedStatus);
+    if (failOnPartError) {
+      expect(result.response.error).toBe('Team leader part failed: part-1: member failed');
+    } else {
+      expect(result.response.content).toContain('recovery complete');
+    }
+    expect(applyPostExecutionPhases).toHaveBeenCalledTimes(postExecutionCalls);
   });
 
   it('passes resolved session and step mcpServers to team leader structured planning calls', async () => {
