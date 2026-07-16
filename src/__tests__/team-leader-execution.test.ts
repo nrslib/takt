@@ -44,7 +44,6 @@ describe('runTeamLeaderExecution', () => {
     const result = await runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: 2,
-      refillThreshold: 0,
       maxTotalParts: 5,
       runPart,
       requestMoreParts,
@@ -64,17 +63,16 @@ describe('runTeamLeaderExecution', () => {
     await expect(runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: 2,
-      refillThreshold: 0,
       maxTotalParts: 2,
       runPart,
       requestMoreParts,
-    })).rejects.toThrow('Initial team leader parts exceed max_total_parts: 3 > 2');
+    })).rejects.toThrow('Initial team leader parts exceed total part budget: 3 > 2');
 
     expect(runPart).not.toHaveBeenCalled();
     expect(requestMoreParts).not.toHaveBeenCalled();
   });
 
-  it('refill threshold 到達時に追加パートを取り込んで完了する', async () => {
+  it('予定済みパートがすべて完了してから追加パートを取り込む', async () => {
     const part1 = makePart('p1');
     const part2 = makePart('p2');
     const part3 = makePart('p3');
@@ -96,7 +94,6 @@ describe('runTeamLeaderExecution', () => {
     const result = await runTeamLeaderExecution({
       initialParts: [part1, part2],
       maxConcurrency: 2,
-      refillThreshold: 1,
       runPart,
       requestMoreParts,
     });
@@ -104,6 +101,12 @@ describe('runTeamLeaderExecution', () => {
     expect(result.plannedParts.map((p) => p.id)).toEqual(['p1', 'p2', 'p3']);
     expect(result.partResults.map((r) => r.part.id).sort()).toEqual(['p1', 'p2', 'p3']);
     expect(runPart).toHaveBeenCalledTimes(3);
+    expect(requestMoreParts).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      partResults: expect.arrayContaining([
+        expect.objectContaining({ part: part1 }),
+        expect.objectContaining({ part: part2 }),
+      ]),
+    }));
     expect(requestMoreParts).toHaveBeenCalledTimes(2);
     expect(result.partResults.some((r) => r.part.id === part3.id)).toBe(true);
   });
@@ -120,17 +123,18 @@ describe('runTeamLeaderExecution', () => {
     await expect(runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: 1,
-      refillThreshold: 1,
       maxTotalParts: 3,
       runPart,
       requestMoreParts,
     })).rejects.toThrow('Team leader planned parts exceed max_total_parts: 4 > 3');
 
     expect(requestMoreParts).toHaveBeenCalledWith({
-      partResults: [expect.objectContaining({ part: parts[0] })],
+      partResults: expect.arrayContaining([
+        expect.objectContaining({ part: parts[0] }),
+        expect.objectContaining({ part: parts[1] }),
+      ]),
       scheduledIds: ['p1', 'p2'],
       remainingPartBudget: 1,
-      unfinishedScheduledPartCount: 1,
     });
   });
 
@@ -145,7 +149,6 @@ describe('runTeamLeaderExecution', () => {
     await expect(runTeamLeaderExecution({
       initialParts: parts,
       maxConcurrency: 1,
-      refillThreshold: 1,
       maxTotalParts: 3,
       runPart,
       requestMoreParts,
@@ -169,7 +172,6 @@ describe('runTeamLeaderExecution', () => {
     const result = await runTeamLeaderExecution({
       initialParts: [part1],
       maxConcurrency: 1,
-      refillThreshold: 0,
       runPart,
       requestMoreParts,
       onPlanningNoNewParts,

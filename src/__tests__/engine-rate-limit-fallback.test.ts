@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
 import type { ProviderType } from '../shared/types/provider.js';
@@ -25,6 +25,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { InstructionBuildTransaction } from '../core/workflow/engine/instruction-build-transaction.js';
 import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
@@ -126,7 +127,6 @@ function teamLeaderStepConfig(): WorkflowConfig {
           persona: '../personas/team-leader.md',
           maxConcurrency: 1,
           maxTotalParts: 20,
-          refillThreshold: 0,
           timeoutMs: 10000,
           partPersona: '../personas/coder.md',
           partAllowedTools: ['Read', 'Edit'],
@@ -160,6 +160,7 @@ describe('WorkflowEngine rate limit fallback', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -892,7 +893,6 @@ describe('WorkflowEngine rate limit fallback', () => {
             persona: '../personas/team-leader.md',
             maxConcurrency: 1,
             maxTotalParts: 20,
-            refillThreshold: 0,
             timeoutMs: 10000,
             partPersona: '../personas/coder.md',
             partAllowedTools: ['Read', 'Edit'],
@@ -903,16 +903,18 @@ describe('WorkflowEngine rate limit fallback', () => {
         }),
       ],
     });
+    const onSessionUpdate = vi.fn();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
       rateLimitFallback: {
         switchChain: [{ provider: 'codex', model: 'gpt-5' }],
       },
+      onSessionUpdate,
     }));
     const parts = [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
     const doneFeedback = { done: true, reasoning: 'enough', parts: [] };
     mockRunAgentSequence([
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
-      makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
+      makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done', sessionId: 'part-claude-session' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
       makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
@@ -947,36 +949,72 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(engine.getState().previousResponseSourcePath).toMatch(
       /^\.takt\/runs\/test-report-dir\/context\/previous_responses\/implement\.1\.\d{8}T\d{6}Z\.md$/,
     );
+    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', 'part-claude-session');
+    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', undefined);
     expect(runReportPhase).toHaveBeenCalledTimes(2);
     expect(detectMatchedRule).toHaveBeenCalledOnce();
   });
 
-  it('team_leader part が rate_limited の場合は fallback retry の part prompt に fallback notice を注入する', async () => {
+  it('team_leader part の rate-limit fallback retry は member iteration と snapshot 名を同じ論理試行に戻す', async () => {
     // Given
-    const engine = new WorkflowEngine(teamLeaderStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
+    const config = teamLeaderStepConfig();
+    const step = config.steps[0];
+    if (!step) {
+      throw new Error('team leader step is required');
+    }
+    step.policyContents = ['member policy'];
+    const previousTail = 'PREVIOUS_RESPONSE_TAIL: retain the complete review result';
+    const onSessionUpdate = vi.fn();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
       rateLimitFallback: {
         switchChain: [{ provider: 'codex', model: 'gpt-5' }],
       },
+      onSessionUpdate,
     }));
-    const parts = [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+    const parts = [
+      { id: 'part-1', title: 'API', instruction: 'Implement API' },
+      { id: 'part-2', title: 'Tests', instruction: 'Add tests' },
+    ];
+    const fallbackParts = [{ id: 'part-3', title: 'Fallback API', instruction: 'Implement API with fallback' }];
     const doneFeedback = { done: true, reasoning: 'enough', parts: [] };
     mockRunAgentSequence([
       makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
-      makeRateLimitedResponse('claude', { persona: 'implement.part-1' }),
+      makeRateLimitedResponse('claude', { persona: 'implement.part-1', sessionId: 'part-rate-limited-session' }),
+      makeResponse({ persona: 'implement.part-2', content: '[STEP:1] done', sessionId: 'part-success-session' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
-      makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
-      makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
+      makeResponse({ persona: 'team-leader', structuredOutput: { parts: fallbackParts } }),
+      makeResponse({ persona: 'implement.part-3', content: '[STEP:1] done' }),
       makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
     ]);
     mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    const previousResponse = makeResponse({ persona: 'review', content: `${'x'.repeat(2500)}\n${previousTail}` });
+    const initialState = engine.getState();
+    initialState.stepOutputs.set('review', previousResponse);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-20T01:02:03.000Z'));
 
     // When
-    const state = await engine.run();
+    const rateLimited = await engine.runSingleIteration();
+    const stateAfterRateLimit = engine.getState();
+    expect(rateLimited.nextStep).toBe('implement');
+    expect(stateAfterRateLimit.lastOutput).toBeUndefined();
+    expect([...stateAfterRateLimit.stepOutputs.keys()]).toEqual(['review']);
+    expect(stateAfterRateLimit.personaSessions).toEqual(new Map());
+    expect(stateAfterRateLimit.stepIterations).toEqual(new Map());
+    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', 'part-rate-limited-session');
+    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-2:claude', 'part-success-session');
+    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', undefined);
+    expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-2:claude', undefined);
+    vi.setSystemTime(new Date('2026-06-20T01:02:04.000Z'));
+    const completed = await engine.runSingleIteration();
+    const state = engine.getState();
 
     // Then
+    expect(completed.nextStep).toBe('COMPLETE');
     expect(state.status).toBe('completed');
     expect(state.iteration).toBe(1);
     expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
+      'claude',
       'claude',
       'claude',
       'claude',
@@ -985,13 +1023,131 @@ describe('WorkflowEngine rate limit fallback', () => {
       'codex',
     ]);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
+    expect(prompts[0]).toContain(previousTail);
     expect(prompts[1]).not.toContain('Fallback Execution');
-    expect(prompts[4]).toContain('Fallback Execution');
-    expect(prompts[4]).toContain('Previous provider/model: claude / claude-sonnet');
-    expect(prompts[4]).toContain('Current provider/model: codex / gpt-5');
-    expect(prompts[4]).toContain('Implement API');
-    expect(runAgent).toHaveBeenCalledTimes(6);
+    expect(prompts[1]).toContain('Step Iteration: 1(times this step has run)');
+    expect(prompts[5]).toContain('Fallback Execution');
+    expect(prompts[5]).toContain('Previous provider/model: claude / claude-sonnet');
+    expect(prompts[5]).toContain('Current provider/model: codex / gpt-5');
+    expect(prompts[5]).toContain('Implement API with fallback');
+    expect(prompts[5]).toContain('Step Iteration: 1(times this step has run)');
+    expect(prompts[4]).toContain(previousTail);
+    const policySnapshots = readdirSync(join(tmpDir, '.takt', 'runs', 'test-report-dir', 'context', 'policy'))
+      .filter((file) => file.startsWith('implement-part-'));
+    expect(policySnapshots).toEqual(['implement-part-3.1.20260620T010204Z.md']);
+    expect(runAgent).toHaveBeenCalledTimes(7);
     expect(detectMatchedRule).toHaveBeenCalledOnce();
+  });
+
+  it('team_leader part の rate-limit rollback は既存 part session の上書きを外部にも復元する', async () => {
+    // Given
+    const onSessionUpdate = vi.fn();
+    const engine = new WorkflowEngine(teamLeaderStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
+      initialSessions: { 'implement.part-1:claude': 'part-original-session' },
+      onSessionUpdate,
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    }));
+    const parts = [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+    const doneFeedback = { done: true, reasoning: 'enough', parts: [] };
+    mockRunAgentSequence([
+      makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
+      makeRateLimitedResponse('claude', { persona: 'implement.part-1', sessionId: 'part-attempt-session' }),
+      makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
+    ]);
+
+    // When
+    const result = await engine.runSingleIteration();
+
+    // Then
+    expect(result.nextStep).toBe('implement');
+    expect(engine.getState().personaSessions.get('implement.part-1:claude')).toBe('part-original-session');
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(1, 'implement.part-1:claude', 'part-attempt-session');
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(2, 'implement.part-1:claude', 'part-original-session');
+  });
+
+  it('team_leader part の rollback callback が throw しても後続 session と non-session state を復元する', async () => {
+    // Given
+    const onSessionUpdate = vi.fn((key: string, sessionId: string | undefined) => {
+      if (key === 'implement.part-1:claude' && sessionId === undefined) {
+        throw new Error('session rollback callback failed');
+      }
+    });
+    const engine = new WorkflowEngine(teamLeaderStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+      onSessionUpdate,
+    }));
+    mockRunAgentSequence([
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Tests', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeRateLimitedResponse('claude', { persona: 'implement.part-1', sessionId: 'part-1-attempt-session' }),
+      makeResponse({ persona: 'implement.part-2', content: '[STEP:1] done', sessionId: 'part-2-attempt-session' }),
+      makeResponse({ persona: 'team-leader', structuredOutput: { done: true, reasoning: 'enough', parts: [] } }),
+    ]);
+
+    // When
+    await expect(engine.runSingleIteration()).rejects.toBeInstanceOf(AggregateError);
+
+    // Then
+    const state = engine.getState();
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(1, 'implement.part-1:claude', 'part-1-attempt-session');
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(2, 'implement.part-2:claude', 'part-2-attempt-session');
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(3, 'implement.part-1:claude', undefined);
+    expect(onSessionUpdate).toHaveBeenNthCalledWith(4, 'implement.part-2:claude', undefined);
+    expect(state.personaSessions).toEqual(new Map());
+    expect(state.lastOutput).toBeUndefined();
+    expect(state.pendingFallback).toBeUndefined();
+    expect(state.stepOutputs).toEqual(new Map());
+    expect(state.stepIterations).toEqual(new Map());
+  });
+
+  it('instruction rollback が throw しても session と non-session state の補償を試行する', async () => {
+    // Given
+    const onSessionUpdate = vi.fn();
+    const rollback = vi.spyOn(InstructionBuildTransaction.prototype, 'rollback')
+      .mockImplementationOnce(() => {
+        throw new Error('instruction rollback failed');
+      });
+    const engine = new WorkflowEngine(teamLeaderStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+      onSessionUpdate,
+    }));
+    mockRunAgentSequence([
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }] },
+      }),
+      makeRateLimitedResponse('claude', { persona: 'implement.part-1', sessionId: 'part-attempt-session' }),
+      makeResponse({ persona: 'team-leader', structuredOutput: { done: true, reasoning: 'enough', parts: [] } }),
+    ]);
+
+    try {
+      // When
+      await expect(engine.runSingleIteration()).rejects.toBeInstanceOf(AggregateError);
+
+      // Then
+      const state = engine.getState();
+      expect(onSessionUpdate).toHaveBeenCalledWith('implement.part-1:claude', undefined);
+      expect(state.personaSessions).toEqual(new Map());
+      expect(state.lastOutput).toBeUndefined();
+      expect(state.pendingFallback).toBeUndefined();
+      expect(state.stepOutputs).toEqual(new Map());
+      expect(state.stepIterations).toEqual(new Map());
+    } finally {
+      rollback.mockRestore();
+    }
   });
 
   it('team_leader part の fallback retry では auto routing が fallback provider を上書きしない', async () => {

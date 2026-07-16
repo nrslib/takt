@@ -224,7 +224,9 @@ export const TeamLeaderConfigRawSchema = z.object({
   max_parts: z.number().int().positive().max(3).optional(),
   max_concurrency: z.number().int().positive().max(3).optional(),
   max_total_parts: z.number().int().positive().max(MAX_TEAM_LEADER_MAX_TOTAL_PARTS).optional(),
-  refill_threshold: z.number().int().min(0).optional(),
+  initial_max_parts: z.number().int().positive().max(MAX_TEAM_LEADER_MAX_TOTAL_PARTS).optional(),
+  fail_on_part_error: z.boolean().optional(),
+  refill_threshold: z.literal(0).optional(),
   timeout_ms: z.number().int().positive().optional(),
   inspect_tools: z.array(z.string()).optional(),
   part_persona: z.string().optional(),
@@ -241,13 +243,12 @@ export const TeamLeaderConfigRawSchema = z.object({
     });
   }
 
-  const maxConcurrency = data.max_concurrency ?? data.max_parts ?? 3;
-  const refillThreshold = data.refill_threshold ?? 0;
-  if (refillThreshold > maxConcurrency) {
+  const maxTotalParts = data.max_total_parts ?? MAX_TEAM_LEADER_MAX_TOTAL_PARTS;
+  if (data.initial_max_parts !== undefined && data.initial_max_parts > maxTotalParts) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ['refill_threshold'],
-      message: "'refill_threshold' must be less than or equal to team leader concurrency",
+      path: ['initial_max_parts'],
+      message: "'initial_max_parts' must be less than or equal to team leader total part limit",
     });
   }
 });

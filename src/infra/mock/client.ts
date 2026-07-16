@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { getScenarioQueue } from './scenario.js';
@@ -18,6 +19,14 @@ export type { MockCallOptions };
  */
 function generateMockSessionId(): string {
   return `mock-session-${randomUUID()}`;
+}
+
+function recordMockCall(event: 'start' | 'complete', personaName: string): void {
+  const logPath = process.env.TAKT_MOCK_CALL_LOG;
+  if (!logPath) {
+    return;
+  }
+  appendFileSync(logPath, `${JSON.stringify({ event, personaName })}\n`);
 }
 
 async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -46,6 +55,7 @@ export async function callMock(
 
   // Scenario queue takes priority over explicit options
   const scenarioEntry = getScenarioQueue()?.consume(personaName);
+  recordMockCall('start', personaName);
 
   // Apply artificial delay if specified (respects abortSignal)
   if (scenarioEntry?.delayMs) {
@@ -53,6 +63,7 @@ export async function callMock(
       await delayWithAbort(scenarioEntry.delayMs, options.abortSignal);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
+        recordMockCall('complete', personaName);
         return {
           persona: personaName,
           status: 'blocked',
@@ -94,6 +105,7 @@ export async function callMock(
     options.onStream(resultEvent);
   }
 
+  recordMockCall('complete', personaName);
   return {
     persona: personaName,
     status,

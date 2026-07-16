@@ -64,6 +64,7 @@ import {
 } from '../findings/contract-intake.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
+import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 
 const log = createLogger('step-executor');
 
@@ -218,8 +219,10 @@ export class StepExecutor {
     content: string,
     directoryRel: string,
     filename: string,
+    transaction?: InstructionBuildTransaction,
   ): string {
     const absPath = join(this.deps.getCwd(), directoryRel, filename);
+    transaction?.recordSnapshotWrite(absPath);
     writeFileSync(absPath, content, 'utf-8');
     return `${directoryRel}/${filename}`;
   }
@@ -229,6 +232,7 @@ export class StepExecutor {
     stepName: string,
     stepIteration: number,
     contents: string[] | undefined,
+    transaction?: InstructionBuildTransaction,
   ): { content: string[]; sourcePath: string } | undefined {
     if (!contents || contents.length === 0) return undefined;
     const merged = contents.join('\n\n---\n\n');
@@ -241,6 +245,7 @@ export class StepExecutor {
       merged,
       directoryRel,
       StepExecutor.buildSnapshotFileName(stepName, stepIteration, timestamp),
+      transaction,
     );
     return { content: [merged], sourcePath };
   }
@@ -249,6 +254,7 @@ export class StepExecutor {
     state: WorkflowState,
     stepName: string,
     stepIteration: number,
+    transaction?: InstructionBuildTransaction,
   ): void {
     if (!state.lastOutput || state.previousResponseSourcePath) return;
     const timestamp = StepExecutor.buildTimestamp();
@@ -258,11 +264,13 @@ export class StepExecutor {
       state.lastOutput.content,
       runPaths.contextPreviousResponsesRel,
       fileName,
+      transaction,
     );
     this.writeSnapshot(
       state.lastOutput.content,
       runPaths.contextPreviousResponsesRel,
       'latest.md',
+      transaction,
     );
     state.previousResponseSourcePath = sourcePath;
   }
@@ -467,19 +475,22 @@ export class StepExecutor {
     maxSteps: number | 'infinite',
     fallbackContext?: FallbackContext,
     findingContract?: FindingContractInstructionContext,
+    transaction?: InstructionBuildTransaction,
   ): string {
-    this.ensurePreviousResponseSnapshot(state, step.name, stepIteration);
+    this.ensurePreviousResponseSnapshot(state, step.name, stepIteration, transaction);
     const policySnapshot = this.writeFacetSnapshot(
       'policy',
       step.name,
       stepIteration,
       step.policyContents,
+      transaction,
     );
     const knowledgeSnapshot = this.writeFacetSnapshot(
       'knowledge',
       step.name,
       stepIteration,
       step.knowledgeContents,
+      transaction,
     );
     const workflowSteps = this.deps.getWorkflowSteps();
     const workflowDefinitionSteps = this.deps.getWorkflowDefinitionSteps();

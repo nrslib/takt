@@ -4,7 +4,7 @@ export function isPlanningBudgetError(error: unknown): boolean {
   }
 
   const message = error.message;
-  return /^Initial team leader parts exceed max_total_parts: \d+ > \d+$/.test(message)
+  return /^Initial team leader parts exceed total part budget: \d+ > \d+$/.test(message)
     || /^Team leader planned parts exceed max_total_parts: \d+ > \d+$/.test(message)
     || /^Team leader produced too many total parts: \d+ > max_total_parts \d+$/.test(message)
     || /^Structured output produced too many total parts: \d+ > max_total_parts \d+$/.test(message)

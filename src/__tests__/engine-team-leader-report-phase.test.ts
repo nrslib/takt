@@ -100,7 +100,6 @@ function createConfig(): WorkflowConfig {
         teamLeader: {
           maxConcurrency: 1,
           maxTotalParts: 20,
-          refillThreshold: 0,
           timeoutMs: 1_000,
           partPersona: 'testing-reviewer',
           partEdit: false,

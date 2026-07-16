@@ -180,6 +180,8 @@ interface WorkflowStepBase {
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;
+  /** Internal-only marker for Team Leader planning steps that need lossless state output. */
+  preserveFullPreviousResponse?: true;
   /**
    * Set only by the engine when it synthesizes a step (e.g. the
    * finding-conflict-adjudication step injected into config.steps). Never

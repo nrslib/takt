@@ -35,9 +35,11 @@ export interface TeamLeaderConfig {
   providerRoutingPersonaKey?: string;
   /** Maximum number of parts to run in parallel */
   maxConcurrency: number;
+  /** Maximum number of parts the initial decomposition may create */
+  initialMaxParts?: number;
   maxTotalParts: number;
-  /** Trigger additional planning when queued parts drop to this threshold or below */
-  refillThreshold: number;
+  /** Fail the parent step when any member part fails. */
+  failOnPartError?: boolean;
   /** Default timeout for parts in milliseconds */
   timeoutMs: number;
   /** Read-only inspection tools for the parent decomposition call */
