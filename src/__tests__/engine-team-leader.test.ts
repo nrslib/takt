@@ -111,7 +111,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     ['en', 'Every part in the same batch must be independently executable', 'When parts.length === 1, first consider whether independent responsibility boundaries are available'],
     ['ja', '同じバッチ内の part は互いに独立させる', '`parts.length === 1` になる場合も、独立に実行できる責務境界がないか先に検討する'],
   ] as const)('builtin %s facet reaches the real structured decomposition caller', async (language, independenceRule, boundaryRule) => {
-    const builtinPath = join(process.cwd(), 'builtins', language, 'workflows', 'takt-default-for-local-llm.yaml');
+    const builtinPath = join(process.cwd(), 'builtins', language, 'workflows', 'draft.yaml');
     mkdirSync(join(tmpDir, '.takt'), { recursive: true });
     writeFileSync(join(tmpDir, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf-8');
     const loaded = loadWorkflowFromFile(builtinPath, tmpDir);

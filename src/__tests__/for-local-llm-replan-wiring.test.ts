@@ -43,23 +43,6 @@ const DEV_WORKFLOWS = [
 ] as const;
 
 describe.each(['ja', 'en'] as const)('for-local-llm replan wiring (%s)', (lang) => {
-  it('should use the staged Team Leader contract with isolated member sessions', () => {
-    languageState.value = lang;
-    const workflow = loadWorkflow('takt-default-for-local-llm', process.cwd());
-
-    for (const name of ['implement', 'ai-antipattern-fix', 'fix']) {
-      const step = workflow!.steps.find((candidate) => candidate.name === name);
-      expect(step?.teamLeader).toEqual(expect.objectContaining({
-        initialMaxParts: 2,
-        maxConcurrency: 2,
-        maxTotalParts: 4,
-        failOnPartError: true,
-      }));
-    }
-    expect(workflow!.steps.find((step) => step.name === 'implement')?.passPreviousResponse).toBe(true);
-    expect(workflow!.steps.find((step) => step.name === 'ai-antipattern-fix')?.passPreviousResponse).toBe(true);
-  });
-
   it.each(DEV_WORKFLOWS)('should route fix dead ends to plan and keep abort as the last resort when %s is loaded', (name) => {
     languageState.value = lang;
     const workflow = loadWorkflow(name, process.cwd());
