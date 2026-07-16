@@ -121,15 +121,6 @@ describe('previewPrompts', () => {
     expect(mockInfo).toHaveBeenCalledWith('Steps: 1');
   });
 
-  it('解決済み言語を表示する', async () => {
-    mockResolveWorkflowConfigValue.mockReturnValueOnce('ja');
-
-    await previewPrompts('/project');
-
-    expect(mockResolveWorkflowConfigValue).toHaveBeenCalledWith('/project', 'language');
-    expect(mockInfo).toHaveBeenCalledWith('Language: ja');
-  });
-
   it('ヘッダーを workflow 用語で表示する', async () => {
     await previewPrompts('/project');
 

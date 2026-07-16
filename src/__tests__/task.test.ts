@@ -777,6 +777,24 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(store.updateCalls).toBe(0);
   });
 
+  it('should treat zero max auto-requeue attempts as disabled', () => {
+    writeTasksFile(testDir, [createFailedRecord({})]);
+
+    const result = (runner as AutoRequeueCapableRunner).autoRequeueFailedTask('task-a', {
+      maxAttempts: 0,
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(result).toEqual({
+      requeued: false,
+      attempt: 0,
+      maxAttempts: 0,
+      reason: 'disabled',
+    });
+    expect(file.tasks[0]?.status).toBe('failed');
+    expect(file.tasks[0]?.auto_requeue_count).toBeUndefined();
+  });
+
   it('should not auto-requeue failed tasks without a failed step', () => {
     writeTasksFile(testDir, [
       createFailedRecord({

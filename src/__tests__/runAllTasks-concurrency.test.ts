@@ -722,6 +722,54 @@ describe('runAllTasks concurrency', () => {
       expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
     });
 
+    it('should stop auto-requeueing and report failure when max attempts are reached', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+        autoRequeueMaxAttempts: 1,
+      });
+      const task1 = createTask('config-auto-requeue-exhausted-task');
+      const requeuedTask = createTask('config-auto-requeue-exhausted-task');
+
+      mockAutoRequeueFailedTask
+        .mockReturnValueOnce({
+          requeued: true,
+          attempt: 1,
+          maxAttempts: 1,
+          reason: 'requeued',
+        })
+        .mockReturnValueOnce({
+          requeued: false,
+          attempt: 1,
+          maxAttempts: 1,
+          reason: 'max_attempts_reached',
+        });
+      mockExecuteWorkflow
+        .mockResolvedValueOnce({ success: false })
+        .mockResolvedValueOnce({ success: false });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([requeuedTask])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockAutoRequeueFailedTask).toHaveBeenCalledTimes(2);
+      expect(mockAutoRequeueFailedTask).toHaveBeenNthCalledWith(
+        2,
+        'config-auto-requeue-exhausted-task',
+        { maxAttempts: 1 },
+      );
+      expect(mockFailTask).toHaveBeenCalledTimes(2);
+      expect(mockCompleteTask).not.toHaveBeenCalled();
+      expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
+    });
+
     it('should pass autoStrategy to executeWorkflow when provider is resolved from config', async () => {
       const task1 = createTask('auto-strategy-task');
 
