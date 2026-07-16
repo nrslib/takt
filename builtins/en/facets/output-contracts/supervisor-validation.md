@@ -1,7 +1,7 @@
 ```markdown
 # Final Validation Results
 
-## Result: APPROVE / REJECT
+## Result: APPROVE / REJECT / BLOCKED
 
 ## Requirements Fulfillment Check
 
@@ -9,12 +9,13 @@ Extract requirements from the task spec and verify each one individually against
 
 | # | Decomposed requirement | Original Requirement Source | Met | Evidence (file:line) | Exception / Optionalization Evidence |
 |---|------------------------|-----------------------------|-----|----------------------|------------------------------------|
-| 1 | {requirement 1} | `order.md:10` | ✅/❌ | `src/file.ts:42` | none |
-| 2 | {requirement 2} | `order.md:11` | ✅/❌ | `src/file.ts:55` | none |
+| 1 | {requirement 1} | `order.md:10` | ✅/❌/unverified | `src/file.ts:42` | none |
+| 2 | {requirement 2} | `order.md:11` | ✅/❌/unverified | `src/file.ts:55` | none |
 
 - If a sentence contains multiple conditions, split it into the smallest independently verifiable rows
 - Do not combine parallel conditions such as `A/B`, `global/project`, `JSON/leaf`, `allow/deny`, or `read/write` into one row
 - If any ❌ exists, REJECT is mandatory
+- When environmental constraints prevent obtaining evidence, use `unverified`, record the verification blocker, and return BLOCKED
 - ✅ without evidence is invalid (must verify against actual code)
 - Do not mark a row as ✅ when the evidence covers only part of the cases
 - Treat optionalization, exclusion, or exception not present in the task spec as unmet
@@ -59,7 +60,12 @@ Extract requirements from the task spec and verify each one individually against
 ## Unverified Scope
 | Item | Impact | Treatment |
 |------|--------|-----------|
-| {Unverified scope, or "none"} | {Primary or supporting requirement} | APPROVE allowed / REJECT reason |
+| {Unverified scope, or "none"} | {Primary or supporting requirement} | APPROVE allowed / REJECT reason / BLOCKED reason |
+
+## Verification Blocker (BLOCKED only)
+| Required check | Command | Observed result | Required environment | Actual environment | runtime.prepare | Why task-scope code cannot resolve it |
+|----------------|---------|-----------------|----------------------|--------------------|-----------------|---------------------------------------|
+| {Check} | `{command}` | {Actual error} | {Required runtime and version} | {Available runtime and version} | {Configuration and result or why unavailable} | {Evidence that the cause is outside task scope} |
 
 ## Current Iteration Findings (new)
 | # | finding_id | Item | Evidence | Reason | Required Action |

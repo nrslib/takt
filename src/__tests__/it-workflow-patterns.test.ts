@@ -273,6 +273,27 @@ describe('Workflow Patterns IT: default workflow (parallel reviewers)', () => {
 
     expect(state.status).toBe('completed');
   });
+
+  it('should abort when final verification is blocked by the environment', async () => {
+    const config = loadWorkflow('default', testDir);
+
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementable' },
+      { persona: 'coder', status: 'done', content: 'Tests written successfully' },
+      { persona: 'coder', status: 'done', content: 'Implementation complete' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
+      { persona: 'architecture-reviewer', status: 'done', content: 'approved' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },
+      { persona: 'coding-reviewer', status: 'done', content: 'approved' },
+      { persona: 'merge-readiness-reviewer', status: 'done', content: 'approved' },
+      { persona: 'supervisor', status: 'done', content: 'BLOCKED' },
+    ]);
+
+    const engine = createEngine(config!, testDir, 'Environment-blocked task');
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+  });
 });
 
 describe('Workflow Patterns IT: default workflow (write_tests skip path)', () => {
@@ -308,6 +329,36 @@ describe('Workflow Patterns IT: default workflow (write_tests skip path)', () =>
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
+  });
+});
+
+describe('Workflow Patterns IT: mini workflow environment blocker', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    testDir = createTestDir();
+  });
+
+  afterEach(() => {
+    resetScenario();
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should prioritize supervisor BLOCKED over a parallel review finding', async () => {
+    const config = loadWorkflow('frontend-mini', testDir);
+
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: 'Requirements are clear and implementation is possible' },
+      { persona: 'coder', status: 'done', content: 'Implementation complete' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: 'AI-specific issues found' },
+      { persona: 'supervisor', status: 'done', content: 'BLOCKED' },
+    ]);
+
+    const engine = createEngine(config!, testDir, 'Environment-blocked mini task');
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
   });
 });
 

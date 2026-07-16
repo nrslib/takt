@@ -33,6 +33,13 @@ Procedure:
 7. Extract diff-introduced contracts that are not visible in the requirements table
    - Metadata, source, trace, adapters, public tool contracts, and identifiers that are persisted, displayed, or reused must be checked as independent items even when absent from the original requirement
 
+## Verification blocked by the environment
+
+- Use BLOCKED only when required tests, builds, or runtime checks cannot run because of the environment and task-scope code changes cannot resolve the cause
+- Before returning BLOCKED, verify the command, actual error, required runtime, actual runtime, and the `runtime.prepare` configuration and result or why it cannot be used
+- Use REJECT instead of BLOCKED for implementation defects, invalid dependency declarations, checks that were merely skipped, or problems fixable within the task scope
+- Do not approve unverified scope or create `summary` when returning BLOCKED
+
 ## Report Priority (supervise-specific)
 
 - Do not treat summary reports as primary evidence. Use execution-result reports, reviewer reports with concrete verification details, and actual code in that order

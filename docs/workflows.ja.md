@@ -449,6 +449,10 @@ workflow_config:
     prepare: [node, gradle, ./custom-script.sh]
 ```
 
+`node` / `gradle` プリセットはキャッシュと一時ディレクトリを分離しますが、ランタイムのインストールやバージョン選択は行いません。カスタムスクリプトは `KEY=value` または `export KEY=value` を標準出力へ書くことで、`PATH` を含む環境変数を後続の provider 実行へ渡せます。
+
+`runtime.prepare` を設定しても、タスク範囲のコード変更では解消できない環境要因により必須の検証を実行できない場合、組み込みの supervise workflow は `BLOCKED` として中断します。検証不能を実装不具合として修正ループへ戻しません。
+
 ### `loop_monitors`
 
 step 間の循環パターン（例: `review` → `fix` → `review` の無限ループ）を検出し、進捗があるかを AI に判定させます。
