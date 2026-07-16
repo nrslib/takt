@@ -45,16 +45,18 @@ import {
 } from './OpenCodeStreamHandler.js';
 import {
   OpenCodeToolGuard,
-  buildEditConflictCorrectionPrompt,
+  buildToolGuardCorrectionPrompt,
   buildToolGuardRetryPrompt,
   clearToolGuardPendingCorrection,
   createToolGuardRecoveryState,
   markToolGuardCorrectionPending,
   markToolGuardFreshSessionUsed,
-  shouldIssueEditConflictCorrection,
+  shouldIssueToolGuardCorrection,
   type ToolGuardFailure,
+  type ToolGuardRecoverableFailure,
 } from './tool-guard.js';
 import {
+  STRUCTURED_OUTPUT_TOOL_NAME,
   buildFormatlessStructuredPrompt,
   createStructuredOutputRecoveryState,
   degradeToFormatless,
@@ -64,12 +66,10 @@ import {
   shouldRecoverStaleSession,
 } from './structured-output-recovery.js';
 import {
-  buildUnavailableToolRetryPrompt,
-  createUnavailableToolRecoveryState,
-  markUnavailableToolRecoveryUsed,
   parseServerAvailableTools,
-  shouldRecoverUnavailableToolLoop,
 } from './unavailable-tool-recovery.js';
+import { createOpenCodeSessionLifecycle } from './session-lifecycle.js';
+import type { OpenCodeSessionLifecycle } from './session-lifecycle.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import { isSensitiveKeyName, sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { versionAllowsListToolShim } from './list-tool-shim-guard.js';
@@ -299,6 +299,7 @@ const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_RETRY_MAX_ATTEMPTS = 3;
 const OPENCODE_RETRY_BASE_DELAY_MS = 250;
 const OPENCODE_INTERACTION_TIMEOUT_MS = 5000;
+const OPENCODE_SESSION_ABORT_TIMEOUT_MS = 5000;
 const OPENCODE_SERVER_START_TIMEOUT_MS = 60000;
 const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
   'stream disconnected before completion',
@@ -316,12 +317,35 @@ type OpencodeClient = Awaited<ReturnType<typeof createOpencode>>['client'];
 type OpenCodeSessionSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient['session']['get']>>['data']>;
 type OpenCodeAbortCause = 'timeout' | 'external' | 'prompt';
 
+function toRecoverableToolGuardFailure(
+  failure: ToolGuardFailure | undefined,
+): ToolGuardRecoverableFailure | undefined {
+  if (failure?.kind === 'unavailable_tool_loop' && failure.tool === STRUCTURED_OUTPUT_TOOL_NAME) {
+    return undefined;
+  }
+  if (
+    failure?.kind === 'unavailable_tool_loop'
+    || failure?.kind === 'invalid_argument_loop'
+    || failure?.kind === 'edit_conflict_loop'
+    || failure?.kind === 'tool_error_burst'
+  ) {
+    return failure;
+  }
+  return undefined;
+}
+
+function getToolGuardFailureFingerprint(failure: ToolGuardRecoverableFailure): string {
+  return failure.kind === 'edit_conflict_loop' ? failure.signature : failure.fingerprint;
+}
+
 interface SharedServer {
+  key: string;
   client: OpencodeClient;
   close: () => void;
   model: string;
   apiKey?: string;
   busy: boolean;
+  invalidated: boolean;
   queue: SharedServerQueueEntry[];
 }
 
@@ -332,6 +356,13 @@ interface SharedServerQueueEntry {
   signal?: AbortSignal;
 }
 
+class OpenCodeSharedServerInvalidationError extends Error {
+  constructor(error: Error) {
+    super(error.message);
+    this.name = 'OpenCodeSharedServerInvalidationError';
+  }
+}
+
 interface SharedServerEntry {
   server?: SharedServer;
   initPromise?: Promise<SharedServer>;
@@ -340,6 +371,7 @@ interface SharedServerEntry {
 interface AcquiredOpenCodeClient {
   client: OpencodeClient;
   release: () => void;
+  invalidate: (error: Error) => void;
 }
 
 const sharedServers = new Map<string, SharedServerEntry>();
@@ -364,7 +396,7 @@ async function acquireClient(
     return acquireSharedServer(entry.server, abortSignal);
   }
 
-  entry.initPromise = createSharedServer(model, apiKey, childProcessEnv)
+  entry.initPromise = createSharedServer(key, model, apiKey, childProcessEnv)
     .then((server) => {
       entry.server = server;
       return server;
@@ -398,6 +430,7 @@ function getSharedServerEntry(key: string): SharedServerEntry {
 }
 
 async function createSharedServer(
+  key: string,
   model: string,
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
@@ -466,7 +499,7 @@ async function createSharedServer(
   };
 
   log.debug('OpenCode server started', { model, port });
-  return { client, close: closeServer, model, apiKey, busy: false, queue: [] };
+  return { key, client, close: closeServer, model, apiKey, busy: false, invalidated: false, queue: [] };
 }
 
 function acquireSharedServer(
@@ -474,9 +507,12 @@ function acquireSharedServer(
   abortSignal?: AbortSignal,
 ): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
+  if (server.invalidated) {
+    throw new Error('OpenCode shared server is unavailable');
+  }
   if (!server.busy) {
     server.busy = true;
-    return { client: server.client, release: createReleaseHandle(server) };
+    return createAcquiredClient(server);
   }
 
   return new Promise((resolve, reject) => {
@@ -617,12 +653,15 @@ export async function getOpenCodeSessionMessages(
 }
 
 function releaseClient(server: SharedServer): void {
+  if (server.invalidated) {
+    return;
+  }
   const next = server.queue.shift();
   if (next) {
     if (next.signal && next.onAbort) {
       next.signal.removeEventListener('abort', next.onAbort);
     }
-    next.resolve({ client: server.client, release: createReleaseHandle(server) });
+    next.resolve(createAcquiredClient(server));
     return;
   }
   server.busy = false;
@@ -671,6 +710,33 @@ function createReleaseHandle(server: SharedServer): () => void {
     released = true;
     releaseClient(server);
   };
+}
+
+function createAcquiredClient(server: SharedServer): AcquiredOpenCodeClient {
+  return {
+    client: server.client,
+    release: createReleaseHandle(server),
+    invalidate: (error) => invalidateSharedServer(server, error),
+  };
+}
+
+function invalidateSharedServer(server: SharedServer, error: Error): void {
+  if (server.invalidated) {
+    return;
+  }
+  server.invalidated = true;
+  if (sharedServers.get(server.key)?.server === server) {
+    sharedServers.delete(server.key);
+  }
+  server.close();
+  const queueError = new OpenCodeSharedServerInvalidationError(error);
+  for (const queued of server.queue) {
+    if (queued.signal && queued.onAbort) {
+      queued.signal.removeEventListener('abort', queued.onAbort);
+    }
+    queued.reject(queueError);
+  }
+  server.queue = [];
 }
 
 export function resetSharedServer(): void {
@@ -1111,10 +1177,6 @@ export class OpenCodeClient {
     // 是正リトライ）へフォールバックする。劣化後は汚染されたセッションを
     // 引きずらないよう fresh session を強制する（structured-output-recovery.ts）。
     let recoveryState = createStructuredOutputRecoveryState(options.outputSchema !== undefined);
-    // 幻覚ツール名（存在しない 'run' 等）の連続呼び出しで止まった場合の
-    // 一般 recovery。structured-output 側とは病因が違うため予算も状態も独立
-    // （unavailable-tool-recovery.ts）。
-    let unavailableToolRecovery = createUnavailableToolRecoveryState();
     // tool ガード（進捗感知型 burst / edit conflict / 絶対コスト上限）。
     // call() 全体で1インスタンス: 絶対台帳は attempt / recovery をまたいで
     // 引き継ぎ、attempt 開始時に短期カウンタだけをリセットする。
@@ -1138,15 +1200,16 @@ export class OpenCodeClient {
       let diagRef: StreamDiagnostics | undefined;
       let release: (() => void) | undefined;
       let opencodeApiClient: OpencodeClient | undefined;
+      let sessionLifecycle: OpenCodeSessionLifecycle | undefined;
       const structuredAttemptPlan = planStructuredOutputAttempt(recoveryState, hasInitialSessionId);
-      // unavailable-tool recovery 後の attempt も fresh session を強制する。
-      // plan の sessionMode を実態に合わせて上書きしておかないと、後段の
+      // tool-guard fresh recovery 後の attempt は fresh session を強制する。
+      // plan の sessionMode を実態に合わせないと、後段の
       // stale StructuredOutput 判定（plan.sessionMode === 'resume' が条件）が
       // 「fresh なのに resume 扱い」で誤発動し、救済の連鎖で attempt が増える。
-      const attemptPlan = unavailableToolRecovery.used || toolGuardRecovery.freshSessionUsed
+      const attemptPlan = toolGuardRecovery.freshSessionUsed
         ? { ...structuredAttemptPlan, sessionMode: 'fresh' as const }
         : structuredAttemptPlan;
-      // edit conflict の correction attempt は直前の attempt のセッションを再開する
+      // tool-loop correction attempt は直前の attempt のセッションを再開する
       // （同一セッション内で1回だけの是正指示 — tool-guard.ts 参照）。
       const pendingToolGuardCorrection = toolGuardRecovery.pendingCorrection;
       if (pendingToolGuardCorrection !== undefined) {
@@ -1273,6 +1336,13 @@ export class OpenCodeClient {
         if (activeSessionId === undefined) {
           throw new Error('OpenCode session ID is required');
         }
+        sessionLifecycle = createOpenCodeSessionLifecycle({
+          client: opencodeApiClient,
+          sessionId: activeSessionId,
+          directory: options.cwd,
+          abortTimeoutMs: OPENCODE_SESSION_ABORT_TIMEOUT_MS,
+          invalidateServer: acquired.invalidate,
+        });
 
         const { stream } = await opencodeApiClient.event.subscribe(
           { directory: options.cwd },
@@ -1310,29 +1380,16 @@ export class OpenCodeClient {
         const basePromptText = attemptPlan.structuredMode === 'formatless' && options.outputSchema !== undefined
           ? buildFormatlessStructuredPrompt(prompt, options.outputSchema)
           : prompt;
-        // unavailable-tool recovery 後の attempt は、さらに再試行前置文
-        // （幻覚ツール名の指摘・有効ツール一覧・workspace 継続の警告）で包む。
-        // 有効ツール一覧は**サーバ申告**（エラー文の "Available tools: ..."）を
-        // 正とし、取れない場合のみ promptTools（buildOpenCodePromptTools() の
-        // 結果、ワイヤ専用 ID 除外済み）へフォールバックする。写像由来の一覧が
-        // 実在しない 'list' を「利用可能」と再誘導した v3-r4 の再発防止。
-        const unavailableWrappedPromptText = unavailableToolRecovery.used && unavailableToolRecovery.tool !== undefined
-          ? buildUnavailableToolRetryPrompt(
-              basePromptText,
-              unavailableToolRecovery.tool,
-              unavailableToolRecovery.serverAvailableTools,
-            )
-          : basePromptText;
         // tool-guard recovery の attempt:
         // - correction: 同一セッション再開なので元プロンプトは再送しない
         //   （セッションに文脈がある）。是正指示だけを送る。
-        // - fresh session: unavailable-tool recovery と同じ機構で、workspace の
+        // - fresh session: workspace の
         //   途中成果・上書き禁止・再読込を明記した前置文で元プロンプトを包む。
         const promptText = pendingToolGuardCorrection !== undefined
-          ? buildEditConflictCorrectionPrompt(pendingToolGuardCorrection.filePath)
+          ? pendingToolGuardCorrection.prompt
           : toolGuardRecovery.freshSessionUsed && toolGuardRecovery.freshReason !== undefined
-            ? buildToolGuardRetryPrompt(unavailableWrappedPromptText, toolGuardRecovery.freshReason)
-            : unavailableWrappedPromptText;
+            ? buildToolGuardRetryPrompt(basePromptText, toolGuardRecovery.freshReason)
+            : basePromptText;
         const promptPayload: Record<string, unknown> = {
           sessionID: activeSessionId,
           directory: options.cwd,
@@ -1349,6 +1406,7 @@ export class OpenCodeClient {
           parts: [{ type: 'text' as const, text: promptText }],
         };
         const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];
+        sessionLifecycle.markPromptSent();
         promptCompletion = opencodeApiClient.session.promptAsync(promptPayloadForSdk, {
           signal: streamAbortController.signal,
         }).catch((error) => {
@@ -1376,6 +1434,7 @@ export class OpenCodeClient {
         // ID が変わったときだけ tool-guard 内でリセットされる。
         toolGuard.resetSessionCounters(activeSessionId);
         let toolGuardFailure: ToolGuardFailure | undefined;
+        let idleConfirmed = false;
         const echoState = { remainingPrompts: buildPromptEchoCandidates(promptText, options.systemPrompt) };
         const textOffsets = new Map<string, number>();
         const textContentParts = new Map<string, string>();
@@ -1437,18 +1496,16 @@ export class OpenCodeClient {
           const event = iteration.value;
 
           const sseEvent = event as OpenCodeStreamEvent;
-          // セッション帰属が判明していて自分でないイベントは処理しない。
+          // active session への帰属を確認できないイベントは処理しない。
           // サーバプールは同一モデルで共有されるため（並列レビュー等）、
           // 兄弟セッションの text/tool 更新を通すと content と検出器が
-          // 汚染される。帰属不明のイベントは種別ごとの処理に委ねるが、
-          // 無音検出のリセット（延命）は自セッションのイベントに限る。
+          // 汚染される。帰属不明のイベントも状態変更や無音検出の延命には
+          // 使わない。
           const eventSessionId = extractEventSessionId(sseEvent);
-          if (eventSessionId !== undefined && eventSessionId !== activeSessionId) {
+          if (eventSessionId !== activeSessionId) {
             continue;
           }
-          if (eventSessionId === activeSessionId) {
-            resetIdleTimeout();
-          }
+          resetIdleTimeout();
           diag.onFirstEvent(sseEvent.type);
           diag.onEvent(sseEvent.type);
           if (sseEvent.type === 'message.part.updated') {
@@ -1754,6 +1811,8 @@ export class OpenCodeClient {
               status?: { type?: string };
             };
             if (statusProps.sessionID === activeSessionId && statusProps.status?.type === 'idle') {
+              idleConfirmed = true;
+              sessionLifecycle.confirmIdle();
               break;
             }
             continue;
@@ -1762,6 +1821,8 @@ export class OpenCodeClient {
           if (sseEvent.type === 'session.idle') {
             const idleProps = sseEvent.properties as { sessionID: string };
             if (idleProps.sessionID === activeSessionId) {
+              idleConfirmed = true;
+              sessionLifecycle.confirmIdle();
               break;
             }
             continue;
@@ -1772,7 +1833,7 @@ export class OpenCodeClient {
               sessionID?: string;
               error?: unknown;
             };
-            if (!errorProps.sessionID || errorProps.sessionID === activeSessionId) {
+            if (errorProps.sessionID === activeSessionId) {
               success = false;
               failureMessage = extractOpenCodeErrorMessage(errorProps.error) ?? 'OpenCode session error';
               diag.onStreamError('session.error', failureMessage);
@@ -1798,13 +1859,18 @@ export class OpenCodeClient {
           failureMessage = abortCause === 'timeout' ? timeoutMessage : OPENCODE_STREAM_ABORTED_MESSAGE;
         }
 
+        if (success && !idleConfirmed) {
+          success = false;
+          failureMessage = 'OpenCode stream ended before the session became idle';
+        }
+
         content = [...textContentParts.values()].join('\n');
         if (!success && !streamAbortController.signal.aborted) {
           streamAbortController.abort();
         }
         await awaitPromptCompletion();
         if (promptError !== undefined) {
-          if (success) {
+          if (success || abortCause === 'prompt') {
             success = false;
             failureMessage = promptError;
           } else if (!failureMessage) {
@@ -1814,7 +1880,20 @@ export class OpenCodeClient {
         diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
 
         if (!success) {
-          const message = failureMessage || 'OpenCode execution failed';
+          let message = failureMessage || 'OpenCode execution failed';
+          const stopResult = await sessionLifecycle.stopServerSessionOnce();
+          if (!stopResult.ok) {
+            message = stopResult.error.message;
+            emitResult(options.onStream, false, message, activeSessionId);
+            return {
+              persona: agentType,
+              status: 'error',
+              content: message,
+              error: message,
+              timestamp: new Date(),
+              sessionId: activeSessionId,
+            };
+          }
           // 無音タイムアウトで止めた場合、死因はサーバが握った 429 かもしれない。
           // メッセージ文字列だけでは判別できないため、セッションを検死する。
           if (
@@ -1889,76 +1968,44 @@ export class OpenCodeClient {
             continue;
           }
 
-          // A general unavailable-tool loop: the model kept calling a tool name
-          // that does not exist (hallucinated 'run' etc.) until the detector's
-          // threshold of 2 fired. Retry the same prompt once in a fresh session
-          // with a retry preamble (hallucinated name, valid tool list, workspace
-          // continuation warning). StructuredOutput is deliberately excluded —
-          // its only rescue path is the stricter stale-session branch above.
+          const recoverableToolFailure = toRecoverableToolGuardFailure(toolGuardFailure);
           if (
-            unavailableLoopToolName !== undefined
-            && shouldRecoverUnavailableToolLoop(unavailableToolRecovery, unavailableLoopToolName)
-          ) {
-            unavailableToolRecovery = markUnavailableToolRecoveryUsed(
-              unavailableToolRecovery,
-              unavailableLoopToolName,
-              unavailableLoopServerTools,
-            );
-            maxAttempts = Math.max(maxAttempts, attempt + 1);
-            log.debug('OpenCode unavailable tool loop detected; retrying prompt once in a fresh session with a retry preamble', {
-              agentType,
-              previousAttempt: attempt,
-              previousSessionId: activeSessionId,
-              tool: unavailableLoopToolName,
-            });
-            await this.waitForRetryDelay(attempt, options.abortSignal);
-            continue;
-          }
-
-          // edit_conflict_loop: 同一セッション内 correction（対象再読込・同一
-          // oldString 反復禁止・必要なら write、の是正指示）。署名を照合する:
-          // correction 済み署名の再発は「correction 失敗」として下の fresh へ
-          // escalate し、別署名の新規 conflict は自身の correction 段階から
-          // 始める（コール全体の correction 回数上限内で）。
-          if (
-            toolGuardFailure?.kind === 'edit_conflict_loop'
-            && shouldIssueEditConflictCorrection(toolGuardRecovery, toolGuardFailure.signature)
-            && activeSessionId !== undefined
+            recoverableToolFailure !== undefined
+            && !toolGuardRecovery.freshSessionUsed
+            && shouldIssueToolGuardCorrection(
+              toolGuardRecovery,
+              getToolGuardFailureFingerprint(recoverableToolFailure),
+            )
           ) {
             toolGuardRecovery = markToolGuardCorrectionPending(
               toolGuardRecovery,
               activeSessionId,
-              toolGuardFailure.filePath,
-              toolGuardFailure.signature,
+              getToolGuardFailureFingerprint(recoverableToolFailure),
+              buildToolGuardCorrectionPrompt(recoverableToolFailure, unavailableLoopServerTools),
             );
             toolGuard.noteRecovery();
             maxAttempts = Math.max(maxAttempts, attempt + 1);
-            log.debug('OpenCode edit conflict loop detected; sending one in-session correction', {
+            log.debug('OpenCode tool loop detected; sending one in-session correction', {
               agentType,
               previousAttempt: attempt,
               sessionId: activeSessionId,
-              signature: toolGuardFailure.signature.slice(0, 12),
+              kind: recoverableToolFailure.kind,
+              fingerprint: getToolGuardFailureFingerprint(recoverableToolFailure).slice(0, 12),
               toolHealth: toolGuard.stats(),
             });
             await this.waitForRetryDelay(attempt, options.abortSignal);
             continue;
           }
 
-          // correction 済み署名の再発（correction 失敗）・correction 上限超過後の
-          // 新規 conflict・tool_error_burst: fresh session recovery を最大1回
-          //（すべてで合計1回を共有）。
-          if (
-            (toolGuardFailure?.kind === 'edit_conflict_loop' || toolGuardFailure?.kind === 'tool_error_burst')
-            && !toolGuardRecovery.freshSessionUsed
-          ) {
-            toolGuardRecovery = markToolGuardFreshSessionUsed(toolGuardRecovery, toolGuardFailure.kind);
+          if (recoverableToolFailure !== undefined && !toolGuardRecovery.freshSessionUsed) {
+            toolGuardRecovery = markToolGuardFreshSessionUsed(toolGuardRecovery, recoverableToolFailure.kind);
             toolGuard.noteRecovery();
             maxAttempts = Math.max(maxAttempts, attempt + 1);
             log.debug('OpenCode tool guard failure; retrying prompt once in a fresh session with a continuation preamble', {
               agentType,
               previousAttempt: attempt,
               previousSessionId: activeSessionId,
-              reason: toolGuardFailure.kind,
+              reason: recoverableToolFailure.kind,
               toolHealth: toolGuard.stats(),
             });
             await this.waitForRetryDelay(attempt, options.abortSignal);
@@ -1977,14 +2024,14 @@ export class OpenCodeClient {
             continue;
           }
 
-          if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed || unavailableToolRecovery.used) {
+          if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed || toolGuardRecovery.freshSessionUsed) {
             log.debug('OpenCode recovery attempt finished', {
               agentType,
               attempt,
               sessionId: activeSessionId,
               nativeDegraded: recoveryState.nativeDegraded,
               staleSessionRecoveryUsed: recoveryState.staleSessionRecoveryUsed,
-              unavailableToolRecoveryUsed: unavailableToolRecovery.used,
+              toolGuardFreshSessionUsed: toolGuardRecovery.freshSessionUsed,
               outcome: 'error',
               message,
             });
@@ -2006,14 +2053,14 @@ export class OpenCodeClient {
           };
         }
 
-        if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed || unavailableToolRecovery.used) {
+        if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed || toolGuardRecovery.freshSessionUsed) {
           log.debug('OpenCode recovery attempt finished', {
             agentType,
             attempt,
             sessionId: activeSessionId,
             nativeDegraded: recoveryState.nativeDegraded,
             staleSessionRecoveryUsed: recoveryState.staleSessionRecoveryUsed,
-            unavailableToolRecoveryUsed: unavailableToolRecovery.used,
+            toolGuardFreshSessionUsed: toolGuardRecovery.freshSessionUsed,
             outcome: 'success',
           });
         }
@@ -2052,14 +2099,35 @@ export class OpenCodeClient {
           debugInfo: { toolHealth: successToolHealth },
         };
       } catch (error) {
+        if (error instanceof OpenCodeSharedServerInvalidationError) {
+          const errorMessage = error.message;
+          diagRef?.onCompleted('error', errorMessage);
+          if (sessionId) {
+            emitResult(options.onStream, false, errorMessage, sessionId);
+          }
+          return {
+            persona: agentType,
+            status: 'error',
+            content: errorMessage,
+            error: errorMessage,
+            timestamp: new Date(),
+            sessionId,
+          };
+        }
+
         const message = getErrorMessage(error);
-        const errorMessage = streamAbortController.signal.aborted
+        let errorMessage = streamAbortController.signal.aborted
           ? abortCause === 'timeout'
             ? timeoutMessage
             : abortCause === 'prompt' && promptError !== undefined
               ? promptError
               : OPENCODE_STREAM_ABORTED_MESSAGE
           : message;
+
+        const stopResult = await sessionLifecycle?.stopServerSessionOnce();
+        if (stopResult !== undefined && !stopResult.ok) {
+          errorMessage = stopResult.error.message;
+        }
 
         if (containsRateLimitError(errorMessage)) {
           const rateLimitedResponse = this.buildRateLimitedResponse(agentType, sessionId, errorMessage);
@@ -2074,7 +2142,8 @@ export class OpenCodeClient {
           errorMessage,
         );
 
-        const retriable = this.isRetriableError(errorMessage, streamAbortController.signal.aborted, abortCause);
+        const retriable = (stopResult === undefined || stopResult.ok)
+          && this.isRetriableError(errorMessage, streamAbortController.signal.aborted, abortCause);
         if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
           log.info('Retrying OpenCode call after transient exception', { agentType, attempt, errorMessage });
           await this.waitForRetryDelay(attempt, options.abortSignal);
@@ -2104,6 +2173,13 @@ export class OpenCodeClient {
           streamAbortController.abort();
         }
         await awaitPromptCompletion();
+        const stopResult = await sessionLifecycle?.stopServerSessionOnce();
+        if (stopResult !== undefined && !stopResult.ok) {
+          log.warn('OpenCode server session could not be stopped; shared server invalidated', {
+            sessionId,
+            error: stopResult.error.message,
+          });
+        }
         release?.();
       }
     }

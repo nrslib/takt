@@ -4,7 +4,8 @@
  *
  * - edit_conflict_loop → 同一セッション内 correction 1回 → 再発で fresh session
  *   recovery 1回 → done
- * - tool_error_burst → fresh session 1回 → 再発で即失敗（recovery 消費後）
+ * - tool_error_burst → 同一セッション内 correction 1回 → 再発で fresh session
+ *   recovery 1回 → 再発で即失敗
  * - absolute_cost_limit → 即失敗（recovery なし）
  */
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,10 +15,14 @@ type MockStreamEvent = Record<string, unknown>;
 let runPlans: MockStreamEvent[][] = [];
 let runPlanIndex = 0;
 
-function createEvents(events: MockStreamEvent[]) {
+function createEvents(events: MockStreamEvent[], sessionId: string) {
   return (async function* () {
     for (const event of events) {
-      yield event;
+      const properties = event.properties;
+      if (typeof properties !== 'object' || properties === null || Array.isArray(properties)) {
+        throw new Error('Mock OpenCode event properties are required');
+      }
+      yield { ...event, properties: { ...properties, sessionID: sessionId } };
     }
   })();
 }
@@ -52,31 +57,37 @@ const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/cl
 let sessionSeq = 0;
 
 function installOpenCodeMock() {
+  let activeSessionId: string | undefined;
   const sessionCreate = vi.fn().mockImplementation(async () => {
     sessionSeq += 1;
-    return { data: { id: `session-${sessionSeq}` } };
+    activeSessionId = `session-${sessionSeq}`;
+    return { data: { id: activeSessionId } };
   });
   const promptAsync = vi.fn().mockResolvedValue(undefined);
+  const abort = vi.fn().mockResolvedValue({ data: true });
   const subscribe = vi.fn().mockImplementation(async () => {
     const plan = runPlans[runPlanIndex];
     runPlanIndex += 1;
     if (!plan) {
       throw new Error(`Missing run plan for attempt ${runPlanIndex}`);
     }
-    return { stream: createEvents(plan) };
+    if (activeSessionId === undefined) {
+      throw new Error('OpenCode session must be created before subscribing');
+    }
+    return { stream: createEvents(plan, activeSessionId) };
   });
 
   createOpencodeMock.mockResolvedValue({
     client: {
       instance: { dispose: vi.fn() },
-      session: { create: sessionCreate, promptAsync },
+      session: { create: sessionCreate, promptAsync, abort },
       event: { subscribe },
       permission: { reply: vi.fn() },
     },
     server: { close: vi.fn() },
   });
 
-  return { sessionCreate, promptAsync, subscribe };
+  return { sessionCreate, promptAsync, abort, subscribe };
 }
 
 let toolCallSeq = 0;
@@ -150,7 +161,10 @@ function invalidCompletedToolEvent(): MockStreamEvent {
         callID: `tc-${toolCallSeq}`,
         state: {
           status: 'completed',
-          input: { tool: 'read', error: "Required argument 'filePath' is missing or invalid" },
+          input: {
+            tool: 'read',
+            error: `Required argument 'filePath' is missing or invalid (variant ${'x'.repeat(toolCallSeq)})`,
+          },
           output: 'OpenCode rejected the tool call',
           title: 'invalid',
         },
@@ -212,14 +226,15 @@ describe('OpenCodeClient tool guard recovery', () => {
 
   it('completed invalid は成功台帳へ入れず既存の引数エラー検出へ流れる', async () => {
     process.env.TAKT_OPENCODE_TOOL_SUCCESS_REPEATS = '2';
-    runPlans = [[
+    const invalidLoop = () => [
       invalidCompletedToolEvent(),
       invalidCompletedToolEvent(),
       invalidCompletedToolEvent(),
       invalidCompletedToolEvent(),
-    ]];
+    ];
+    runPlans = [invalidLoop(), invalidLoop(), invalidLoop()];
 
-    const { promptAsync } = installOpenCodeMock();
+    const { sessionCreate, promptAsync } = installOpenCodeMock();
     const client = new OpenCodeClient();
     const result = await client.call('coder', 'implement the task', {
       cwd: '/tmp',
@@ -229,7 +244,8 @@ describe('OpenCodeClient tool guard recovery', () => {
     expect(result.status).toBe('error');
     expect(result.error).toContain('invalid');
     expect(result.error).not.toContain('successful tool result loop');
-    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
   });
 
   it('同一 session の correction attempt をまたいで成功反復を数える', async () => {
@@ -397,15 +413,17 @@ describe('OpenCodeClient tool guard recovery', () => {
     expect(result.error).not.toContain('secret-looking source body ALPHA');
   });
 
-  it('tool_error_burst: fresh session 1回 → 再発で即失敗（needs_fix 等への迂回はしない）', async () => {
+  it('tool_error_burst: correction → fresh session → 再発で即失敗（needs_fix 等への迂回はしない）', async () => {
     runPlans = [
       // attempt1: 連続10エラー（559スピン型）→ burst。
       [...Array.from({ length: 10 }, (_, index) => genericErrorEvent(index))],
-      // attempt2 (fresh): また連続10エラー → burst 再発 → recovery 消費済みで失敗。
+      // attempt2 (correction): また連続10エラー → 同じ fingerprint の再発で fresh。
       [...Array.from({ length: 10 }, (_, index) => genericErrorEvent(index + 10))],
+      // attempt3 (fresh): 再発 → recovery 消費済みで失敗。
+      [...Array.from({ length: 10 }, (_, index) => genericErrorEvent(index + 20))],
     ];
 
-    const { promptAsync } = installOpenCodeMock();
+    const { sessionCreate, promptAsync } = installOpenCodeMock();
     const client = new OpenCodeClient();
     const result = await client.call('coder', 'implement the task', {
       cwd: '/tmp',
@@ -414,13 +432,19 @@ describe('OpenCodeClient tool guard recovery', () => {
 
     expect(result.status).toBe('error');
     expect(result.error).toContain('tool error burst');
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
     const call2 = promptAsync.mock.calls[1]?.[0] as { parts: Array<{ text: string }> };
-    expect(call2.parts[0]?.text).toContain('degraded into a burst');
+    const call3 = promptAsync.mock.calls[2]?.[0] as { parts: Array<{ text: string }> };
+    expect(call2.parts[0]?.text).toContain('tool calls are failing repeatedly');
+    expect(call2.parts[0]?.text).not.toContain('implement the task');
+    expect(call3.parts[0]?.text).toContain('degraded into a burst');
+    expect(call3.parts[0]?.text).toContain('implement the task');
 
     // 絶対台帳は recovery をまたいで維持されている。
-    const toolHealth = (result.debugInfo as { toolHealth?: { totalErrors: number } })?.toolHealth;
-    expect(toolHealth?.totalErrors).toBe(20);
+    const toolHealth = (result.debugInfo as { toolHealth?: { totalErrors: number; recoveriesUsed: number } })?.toolHealth;
+    expect(toolHealth?.totalErrors).toBe(30);
+    expect(toolHealth?.recoveriesUsed).toBe(2);
   });
 
   it('エラー文が oldString 本文を引用しても failureMessage（AgentResponse.error）に本文が現れない（codex 2巡目ブロッカー: エラー文経由の漏えい）', async () => {

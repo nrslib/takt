@@ -298,20 +298,17 @@ describe('OpenCodeToolGuard: 強い進捗とウィンドウ（codex ブロッカ
   });
 });
 
-describe('ToolGuardRecoveryState: correction の署名照合（codex ブロッカー2）', () => {
-  it('correction 済み署名の再発は不可、別署名は上限内で可、上限超過で不可', async () => {
-    const { createToolGuardRecoveryState, markToolGuardCorrectionPending, shouldIssueEditConflictCorrection } = await import('../infra/opencode/tool-guard.js');
+describe('ToolGuardRecoveryState: correction fingerprint の共有予算', () => {
+  it('種別をまたいでも同じ上限を使い、同じ fingerprint の correction は一度だけにする', async () => {
+    const { createToolGuardRecoveryState, markToolGuardCorrectionPending, shouldIssueToolGuardCorrection } = await import('../infra/opencode/tool-guard.js');
     let state = createToolGuardRecoveryState();
-    expect(shouldIssueEditConflictCorrection(state, 'sig-a')).toBe(true);
-    state = markToolGuardCorrectionPending(state, 'session-1', 'src/a.ts', 'sig-a');
-    // 同一署名の再発 = correction 失敗 → correction は再発行しない（fresh へ escalate）。
-    expect(shouldIssueEditConflictCorrection(state, 'sig-a')).toBe(false);
-    // 別署名の新規 conflict は自身の correction 段階から始める。
-    expect(shouldIssueEditConflictCorrection(state, 'sig-b')).toBe(true);
-    state = markToolGuardCorrectionPending(state, 'session-1', 'src/b.ts', 'sig-b');
-    // コール全体の上限（既定2）を消費し切ったら、新規署名でも correction しない。
+    expect(shouldIssueToolGuardCorrection(state, 'unavailable:run')).toBe(true);
+    state = markToolGuardCorrectionPending(state, 'session-1', 'unavailable:run', 'Use a valid tool.');
+    expect(shouldIssueToolGuardCorrection(state, 'unavailable:run')).toBe(false);
+    expect(shouldIssueToolGuardCorrection(state, 'invalid:read')).toBe(true);
+    state = markToolGuardCorrectionPending(state, 'session-1', 'invalid:read', 'Use valid arguments.');
     expect(state.correctionsUsed).toBe(2);
-    expect(shouldIssueEditConflictCorrection(state, 'sig-c')).toBe(false);
+    expect(shouldIssueToolGuardCorrection(state, 'edit:sig-c')).toBe(false);
   });
 });
 
@@ -351,6 +348,38 @@ describe('OpenCodeToolGuard: edit_conflict_loop', () => {
 });
 
 describe('OpenCodeToolGuard: 絶対コスト上限（recovery をまたぐ台帳）', () => {
+  it('unavailable detector と総エラー上限が同時成立したら absolute hard stop を優先する', () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '2';
+    const guard = new OpenCodeToolGuard();
+    const message = "Model tried to call unavailable tool 'run'";
+
+    expect(guard.observeError(nextCallId(), 'run', message)).toBeUndefined();
+    const failure = guard.observeError(nextCallId(), 'run', message);
+
+    expect(failure?.kind).toBe('absolute_cost_limit');
+    if (failure?.kind === 'absolute_cost_limit') {
+      expect(failure.stats.totalErrors).toBe(2);
+      expect(failure.stats.recoveriesUsed).toBe(0);
+    }
+  });
+
+  it('invalid-argument detector と総エラー上限が同時成立したら absolute hard stop を優先する', () => {
+    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '4';
+    const guard = new OpenCodeToolGuard();
+    const message = "Required argument 'filePath' is missing or invalid";
+    let failure: ToolGuardFailure | undefined;
+
+    for (let index = 0; index < 4; index += 1) {
+      failure = guard.observeError(nextCallId(), 'read', message);
+    }
+
+    expect(failure?.kind).toBe('absolute_cost_limit');
+    if (failure?.kind === 'absolute_cost_limit') {
+      expect(failure.stats.totalErrors).toBe(4);
+      expect(failure.stats.recoveriesUsed).toBe(0);
+    }
+  });
+
   it('エラー総数の絶対上限は resetSessionCounters()（fresh-session recovery）でリセットされない', () => {
     process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '12';
     const guard = new OpenCodeToolGuard();

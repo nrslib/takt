@@ -52,8 +52,8 @@ class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   private readonly events: unknown[];
   readonly returnSpy = vi.fn(async () => ({ done: true as const, value: undefined }));
 
-  constructor(events: unknown[]) {
-    this.events = events;
+  constructor(events: unknown[], sessionID: string | undefined) {
+    this.events = sessionID === undefined ? events : events.map((event) => withEventSessionId(event, sessionID));
   }
 
   [Symbol.asyncIterator](): AsyncGenerator<unknown, void, unknown> {
@@ -76,6 +76,39 @@ class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   async throw(e?: unknown): Promise<IteratorResult<unknown, void>> {
     throw e;
   }
+}
+
+function withEventSessionId(event: unknown, sessionID: string): unknown {
+  if (typeof event !== 'object' || event === null) {
+    return event;
+  }
+  const streamEvent = event as { type?: unknown; properties?: unknown };
+  if (typeof streamEvent.properties !== 'object' || streamEvent.properties === null) {
+    return event;
+  }
+  const properties = streamEvent.properties as Record<string, unknown>;
+  if (typeof properties.sessionID === 'string') {
+    return event;
+  }
+  if (streamEvent.type === 'message.part.updated') {
+    const part = properties.part;
+    if (typeof part === 'object' && part !== null) {
+      if (typeof (part as { sessionID?: unknown }).sessionID === 'string') {
+        return event;
+      }
+      return { ...streamEvent, properties: { ...properties, part: { ...part, sessionID } } };
+    }
+  }
+  if (streamEvent.type === 'message.updated' || streamEvent.type === 'message.completed' || streamEvent.type === 'message.failed') {
+    const info = properties.info;
+    if (typeof info === 'object' && info !== null) {
+      if (typeof (info as { sessionID?: unknown }).sessionID === 'string') {
+        return event;
+      }
+      return { ...streamEvent, properties: { ...properties, info: { ...info, sessionID } } };
+    }
+  }
+  return { ...streamEvent, properties: { ...properties, sessionID } };
 }
 
 class StallingEventStream implements AsyncGenerator<unknown, void, unknown> {
@@ -220,6 +253,24 @@ function deferred<T = void>(): {
   return { promise, resolve, reject };
 }
 
+function textPartUpdated(sessionID: string, id: string, text: string): unknown {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: { id, sessionID, type: 'text', text },
+      delta: text,
+    },
+  };
+}
+
+function sessionIdle(sessionID: string): unknown {
+  return { type: 'session.idle', properties: { sessionID } };
+}
+
+function successfulSessionAbort(): ReturnType<typeof vi.fn> {
+  return vi.fn().mockResolvedValue({ data: true });
+}
+
 vi.mock('node:net', () => ({
   createServer: () => {
     const handlers = new Map<string, (...args: unknown[]) => void>();
@@ -245,20 +296,18 @@ function makeOpenCodeClientMock(sessionId: string, responses: string[]) {
   let turnIndex = 0;
   const sessionCreate = vi.fn().mockResolvedValue({ data: { id: sessionId } });
   const promptAsync = vi.fn().mockResolvedValue(undefined);
+  const abort = successfulSessionAbort();
   const subscribe = vi.fn().mockImplementation(() => {
     const text = responses[turnIndex] ?? '';
     const events: unknown[] = [];
     if (text) {
-      events.push({
-        type: 'message.part.updated',
-        properties: { part: { id: `p-${turnIndex}`, type: 'text', text }, delta: text },
-      });
+      events.push(textPartUpdated(sessionId, `p-${turnIndex}`, text));
     }
-    events.push({ type: 'session.idle', properties: { sessionID: sessionId } });
+    events.push(sessionIdle(sessionId));
     turnIndex += 1;
-    return Promise.resolve({ stream: new MockEventStream(events) });
+    return Promise.resolve({ stream: new MockEventStream(events, sessionId) });
   });
-  return { sessionCreate, promptAsync, subscribe };
+  return { sessionCreate, promptAsync, abort, subscribe };
 }
 
 /**
@@ -272,8 +321,10 @@ function unavailableToolErrorEvent(
   callID: string,
   tool: string,
   availableTools = 'bash, edit, glob, grep, invalid, read, skill, todowrite, webfetch, write',
+  errorOverride?: string,
 ) {
-  const error = `Model tried to call unavailable tool '${tool}'. Available tools: ${availableTools}.`;
+  const error = errorOverride
+    ?? `Model tried to call unavailable tool '${tool}'. Available tools: ${availableTools}.`;
   return {
     type: 'message.part.updated',
     properties: {
@@ -302,7 +353,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-1' },
       },
-    ]);
+    ], 'session-1');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-1' } });
@@ -312,7 +363,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -339,7 +390,7 @@ describe('OpenCodeClient stream cleanup', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'p-pending-prompt', type: 'text', text: 'done' },
+          part: { id: 'p-pending-prompt', sessionID: 'session-pending-prompt', type: 'text', text: 'done' },
           delta: 'done',
         },
       },
@@ -347,7 +398,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-pending-prompt' },
       },
-    ]);
+    ], 'session-pending-prompt');
 
     const prompt = deferred();
     const promptAsync = vi.fn().mockImplementation(() => prompt.promise);
@@ -357,7 +408,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -393,14 +444,14 @@ describe('OpenCodeClient stream cleanup', () => {
         ? 'session-prompt-timeout'
         : 'session-after-prompt-timeout';
       return Promise.resolve({
-        stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }]),
+        stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }], sessionID),
       });
     });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -438,7 +489,7 @@ describe('OpenCodeClient stream cleanup', () => {
           error: { name: 'Error', data: { message: 'boom' } },
         },
       },
-    ]);
+    ], 'session-2');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-2' } });
@@ -448,7 +499,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -476,7 +527,7 @@ describe('OpenCodeClient stream cleanup', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'p-1', type: 'text', text: 'done' },
+          part: { id: 'p-1', sessionID: 'session-3', type: 'text', text: 'done' },
           delta: 'done',
         },
       },
@@ -493,7 +544,7 @@ describe('OpenCodeClient stream cleanup', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'p-1', type: 'text', text: 'done more' },
+          part: { id: 'p-1', sessionID: 'session-3', type: 'text', text: 'done more' },
           delta: ' more',
         },
       },
@@ -501,7 +552,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-3' },
       },
-    ]);
+    ], 'session-3');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-3' } });
@@ -511,7 +562,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -544,7 +595,7 @@ describe('OpenCodeClient stream cleanup', () => {
     const stream = new MockEventStream([
       {
         type: 'message.part.updated',
-        properties: { part: { id: 'p-1', type: 'text', text: '' } },
+        properties: { part: { id: 'p-1', sessionID: 'session-dup', type: 'text', text: '' } },
       },
       {
         type: 'message.part.delta',
@@ -552,13 +603,13 @@ describe('OpenCodeClient stream cleanup', () => {
       },
       {
         type: 'message.part.updated',
-        properties: { part: { id: 'p-1', type: 'text', text: 'apple' } },
+        properties: { part: { id: 'p-1', sessionID: 'session-dup', type: 'text', text: 'apple' } },
       },
       {
         type: 'session.idle',
         properties: { sessionID: 'session-dup' },
       },
-    ]);
+    ], 'session-dup');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-dup' } });
@@ -566,7 +617,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -588,7 +639,7 @@ describe('OpenCodeClient stream cleanup', () => {
     const stream = new MockEventStream([
       {
         type: 'message.part.updated',
-        properties: { part: { id: 'p-2', type: 'text', text: '' } },
+        properties: { part: { id: 'p-2', sessionID: 'session-dup2', type: 'text', text: '' } },
       },
       {
         type: 'message.part.delta',
@@ -600,13 +651,13 @@ describe('OpenCodeClient stream cleanup', () => {
       },
       {
         type: 'message.part.updated',
-        properties: { part: { id: 'p-2', type: 'text', text: 'apple' } },
+        properties: { part: { id: 'p-2', sessionID: 'session-dup2', type: 'text', text: 'apple' } },
       },
       {
         type: 'session.idle',
         properties: { sessionID: 'session-dup2' },
       },
-    ]);
+    ], 'session-dup2');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-dup2' } });
@@ -614,7 +665,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -651,7 +702,7 @@ describe('OpenCodeClient stream cleanup', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'p-q1', type: 'text', text: 'continued response' },
+          part: { id: 'p-q1', sessionID: 'session-4', type: 'text', text: 'continued response' },
           delta: 'continued response',
         },
       },
@@ -659,7 +710,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-4' },
       },
-    ]);
+    ], 'session-4');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-4' } });
@@ -670,7 +721,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
         question: { reject: questionReject, reply: vi.fn() },
@@ -722,7 +773,11 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-5' },
+      },
+    ], 'session-5');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-5' } });
@@ -733,7 +788,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
         question: { reject: vi.fn(), reply: questionReply },
@@ -780,7 +835,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-deny' },
       },
-    ]);
+    ], 'session-deny');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-deny' } });
@@ -791,7 +846,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
         question: { reject: questionReject, reply: vi.fn() },
@@ -833,7 +888,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      { type: 'session.idle', properties: { sessionID: 'session-tools' } },
+    ], 'session-tools');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-tools' } });
@@ -843,7 +899,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -907,7 +963,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      { type: 'session.idle', properties: { sessionID: 'session-tools-allow' } },
+    ], 'session-tools-allow');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-tools-allow' } });
@@ -917,7 +974,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -971,7 +1028,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-variant'),
+    ], 'session-variant');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-variant' } });
@@ -981,7 +1039,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1017,7 +1075,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-output-format'),
+    ], 'session-output-format');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-output-format' } });
@@ -1027,7 +1086,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1083,11 +1142,11 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-tool-loop' },
       },
-    ]);
+    ], 'session-tool-loop');
 
-    // unavailable-tool recovery が1回だけ挟まるため、再試行側でも同じループを
-    // 起こして「最終的にエラーで打ち切られる」従来の契約を検証する
-    const retryStream = new MockEventStream([
+    // 同一セッション correction、fresh session の双方で同じ fingerprint を
+    // 再発させ、3回目を terminal にする。
+    const correctionStream = new MockEventStream([
       {
         type: 'message.part.updated',
         properties: {
@@ -1112,17 +1171,47 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+    ], 'session-tool-loop');
+    const freshStream = new MockEventStream([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-5',
+            type: 'tool',
+            callID: 'call-run-5',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: unavailableToolError },
+          },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'tool-part-6',
+            type: 'tool',
+            callID: 'call-run-6',
+            tool: 'run',
+            state: { status: 'error', input: { command: 'echo report' }, error: unavailableToolError },
+          },
+        },
+      },
+    ], 'session-tool-fresh');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-tool-loop' } });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-tool-loop' } })
+      .mockResolvedValueOnce({ data: { id: 'session-tool-fresh' } });
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream })
-      .mockResolvedValueOnce({ stream: retryStream });
+      .mockResolvedValueOnce({ stream: correctionStream })
+      .mockResolvedValueOnce({ stream: freshStream });
+    const abort = successfulSessionAbort();
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1138,13 +1227,25 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
     expect(result.content).toContain(unavailableToolError);
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptTextOfCall(promptAsync, 1)).not.toContain('write report');
+    expect(promptTextOfCall(promptAsync, 2)).toContain('write report');
+    expect(abort).toHaveBeenCalledTimes(3);
+    expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
+    expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);
+    expect(promptAsync.mock.calls.map(([payload]) => (payload as { sessionID: string }).sessionID)).toEqual([
+      'session-tool-loop',
+      'session-tool-loop',
+      'session-tool-fresh',
+    ]);
     expect(stream.returnSpy).toHaveBeenCalled();
-    expect(retryStream.returnSpy).toHaveBeenCalled();
+    expect(correctionStream.returnSpy).toHaveBeenCalled();
+    expect(freshStream.returnSpy).toHaveBeenCalled();
   });
 
   // v3-r4 実測形の回帰: opencode 1.17.18 に存在しない 'list' を呼び続け、
-  // recovery（fresh session 1回）後も同名再発 → 確定失敗。修正前は recovery
+  // correction → fresh session 後も同名再発 → 確定失敗。修正前は recovery
   // 前置文の有効ツール一覧が TAKT の写像（'list' を含む）から生成され、
   // 「'list' は存在しない」と言った直後に 'list' を利用可能と再誘導していた。
   // 前置文はサーバ申告（エラー文の Available tools）を正とし、'invalid'
@@ -1165,18 +1266,23 @@ describe('OpenCodeClient stream cleanup', () => {
         },
       },
     });
-    const stream = new MockEventStream([listErrorPart(1), listErrorPart(2)]);
-    const retryStream = new MockEventStream([listErrorPart(3), listErrorPart(4)]);
+    const stream = new MockEventStream([listErrorPart(1), listErrorPart(2)], 'session-list-loop');
+    const correctionStream = new MockEventStream([listErrorPart(3), listErrorPart(4)], 'session-list-loop');
+    const freshStream = new MockEventStream([listErrorPart(5), listErrorPart(6)], 'session-list-loop-fresh');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-list-loop' } });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-list-loop' } })
+      .mockResolvedValueOnce({ data: { id: 'session-list-loop-fresh' } });
+    const abort = successfulSessionAbort();
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream })
-      .mockResolvedValueOnce({ stream: retryStream });
+      .mockResolvedValueOnce({ stream: correctionStream })
+      .mockResolvedValueOnce({ stream: freshStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1192,22 +1298,23 @@ describe('OpenCodeClient stream cleanup', () => {
     // recovery 後の同名再発は本物の失敗として確定する（v3-r4 と同じ結末）。
     expect(result.status).toBe('error');
     expect(result.content).toContain("'list'");
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(abort).toHaveBeenCalledTimes(3);
+    expect(promptAsync.mock.calls.map(([payload]) => (payload as { sessionID: string }).sessionID)).toEqual([
+      'session-list-loop',
+      'session-list-loop',
+      'session-list-loop-fresh',
+    ]);
 
-    // recovery 前置文（2回目のプロンプト）の検証。
-    const retryPrompt = promptTextOfCall(promptAsync, 1);
-    expect(retryPrompt).toContain('repeatedly called a tool named "list"');
-    // 有効ツール一覧はサーバ申告そのもの（'invalid' と 'list' を含まない）。
-    expect(retryPrompt).toContain(
-      'Only the following tools are available in this session: bash, edit, glob, grep, read, skill, todowrite, webfetch, write.',
-    );
-    const availableLine = retryPrompt.split('\n').find((line) => line.includes('available in this session')) ?? '';
-    expect(availableLine).not.toMatch(/\blist\b/);
-    expect(availableLine).not.toMatch(/\binvalid\b/);
-    // 具体的な代替（ディレクトリ一覧は glob か bash の ls）へ誘導する。
-    expect(retryPrompt).toContain('There is no "list" tool');
-    expect(retryPrompt).toContain('"glob"');
-    expect(retryPrompt).toContain('`ls`');
+    const correctionPrompt = promptTextOfCall(promptAsync, 1);
+    expect(correctionPrompt).toContain('unavailable tool "list"');
+    expect(correctionPrompt).toContain('"bash", "edit", "glob", "grep", "read"');
+    expect(correctionPrompt).not.toContain('fix the findings');
+    const freshPrompt = promptTextOfCall(promptAsync, 2);
+    expect(freshPrompt).toContain('previous session repeatedly called an unavailable tool');
+    expect(freshPrompt).toContain('fix the findings');
+    expect(freshPrompt).toContain('Do NOT overwrite or discard');
   });
 
   // OpenCode は拒否したツール呼び出しを `invalid` 擬似ツールの status='completed'
@@ -1220,7 +1327,6 @@ describe('OpenCodeClient stream cleanup', () => {
         id: `invalid-part-${index}`,
         type: 'tool',
         callID: `call-invalid-${index}`,
-        sessionID: 'session-invalid-loop',
         tool: 'invalid',
         state: {
           status: 'completed',
@@ -1234,18 +1340,29 @@ describe('OpenCodeClient stream cleanup', () => {
 
   const runInvalidScenario = async (events: unknown[]) => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const stream = new MockEventStream([
-      ...events,
-      { type: 'session.idle', properties: { sessionID: 'session-invalid-loop' } },
-    ]);
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-invalid-loop' } })
+      .mockResolvedValue({ data: { id: 'session-invalid-loop-fresh' } });
+    const subscribe = vi.fn().mockImplementation(() => {
+      const sessionID = sessionCreate.mock.calls.length > 1
+        ? 'session-invalid-loop-fresh'
+        : 'session-invalid-loop';
+      return Promise.resolve({
+        stream: new MockEventStream([
+          ...events,
+          sessionIdle(sessionID),
+        ], sessionID),
+      });
+    });
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
-          create: vi.fn().mockResolvedValue({ data: { id: 'session-invalid-loop' } }),
+          create: sessionCreate,
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
-        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        event: { subscribe },
         permission: { reply: vi.fn() },
       },
       server: { close: vi.fn() },
@@ -1337,11 +1454,10 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-invalid-tool-loop' },
       },
-    ]);
+    ], 'session-invalid-tool-loop');
 
-    // unavailable-tool recovery の1回を挟んでも、再試行で同じループなら
-    // 従来どおりエラーで打ち切る
-    const retryStream = new MockEventStream([
+    // correction と fresh session の双方で同じ fingerprint を再発させる。
+    const correctionStream = new MockEventStream([
       {
         type: 'message.part.updated',
         properties: {
@@ -1366,17 +1482,24 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+    ], 'session-invalid-tool-loop');
+    const freshStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-5', 'call-run-5', 'run', 'glob, grep, read', invalidToolError),
+      unavailableToolErrorEvent('tool-part-6', 'call-run-6', 'run', 'glob, grep, read', invalidToolError),
+    ], 'session-invalid-tool-loop-fresh');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-invalid-tool-loop' } });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-invalid-tool-loop' } })
+      .mockResolvedValueOnce({ data: { id: 'session-invalid-tool-loop-fresh' } });
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream })
-      .mockResolvedValueOnce({ stream: retryStream });
+      .mockResolvedValueOnce({ stream: correctionStream })
+      .mockResolvedValueOnce({ stream: freshStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1392,7 +1515,10 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
     expect(result.content).toContain(invalidToolError);
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptTextOfCall(promptAsync, 1)).not.toContain('write report');
+    expect(promptTextOfCall(promptAsync, 2)).toContain('write report');
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -1429,10 +1555,10 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-alternating-tool-loop' },
       },
-    ]);
+    ], 'session-alternating-tool-loop');
 
-    // recovery の再試行側でも交互ループを起こし、従来の打ち切り契約を検証する
-    const retryStream = new MockEventStream([
+    // correction と fresh session でも交互ループを起こし、terminal を検証する。
+    const correctionStream = new MockEventStream([
       {
         type: 'message.part.updated',
         properties: {
@@ -1457,17 +1583,24 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+    ], 'session-alternating-tool-loop');
+    const freshStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-5', 'call-run-3', 'run', 'glob, grep, read', runToolError),
+      unavailableToolErrorEvent('tool-part-6', 'call-list-3', 'list', 'glob, grep, read', listToolError),
+    ], 'session-alternating-tool-loop-fresh');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-alternating-tool-loop' } });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-alternating-tool-loop' } })
+      .mockResolvedValueOnce({ data: { id: 'session-alternating-tool-loop-fresh' } });
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream })
-      .mockResolvedValueOnce({ stream: retryStream });
+      .mockResolvedValueOnce({ stream: correctionStream })
+      .mockResolvedValueOnce({ stream: freshStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1483,7 +1616,10 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('error');
     expect(result.content).toContain('list');
     expect(result.content).toContain(listToolError);
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptTextOfCall(promptAsync, 1)).not.toContain('write report');
+    expect(promptTextOfCall(promptAsync, 2)).toContain('write report');
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -1543,23 +1679,30 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-running-then-error-loop' },
       },
-    ]);
+    ], 'session-running-then-error-loop');
 
     // recovery の再試行側でも同じループを起こし、従来の打ち切り契約を検証する
-    const retryStream = new MockEventStream([
+    const correctionStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-3', 'call-run-3', 'run'),
       unavailableToolErrorEvent('tool-part-4', 'call-run-4', 'run'),
-    ]);
+    ], 'session-running-then-error-loop');
+    const freshStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-5', 'call-run-5', 'run'),
+      unavailableToolErrorEvent('tool-part-6', 'call-run-6', 'run'),
+    ], 'session-running-then-error-loop-fresh');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-running-then-error-loop' } });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-running-then-error-loop' } })
+      .mockResolvedValueOnce({ data: { id: 'session-running-then-error-loop-fresh' } });
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream })
-      .mockResolvedValueOnce({ stream: retryStream });
+      .mockResolvedValueOnce({ stream: correctionStream })
+      .mockResolvedValueOnce({ stream: freshStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1574,7 +1717,8 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -1623,10 +1767,10 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-duplicate-tool-update' },
       },
-    ]);
+    ], 'session-duplicate-tool-update');
 
     // recovery の再試行側でも list のループを起こし、従来の打ち切り契約を検証する
-    const retryStream = new MockEventStream([
+    const correctionStream = new MockEventStream([
       {
         type: 'message.part.updated',
         properties: {
@@ -1651,17 +1795,24 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+    ], 'session-duplicate-tool-update');
+    const freshStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-list-4', 'call-list-4', 'list', 'glob, grep, read', listToolError),
+      unavailableToolErrorEvent('tool-part-list-5', 'call-list-5', 'list', 'glob, grep, read', listToolError),
+    ], 'session-duplicate-tool-update-fresh');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-duplicate-tool-update' } });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-duplicate-tool-update' } })
+      .mockResolvedValueOnce({ data: { id: 'session-duplicate-tool-update-fresh' } });
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream })
-      .mockResolvedValueOnce({ stream: retryStream });
+      .mockResolvedValueOnce({ stream: correctionStream })
+      .mockResolvedValueOnce({ stream: freshStream });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1703,7 +1854,7 @@ describe('OpenCodeClient stream cleanup', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'text-part-1', type: 'text', text: 'report ready' },
+          part: { id: 'text-part-1', sessionID: 'session-single-tool-error', type: 'text', text: 'report ready' },
           delta: 'report ready',
         },
       },
@@ -1711,7 +1862,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-single-tool-error' },
       },
-    ]);
+    ], 'session-single-tool-error');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-single-tool-error' } });
@@ -1720,7 +1871,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1775,7 +1926,7 @@ describe('OpenCodeClient stream cleanup', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'p-system', type: 'text', text: 'system prompt\n\nuser promptassistant response' },
+          part: { id: 'p-system', sessionID: 'session-system-prompt', type: 'text', text: 'system prompt\n\nuser promptassistant response' },
           delta: 'system prompt\n\nuser promptassistant response',
         },
       },
@@ -1789,7 +1940,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-system-prompt'),
+    ], 'session-system-prompt');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-system-prompt' } });
@@ -1799,7 +1951,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1849,7 +2001,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-full-permission'),
+    ], 'session-full-permission');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-full-permission' } });
@@ -1859,7 +2012,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1898,7 +2051,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-empty-tools'),
+    ], 'session-empty-tools');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-empty-tools' } });
@@ -1908,7 +2062,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -1966,7 +2120,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-deny-tool-markup' },
       },
-    ]);
+    ], 'session-deny-tool-markup');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-deny-tool-markup' } });
@@ -1974,7 +2128,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2015,7 +2169,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-existing-tools'),
+    ], 'session-existing-tools');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'unused-session' } });
@@ -2025,7 +2180,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2078,14 +2233,14 @@ describe('OpenCodeClient stream cleanup', () => {
       return Promise.resolve({
         stream: new MockEventStream([
           { type: 'session.idle', properties: { sessionID: sessionId } },
-        ]),
+        ], sessionId),
       });
     });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2139,7 +2294,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-existing-default-permissions'),
+    ], 'session-existing-default-permissions');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'unused-session' } });
@@ -2150,7 +2306,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, update: sessionUpdate, promptAsync },
+        session: { create: sessionCreate, update: sessionUpdate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2188,7 +2344,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-permission-summary'),
+    ], 'session-permission-summary');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-permission-summary' } });
@@ -2198,7 +2355,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2248,7 +2405,8 @@ describe('OpenCodeClient stream cleanup', () => {
           },
         },
       },
-    ]);
+      sessionIdle('session-ruleset'),
+    ], 'session-ruleset');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-ruleset' } });
@@ -2258,7 +2416,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2291,7 +2449,7 @@ describe('OpenCodeClient stream cleanup', () => {
           sessionID: 'session-perm-timeout',
         },
       },
-    ]);
+    ], 'session-perm-timeout');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-perm-timeout' } });
@@ -2302,7 +2460,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: permissionReply },
       },
@@ -2341,7 +2499,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-permission' },
       },
-    ]);
+    ], 'session-permission');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-permission' } });
@@ -2352,7 +2510,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: permissionReply },
       },
@@ -2403,7 +2561,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-allowed-read' },
       },
-    ]);
+    ], 'session-allowed-read');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-allowed-read' } });
@@ -2413,7 +2571,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: permissionReply },
       },
@@ -2498,12 +2656,20 @@ describe('OpenCodeClient stream cleanup', () => {
       (_args: unknown, opts: { signal: AbortSignal }) =>
         Promise.resolve({ stream: buildAbortEndingStream(opts.signal) }),
     );
+    let cleanupSignal: AbortSignal | undefined;
+    const sessionAbort = vi.fn(
+      (_parameters: unknown, options: { signal: AbortSignal }) => {
+        cleanupSignal = options.signal;
+        return Promise.resolve({ data: true as const });
+      },
+    );
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-stall' } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: sessionAbort,
         },
         event: { subscribe },
         permission: { reply: permissionReply },
@@ -2522,6 +2688,12 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('abort');
+    expect(sessionAbort).toHaveBeenCalledWith(
+      { sessionID: 'session-stall', directory: '/tmp' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(cleanupSignal).not.toBe(abortController.signal);
+    expect(cleanupSignal?.aborted).toBe(false);
   });
 
   it('should request native structured output and capture info.structured', async () => {
@@ -2539,7 +2711,7 @@ describe('OpenCodeClient stream cleanup', () => {
         },
       },
       { type: 'session.idle', properties: { sessionID: 'session-structured' } },
-    ]);
+    ], 'session-structured');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -2547,6 +2719,7 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-structured' } }),
           promptAsync,
+          abort: successfulSessionAbort(),
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
@@ -2580,6 +2753,7 @@ describe('OpenCodeClient stream cleanup', () => {
         properties: {
           part: {
             id: 'part-1',
+            sessionID: 'session-fallback',
             type: 'text',
             text: 'report text\n```json\n{"rawFindings": []}\n```',
           },
@@ -2587,13 +2761,14 @@ describe('OpenCodeClient stream cleanup', () => {
         },
       },
       { type: 'session.idle', properties: { sessionID: 'session-fallback' } },
-    ]);
+    ], 'session-fallback');
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-fallback' } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
@@ -2651,18 +2826,19 @@ describe('OpenCodeClient stream cleanup', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'part-1', type: 'text', text },
+          part: { id: 'part-1', sessionID: 'session-edge', type: 'text', text },
           delta: text,
         },
       },
       { type: 'session.idle', properties: { sessionID: 'session-edge' } },
-    ]);
+    ], 'session-edge');
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-edge' } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
@@ -2702,19 +2878,19 @@ describe('OpenCodeClient stream cleanup', () => {
               },
             },
           },
-        ]),
+        ], 'session-fmt'),
       })
       .mockResolvedValueOnce({
         stream: new MockEventStream([
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-1', type: 'text', text: '{"rawFindings": []}' },
+              part: { id: 'p-1', sessionID: 'session-fmt', type: 'text', text: '{"rawFindings": []}' },
               delta: '{"rawFindings": []}'
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-fmt' } },
-        ]),
+        ], 'session-fmt'),
       });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
@@ -2723,6 +2899,7 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-fmt' } }),
           promptAsync,
+          abort: successfulSessionAbort(),
         },
         event: { subscribe },
         permission: { reply: vi.fn() },
@@ -2749,7 +2926,7 @@ describe('OpenCodeClient stream cleanup', () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
     // transient は promptAsync 例外経路（abortCause: prompt）でのみリトライされる
-    const emptyStream = () => new MockEventStream([]);
+    const emptyStream = () => new MockEventStream([], 'session-budget');
     const formatFailureStream = new MockEventStream([
       {
         type: 'message.updated',
@@ -2757,17 +2934,17 @@ describe('OpenCodeClient stream cleanup', () => {
           info: { sessionID: 'session-budget', role: 'assistant', error: { name: 'StructuredOutputError', data: { message: 'Model did not produce structured output' } } },
         },
       },
-    ]);
+    ], 'session-budget');
     const successStream = new MockEventStream([
       {
         type: 'message.part.updated',
         properties: {
-          part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
+          part: { id: 'p-1', sessionID: 'session-budget', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
           delta: 'report\n```json\n{"rawFindings": []}\n```',
         },
       },
       { type: 'session.idle', properties: { sessionID: 'session-budget' } },
-    ]);
+    ], 'session-budget');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: emptyStream() })
       .mockResolvedValueOnce({ stream: emptyStream() })
@@ -2783,6 +2960,7 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-budget' } }),
           promptAsync,
+          abort: successfulSessionAbort(),
         },
         event: { subscribe },
         permission: { reply: vi.fn() },
@@ -2809,14 +2987,14 @@ describe('OpenCodeClient stream cleanup', () => {
     const staleStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
-    ]);
+    ], 'session-old');
     const recoveredStream = new MockEventStream([
       {
         type: 'message.part.updated',
-        properties: { part: { id: 'p-1', type: 'text', text: 'all good' }, delta: 'all good' },
+        properties: { part: { id: 'p-1', sessionID: 'session-fresh', type: 'text', text: 'all good' }, delta: 'all good' },
       },
       { type: 'session.idle', properties: { sessionID: 'session-fresh' } },
-    ]);
+    ], 'session-fresh');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: staleStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
@@ -2825,7 +3003,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2852,11 +3030,11 @@ describe('OpenCodeClient stream cleanup', () => {
     const staleStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
-    ]);
+    ], 'session-old');
     const freshStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-3', 'call-3', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-4', 'call-4', 'StructuredOutput'),
-    ]);
+    ], 'session-fresh');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: staleStream })
       .mockResolvedValueOnce({ stream: freshStream });
@@ -2865,7 +3043,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2885,28 +3063,31 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
-  it('should not stack the stale-session recovery on a non-StructuredOutput loop (general recovery only, 2 attempts max)', async () => {
+  it('should keep non-StructuredOutput loops on correction and fresh recovery only', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    // resumed session の 'run' ループは一般 recovery（1回）だけが受け持つ。
-    // stale StructuredOutput recovery が重ねて発動して attempt が3回に
-    // 膨らまないことを固定する。
+    // resumed session の run ループは correction と fresh recovery だけが受け持つ。
     const firstLoop = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
-    ]);
-    const secondLoop = new MockEventStream([
+    ], 'session-old');
+    const correctionLoop = new MockEventStream([
       unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
       unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
-    ]);
+    ], 'session-old');
+    const freshLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-5', 'call-5', 'run'),
+      unavailableToolErrorEvent('tool-part-6', 'call-6', 'run'),
+    ], 'session-fresh');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: firstLoop })
-      .mockResolvedValueOnce({ stream: secondLoop });
+      .mockResolvedValueOnce({ stream: correctionLoop })
+      .mockResolvedValueOnce({ stream: freshLoop });
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2922,9 +3103,10 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
-    expect(promptAsync).toHaveBeenCalledTimes(2);
-    // fresh session は一般 recovery の1回分だけ作られる
+    expect(promptAsync).toHaveBeenCalledTimes(3);
     expect(sessionCreate).toHaveBeenCalledTimes(1);
+    expect(promptTextOfCall(promptAsync, 1)).not.toContain('review it');
+    expect(promptTextOfCall(promptAsync, 2)).toContain('review it');
   });
 
   it('should not attempt stale session recovery on the first call without a session id', async () => {
@@ -2932,14 +3114,14 @@ describe('OpenCodeClient stream cleanup', () => {
     const stream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
-    ]);
+    ], 'session-new');
     const subscribe = vi.fn().mockResolvedValue({ stream });
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-new' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -2978,26 +3160,26 @@ describe('OpenCodeClient stream cleanup', () => {
               },
             },
           },
-        ]),
+        ], 'session-old'),
       })
       .mockResolvedValueOnce({
         stream: new MockEventStream([
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-1', type: 'text', text: '{"step":2,"reason":"second rule"}' },
+              part: { id: 'p-1', sessionID: 'session-fresh-format', type: 'text', text: '{"step":2,"reason":"second rule"}' },
               delta: '{"step":2,"reason":"second rule"}',
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-fresh-format' } },
-        ]),
+        ], 'session-fresh-format'),
       });
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh-format' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3049,20 +3231,20 @@ describe('OpenCodeClient stream cleanup', () => {
               },
             },
           },
-        ]),
+        ], 'session-formatless'),
       })
       .mockResolvedValueOnce({
         stream: new MockEventStream([
           unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
           unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
-        ]),
+        ], 'session-formatless'),
       });
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-formatless' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3098,26 +3280,26 @@ describe('OpenCodeClient stream cleanup', () => {
               },
             },
           },
-        ]),
+        ], 'session-old'),
       })
       .mockResolvedValueOnce({
         stream: new MockEventStream([
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-1', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
+              part: { id: 'p-1', sessionID: 'session-fresh-upstream', type: 'text', text: 'report\n```json\n{"rawFindings": []}\n```' },
               delta: 'report\n```json\n{"rawFindings": []}\n```',
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-fresh-upstream' } },
-        ]),
+        ], 'session-fresh-upstream'),
       });
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh-upstream' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3142,10 +3324,10 @@ describe('OpenCodeClient stream cleanup', () => {
     const staleStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
-    ]);
+    ], 'session-old');
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-recovered' } },
-    ]);
+    ], 'session-recovered');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: staleStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
@@ -3154,7 +3336,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3173,30 +3355,36 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.sessionId).not.toBe('session-old');
   });
 
-  it('should retry a general unavailable-tool loop once in a fresh session with a retry preamble', async () => {
+  it('should correct an unavailable-tool loop in-session, then recover a repeated fingerprint in one fresh session', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
-    ]);
+    ], 'session-a');
+    const correctionStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
+      unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
+    ], 'session-a');
     const recoveredStream = new MockEventStream([
       {
         type: 'message.part.updated',
-        properties: { part: { id: 'p-1', type: 'text', text: 'done via bash' }, delta: 'done via bash' },
+        properties: { part: { id: 'p-1', sessionID: 'session-b', type: 'text', text: 'done via bash' }, delta: 'done via bash' },
       },
       { type: 'session.idle', properties: { sessionID: 'session-b' } },
-    ]);
+    ], 'session-b');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: correctionStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
     const sessionCreate = vi.fn()
       .mockResolvedValueOnce({ data: { id: 'session-a' } })
       .mockResolvedValueOnce({ data: { id: 'session-b' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const abort = successfulSessionAbort();
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3213,36 +3401,48 @@ describe('OpenCodeClient stream cleanup', () => {
     // 元セッションを捨て、新しい fresh session の ID を上位に返す
     expect(result.sessionId).toBe('session-b');
     expect(sessionCreate).toHaveBeenCalledTimes(2);
-    expect(promptAsync).toHaveBeenCalledTimes(2);
-    const retryText = promptTextOfCall(promptAsync, 1);
-    // 前置文: 幻覚ツール名（引用付き）、既知エイリアスの案内、有効ツール一覧、
-    // workspace 継続の警告、元のプロンプト本文
-    expect(retryText).toContain('"run"');
-    expect(retryText).toContain('does not exist');
-    expect(retryText).toContain('Use "bash" for shell commands.');
-    expect(retryText).toContain('bash, edit, glob, grep');
-    expect(retryText).toContain('the workspace is NOT fresh');
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(abort).toHaveBeenCalledTimes(2);
+    expect(promptAsync.mock.calls.map(([payload]) => (payload as { sessionID: string }).sessionID)).toEqual([
+      'session-a',
+      'session-a',
+      'session-b',
+    ]);
+    const correctionText = promptTextOfCall(promptAsync, 1);
+    expect(correctionText).toContain('unavailable tool "run"');
+    expect(correctionText).toContain('"bash", "edit", "glob", "grep"');
+    expect(correctionText).not.toContain('implement it');
+    const retryText = promptTextOfCall(promptAsync, 2);
+    expect(retryText).toContain('previous session repeatedly called an unavailable tool');
+    expect(retryText).toContain('Do NOT overwrite or discard');
     expect(retryText).toContain('implement it');
+    expect(abort.mock.invocationCallOrder[0]).toBeLessThan(promptAsync.mock.invocationCallOrder[1]);
+    expect(abort.mock.invocationCallOrder[1]).toBeLessThan(promptAsync.mock.invocationCallOrder[2]);
   });
 
-  it('should discard the resumed session when recovering a general unavailable-tool loop', async () => {
+  it('should keep a resumed session for correction and discard it only after the fingerprint repeats', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
-    ]);
+    ], 'session-old');
+    const correctionStream = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
+      unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
+    ], 'session-old');
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-fresh-run' } },
-    ]);
+    ], 'session-fresh-run');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: loopStream })
+      .mockResolvedValueOnce({ stream: correctionStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh-run' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3258,31 +3458,41 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('session-fresh-run');
-    // 1回目は resume（create しない）、再試行だけ fresh session を作る
+    // initial と correction は resume、同じ fingerprint の再発後だけ fresh を作る
     expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({ sessionID: 'session-old' });
-    expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'session-fresh-run' });
+    expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'session-old' });
+    expect(promptAsync.mock.calls[2]?.[0]).toMatchObject({ sessionID: 'session-fresh-run' });
+    expect(promptTextOfCall(promptAsync, 1)).not.toContain('implement it');
+    expect(promptTextOfCall(promptAsync, 2)).toContain('implement it');
   });
 
-  it('should fail after the single unavailable-tool recovery when the fresh session loops again', async () => {
+  it('should fail after correction and the single fresh recovery both repeat the same fingerprint', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const firstLoop = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
-    ]);
-    const secondLoop = new MockEventStream([
+    ], 'session-a');
+    const correctionLoop = new MockEventStream([
       unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
       unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
-    ]);
+    ], 'session-a');
+    const freshLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-5', 'call-5', 'run'),
+      unavailableToolErrorEvent('tool-part-6', 'call-6', 'run'),
+    ], 'session-fresh');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: firstLoop })
-      .mockResolvedValueOnce({ stream: secondLoop });
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-fresh' } });
+      .mockResolvedValueOnce({ stream: correctionLoop })
+      .mockResolvedValueOnce({ stream: freshLoop });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-a' } })
+      .mockResolvedValueOnce({ data: { id: 'session-fresh' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3295,21 +3505,87 @@ describe('OpenCodeClient stream cleanup', () => {
       model: 'opencode/big-pickle',
     });
 
-    // 救済は1回限り。再試行後も同じ違反なら本物の失敗として即エラー（計2 attempt）
+    // correction と fresh を使い切った後の再発は terminal（計3 attempt）
     expect(result.status).toBe('error');
     expect(result.content).toContain('run');
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptAsync.mock.calls.map(([payload]) => (payload as { sessionID: string }).sessionID)).toEqual([
+      'session-a',
+      'session-a',
+      'session-fresh',
+    ]);
+    expect(promptTextOfCall(promptAsync, 1)).not.toContain('implement it');
+    expect(promptTextOfCall(promptAsync, 2)).toContain('implement it');
   });
 
-  it('should include the todowrite alias hint when the hallucinated tool is todo_write', async () => {
+  it('should make a different fingerprint terminal after the fresh recovery has been used', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const firstLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+      unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+    ], 'session-a');
+    const correctionLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-3', 'call-3', 'run'),
+      unavailableToolErrorEvent('tool-part-4', 'call-4', 'run'),
+    ], 'session-a');
+    const invalidArgumentError = 'The read tool was called with invalid arguments: SchemaError(Expected string)';
+    const freshLoop = new MockEventStream(Array.from({ length: 4 }, (_, index) => ({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: `invalid-part-${index}`,
+          type: 'tool',
+          callID: `invalid-call-${index}`,
+          tool: 'read',
+          state: { status: 'error', input: {}, error: invalidArgumentError },
+        },
+      },
+    })), 'session-fresh');
+    const unexpectedCorrection = new MockEventStream([
+      textPartUpdated('session-fresh', 'unexpected', 'incorrectly recovered'),
+      sessionIdle('session-fresh'),
+    ], 'session-fresh');
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({ stream: firstLoop })
+      .mockResolvedValueOnce({ stream: correctionLoop })
+      .mockResolvedValueOnce({ stream: freshLoop })
+      .mockResolvedValueOnce({ stream: unexpectedCorrection });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-a' } })
+      .mockResolvedValueOnce({ data: { id: 'session-fresh' } });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('coder', 'implement it', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('invalid tool argument loop');
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(subscribe).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it('should quote todo_write and advertise the observed tool set in its correction', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'todo_write'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'todo_write'),
-    ]);
+    ], 'session-todo');
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-todo' } },
-    ]);
+    ], 'session-todo');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: loopStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
@@ -3317,7 +3593,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-todo' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-todo' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3331,19 +3607,22 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('done');
-    const retryText = promptTextOfCall(promptAsync, 1);
-    expect(retryText).toContain('Use "todowrite"');
+    const correctionText = promptTextOfCall(promptAsync, 1);
+    expect(correctionText).toContain('unavailable tool "todo_write"');
+    expect(correctionText).toContain('"todowrite"');
+    expect(correctionText).not.toContain('track the plan');
+    expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
-  it('should not attach a semantic mapping for an unknown hallucinated tool name', async () => {
+  it('should not invent a semantic mapping for an unknown hallucinated tool name', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'execute_shell'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'execute_shell'),
-    ]);
+    ], 'session-unknown');
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-unknown' } },
-    ]);
+    ], 'session-unknown');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: loopStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
@@ -3351,7 +3630,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-unknown' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-unknown' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3365,23 +3644,23 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('done');
-    const retryText = promptTextOfCall(promptAsync, 1);
-    // 未知の幻覚名には意味推測のマッピングを付けず、有効ツール一覧のみ提示する
-    expect(retryText).toContain('"execute_shell"');
-    expect(retryText).not.toContain('Use "');
-    expect(retryText).toContain('bash, edit, glob, grep');
+    const correctionText = promptTextOfCall(promptAsync, 1);
+    expect(correctionText).toContain('"execute_shell"');
+    expect(correctionText).not.toContain('Use "bash"');
+    expect(correctionText).toContain('"bash", "edit", "glob", "grep"');
+    expect(correctionText).not.toContain('run the build');
   });
 
-  it('should suppress the bash alias hint when bash is not among the enabled tools', async () => {
+  it('should advertise only observed tools when bash is not enabled', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
       // bash の無いレビュー系ステップでは、サーバ申告一覧にも bash が現れない。
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run', 'glob, grep, invalid, read, skill'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run', 'glob, grep, invalid, read, skill'),
-    ]);
+    ], 'session-no-bash');
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-no-bash' } },
-    ]);
+    ], 'session-no-bash');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: loopStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
@@ -3389,7 +3668,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-no-bash' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-no-bash' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3405,27 +3684,23 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('done');
-    const retryText = promptTextOfCall(promptAsync, 1);
-    // 変換先の bash がこの attempt で使えない以上、案内すると有効一覧と矛盾する。
-    // 未知名と同じ扱い（有効一覧のみ）に落ちることを固定する。
-    expect(retryText).toContain('"run"');
-    expect(retryText).not.toContain('Use "bash"');
-    expect(retryText).not.toContain('Use "');
-    // 一覧はサーバ申告そのもの（'invalid' は除外、実在しない 'list' は載らない）。
-    expect(retryText).toContain('glob, grep, read, skill');
-    expect(retryText).not.toContain('list');
-    expect(retryText).not.toContain('bash');
+    const correctionText = promptTextOfCall(promptAsync, 1);
+    expect(correctionText).toContain('"run"');
+    expect(correctionText).not.toContain('Use "bash"');
+    expect(correctionText).toContain('"glob", "grep", "read", "skill"');
+    expect(correctionText).not.toContain('"list"');
+    expect(correctionText).not.toContain('"bash"');
   });
 
-  it('should suppress the todowrite alias hint when todowrite is not among the enabled tools', async () => {
+  it('should not advertise todowrite when it is absent from the observed tool set', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const loopStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'todo_write', 'glob, grep, invalid, read, skill'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'todo_write', 'glob, grep, invalid, read, skill'),
-    ]);
+    ], 'session-no-todo');
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-no-todo' } },
-    ]);
+    ], 'session-no-todo');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: loopStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
@@ -3433,7 +3708,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-no-todo' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-no-todo' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3448,11 +3723,11 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('done');
-    const retryText = promptTextOfCall(promptAsync, 1);
-    expect(retryText).toContain('"todo_write"');
-    expect(retryText).not.toContain('Use "todowrite"');
-    expect(retryText).not.toContain('Use "');
-    expect(retryText).toContain('glob, grep, read, skill');
+    const correctionText = promptTextOfCall(promptAsync, 1);
+    expect(correctionText).toContain('"todo_write"');
+    expect(correctionText).not.toContain('Use "todowrite"');
+    expect(correctionText).toContain('"glob", "grep", "read", "skill"');
+    expect(correctionText).not.toContain('"todowrite"');
   });
 
   it('should route a StructuredOutput loop only through the stale-session recovery, never the general one', async () => {
@@ -3462,12 +3737,12 @@ describe('OpenCodeClient stream cleanup', () => {
     const stream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'StructuredOutput'),
-    ]);
+    ], 'session-so');
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-so' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-so' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
       },
@@ -3485,26 +3760,31 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(1);
   });
 
-  it('should not recover a StructuredOutput loop that follows an unavailable-tool recovery', async () => {
+  it('should route StructuredOutput through stale-session recovery after an unrelated correction', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    // 'run' の救済で fresh になった attempt が StructuredOutput ループに落ちた場合、
-    // plan 上は resume 由来でも実セッションは fresh なので stale recovery を発動させない
+    // run correction 中の StructuredOutput loop は一般 tool-loop recovery へ混ぜず、
+    // stale-session route で fresh にする。fresh での再発は terminal。
     const runLoop = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
-    ]);
+    ], 'session-old');
     const structuredLoop = new MockEventStream([
       unavailableToolErrorEvent('tool-part-3', 'call-3', 'StructuredOutput'),
       unavailableToolErrorEvent('tool-part-4', 'call-4', 'StructuredOutput'),
-    ]);
+    ], 'session-old');
+    const freshStructuredLoop = new MockEventStream([
+      unavailableToolErrorEvent('tool-part-5', 'call-5', 'StructuredOutput'),
+      unavailableToolErrorEvent('tool-part-6', 'call-6', 'StructuredOutput'),
+    ], 'session-fresh');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: runLoop })
-      .mockResolvedValueOnce({ stream: structuredLoop });
+      .mockResolvedValueOnce({ stream: structuredLoop })
+      .mockResolvedValueOnce({ stream: freshStructuredLoop });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-fresh' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-fresh' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3520,12 +3800,14 @@ describe('OpenCodeClient stream cleanup', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('StructuredOutput');
-    expect(promptAsync).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(promptAsync.mock.calls[0]?.[0]).toMatchObject({ sessionID: 'session-old' });
+    expect(promptAsync.mock.calls[1]?.[0]).toMatchObject({ sessionID: 'session-old' });
+    expect(promptAsync.mock.calls[2]?.[0]).toMatchObject({ sessionID: 'session-fresh' });
   });
 
-  it('should not enter the unavailable-tool recovery for an invalid-argument loop', async () => {
+  it('should apply correction, fresh recovery, then terminal failure to an invalid-argument loop', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const invalidArgError = "Required argument 'filePath' is missing or invalid";
     const events = [1, 2, 3, 4].map((n) => ({
       type: 'message.part.updated',
       properties: {
@@ -3534,16 +3816,29 @@ describe('OpenCodeClient stream cleanup', () => {
           type: 'tool',
           callID: `call-${n}`,
           tool: 'read',
-          state: { status: 'error', input: {}, error: invalidArgError },
+          state: {
+            status: 'error',
+            input: {},
+            error: `Required argument 'filePath' is missing or invalid (variant ${'x'.repeat(n)})`,
+          },
         },
       },
     }));
     const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-invalid-arg' } })
+      .mockResolvedValueOnce({ data: { id: 'session-invalid-arg-fresh' } });
+    const subscribe = vi.fn().mockImplementation(() => {
+      const sessionID = sessionCreate.mock.calls.length > 1
+        ? 'session-invalid-arg-fresh'
+        : 'session-invalid-arg';
+      return Promise.resolve({ stream: new MockEventStream(events, sessionID) });
+    });
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-invalid-arg' } }), promptAsync },
-        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream(events) }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe },
         permission: { reply: vi.fn() },
       },
       server: { close: vi.fn() },
@@ -3555,10 +3850,12 @@ describe('OpenCodeClient stream cleanup', () => {
       model: 'opencode/big-pickle',
     });
 
-    // 引数不正ループは unavailable-tool ではないため recovery 対象外（従来どおり即エラー）
     expect(result.status).toBe('error');
     expect(result.content).toContain('invalid tool argument loop');
-    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptTextOfCall(promptAsync, 1)).not.toContain('read files');
+    expect(promptTextOfCall(promptAsync, 2)).toContain('read files');
   });
 
   it('should not enter the unavailable-tool recovery when the tool error budget is exhausted', async () => {
@@ -3597,8 +3894,8 @@ describe('OpenCodeClient stream cleanup', () => {
       createOpencodeMock.mockResolvedValue({
         client: {
           instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-          session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-budget-x' } }), promptAsync },
-          event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream(events) }) },
+          session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-budget-x' } }), promptAsync, abort: successfulSessionAbort() },
+          event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream(events, 'session-budget-x') }) },
           permission: { reply: vi.fn() },
         },
         server: { close: vi.fn() },
@@ -3620,14 +3917,14 @@ describe('OpenCodeClient stream cleanup', () => {
 
   it('should keep the unavailable-tool recovery slot even after the transient budget is consumed', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const emptyStream = () => new MockEventStream([]);
+    const emptyStream = () => new MockEventStream([], 'session-late');
     const loopStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
       unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
-    ]);
+    ], 'session-late');
     const successStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-late' } },
-    ]);
+    ], 'session-late');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: emptyStream() })
       .mockResolvedValueOnce({ stream: emptyStream() })
@@ -3640,7 +3937,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-late' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-late' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3665,10 +3962,10 @@ describe('OpenCodeClient stream cleanup', () => {
     const loopStream = new MockEventStream([
       unavailableToolErrorEvent('tool-part-1', 'call-1', hostileTool),
       unavailableToolErrorEvent('tool-part-2', 'call-2', hostileTool),
-    ]);
+    ], 'session-hostile');
     const recoveredStream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-hostile' } },
-    ]);
+    ], 'session-hostile');
     const subscribe = vi.fn()
       .mockResolvedValueOnce({ stream: loopStream })
       .mockResolvedValueOnce({ stream: recoveredStream });
@@ -3676,7 +3973,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
-        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-hostile' } }), promptAsync },
+        session: { create: vi.fn().mockResolvedValue({ data: { id: 'session-hostile' } }), promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -3702,6 +3999,10 @@ describe('OpenCodeClient stream cleanup', () => {
     const stream = new MockEventStream([
       {
         type: 'message.part.updated',
+        properties: { part: { id: 'p-unknown', type: 'text', text: 'unknown session text' } },
+      },
+      {
+        type: 'message.part.updated',
         properties: { part: { id: 'p-sibling', type: 'text', text: 'sibling text', sessionID: 'other-session' } },
       },
       {
@@ -3709,13 +4010,14 @@ describe('OpenCodeClient stream cleanup', () => {
         properties: { part: { id: 'p-own', type: 'text', text: 'own text', sessionID: 'session-own' } },
       },
       { type: 'session.idle', properties: { sessionID: 'session-own' } },
-    ]);
+    ], undefined);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-own' } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
@@ -3731,6 +4033,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(result.status).toBe('done');
     expect(result.content).toContain('own text');
     expect(result.content).not.toContain('sibling text');
+    expect(result.content).not.toContain('unknown session text');
   });
 
   it('should time out a stalled session even while unrelated bus events keep flowing', async () => {
@@ -3744,6 +4047,7 @@ describe('OpenCodeClient stream cleanup', () => {
           session: {
             create: vi.fn().mockResolvedValue({ data: { id: 'session-stalled' } }),
             promptAsync: vi.fn().mockReturnValue(new Promise(() => { /* 完了しない */ })),
+            abort: successfulSessionAbort(),
           },
           event: { subscribe: vi.fn().mockResolvedValue({ stream: chatterStream }) },
           permission: { reply: vi.fn() },
@@ -3781,6 +4085,7 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-stalled' } }),
           promptAsync: vi.fn().mockReturnValue(new Promise(() => { /* 完了しない */ })),
+          abort: successfulSessionAbort(),
           messages,
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream: chatterStream }) },
@@ -3948,6 +4253,7 @@ describe('OpenCodeClient stream cleanup', () => {
           session: {
             create: vi.fn().mockResolvedValue({ data: { id: 'session-stalled' } }),
             promptAsync: vi.fn().mockReturnValue(new Promise(() => { /* 完了しない */ })),
+            abort: successfulSessionAbort(),
             messages: vi.fn().mockReturnValue(new Promise(() => { /* 応答しない */ })),
           },
           event: { subscribe: vi.fn().mockResolvedValue({ stream: chatterStream }) },
@@ -3981,6 +4287,7 @@ describe('OpenCodeClient stream cleanup', () => {
           session: {
             create: vi.fn().mockResolvedValue({ data: { id: 'session-stalled' } }),
             promptAsync: vi.fn().mockReturnValue(new Promise(() => { /* 完了しない */ })),
+            abort: successfulSessionAbort(),
             messages: vi.fn().mockRejectedValue(new Error('server gone')),
           },
           event: { subscribe: vi.fn().mockResolvedValue({ stream: chatterStream }) },
@@ -4008,13 +4315,14 @@ describe('OpenCodeClient stream cleanup', () => {
     const stream = new MockEventStream([
       ...events,
       { type: 'session.idle', properties: { sessionID: sessionId } },
-    ]);
+    ], sessionId);
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
@@ -4152,16 +4460,17 @@ describe('OpenCodeClient stream cleanup', () => {
       toolError('c5', 'read', INVALID),
       {
         type: 'message.part.updated',
-        properties: { part: { id: 'p-text', type: 'text', text: 'done' }, delta: 'done' },
+        properties: { part: { id: 'p-text', sessionID: 'session-mixed', type: 'text', text: 'done' }, delta: 'done' },
       },
       { type: 'session.idle', properties: { sessionID: 'session-mixed' } },
-    ]);
+    ], 'session-mixed');
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-mixed' } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
@@ -4182,13 +4491,14 @@ describe('OpenCodeClient stream cleanup', () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([
       { type: 'session.idle', properties: { sessionID: 'session-config-deny' } },
-    ]);
+    ], 'session-config-deny');
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn().mockResolvedValue({ data: {} }) },
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-config-deny' } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
         event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
         permission: { reply: vi.fn() },
@@ -4228,7 +4538,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-deny-all' },
       },
-    ]);
+    ], 'session-deny-all');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-deny-all' } });
@@ -4239,7 +4549,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: permissionReply },
       },
@@ -4302,18 +4612,18 @@ describe('OpenCodeClient stream cleanup', () => {
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-permission-reject' } },
-        ]),
+        ], 'session-permission-reject'),
       })
       .mockResolvedValueOnce({
         stream: new MockEventStream([
           { type: 'session.idle', properties: { sessionID: 'session-after-reject' } },
-        ]),
+        ], 'session-after-reject'),
       });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: permissionReply },
       },
@@ -4372,13 +4682,13 @@ describe('OpenCodeClient stream cleanup', () => {
       .mockResolvedValueOnce({
         stream: new MockEventStream([
           { type: 'session.idle', properties: { sessionID: 'session-after-stream-error' } },
-        ]),
+        ], 'session-after-stream-error'),
       });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -4427,7 +4737,7 @@ describe('OpenCodeClient stream cleanup', () => {
         firstStream = new StallingEventStream({
           type: 'message.part.updated',
           properties: {
-            part: { id: 'p-before-prompt-error', type: 'text', text: 'partial' },
+            part: { id: 'p-before-prompt-error', sessionID: 'session-prompt-transport-error', type: 'text', text: 'partial' },
             delta: 'partial',
           },
         }, options.signal);
@@ -4438,18 +4748,18 @@ describe('OpenCodeClient stream cleanup', () => {
           {
             type: 'message.part.updated',
             properties: {
-              part: { id: 'p-after-prompt-error', type: 'text', text: 'recovered' },
+              part: { id: 'p-after-prompt-error', sessionID: 'session-after-prompt-transport-error', type: 'text', text: 'recovered' },
               delta: 'recovered',
             },
           },
           { type: 'session.idle', properties: { sessionID: 'session-after-prompt-transport-error' } },
-        ]),
+        ], 'session-after-prompt-transport-error'),
       });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -4491,7 +4801,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-doom-loop' },
       },
-    ]);
+    ], 'session-doom-loop');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-doom-loop' } });
@@ -4502,7 +4812,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: permissionReply },
       },
@@ -4553,7 +4863,7 @@ describe('OpenCodeClient stream cleanup', () => {
         type: 'session.idle',
         properties: { sessionID: 'session-doom-loop-deny-only' },
       },
-    ]);
+    ], 'session-doom-loop-deny-only');
 
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-doom-loop-deny-only' } });
@@ -4563,7 +4873,7 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: permissionReply },
       },
@@ -4615,10 +4925,10 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe: vi.fn().mockImplementation(() => {
           const events = [{ type: 'session.idle', properties: { sessionID: `session-${callCount}` } }];
-          return Promise.resolve({ stream: new MockEventStream(events) });
+          return Promise.resolve({ stream: new MockEventStream(events, `session-${callCount}`) });
         }) },
         permission: { reply: vi.fn() },
       },
@@ -4645,7 +4955,9 @@ describe('OpenCodeClient stream cleanup', () => {
     const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
     resetSharedServer();
 
-    const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-1' } });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-1' } })
+      .mockResolvedValueOnce({ data: { id: 'session-2' } });
     const promptAsync = vi.fn().mockResolvedValue(undefined);
     const disposeInstance = vi.fn().mockResolvedValue({ data: {} });
     const serverClose1 = vi.fn();
@@ -4654,16 +4966,16 @@ describe('OpenCodeClient stream cleanup', () => {
     createOpencodeMock.mockResolvedValueOnce({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
-        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-1' } }]) }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-1' } }], 'session-1') }) },
         permission: { reply: vi.fn() },
       },
       server: { close: serverClose1 },
     }).mockResolvedValueOnce({
       client: {
         instance: { dispose: disposeInstance },
-        session: { create: sessionCreate, promptAsync },
-        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-2' } }]) }) },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-2' } }], 'session-2') }) },
         permission: { reply: vi.fn() },
       },
       server: { close: serverClose2 },
@@ -4695,12 +5007,13 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-close-failure' } }),
           promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
         },
         event: {
           subscribe: vi.fn().mockResolvedValue({
             stream: new MockEventStream([
               { type: 'session.idle', properties: { sessionID: 'session-close-failure' } },
-            ]),
+            ], 'session-close-failure'),
           }),
         },
         permission: { reply: vi.fn() },
@@ -4743,10 +5056,11 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-model-a' } }),
           promptAsync: firstPromptAsync,
+          abort: successfulSessionAbort(),
         },
         event: {
           subscribe: vi.fn().mockResolvedValue({
-            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-model-a' } }]),
+            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-model-a' } }], 'session-model-a'),
           }),
         },
         permission: { reply: vi.fn() },
@@ -4758,10 +5072,11 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-model-b' } }),
           promptAsync: secondPromptAsync,
+          abort: successfulSessionAbort(),
         },
         event: {
           subscribe: vi.fn().mockResolvedValue({
-            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-model-b' } }]),
+            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-model-b' } }], 'session-model-b'),
           }),
         },
         permission: { reply: vi.fn() },
@@ -4803,10 +5118,11 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-key-a' } }),
           promptAsync: firstPromptAsync,
+          abort: successfulSessionAbort(),
         },
         event: {
           subscribe: vi.fn().mockResolvedValue({
-            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-key-a' } }]),
+            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-key-a' } }], 'session-key-a'),
           }),
         },
         permission: { reply: vi.fn() },
@@ -4818,10 +5134,11 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-key-b' } }),
           promptAsync: secondPromptAsync,
+          abort: successfulSessionAbort(),
         },
         event: {
           subscribe: vi.fn().mockResolvedValue({
-            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-key-b' } }]),
+            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-key-b' } }], 'session-key-b'),
           }),
         },
         permission: { reply: vi.fn() },
@@ -4875,10 +5192,11 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: vi.fn().mockResolvedValue({ data: { id: 'session-a' } }),
           promptAsync: vi.fn().mockImplementation(() => promptA.promise),
+          abort: successfulSessionAbort(),
         },
         event: {
           subscribe: vi.fn().mockResolvedValue({
-            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-a' } }]),
+            stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID: 'session-a' } }], 'session-a'),
           }),
         },
         permission: { reply: vi.fn() },
@@ -4890,12 +5208,13 @@ describe('OpenCodeClient stream cleanup', () => {
         session: {
           create: sessionCreateB,
           promptAsync: promptAsyncB,
+          abort: successfulSessionAbort(),
         },
         event: {
           subscribe: vi.fn().mockImplementation(() => {
             const sessionID = sessionCreateB.mock.calls.length === 1 ? 'session-b-1' : 'session-b-2';
             return Promise.resolve({
-              stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }]),
+              stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }], sessionID),
             });
           }),
         },
@@ -4953,14 +5272,14 @@ describe('OpenCodeClient stream cleanup', () => {
         ? 'session-before-abort'
         : 'session-after-abort';
       return Promise.resolve({
-        stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }]),
+        stream: new MockEventStream([{ type: 'session.idle', properties: { sessionID } }], sessionID),
       });
     });
 
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -5004,6 +5323,180 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
+  it('should not retry or release the lease until a deferred server-session abort succeeds', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const abortResult = deferred<{ data: true }>();
+    const abort = vi.fn()
+      .mockImplementationOnce(() => abortResult.promise)
+      .mockResolvedValue({ data: true });
+    const sessionCreate = vi.fn()
+      .mockResolvedValueOnce({ data: { id: 'session-deferred-abort' } })
+      .mockResolvedValueOnce({ data: { id: 'session-after-deferred-abort' } });
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const subscribe = vi.fn()
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+          unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+        ], 'session-deferred-abort'),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          sessionIdle('session-deferred-abort'),
+          sessionIdle('session-after-deferred-abort'),
+        ], 'session-deferred-abort'),
+      })
+      .mockResolvedValueOnce({
+        stream: new MockEventStream([
+          sessionIdle('session-deferred-abort'),
+          sessionIdle('session-after-deferred-abort'),
+        ], 'session-after-deferred-abort'),
+      });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync, abort },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+    const recoveringCall = client.call('coder', 'recover me', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledTimes(1));
+
+    const queuedCall = client.call('coder', 'queued task', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    expect(promptAsync).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    abortResult.resolve({ data: true });
+    const [recovered, queued] = await Promise.all([recoveringCall, queuedCall]);
+
+    expect(recovered.status).toBe('done');
+    expect(queued.status).toBe('done');
+    expect(sessionCreate).toHaveBeenCalledTimes(2);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(subscribe).toHaveBeenCalledTimes(3);
+  });
+
+  it('should keep the production session-abort timeout fixed when interaction timeout is overridden', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const subscribe = vi.fn()
+        .mockResolvedValueOnce({
+          stream: new MockEventStream([
+            unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+            unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+          ], 'session-fixed-abort-timeout'),
+        })
+        .mockResolvedValueOnce({
+          stream: new MockEventStream([
+            sessionIdle('session-fixed-abort-timeout'),
+          ], 'session-fixed-abort-timeout'),
+        });
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn() },
+          session: {
+            create: vi.fn().mockResolvedValue({ data: { id: 'session-fixed-abort-timeout' } }),
+            promptAsync: vi.fn().mockResolvedValue(undefined),
+            abort: successfulSessionAbort(),
+          },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: vi.fn() },
+      });
+
+      const result = await new OpenCodeClient().call('coder', 'recover me', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        interactionTimeoutMs: 17,
+      });
+
+      expect(result.status).toBe('done');
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it.each(['data-false', 'api-error', 'retryable-api-error'] as const)(
+    'should invalidate the shared server and reject its queue when session abort fails via %s',
+    async (mode) => {
+      const { OpenCodeClient } = await import('../infra/opencode/client.js');
+      const abortGate = deferred<{ data?: boolean }>();
+      const abort = vi.fn().mockImplementation(() => abortGate.promise);
+      const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-abort-failure' } });
+      const promptAsync = vi.fn().mockResolvedValue(undefined);
+      const subscribe = vi.fn().mockResolvedValue({
+        stream: new MockEventStream([
+          unavailableToolErrorEvent('tool-part-1', 'call-1', 'run'),
+          unavailableToolErrorEvent('tool-part-2', 'call-2', 'run'),
+        ], 'session-abort-failure'),
+      });
+      const serverClose = vi.fn();
+
+      createOpencodeMock.mockResolvedValue({
+        client: {
+          instance: { dispose: vi.fn() },
+          session: { create: sessionCreate, promptAsync, abort },
+          event: { subscribe },
+          permission: { reply: vi.fn() },
+        },
+        server: { close: serverClose },
+      });
+
+      const client = new OpenCodeClient();
+      const failingCall = client.call('coder', 'first', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        interactionTimeoutMs: 20,
+      });
+      while (promptAsync.mock.calls.length === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      const queuedCall = client.call('coder', 'queued', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        interactionTimeoutMs: 20,
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sessionCreate).toHaveBeenCalledTimes(1);
+      if (mode === 'data-false') {
+        abortGate.resolve({ data: false });
+      } else {
+        const abortError = mode === 'retryable-api-error' ? 'fetch failed' : 'abort API unavailable';
+        abortGate.reject(new Error(abortError));
+      }
+
+      const [failed, rejectedQueue] = await Promise.all([failingCall, queuedCall]);
+
+      expect(failed.status).toBe('error');
+      expect(failed.content).toContain('OpenCode server session abort failed');
+      expect(rejectedQueue.status).toBe('error');
+      expect(rejectedQueue.content).toContain('OpenCode server session abort failed');
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(sessionCreate).toHaveBeenCalledTimes(1);
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      expect(serverClose).toHaveBeenCalledTimes(1);
+      expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('should apply childProcessEnv only while starting the shared server and restore ambient env', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const previousTaktObservability = process.env.TAKT_OBSERVABILITY;
@@ -5020,7 +5513,7 @@ describe('OpenCodeClient stream cleanup', () => {
       return {
         client: {
           instance: { dispose: vi.fn() },
-          session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
           event: { subscribe },
           permission: { reply: vi.fn() },
         },
@@ -5075,7 +5568,7 @@ describe('OpenCodeClient stream cleanup', () => {
       return {
         client: {
           instance: { dispose: vi.fn() },
-          session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
           event: { subscribe },
           permission: { reply: vi.fn() },
         },
@@ -5131,7 +5624,7 @@ describe('OpenCodeClient stream cleanup', () => {
         return {
           client: {
             instance: { dispose: vi.fn() },
-            session: { create: secondSessionCreate, promptAsync: secondPromptAsync },
+            session: { create: secondSessionCreate, promptAsync: secondPromptAsync, abort: successfulSessionAbort() },
             event: { subscribe: secondSubscribe },
             permission: { reply: vi.fn() },
           },
@@ -5160,7 +5653,7 @@ describe('OpenCodeClient stream cleanup', () => {
       firstStartup.resolve({
         client: {
           instance: { dispose: vi.fn() },
-          session: { create: firstSessionCreate, promptAsync: firstPromptAsync },
+          session: { create: firstSessionCreate, promptAsync: firstPromptAsync, abort: successfulSessionAbort() },
           event: { subscribe: firstSubscribe },
           permission: { reply: vi.fn() },
         },
@@ -5218,7 +5711,7 @@ describe('OpenCodeClient stream cleanup', () => {
       resolveStartup!({
         client: {
           instance: { dispose: vi.fn() },
-          session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
           event: { subscribe },
           permission: { reply: vi.fn() },
         },
@@ -5260,7 +5753,7 @@ describe('OpenCodeClient stream cleanup', () => {
         return {
           client: {
             instance: { dispose: vi.fn() },
-            session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
             event: { subscribe },
             permission: { reply: vi.fn() },
           },
@@ -5330,7 +5823,7 @@ describe('OpenCodeClient stream cleanup', () => {
       return {
         client: {
           instance: { dispose: vi.fn() },
-          session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
           event: { subscribe },
           permission: { reply: vi.fn() },
         },
@@ -5370,7 +5863,7 @@ describe('OpenCodeClient stream cleanup', () => {
       return {
         client: {
           instance: { dispose: vi.fn() },
-          session: { create: sessionCreate, promptAsync },
+        session: { create: sessionCreate, promptAsync, abort: successfulSessionAbort() },
           event: { subscribe },
           permission: { reply: vi.fn() },
         },
@@ -5425,12 +5918,12 @@ describe('OpenCode conversation via provider (E2E)', () => {
       if (text) {
         events.push({
           type: 'message.part.updated',
-          properties: { part: { id: `p-${turnIndex}`, type: 'text', text }, delta: text },
+          properties: { part: { id: `p-${turnIndex}`, sessionID: sessionId, type: 'text', text }, delta: text },
         });
       }
       events.push({ type: 'session.idle', properties: { sessionID: sessionId } });
       turnIndex += 1;
-      return Promise.resolve({ stream: new MockEventStream(events) });
+      return Promise.resolve({ stream: new MockEventStream(events, sessionId) });
     });
     return { sessionCreate, sessionUpdate, promptAsync, subscribe };
   }
@@ -5448,7 +5941,7 @@ describe('OpenCode conversation via provider (E2E)', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, update: sessionUpdate, promptAsync },
+        session: { create: sessionCreate, update: sessionUpdate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },
@@ -5498,7 +5991,7 @@ describe('OpenCode conversation via provider (E2E)', () => {
     createOpencodeMock.mockResolvedValue({
       client: {
         instance: { dispose: vi.fn() },
-        session: { create: sessionCreate, update: sessionUpdate, promptAsync },
+        session: { create: sessionCreate, update: sessionUpdate, promptAsync, abort: successfulSessionAbort() },
         event: { subscribe },
         permission: { reply: vi.fn() },
       },

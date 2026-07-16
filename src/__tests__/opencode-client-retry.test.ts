@@ -9,10 +9,17 @@ let runPlans: RunPlan[] = [];
 let runPlanIndex = 0;
 const OPENCODE_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
-function createEvents(events: MockStreamEvent[]) {
+function createEvents(events: MockStreamEvent[], sessionId: string) {
   return (async function* () {
     for (const event of events) {
-      yield event;
+      const properties = event.properties;
+      if (typeof properties !== 'object' || properties === null) {
+        throw new Error('Session event properties are required');
+      }
+      yield {
+        ...event,
+        properties: { ...properties, sessionID: sessionId },
+      };
     }
   })();
 }
@@ -61,8 +68,13 @@ vi.mock('@opencode-ai/sdk/v2', () => ({
 const { OpenCodeClient, resetSharedServer } = await import('../infra/opencode/client.js');
 
 function installOpenCodeMock() {
-  const sessionCreate = vi.fn().mockResolvedValue({ data: { id: 'session-1' } });
+  let activeSessionId: string | undefined;
+  const sessionCreate = vi.fn().mockImplementation(() => {
+    activeSessionId = 'session-1';
+    return Promise.resolve({ data: { id: activeSessionId } });
+  });
   const promptAsync = vi.fn().mockResolvedValue(undefined);
+  const abort = vi.fn().mockResolvedValue({ data: true });
   const subscribe = vi.fn().mockImplementation(async (_payload: unknown, options?: { signal?: AbortSignal }) => {
     const plan = runPlans[runPlanIndex];
     runPlanIndex += 1;
@@ -72,13 +84,16 @@ function installOpenCodeMock() {
     if (plan.type === 'stream') {
       return { stream: plan.createStream(options?.signal) };
     }
-    return { stream: createEvents(plan.events) };
+    if (activeSessionId === undefined) {
+      throw new Error('Session must be created before subscribing');
+    }
+    return { stream: createEvents(plan.events, activeSessionId) };
   });
 
   createOpencodeMock.mockResolvedValue({
     client: {
       instance: { dispose: vi.fn() },
-      session: { create: sessionCreate, promptAsync },
+      session: { create: sessionCreate, promptAsync, abort },
       event: { subscribe },
       permission: { reply: vi.fn() },
     },

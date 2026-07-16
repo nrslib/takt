@@ -47,11 +47,11 @@ export interface ToolHealthStats {
 }
 
 export type ToolGuardFailure =
-  | { kind: 'unavailable_tool_loop'; tool: string; message: string }
-  | { kind: 'invalid_argument_loop'; tool: string; message: string }
+  | { kind: 'unavailable_tool_loop'; tool: string; fingerprint: string; message: string }
+  | { kind: 'invalid_argument_loop'; tool: string; fingerprint: string; message: string }
   | { kind: 'edit_conflict_loop'; tool: 'edit'; signature: string; filePath: string; message: string }
   | { kind: 'tool_success_loop'; tool: string; message: string }
-  | { kind: 'tool_error_burst'; stats: ToolHealthStats; message: string }
+  | { kind: 'tool_error_burst'; fingerprint: string; stats: ToolHealthStats; message: string }
   | { kind: 'absolute_cost_limit'; stats: ToolHealthStats; message: string };
 
 /** 呼び出し時に評価する（テスト・実験で env から上書きできるようにする）。 */
@@ -290,8 +290,8 @@ export class OpenCodeToolGuard {
   }
 
   /**
-   * ツールエラーの観測。発火順は「連続性検出（従来ロジック不変）→ 絶対上限 →
-   * 進捗感知 burst」。同一 callId の重複イベントは1回として数える。
+   * ツールエラーの観測。発火順は「絶対上限 → 連続性検出 → 進捗感知 burst」。
+   * 同一 callId の重複イベントは1回として数える。
    */
   observeError(
     toolCallId: string,
@@ -324,16 +324,9 @@ export class OpenCodeToolGuard {
       this.absoluteSignatureCounts.set(signature, absoluteCount);
       this.maxSameSignatureRepeats = Math.max(this.maxSameSignatureRepeats, absoluteCount);
 
-      if (unavailable !== undefined) {
-        return { kind: 'unavailable_tool_loop', tool: unavailable.tool, message: unavailable.message };
-      }
-      if (invalidArgument !== undefined) {
-        return { kind: 'invalid_argument_loop', tool, message: invalidArgument };
-      }
-
-      // 絶対コスト上限（recovery をまたぐ台帳）。edit_conflict より先に判定する:
-      // recovery を消費し切った後の同一署名再発は「もう一度 correction を試みる
-      // べき事象」ではなく hard stop（即失敗）。
+      // 絶対コスト上限（recovery をまたぐ台帳）は recoverable detector より
+      // 優先する。同じイベントで両方の閾値に達しても correction/fresh の予算を
+      // 消費せず hard stop にする。
       if (this.totalErrors >= config.absoluteErrorBudget) {
         const stats = this.stats();
         return {
@@ -348,6 +341,23 @@ export class OpenCodeToolGuard {
           kind: 'absolute_cost_limit',
           stats,
           message: `OpenCode absolute same-signature limit exceeded (signature ${signature.slice(0, 12)} repeated ${absoluteCount} times across the whole call incl. recoveries; last tool "${tool}")`,
+        };
+      }
+
+      if (unavailable !== undefined) {
+        return {
+          kind: 'unavailable_tool_loop',
+          tool: unavailable.tool,
+          fingerprint: `unavailable:${unavailable.tool.toLowerCase()}`,
+          message: unavailable.message,
+        };
+      }
+      if (invalidArgument !== undefined) {
+        return {
+          kind: 'invalid_argument_loop',
+          tool,
+          fingerprint: `invalid:${tool.toLowerCase()}`,
+          message: invalidArgument,
         };
       }
 
@@ -373,6 +383,7 @@ export class OpenCodeToolGuard {
         const stats = this.stats();
         return {
           kind: 'tool_error_burst',
+          fingerprint: 'tool_error_burst',
           stats,
           message: `OpenCode tool error burst detected (${this.consecutiveErrors} consecutive errors without progress, recent error rate ${(stats.recentErrorRate * 100).toFixed(0)}% over ${stats.recentWindowSize} events; last tool "${tool}"): ${message}`,
         };
@@ -396,61 +407,65 @@ export class OpenCodeToolGuard {
 
 /**
  * call() 1回分の tool-guard recovery 状態。
- * - correction: edit_conflict_loop に対する同一セッション内の指示1回
- * - fresh session: correction 後の再発、または tool_error_burst に対して1回
- *   （edit_conflict / burst で合計1回を共有）
+ * - correction: recoverable な tool-loop に対する同一セッション内の是正指示
+ * - fresh session: correction 後の再発、または correction 予算超過に対して1回
+ *   （tool-loop 種別で合計1回を共有）
  * どちらも使い切った後の再発は本物の失敗（needs_fix / plan への自動迂回は
  * しない — インフラ障害とレビュー判断を混同しない、という codex 裁定）。
  */
 export interface ToolGuardRecoveryState {
   /** コール全体で消費した correction 回数（上限は editCorrectionLimit）。 */
   readonly correctionsUsed: number;
-  /**
-   * correction 済みの署名。edit_conflict の再発火時にこのリストと照合し、
-   * 「correction 済み署名の再発 = correction 失敗 → fresh へ escalate」と
-   * 「別署名の新規 conflict = 自身の correction 段階から開始」を区別する
-   * （codex 指摘: 無検証だと別署名の新規 conflict が共有 fresh recovery を
-   * 誤って消費する）。
-   */
-  readonly correctedSignatures: readonly string[];
+  /** correction 済みの detector fingerprint。再発は fresh へ escalate する。 */
+  readonly correctedFingerprints: readonly string[];
   /** 次の attempt が correction（同一セッション再開）であることを示す。 */
   readonly pendingCorrection?: {
     readonly sessionId: string;
-    readonly filePath: string;
-    readonly signature: string;
+    readonly fingerprint: string;
+    readonly prompt: string;
   };
   readonly freshSessionUsed: boolean;
   /** fresh recovery 発動理由（前置文とログに使う）。 */
-  readonly freshReason?: 'edit_conflict_loop' | 'tool_error_burst';
+  readonly freshReason?: ToolGuardRecoverableKind;
 }
 
+export type ToolGuardRecoverableKind = Extract<
+  ToolGuardFailure['kind'],
+  'unavailable_tool_loop' | 'invalid_argument_loop' | 'edit_conflict_loop' | 'tool_error_burst'
+>;
+
+export type ToolGuardRecoverableFailure = Extract<
+  ToolGuardFailure,
+  { kind: ToolGuardRecoverableKind }
+>;
+
 export function createToolGuardRecoveryState(): ToolGuardRecoveryState {
-  return { correctionsUsed: 0, correctedSignatures: [], freshSessionUsed: false };
+  return { correctionsUsed: 0, correctedFingerprints: [], freshSessionUsed: false };
 }
 
 /**
- * この edit_conflict 発火に correction を発行してよいか。correction 済み署名の
- * 再発は不可（fresh へ escalate）。新規署名はコール全体の correction 上限内で可。
+ * この tool-loop 発火に correction を発行してよいか。correction 済み fingerprint の
+ * 再発は不可（fresh へ escalate）。新規 fingerprint はコール全体の上限内で可。
  */
-export function shouldIssueEditConflictCorrection(
+export function shouldIssueToolGuardCorrection(
   state: ToolGuardRecoveryState,
-  signature: string,
+  fingerprint: string,
 ): boolean {
-  return !state.correctedSignatures.includes(signature)
+  return !state.correctedFingerprints.includes(fingerprint)
     && state.correctionsUsed < resolveToolGuardConfig().editCorrectionLimit;
 }
 
 export function markToolGuardCorrectionPending(
   state: ToolGuardRecoveryState,
   sessionId: string,
-  filePath: string,
-  signature: string,
+  fingerprint: string,
+  prompt: string,
 ): ToolGuardRecoveryState {
   return {
     ...state,
     correctionsUsed: state.correctionsUsed + 1,
-    correctedSignatures: [...state.correctedSignatures, signature],
-    pendingCorrection: { sessionId, filePath, signature },
+    correctedFingerprints: [...state.correctedFingerprints, fingerprint],
+    pendingCorrection: { sessionId, fingerprint, prompt },
   };
 }
 
@@ -462,7 +477,7 @@ export function clearToolGuardPendingCorrection(state: ToolGuardRecoveryState): 
 
 export function markToolGuardFreshSessionUsed(
   state: ToolGuardRecoveryState,
-  reason: 'edit_conflict_loop' | 'tool_error_burst',
+  reason: ToolGuardRecoverableKind,
 ): ToolGuardRecoveryState {
   return { ...clearToolGuardPendingCorrection(state), freshSessionUsed: true, freshReason: reason };
 }
@@ -482,17 +497,46 @@ export function buildEditConflictCorrectionPrompt(filePath: string): string {
   ].join('\n');
 }
 
+export function buildToolGuardCorrectionPrompt(
+  failure: ToolGuardRecoverableFailure,
+  serverAvailableTools: readonly string[] | undefined,
+): string {
+  if (failure.kind === 'edit_conflict_loop') {
+    return buildEditConflictCorrectionPrompt(failure.filePath);
+  }
+  if (failure.kind === 'unavailable_tool_loop') {
+    const available = serverAvailableTools === undefined
+      ? 'Use only tools currently available in this session.'
+      : `Use only these available tools: ${serverAvailableTools.map((tool) => JSON.stringify(tool)).join(', ')}.`;
+    return [
+      `Your recent attempts repeatedly called unavailable tool ${JSON.stringify(failure.tool)}. Stop calling it.`,
+      available,
+      'Re-read the current task context and continue using valid tools only. Do not repeat the original prompt.',
+    ].join('\n');
+  }
+  if (failure.kind === 'invalid_argument_loop') {
+    return [
+      `Your recent calls to ${JSON.stringify(failure.tool)} repeatedly used invalid arguments.`,
+      'Stop repeating the same call. Re-read the tool requirements and current file state, then use a complete, correctly typed argument object.',
+      'Continue the current task without repeating the original prompt.',
+    ].join('\n');
+  }
+  return [
+    'Your recent tool calls are failing repeatedly without progress.',
+    'Pause, re-read the current task and relevant workspace state, then make one deliberate valid tool call instead of repeating the failing pattern.',
+    'Continue the current task without repeating the original prompt.',
+  ].join('\n');
+}
+
 /**
  * fresh-session recovery 用の前置文。unavailable-tool recovery と同じ機構・
  * パターン: workspace に途中成果が存在する・上書きするな・対象を再読込せよ。
  */
 export function buildToolGuardRetryPrompt(
   prompt: string,
-  reason: 'edit_conflict_loop' | 'tool_error_burst',
+  reason: ToolGuardRecoverableKind,
 ): string {
-  const reasonLine = reason === 'edit_conflict_loop'
-    ? 'Your previous session kept failing the same edit because its oldString did not match the file content.'
-    : 'Your previous session degraded into a burst of failing tool calls without making progress.';
+  const reasonLine = buildFreshRecoveryReason(reason);
   return [
     'A previous session already worked on this task in the same workspace.',
     reasonLine,
@@ -502,4 +546,17 @@ export function buildToolGuardRetryPrompt(
     '',
     prompt,
   ].join('\n');
+}
+
+function buildFreshRecoveryReason(reason: ToolGuardRecoverableKind): string {
+  switch (reason) {
+    case 'edit_conflict_loop':
+      return 'Your previous session kept failing the same edit because its oldString did not match the file content.';
+    case 'unavailable_tool_loop':
+      return 'Your previous session repeatedly called an unavailable tool.';
+    case 'invalid_argument_loop':
+      return 'Your previous session repeatedly called a tool with invalid arguments.';
+    case 'tool_error_burst':
+      return 'Your previous session degraded into a burst of failing tool calls without making progress.';
+  }
 }
