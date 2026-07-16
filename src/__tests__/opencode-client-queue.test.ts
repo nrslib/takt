@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { AgentResponse } from '../core/models/response.js';
 
 class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   private index = 0;
@@ -131,7 +132,13 @@ describe('OpenCodeClient session queue', () => {
   it('should run two calls with different sessionIds in parallel', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
 
-    const promptAsync = vi.fn().mockReturnValue(new Promise<void>(() => {}));
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    let promptCallCount = 0;
+    const promptAsync = vi.fn().mockImplementation(() => {
+      promptCallCount++;
+      return promptCallCount === 1 ? firstPrompt.promise : secondPrompt.promise;
+    });
     const sessionCreate = vi.fn();
     let subCount = 0;
     const subscribe = vi.fn().mockImplementation(() => {
@@ -163,6 +170,12 @@ describe('OpenCodeClient session queue', () => {
 
     expect(sessionCreate).not.toHaveBeenCalled();
     expect(createOpencodeMock).toHaveBeenCalledTimes(1);
+
+    firstPrompt.resolve();
+    secondPrompt.resolve();
+    const [r1, r2] = await Promise.all([call1, call2]);
+    expect(r1.status).toBe('done');
+    expect(r2.status).toBe('done');
   });
 
   it('should serialize same-session calls in FIFO order', async () => {
@@ -397,5 +410,81 @@ describe('OpenCodeClient session queue', () => {
     expect(promptAsync.mock.calls[0][0].sessionID).toBe('session-retry-1');
     expect(promptAsync.mock.calls[1][0].sessionID).toBe('session-retry-2');
     expect(promptAsync.mock.calls[0][0].sessionID).not.toBe(promptAsync.mock.calls[1][0].sessionID);
+  });
+
+  it('should queue second call started from init behind the first (same session follow-up)', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+
+    const firstPrompt = deferred<void>();
+    const secondPrompt = deferred<void>();
+    const SID = 'session-init-followup';
+    const sessionCreate = vi.fn().mockResolvedValueOnce({ data: { id: SID } });
+    let promptCallCount = 0;
+    const promptAsync = vi.fn().mockImplementation(() => {
+      promptCallCount++;
+      return promptCallCount === 1 ? firstPrompt.promise : secondPrompt.promise;
+    });
+    const subscribe = vi.fn().mockResolvedValue({
+      stream: new MockEventStream([
+        { type: 'session.idle', properties: { sessionID: SID } },
+      ]),
+    });
+
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: { create: sessionCreate, promptAsync },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const client = new OpenCodeClient();
+
+    let call2Promise: Promise<AgentResponse> | undefined;
+    const onStream = vi.fn((event) => {
+      if (event.type === 'init' && event.data.sessionId === SID) {
+        call2Promise = client.call('coder', 'second', {
+          cwd: '/tmp',
+          model: 'opencode/test-model',
+          sessionId: SID,
+        });
+      }
+    });
+
+    const call1 = client.call('coder', 'first', {
+      cwd: '/tmp',
+      model: 'opencode/test-model',
+      onStream,
+    });
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    });
+
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
+    expect(promptCallCount).toBe(1);
+
+    await vi.waitFor(() => {
+      expect(call2Promise).toBeDefined();
+    });
+
+    expect(promptCallCount).toBe(1);
+
+    firstPrompt.resolve();
+
+    await vi.waitFor(() => {
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    });
+
+    expect(promptAsync.mock.calls[0][0].sessionID).toBe(SID);
+    expect(promptAsync.mock.calls[1][0].sessionID).toBe(SID);
+
+    secondPrompt.resolve();
+
+    const [r1, r2] = await Promise.all([call1, call2Promise!]);
+    expect(r1.status).toBe('done');
+    expect(r2.status).toBe('done');
   });
 });

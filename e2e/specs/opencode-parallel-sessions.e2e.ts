@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { resolve as resolvePath } from 'node:path';
 import { createOpencode, type Event as OpenCodeEvent } from '@opencode-ai/sdk/v2';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentResponse } from '../../src/core/models/response.js';
 
 const { createOpencodeMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('@opencode-ai/sdk/v2', async () => {
 const INTEGRATION_ENV = 'TAKT_OPENCODE_PARALLEL_INTEGRATION';
 const SERVER_START_TIMEOUT = 60_000;
 const SESSION_TIMEOUT = 240_000;
+const NO_UPSTREAM_REQUEST_WINDOW_MS = 1_000;
 const DUMMY_API_KEY = 'takt-test-dummy-api-key';
 const MODEL = { providerID: 'opencode', modelID: 'deepseek-v4-flash-free' } as const;
 const RESPONSE_MODEL = 'opencode/deepseek-v4-flash-free';
@@ -922,6 +924,10 @@ describe.skipIf(shouldSkip)('OpenCode parallel sessions', () => {
       model: MODEL,
       parts: [{ type: 'text' as const, text: 'SESSION-FIFO-1 first prompt' }],
     });
+
+    await upstream.waitForMarkerRequest('SESSION-FIFO-1', 60_000);
+    expect(upstream.requests.length).toBe(1);
+
     const prompt2 = ocClient.session.promptAsync({
       sessionID: sessionId,
       directory: dir,
@@ -929,14 +935,16 @@ describe.skipIf(shouldSkip)('OpenCode parallel sessions', () => {
       parts: [{ type: 'text' as const, text: 'SESSION-FIFO-2 second prompt' }],
     });
 
-    // The OpenCode server queues prompts per session: the second
-    // prompt is not sent until the first completes.  Gate the first
-    // response so we can verify FIFO ordering.
-    await upstream.waitForMarkerRequest('SESSION-FIFO-1', 60_000);
-    expect(upstream.requests.length).toBe(1);
-    expect(upstream.hasBodyContaining('SESSION-FIFO-2')).toBe(false);
+    // FIFO-2 must not reach upstream while FIFO-1 is still gated.
+    // OpenCode SDK provides no acknowledgement when it accepts FIFO-2, so in this
+    // real-process integration test we use a bounded observation window instead.
+    await expect(
+      upstream.waitForBodyMatch(
+        'SESSION-FIFO-2',
+        NO_UPSTREAM_REQUEST_WINDOW_MS,
+      ),
+    ).rejects.toThrow(/Timed out waiting for request body/);
 
-    // Release the first — the now-completed prompt unblocks the second.
     upstream.releaseGate('SESSION-FIFO-1');
     await upstream.waitForBodyMatch('SESSION-FIFO-2', 60_000);
     upstream.releaseBodyGate('SESSION-FIFO-2');
@@ -1216,6 +1224,48 @@ describe.skipIf(shouldSkip)('OpenCodeClient via Takt adapter (integration)', () 
     taktUpstream.releaseBodyGate('TAKT-FIFO-2');
 
     const results = await Promise.all([call1, call2]);
+    expect(results[0].status).toBe('done');
+    expect(results[1].status).toBe('done');
+    expect(taktUpstream.pendingRequests()).toBe(0);
+  }, SESSION_TIMEOUT * 3);
+
+  it('should queue a follow-up call started from init callback behind the first', async () => {
+    if (!taktUpstream || !taktOcClient) {
+      throw new Error('setup failed');
+    }
+
+    taktUpstream.clearRequests();
+    taktUpstream.activateGate('TAKT-INIT-FIRST');
+    taktUpstream.activateBodyGate('TAKT-INIT-SECOND');
+
+    let call2Promise: Promise<AgentResponse> | undefined;
+    const onStream = vi.fn((event) => {
+      if (event.type === 'init' && typeof event.data?.sessionId === 'string') {
+        call2Promise = taktOcClient!.call('coder', 'TAKT-INIT-SECOND follow-up', {
+          cwd: process.cwd(),
+          model: RESPONSE_MODEL,
+          sessionId: event.data.sessionId,
+        });
+      }
+    });
+
+    const call1 = taktOcClient.call('coder', 'TAKT-INIT-FIRST initial', {
+      cwd: process.cwd(),
+      model: RESPONSE_MODEL,
+      onStream,
+    });
+
+    await taktUpstream.waitForMarkerRequest('TAKT-INIT-FIRST', 60_000);
+
+    expect(call2Promise).toBeDefined();
+    expect(taktUpstream.hasBodyContaining('TAKT-INIT-SECOND')).toBe(false);
+    expect(taktUpstream.pendingRequests()).toBe(1);
+
+    taktUpstream.releaseGate('TAKT-INIT-FIRST');
+    await taktUpstream.waitForBodyMatch('TAKT-INIT-SECOND', 60_000);
+    taktUpstream.releaseBodyGate('TAKT-INIT-SECOND');
+
+    const results = await Promise.all([call1, call2Promise!]);
     expect(results[0].status).toBe('done');
     expect(results[1].status).toBe('done');
     expect(taktUpstream.pendingRequests()).toBe(0);

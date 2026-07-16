@@ -873,6 +873,18 @@ export class OpenCodeClient {
           if (!sessionId) {
             throw new Error('Failed to create OpenCode session');
           }
+
+          if (provisionalKey !== undefined) {
+            const realAcquired = await acquireClient(
+              fullModel,
+              options.opencodeApiKey,
+              options.childProcessEnv,
+              options.abortSignal,
+              sessionId,
+            );
+            release!();
+            release = realAcquired.release;
+          }
         }
 
         const activeSessionId = sessionId;
