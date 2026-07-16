@@ -1,7 +1,6 @@
 import { dirname } from 'node:path';
 import { isScopeRef } from 'faceted-prompting';
 import type { WorkflowCallStep, WorkflowConfig } from '../../../core/models/index.js';
-import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 import { getAttachedWorkflowTrustInfo, getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
@@ -23,27 +22,19 @@ function validateWorkflowCallNamedIdentifier(identifier: string, stepName: strin
   }
 }
 
-function getParentWorkflowCallStep(parentWorkflow: WorkflowConfig, stepName: string): WorkflowCallStep {
-  const step = parentWorkflow.steps.find((candidate) => candidate.name === stepName);
-  if (!step || !isWorkflowCallStep(step)) {
-    throw new Error(`workflow_call step "${stepName}" was not found in workflow "${parentWorkflow.name}"`);
-  }
-  return step;
-}
-
 export function resolveWorkflowCallTarget(
   parentWorkflow: WorkflowConfig,
-  identifier: string,
-  stepName: string,
+  parentStep: WorkflowCallStep,
   projectCwd: string,
   lookupCwd = projectCwd,
   parentContext?: WorkflowCallParentContext,
 ): WorkflowConfig | null {
+  const stepName = parentStep.name;
+  const identifier = parentStep.call;
   if (!isScopeRef(identifier) && !isWorkflowPath(identifier)) {
     validateWorkflowCallNamedIdentifier(identifier, stepName);
   }
 
-  const parentStep = getParentWorkflowCallStep(parentWorkflow, stepName);
   const parentSourcePath = getWorkflowSourcePath(parentWorkflow) ?? parentContext?.sourcePath;
   const basePath = parentSourcePath ? dirname(parentSourcePath) : lookupCwd;
   const parentTrustInfo = getAttachedWorkflowTrustInfo(parentWorkflow)

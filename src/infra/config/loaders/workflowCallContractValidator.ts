@@ -1,5 +1,6 @@
 import { dirname } from 'node:path';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowCallStep, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
+import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
@@ -34,6 +35,19 @@ function getWorkflowCallValidationKey(workflow: WorkflowConfig, lookupCwd: strin
   return `${lookupCwd}:${workflow.name}`;
 }
 
+function collectWorkflowCallSteps(
+  steps: readonly WorkflowStep[],
+  matches: WorkflowCallStep[] = [],
+): WorkflowCallStep[] {
+  for (const step of steps) {
+    if (isWorkflowCallStep(step)) {
+      matches.push(step);
+    }
+    collectWorkflowCallSteps(step.parallel ?? [], matches);
+  }
+  return matches;
+}
+
 function validateWorkflowCallContractsRecursive(
   workflow: WorkflowConfig,
   projectCwd: string,
@@ -52,10 +66,7 @@ function validateWorkflowCallContractsRecursive(
   const basePath = parentSourcePath ? dirname(parentSourcePath) : lookupCwd;
   const parentTrustInfo = getWorkflowTrustInfo(workflow, projectCwd);
 
-  for (const step of workflow.steps) {
-    if (step.kind !== 'workflow_call') {
-      continue;
-    }
+  for (const step of collectWorkflowCallSteps(workflow.steps)) {
     if (!allowPathBasedCalls && deps.isWorkflowPath(step.call)) {
       continue;
     }

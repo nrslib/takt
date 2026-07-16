@@ -13,6 +13,7 @@ import {
 } from '../../../infra/config/index.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
 import { resolveAssistantScopedProviderModelFromConfig } from '../../../core/config/provider-resolution.js';
+import { toConcreteProvider } from '../../../core/workflow/provider-resolution.js';
 import type { StepProviderInfo, WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
 import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
@@ -77,6 +78,35 @@ function mergeProviderProfileOverrides(
   return merged;
 }
 
+function emitMissingWorkflowFile(outputMode: ExecuteTaskOptions['outputMode'], safeWorkflowIdentifier: string): void {
+  if (outputMode === 'silent') {
+    return;
+  }
+  error(`Workflow file not found: ${safeWorkflowIdentifier}`);
+}
+
+function emitMissingWorkflow(outputMode: ExecuteTaskOptions['outputMode'], safeWorkflowIdentifier: string): void {
+  if (outputMode === 'silent') {
+    return;
+  }
+  error(`Workflow "${safeWorkflowIdentifier}" not found.`);
+  info('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
+  info('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
+  info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
+}
+
+async function dispatchMissingWorkflowFailure(
+  eventSink: ExecuteTaskOptions['eventSink'],
+  reason: string,
+): Promise<WorkflowExecutionResult> {
+  await eventSink?.({
+    type: 'completed',
+    success: false,
+    reason,
+  });
+  return { success: false, reason };
+}
+
 export async function executeTaskWorkflow(
   options: ExecuteTaskOptions,
   workflowExecutor: WorkflowExecutor,
@@ -87,6 +117,10 @@ export async function executeTaskWorkflow(
     workflowIdentifier,
     projectCwd,
     agentOverrides,
+    outputMode,
+    eventSink,
+    onAskUserQuestion,
+    mcpServers,
     interactiveUserInput,
     interactiveMetadata,
     startStep,
@@ -108,15 +142,18 @@ export async function executeTaskWorkflow(
 
   if (!workflowConfig) {
     if (isWorkflowPath(workflowIdentifier)) {
-      error(`Workflow file not found: ${safeWorkflowIdentifier}`);
-      return { success: false, reason: `Workflow file not found: ${safeWorkflowIdentifier}` };
+      emitMissingWorkflowFile(outputMode, safeWorkflowIdentifier);
+      return dispatchMissingWorkflowFailure(
+        eventSink,
+        `Workflow file not found: ${safeWorkflowIdentifier}`,
+      );
     }
 
-    error(`Workflow "${safeWorkflowIdentifier}" not found.`);
-    info('Available workflows are searched in .takt/workflows/ and ~/.takt/workflows/.');
-    info('If the same workflow name exists in multiple locations, project workflows/ take priority over user workflows/.');
-    info('Specify a valid workflow when creating tasks (e.g., via "takt add").');
-    return { success: false, reason: `Workflow "${safeWorkflowIdentifier}" not found.` };
+    emitMissingWorkflow(outputMode, safeWorkflowIdentifier);
+    return dispatchMissingWorkflowFailure(
+      eventSink,
+      `Workflow "${safeWorkflowIdentifier}" not found.`,
+    );
   }
   log.debug('Running workflow', {
     name: workflowConfig.name,
@@ -129,8 +166,15 @@ export async function executeTaskWorkflow(
     projectCwd,
     language: config.language,
     provider: agentOverrides?.provider,
+    providerSource: agentOverrides?.providerSource,
     model: agentOverrides?.model,
+    modelSource: agentOverrides?.modelSource,
+    autoStrategy: agentOverrides?.autoStrategy,
     reportFallbackProvider: resolveReportFallbackProviderModel(projectCwd),
+    outputMode,
+    eventSink,
+    onAskUserQuestion,
+    mcpServers,
     providerOptions: providerOptions.value,
     providerOptionsSource: providerOptions.source,
     providerOptionsOriginResolver: providerOptions.originResolver,
@@ -160,12 +204,12 @@ function resolveReportFallbackProviderModel(projectCwd: string): StepProviderInf
   const global = loadGlobalConfig();
   const resolved = resolveAssistantScopedProviderModelFromConfig({
     local: {
-      provider: project.provider,
+      provider: toConcreteProvider(project.provider),
       model: project.model,
       taktProviders: project.taktProviders,
     },
     global: {
-      provider: global.provider,
+      provider: toConcreteProvider(global.provider),
       model: global.model,
       taktProviders: global.taktProviders,
     },

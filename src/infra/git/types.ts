@@ -66,11 +66,13 @@ export interface CreateIssueOptions {
   labels?: string[];
 }
 
-export interface CreateIssueResult {
-  success: boolean;
-  url?: string;
-  error?: string;
-}
+export type CreateIssueResult =
+  | { success: true; issueNumber: number; url?: string }
+  | { success: false; error: string };
+
+export type CloseIssueResult =
+  | { success: true; commentCreated?: boolean }
+  | { success: false; error: string; commentCreated?: boolean };
 
 export type PrReviewThreadState = 'active' | 'outdated-unresolved' | 'resolved';
 
@@ -103,6 +105,8 @@ export interface GitProvider {
   fetchIssue(issueNumber: number, cwd?: string): Issue;
 
   createIssue(options: CreateIssueOptions, cwd?: string): CreateIssueResult;
+
+  closeIssue(issueNumber: number, comment: string, cwd?: string): CloseIssueResult;
 
   fetchPrReviewComments(prNumber: number, cwd?: string): PrReviewData;
 

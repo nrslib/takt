@@ -3,7 +3,6 @@ import type { ClaudeTerminalCallOptions } from '../claude-terminal/types.js';
 import { resolveClaudeCliPath } from '../config/index.js';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse } from '../../core/models/index.js';
-import { validateClaudeEffortCompatibility } from '../../core/workflow/claude-effort-compatibility.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { keepsAllowedToolWithoutEdit as keepsClaudeAllowedToolWithoutEdit } from './allowed-tool-edit-policy.js';
@@ -44,7 +43,6 @@ function createCaughtProviderErrorResponse(
 function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOptions {
   const claudeOptions = options.providerOptions?.claude;
   const terminalOptions = options.providerOptions?.claudeTerminal;
-  validateClaudeEffortCompatibility(options.model, claudeOptions?.effort);
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,

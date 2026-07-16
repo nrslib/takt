@@ -101,7 +101,7 @@ describe('validateWorkflowConfig', () => {
           edit: false,
           instruction: '{task}',
           passPreviousResponse: true,
-          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     });
@@ -171,14 +171,118 @@ describe('validateWorkflowConfig', () => {
           instruction: '{task}',
           passPreviousResponse: true,
           rules: [
-            { condition: 'findings.open.count == 0', next: 'COMPLETE' },
-            { condition: 'findings.conflicts.count > 0', returnValue: 'need_replan' },
+            { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
+            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
           ],
         },
       ],
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it('fails fast when finding_contract.manager uses opencode without a model', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          provider: 'opencode',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+      personaProviders: {
+        'findings-manager': {
+          provider: 'claude',
+          model: 'claude/persona-model',
+        },
+      },
+    })).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('validates finding_contract.manager through workflow provider fallback when manager provider is not direct', () => {
+    const workflow = createWorkflow({
+      provider: 'opencode',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+    })).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('validates finding_contract.manager through provider_routing.personas when manager provider is not direct', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+      providerRouting: {
+        personas: {
+          'findings-manager': { provider: 'opencode' },
+        },
+      },
+    })).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('prefers finding_contract.manager provider/model over provider_routing and persona_providers', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+      providerRouting: {
+        steps: {
+          'findings-manager': { provider: 'opencode' },
+        },
+        personas: {
+          'findings-manager': { provider: 'opencode' },
+        },
+      },
+      personaProviders: {
+        'findings-manager': { provider: 'opencode' },
+      },
+    })).not.toThrow();
   });
 
   it('fails fast when a findingContract parallel parent cannot route invalid manager output', () => {
@@ -211,7 +315,7 @@ describe('validateWorkflowConfig', () => {
               rules: [{ condition: 'approved' }],
             },
           ],
-          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     });
@@ -251,7 +355,7 @@ describe('validateWorkflowConfig', () => {
               rules: [{ condition: 'approved' }],
             },
           ],
-          rules: [{ condition: 'findings.conflicts.count > 0', returnValue: 'needs_fix' }],
+          rules: [{ condition: 'when(findings.conflicts.count > 0)', returnValue: 'needs_fix' }],
         },
       ],
     });
@@ -289,7 +393,7 @@ describe('validateWorkflowConfig', () => {
               rules: [{ condition: 'approved' }],
             },
           ],
-          rules: [{ condition: 'findings.conflicts.count > 0', next: 'fix' }],
+          rules: [{ condition: 'when(findings.conflicts.count > 0)', next: 'fix' }],
         },
         {
           name: 'fix',
@@ -396,7 +500,7 @@ describe('validateWorkflowConfig', () => {
           cycle: ['plan', 'plan'],
           threshold: 2,
           judge: {
-            rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
           },
         },
       ],
@@ -423,7 +527,7 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
-              rules: [{ condition: 'findings.open.count == 0' }],
+              rules: [{ condition: 'when(findings.open.count == 0)' }],
             },
           ],
           rules: [{ condition: 'done', next: 'COMPLETE' }],
@@ -463,12 +567,12 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
-              rules: [{ condition: 'findings.open.count == 0' }],
+              rules: [{ condition: 'when(findings.open.count == 0)' }],
             },
           ],
           rules: [
-            { condition: 'findings.open.count == 0', next: 'COMPLETE' },
-            { condition: 'findings.conflicts.count > 0', returnValue: 'need_replan' },
+            { condition: 'when(findings.open.count == 0)', next: 'COMPLETE' },
+            { condition: 'when(findings.conflicts.count > 0)', returnValue: 'need_replan' },
           ],
         },
       ],
@@ -484,7 +588,7 @@ describe('validateWorkflowConfig', () => {
           cycle: ['plan', 'plan'],
           threshold: 2,
           judge: {
-            rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+            rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
           },
         },
       ],
@@ -526,10 +630,10 @@ describe('validateWorkflowConfig', () => {
                 schemaRef: 'existing.schema',
                 schema: { type: 'object' },
               },
-              rules: [{ condition: 'true', next: 'COMPLETE' }],
+              rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
             },
           ],
-          rules: [{ condition: 'findings.open.count == 0', next: 'COMPLETE' }],
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
         },
       ],
     });
@@ -558,5 +662,212 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
       'Configuration error: workflowCallResolver is required when workflow contains workflow_call steps',
     );
+  });
+
+  it('fails fast when parallel workflow_call is configured without workflowCallResolver', () => {
+    const workflow = createWorkflow({
+      initialStep: 'reviewers',
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [
+            {
+              name: 'delegate',
+              kind: 'workflow_call',
+              call: 'takt/coding',
+              personaDisplayName: 'delegate',
+              instruction: '',
+              passPreviousResponse: true,
+              rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Configuration error: workflowCallResolver is required when workflow contains workflow_call steps',
+    );
+  });
+
+  it('fails fast when a parallel step contains duplicate sibling sub-step names', () => {
+    const workflow = createWorkflow({
+      initialStep: 'reviewers',
+      steps: [
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [
+            {
+              name: 'delegate',
+              persona: 'reviewer-a',
+              personaDisplayName: 'reviewer-a',
+              instruction: 'review api',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+            {
+              name: 'delegate',
+              persona: 'reviewer-b',
+              personaDisplayName: 'reviewer-b',
+              instruction: 'review ui',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Configuration error: parallel step "reviewers" contains duplicate sub-step name "delegate"',
+    );
+  });
+
+  it('accepts the same parallel sub-step name under different parent steps', () => {
+    const workflow = createWorkflow({
+      initialStep: 'api-reviewers',
+      steps: [
+        {
+          name: 'api-reviewers',
+          personaDisplayName: 'api-reviewers',
+          instruction: 'review api',
+          parallel: [
+            {
+              name: 'delegate',
+              persona: 'api-reviewer',
+              personaDisplayName: 'api-reviewer',
+              instruction: 'review api',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("approved")', next: 'ui-reviewers' }],
+        },
+        {
+          name: 'ui-reviewers',
+          personaDisplayName: 'ui-reviewers',
+          instruction: 'review ui',
+          parallel: [
+            {
+              name: 'delegate',
+              persona: 'ui-reviewer',
+              personaDisplayName: 'ui-reviewer',
+              instruction: 'review ui',
+              passPreviousResponse: true,
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+          ],
+          rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it.each([
+    [
+      'system step',
+      {
+        name: 'cleanup',
+        kind: 'system',
+        session: 'compact',
+        personaDisplayName: 'cleanup',
+        instruction: '',
+        systemInputs: [],
+        effects: [],
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "cleanup": session is only supported on agent steps and parallel sub-steps',
+    ],
+    [
+      'workflow_call step',
+      {
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'takt/coding',
+        session: 'compact',
+        personaDisplayName: 'delegate',
+        instruction: '',
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "delegate": session is only supported on agent steps and parallel sub-steps',
+    ],
+    [
+      'parallel parent step',
+      {
+        name: 'reviewers',
+        persona: 'reviewer',
+        personaDisplayName: 'reviewer',
+        instruction: 'review',
+        session: 'compact',
+        parallel: [
+          {
+            name: 'api-review',
+            persona: 'reviewer',
+            personaDisplayName: 'reviewer',
+            instruction: 'review api',
+            passPreviousResponse: true,
+          },
+        ],
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "reviewers": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+    [
+      'empty parallel parent step',
+      {
+        name: 'reviewers',
+        persona: 'reviewer',
+        personaDisplayName: 'reviewer',
+        instruction: 'review',
+        session: 'compact',
+        parallel: [],
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "reviewers": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+    [
+      'arpeggio parent step',
+      {
+        name: 'batch',
+        persona: 'worker',
+        personaDisplayName: 'worker',
+        instruction: 'batch',
+        session: 'compact',
+        arpeggio: {},
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "batch": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+    [
+      'team_leader parent step',
+      {
+        name: 'split',
+        persona: 'leader',
+        personaDisplayName: 'leader',
+        instruction: 'split',
+        session: 'compact',
+        teamLeader: {},
+        passPreviousResponse: true,
+      },
+      'Configuration error: step "split": session is only supported on normal agent steps and parallel sub-steps',
+    ],
+  ])('rejects session compact on programmatic %s', (_label, step, message) => {
+    const workflow = createWorkflow({
+      initialStep: step.name,
+      steps: [step as unknown as WorkflowConfig['steps'][number]],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      workflowCallResolver: () => null,
+    })).toThrow(message);
   });
 });

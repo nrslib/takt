@@ -10,6 +10,7 @@ import {
 import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 import { readSessionRecords } from '../helpers/session-log';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -217,4 +218,96 @@ describe('E2E: --provider option override (mock)', () => {
     expect(result.exitCode).toBe(1);
     expect(`${result.stdout}\n${result.stderr}`).toContain('base_url');
   }, 240_000);
+
+  it('should execute finding_contract.manager with direct provider/model over persona_providers', () => {
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      persona_providers: {
+        'findings-manager.md': {
+          provider: 'opencode',
+          model: 'opencode/sentinel-manager-model',
+        },
+      },
+    });
+
+    const workflowPath = copyWorkflowFixtureToRepo(
+      repo.path,
+      resolve(__dirname, '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml'),
+    );
+    const scenarioPath = resolve(__dirname, '../fixtures/scenarios/finding-contract-manager-provider.json');
+
+    const result = runTakt({
+      args: [
+        '--task', 'Verify finding manager provider and model routing',
+        '--workflow', workflowPath,
+        '--provider', 'mock',
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: scenarioPath,
+      },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Workflow completed');
+
+    const records = readSessionRecords(repo.path);
+    expect(records.some((record) => record.type === 'workflow_complete')).toBe(true);
+
+    const ledger = JSON.parse(
+      readFileSync(join(repo.path, '.takt', 'findings', 'peer-review.json'), 'utf-8'),
+    ) as {
+      findings: unknown[];
+      rawFindings: unknown[];
+      conflicts: unknown[];
+    };
+    expect(ledger.findings).toEqual([]);
+    expect(ledger.rawFindings).toEqual([]);
+    expect(ledger.conflicts).toEqual([]);
+  }, 240_000);
+
+  it('should display configured finding_contract.manager provider/model in prompt preview', () => {
+    const workflowPath = resolve(
+      __dirname,
+      '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml',
+    );
+
+    const result = runTakt({
+      args: ['prompt', workflowPath],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+      timeout: 60_000,
+    });
+
+    const combined = `${result.stdout}\n${result.stderr}`;
+    expect(combined).toContain('Finding manager provider: mock');
+    expect(combined).toContain('Finding manager model: manager-mock-model');
+  }, 60_000);
+
+  it('should validate finding_contract.manager provider/model before mock execution', () => {
+    const sourceWorkflowPath = resolve(
+      __dirname,
+      '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml',
+    );
+    const invalidWorkflowPath = join(repo.path, 'finding-contract-manager-provider-invalid.yaml');
+    const invalidWorkflow = readFileSync(sourceWorkflowPath, 'utf-8')
+      .replace('    provider: mock\n    model: manager-mock-model\n', '    provider: opencode\n    model: manager-mock-model\n');
+    writeFileSync(invalidWorkflowPath, invalidWorkflow, 'utf-8');
+
+    const result = runTakt({
+      args: [
+        '--task', 'Reject invalid finding manager provider and model',
+        '--workflow', invalidWorkflowPath,
+        '--provider', 'mock',
+      ],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+      timeout: 60_000,
+    });
+
+    const combined = `${result.stdout}\n${result.stderr}`;
+    expect(result.exitCode).toBe(1);
+    expect(combined).toContain('finding_contract.manager.model');
+  }, 60_000);
 });

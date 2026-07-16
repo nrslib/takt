@@ -7,7 +7,7 @@
  */
 
 import chalk from 'chalk';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
@@ -27,6 +27,7 @@ import {
 import { initializeSession } from './sessionInitialization.js';
 import {
   buildInteractiveResultWithAttachments,
+  cleanupImageAttachmentStore,
   createClipboardImagePasteHandler,
   createImagePasteHandler,
   createSessionImageAttachmentStore,
@@ -57,11 +58,12 @@ export async function quietMode(
 ): Promise<InteractiveModeResult> {
   const ctx = initializeSession(cwd, 'interactive');
   const sourceContext = initialInput?.sourceContext;
-  const attachmentStore = createSessionImageAttachmentStore();
+  const attachmentStore = createSessionImageAttachmentStore(initialInput?.attachments);
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
 
+  try {
   if (history.length === 0 && !sourceContext) {
     info(getLabel('interactive.ui.introQuiet', ctx.lang));
     blankLine();
@@ -96,10 +98,19 @@ export async function quietMode(
     return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
   }
 
+  let imageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+  try {
+    imageAttachments = resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments());
+  } catch (caught) {
+    error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+    blankLine();
+    return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+  }
+
   const { result } = await callAIWithRetry(
     summaryPrompt, summaryPrompt, DEFAULT_INTERACTIVE_TOOLS, cwd,
     { ...ctx, sessionId: undefined },
-    { imageAttachments: resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments()) },
+    { imageAttachments },
   );
 
   if (!result) {
@@ -122,4 +133,8 @@ export async function quietMode(
 
   log.info('Quiet mode action selected', { action: selectedAction });
   return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
+  } catch (caught) {
+    cleanupImageAttachmentStore(attachmentStore);
+    throw caught;
+  }
 }

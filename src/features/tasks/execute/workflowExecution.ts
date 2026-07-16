@@ -11,6 +11,7 @@ import { createWorkflowExecutionContext, createWorkflowCallResolver } from './wo
 import { bindWorkflowExecutionEvents, type WorkflowExecutionEventBridge } from './workflowExecutionEvents.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
+import type { StreamEvent } from '../../../shared/types/provider.js';
 import { finalizeWorkflowAbort, reportWorkflowAbort } from './workflowExecutionReporting.js';
 import {
   OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -19,13 +20,15 @@ import {
   resolveOtlpExporterConfig,
   pickNestedOtelExporterOptionEnv,
 } from '../../../shared/telemetry/index.js';
+import type { GitProvider } from '../../../infra/git/index.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
 const log = createLogger('workflow-execution');
 
-type WorkflowRunContext = {
+export type WorkflowRunContext = {
   ignoreIterationLimit?: boolean;
+  gitProvider?: GitProvider;
 };
 
 function serializeObservabilityForNestedRuns(observability: {
@@ -129,8 +132,12 @@ async function executeWorkflowInternal(
   runContext?: WorkflowRunContext,
 ): Promise<WorkflowExecutionResult> {
   const parentRunPid = process.pid;
-  const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, task, cwd, options);
   const workflowExecutionContext = createWorkflowExecutionContext(workflowConfig, options.projectCwd);
+  const workflowCallResolver = createWorkflowCallResolver(workflowExecutionContext);
+  const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, task, cwd, {
+    ...options,
+    workflowCallResolver,
+  });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(workflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
@@ -181,17 +188,21 @@ async function executeWorkflowInternal(
     internalController: runAbortController,
     getEngine: () => engine,
   });
+  const handleProviderStream = (event: StreamEvent): void => {
+    bootstrap.streamHandler(event);
+    eventBridge?.emitProviderOutput(event);
+  };
 
   try {
     const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, process.env);
     engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
       abortSignal: runAbortController.signal,
-      onStream: bootstrap.providerEventLogger.wrapCallback(bootstrap.streamHandler),
+      onStream: bootstrap.providerEventLogger.wrapCallback(handleProviderStream),
       onUserInput,
       initialSessions: bootstrap.savedSessions,
       onSessionUpdate: bootstrap.sessionUpdateHandler,
       onIterationLimit,
-      onAskUserQuestion: createDenyAskUserQuestionHandler(),
+      onAskUserQuestion: options.onAskUserQuestion ?? createDenyAskUserQuestionHandler(),
       ignoreIterationLimit: runContext?.ignoreIterationLimit === true,
       projectCwd: options.projectCwd,
       observability: bootstrap.observability,
@@ -206,11 +217,14 @@ async function executeWorkflowInternal(
       reportFallbackProvider: options.reportFallbackProvider,
       rateLimitFallback: bootstrap.effectiveWorkflowConfig.rateLimitFallback,
       providerOptions: options.providerOptions,
+      autoRouting: bootstrap.effectiveWorkflowConfig.autoRouting,
+      autoStrategyOverride: bootstrap.autoStrategyOverride,
       providerOptionsSource: options.providerOptionsSource,
       providerOptionsOriginResolver: options.providerOptionsOriginResolver,
       personaProviders: options.personaProviders,
       providerRouting: options.providerRouting,
       providerProfiles: options.providerProfiles,
+      mcpServers: options.mcpServers,
       interactive: bootstrap.interactiveUserInput,
       detectRuleIndex,
       structuredCaller: bootstrap.structuredCaller,
@@ -225,8 +239,11 @@ async function executeWorkflowInternal(
       currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
       traceTaskMetadata: options.traceTaskMetadata,
       phase1ProcessSafetyByStep,
-      systemStepServicesFactory: createDefaultSystemStepServices,
-      workflowCallResolver: createWorkflowCallResolver(workflowExecutionContext),
+      systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
+        ...serviceOptions,
+        ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
+      }),
+      workflowCallResolver,
     });
 
     eventBridge = bindWorkflowExecutionEvents({
@@ -246,6 +263,7 @@ async function executeWorkflowInternal(
       sessionLogger: bootstrap.sessionLogger,
       runMetaManager: bootstrap.runMetaManager,
       ndjsonLogPath: bootstrap.ndjsonLogPath,
+      shouldNotifyRateLimit: bootstrap.shouldNotifyRateLimit,
       shouldNotifyWorkflowComplete: bootstrap.shouldNotifyWorkflowComplete,
       shouldNotifyWorkflowAbort: bootstrap.shouldNotifyWorkflowAbort,
       traceDiscovery: bootstrap.traceDiscovery,
@@ -253,15 +271,28 @@ async function executeWorkflowInternal(
       getCurrentWorkflowStack,
       initialResumePoint: options.resumePoint,
       sessionLog: bootstrap.sessionLog,
+      eventSink: options.eventSink,
+      reportDirectory: bootstrap.runPaths.reportsAbs,
+    });
+
+    eventBridge.emitRunStarted({
+      type: 'run_started',
+      runDirectory: bootstrap.runPaths.runRootAbs,
+      reportDirectory: bootstrap.runPaths.reportsAbs,
+      ndjsonLogPath: bootstrap.ndjsonLogPath,
     });
 
     abortHandler.install();
     const finalState = await engine.run();
+    await eventBridge.flushEventSink();
     return {
       success: finalState.status === 'completed',
       reason: eventBridge.state.abortReason,
       lastStep: eventBridge.state.lastStepName,
       lastMessage: eventBridge.state.lastStepContent,
+      runDirectory: bootstrap.runPaths.runRootAbs,
+      reportDirectory: bootstrap.runPaths.reportsAbs,
+      ndjsonLogPath: bootstrap.ndjsonLogPath,
       exceeded: eventBridge.state.exceededInfo != null,
       ...(eventBridge.state.exceededInfo ? { exceededInfo: eventBridge.state.exceededInfo } : {}),
     };
@@ -293,6 +324,21 @@ async function executeWorkflowInternal(
         bootstrap.shouldNotifyWorkflowAbort,
         bootstrap.traceDiscovery,
       );
+      if (eventBridge) {
+        eventBridge.emitWorkflowFailed({
+          type: 'completed',
+          success: false,
+          reportDirectory: bootstrap.runPaths.reportsAbs,
+          reason,
+        });
+        try {
+          await eventBridge.flushEventSink();
+        } catch (flushError) {
+          log.warn('Failed to flush event sink after workflow failure', {
+            error: getErrorMessage(flushError),
+          });
+        }
+      }
     }
     throw error;
   } finally {

@@ -107,6 +107,108 @@ takt --task "Add authentication" --workflow dual
 
 **Note:** Passing a string as an argument (e.g., `takt "Add login feature"`) enters interactive mode with it as the initial message.
 
+## ACP Agent
+
+`takt-acp` starts TAKT as an Agent Client Protocol agent over stdio JSON-RPC.
+Launch it from an ACP-compatible client as the agent command:
+
+```bash
+takt-acp
+```
+
+The ACP session `cwd` must be an absolute path. TAKT uses that directory as both the conversation base and workflow project root. By default, `session/prompt` is an enqueue-first conversation entrypoint: prompts such as "enqueue this task" or "make it a pending task" add a pending task to `.takt/tasks.yaml` with `worktree: true`, and the task can later be executed with `takt run`. Direct workflow execution is kept only for explicit requests such as "run it now" or "execute now"; ambiguous prompts stay in the conversation. The main ACP UX does not depend on `/go` or `/play`: `/go` follows the session `defaultAction` and is enqueued by default, while `/play <task>` remains a compatibility-only explicit direct execution command.
+
+If an ACP prompt creates or directly executes a task, TAKT uses the `default` workflow unless the conversation result explicitly provides another workflow.
+
+`session/new` may omit `mcpServers`; omitted or empty `mcpServers: []` is treated as no MCP servers. Stdio MCP servers are passed to workflow execution, but TAKT fails fast before the run when the effective provider for a step does not support MCP servers. Non-stdio MCP transports, duplicate MCP server names, and duplicate trimmed MCP env names are rejected during session creation.
+
+TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `session/update` notifications. `additionalDirectories` is not advertised and non-empty `additionalDirectories` requests are rejected.
+
+## MCP Server
+
+`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want the client to enqueue TAKT tasks, create an issue through the configured issue provider and enqueue the task, or run the next pending task without shelling out to `takt add` or `takt run`.
+
+```bash
+takt-mcp
+```
+
+For Codex, add a stdio MCP server to `~/.codex/config.toml`, or to project-scoped `.codex/config.toml` for trusted projects:
+
+```toml
+[mcp_servers.takt]
+command = "takt-mcp"
+```
+
+You can also add it with the Codex MCP CLI:
+
+```bash
+codex mcp add takt -- takt-mcp
+```
+
+The server exposes these tools:
+
+| Tool | Description |
+|------|-------------|
+| `takt_enqueue_task` | Save a pending task to `.takt/tasks.yaml`. |
+| `takt_create_issue_and_enqueue_task` | Create an issue through the configured issue provider, then save a pending task with the created issue number. |
+| `takt_run_next_task` | Claim and execute the next pending task through TAKT's existing task execution path. |
+
+Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
+
+### `takt_enqueue_task`
+
+Required input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cwd` | absolute path string | Project root where `.takt/tasks.yaml` is written. |
+| `task` | string | Task instruction body. |
+| `workflow` | string | Workflow name or path. MCP callers must ask which workflow to use before enqueueing. |
+| `autoPr` | boolean | Save the task with auto-PR enabled. MCP callers must ask before enqueueing. |
+
+Optional input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `worktree` | boolean | `true` creates an automatic isolated worktree. Defaults to `true`. MCP input does not accept custom worktree paths. |
+| `taskContext.branch` | string | Local branch name to save with the task. |
+| `taskContext.baseBranch` | string | Base branch name to save with the task. |
+| `taskContext.prNumber` | positive safe integer | Pull request number to save with the task. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
+
+Input limits: `task` is limited to 128 KiB, `workflow` to 128 characters, each issue label to 100 characters, and at most 20 labels.
+
+### `takt_create_issue_and_enqueue_task`
+
+This tool accepts the same fields as `takt_enqueue_task`, plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `labels` | string array | Labels to request when creating the issue. |
+
+Issue creation uses the configured TAKT issue provider and runs in silent output mode. If issue creation fails, the tool returns an MCP error result and does not save the task. If task saving fails after the issue is created, TAKT adds a fixed compensation comment to the created issue and closes it so the repository does not retain an issue without a pending task. When that close succeeds, the MCP error result reports that the issue was created and closed along with the local task-saving error. When that close fails, the MCP error result includes both the task-saving error and the issue close error.
+
+### `takt_run_next_task`
+
+Required input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cwd` | absolute path string | Project root containing `.takt/tasks.yaml`. |
+
+Optional input:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | string | Provider override for the task execution. |
+| `model` | string | Model override for the task execution. |
+| `taskContext.branch` | string | Local branch context. |
+| `taskContext.baseBranch` | string | Base branch context. |
+| `taskContext.prNumber` | positive safe integer | Pull request context. Values greater than `Number.MAX_SAFE_INTEGER` are rejected. |
+
+Input limits: `provider` must be one of TAKT's known provider identifiers and `model` is limited to 128 characters.
+
+The tool executes at most one pending task and suppresses normal workflow output so stdout remains reserved for MCP messages. When no pending task exists, it returns `{ "ran": false }`.
+
 ## Instant Exec Mode
 
 `takt exec` starts TAKT's interactive task-entry mode without writing workflow YAML by hand. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.
@@ -126,11 +228,14 @@ Inside exec mode:
 | `/setup` | Edit agents, replan facets, loop detection thresholds, and project/global presets |
 | `/go` | Summarize the conversation into executable task instructions and run the generated workflow |
 | `/go <note>` | Run with an additional note appended to the conversation summary |
+| `/paste-image` | While editing the current input line, replace the line with a clipboard image placeholder |
 | `/cancel` | Exit without executing |
 
 `/setup` can save/delete project or global presets. Instruction, knowledge, and policy fields reference normal facets; new facets are saved under `.takt/facets/{instructions,knowledge,policies}/` or `$TAKT_CONFIG_DIR/facets/{instructions,knowledge,policies}/` (or `~/.takt/facets/{instructions,knowledge,policies}/` when unset).
 
 On `/go`, TAKT writes `.takt/exec/workflow.yaml` and executes it through the existing workflow engine. `/go` with no prior conversation and no inline task text is rejected before creating the workflow. The review result reports are read from the completed run and injected back into the exec assistant session for the final summary.
+
+Image attachments are available while editing exec input. Use `/paste-image` or `Ctrl+V` to attach a clipboard image on macOS, or paste an OSC 1337 inline image from a compatible terminal. TAKT inserts a `[Image #N]` placeholder. The image is sent with an Assistant request only when the current message or `/go <note>` references that placeholder; placeholders that were not attached in the session are treated as normal text. When `/go` runs, referenced stored images are copied into the generated task spec and listed in its attachment section. Supported formats are PNG, JPEG, GIF, and WebP; inline and clipboard images are limited to 10 MiB. TAKT rejects unsupported image data, mismatched inline-image filename types, oversized images, and stored attachments whose temp path is missing, a symlink, or not a regular file. Providers without native image input receive local path references in the prompt.
 
 Generated exec workflows use `session_key` to keep Worker agent, Review agent, Replanning agent, and loop detection sessions separate even when they share a persona. In user-authored workflows, `session_key` is supported only on normal agent steps, parallel sub-steps, and `loop_monitors.judge`; it is not supported on system steps, workflow_call steps, or parallel parent steps. The effective session key is suffixed with the resolved provider.
 
@@ -387,6 +492,21 @@ takt repertoire remove @{owner}/{repo}
 Installed packages are stored in `~/.takt/repertoire/` and their workflows/facets become available in workflow selection and facet resolution.
 
 When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.
+
+### takt telemetry
+
+Manage local routing event recording used by auto-routing (`provider: auto`). Decisions are written locally to `.takt/events/` as NDJSON; TAKT does not upload them.
+
+```bash
+# Show local routing event recording status
+takt telemetry status
+
+# Enable local routing event recording
+takt telemetry enable
+
+# Disable local routing event recording
+takt telemetry disable
+```
 
 ### takt purge
 

@@ -193,6 +193,24 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
 - 並列サブ step は `promotion` をサポートしません
 
+### Finding Contract manager の provider/model
+
+`finding_contract.manager` では、合成 Finding Manager step 専用の provider と model を指定できます。
+
+```yaml
+finding_contract:
+  ledger_path: .takt/findings/review.json
+  raw_findings_path: .takt/findings/review/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: codex
+    model: gpt-5.5
+```
+
+指定した値は Finding Manager の step レベル `provider` / `model` として扱われます。`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力 provider/model より優先されます。両方とも未指定の場合、manager は通常の workflow step provider/model 解決を維持します。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
+
 ### Finding Contract parallel の retry 失敗ルーティング
 
 workflow に `finding_contract` がある場合、各 parallel 親 step は Finding Manager output が retry 後も意味論的に invalid なときの決定的な rule を宣言する必要があります。この rule により、invalid manager output で workflow を abort したり ledger を更新したりしません。
@@ -337,6 +355,7 @@ promotion は並列サブ step ではサポートされません。
 | `persona` | - | persona キー（section map 参照）またはファイルパス |
 | `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
 | `session_key` | - | 通常の agent step と parallel sub-step の明示セッションキー。実行時キーには解決済み provider が付く。空文字・空白のみは無効 |
+| `session` | `continue` | 通常の agent step と parallel sub-step のセッション扱い。`continue` は保存済み persona session を resume し、`refresh` は resume せず開始し、`compact` は resume 後に Phase 1 前だけ provider へ圧縮を依頼する。report phase / status phase 前には圧縮しない。圧縮 capability がない provider ではそのまま続行し、圧縮失敗時も warning を出して未圧縮 session で続行する |
 | `requires_user_input` | `false` | 通常の agent step がユーザー入力待ち可能であることを示す。system step、workflow-call step、parallel parent step では指定不可。`requires_user_input: true` の step は agent 実行前から interactive mode と user input handler が必須で、未設定の場合はその agent を実行せず workflow を abort する。実際の入力待ちは、一致した rule 側の `requires_user_input: true` でのみ発生する |
 | `tags` | - | config の `provider_routing.tags` に一致させる順序付き routing tag |
 | `policy` | - | policy キーまたはキー配列 |

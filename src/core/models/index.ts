@@ -23,6 +23,7 @@ export type {
   WorkflowRuntimeConfig,
   WorkflowStepKind,
   WorkflowCallOverrides,
+  WorkflowSessionMode,
   WorkflowParamType,
   WorkflowParamFacetKind,
   WorkflowCallArgValue,
@@ -34,6 +35,10 @@ export type {
   FindingContractConfig,
   FindingsRuleContext,
   AgentWorkflowStep,
+  NormalAgentWorkflowStep,
+  ParallelWorkflowStep,
+  ArpeggioWorkflowStep,
+  TeamLeaderWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
   AgentErrorKind,
@@ -58,7 +63,14 @@ export type {
   WorkflowState,
   FindingLedger,
   CustomAgentConfig,
+  ProviderTypeOrAuto,
+  CostTier,
+  AutoRoutingStrategy,
+  AutoRoutingCandidate,
+  AutoRoutingConfig,
+  ConfigAutoRoutingConfig,
   LoggingConfig,
+  TelemetryConfig,
   ObservabilityConfig,
   ResolvedObservabilityConfig,
   Language,
@@ -67,6 +79,10 @@ export type {
   ProviderProfileName,
   ProviderPermissionProfile,
   ProviderPermissionProfiles,
+} from './types.js';
+
+export {
+  WORKFLOW_SESSION_MODES,
 } from './types.js';
 
 // Re-export from agent.ts

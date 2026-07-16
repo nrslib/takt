@@ -38,6 +38,14 @@ export interface ProviderCallOptions {
   childProcessEnv?: Readonly<Record<string, string>>;
 }
 
+export interface ProviderCompactSessionOptions {
+  cwd: string;
+  sessionId: string;
+  model?: string;
+  abortSignal?: AbortSignal;
+  childProcessEnv?: Readonly<Record<string, string>>;
+}
+
 export interface ProviderAgent {
   call(prompt: string, options: ProviderCallOptions): Promise<AgentResponse>;
 }
@@ -48,6 +56,7 @@ export interface Provider {
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   setup(config: AgentSetup): ProviderAgent;
+  compactSession?(options: ProviderCompactSessionOptions): Promise<void>;
 }
 
 export type ProviderType = SharedProviderType;

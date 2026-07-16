@@ -1,11 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const {
-  mockResolveAssistantConfigLayers,
-  mockResolveAssistantProviderModelFromConfig,
+  mockResolveNonWorkflowProviderModel,
 } = vi.hoisted(() => ({
-  mockResolveAssistantConfigLayers: vi.fn(),
-  mockResolveAssistantProviderModelFromConfig: vi.fn(),
+  mockResolveNonWorkflowProviderModel: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
@@ -46,15 +44,8 @@ vi.mock('../infra/providers/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'en'),
   resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
-}));
-
-vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
-}));
-
-vi.mock('../core/config/provider-resolution.js', () => ({
-  resolveAssistantProviderModelFromConfig: (...args: unknown[]) =>
-    mockResolveAssistantProviderModelFromConfig(...args),
+  resolveNonWorkflowProviderModel: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderModel(...args),
 }));
 
 const mockRelayPushCloneToOrigin = vi.fn();
@@ -118,8 +109,7 @@ describe('syncBranchWithRoot', () => {
     mockExistsSync.mockReturnValue(true);
     mockAgentCall.mockResolvedValue(makeAgentResponse());
     mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined } as never);
-    mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
-    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'claude', model: 'sonnet' });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({ provider: 'claude', model: 'sonnet' });
     mockRelayPushCloneToOrigin.mockReturnValue(undefined);
   });
 
@@ -210,7 +200,7 @@ describe('syncBranchWithRoot', () => {
 
     expect(result).toBe(true);
     expect(mockSuccess).toHaveBeenCalledWith('Conflicts resolved & pushed.');
-    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith(PROJECT_DIR);
     expect(mockGetProvider).toHaveBeenCalledWith('claude');
     expect(mockAgentCall).toHaveBeenCalledWith(
       expect.stringContaining('Implement feature X'),
@@ -223,9 +213,9 @@ describe('syncBranchWithRoot', () => {
     );
   });
 
-  it('uses assistant provider/model resolution for conflict resolver', async () => {
+  it('uses non-workflow provider/model resolution for conflict resolver', async () => {
     const task = makeTask();
-    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
     mockExecFileSync
       .mockReturnValueOnce('' as never)
       .mockImplementationOnce(() => { throw new Error('CONFLICT'); });

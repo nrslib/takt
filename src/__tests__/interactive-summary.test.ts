@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSummaryPrompt,
   buildSummaryActionOptions,
+  formatStepPreviews,
   formatTaskHistorySummary,
   type WorkflowContext,
   type SummaryActionLabels,
@@ -102,6 +103,26 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('User: Improve parser');
   });
 
+});
+
+describe('formatStepPreviews', () => {
+  it('provider/model を workflow summary に表示する', () => {
+    const result = formatStepPreviews([
+      {
+        name: 'review',
+        personaDisplayName: 'Reviewer',
+        personaContent: '',
+        instructionContent: '',
+        allowedTools: [],
+        canEdit: false,
+        provider: 'codex',
+        model: 'gpt-5.5',
+      },
+    ], 'en');
+
+    expect(result).toContain('**Provider:** codex');
+    expect(result).toContain('**Model:** gpt-5.5');
+  });
 });
 
 describe('buildSummaryActionOptions', () => {

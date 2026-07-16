@@ -338,6 +338,14 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts.length).toBe(3);
     expect(phaseStarts.every((instruction) => !instruction.startsWith('[Arpeggio batch'))).toBe(true);
     expect(phaseStarts.some((instruction) => instruction.includes('Process '))).toBe(true);
+    // buildGitRules は ArpeggioRunner の buildArpeggioPrompt 経由でも注入される（#1012）。
+    // git_rules.md の parts/ 移行でこの経路が壊れていないことを確認する。
+    // commit 禁止文は phase2 にもあるため、それだけでは phase2 への退行を検出できない。
+    // phase1 固有の index 状態ルールまで直接 assert する。
+    expect(phaseStarts.every((instruction) => instruction.includes('Do NOT run git commit'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('Do NOT run git add'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('index state (staged / unstaged / untracked)'))).toBe(true);
+    expect(phaseStarts.every((instruction) => instruction.includes('git check-ignore -v'))).toBe(true);
   });
 
   it('wraps arpeggio batch executions in phase spans', async () => {

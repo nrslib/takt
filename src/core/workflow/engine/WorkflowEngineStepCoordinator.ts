@@ -66,7 +66,8 @@ interface WorkflowEngineStepCoordinatorDeps {
       monitor: LoopMonitorConfig,
       cycleCount: number,
       triggeringStep: WorkflowStep,
-      triggeringRuntime?: RuntimeStepResolution,
+      triggeringRuntime: RuntimeStepResolution | undefined,
+      fallbackNextStep: string,
     ) => Promise<string>;
   };
   workflowCallRunner: {
@@ -190,8 +191,9 @@ export class WorkflowEngineStepCoordinator {
     monitor: LoopMonitorConfig,
     cycleCount: number,
     triggeringStep: WorkflowStep,
-    triggeringRuntime?: RuntimeStepResolution,
+    triggeringRuntime: RuntimeStepResolution | undefined,
+    fallbackNextStep: string,
   ): Promise<string> {
-    return this.deps.loopMonitorJudgeRunner.run(monitor, cycleCount, triggeringStep, triggeringRuntime);
+    return this.deps.loopMonitorJudgeRunner.run(monitor, cycleCount, triggeringStep, triggeringRuntime, fallbackNextStep);
   }
 }

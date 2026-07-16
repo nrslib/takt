@@ -36,6 +36,30 @@ export function buildTaktManagedPrOptions(body: string): Pick<CreatePrOptions, '
   };
 }
 
+export function parseIssueNumberFromUrl(url: string): number {
+  if (url.endsWith('/')) {
+    throw new Error(`Issue URL must end with a positive issue number: ${url}`);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Issue URL is invalid: ${url}`);
+  }
+
+  const lastSegment = parsed.pathname.split('/').pop();
+  if (lastSegment === undefined || !/^[1-9]\d*$/u.test(lastSegment)) {
+    throw new Error(`Issue URL must end with a positive issue number: ${url}`);
+  }
+
+  const issueNumber = Number(lastSegment);
+  if (!Number.isSafeInteger(issueNumber)) {
+    throw new Error(`Issue number must be a positive safe integer: ${lastSegment}`);
+  }
+  return issueNumber;
+}
+
 /**
  * Format an issue into task text for workflow execution.
  *

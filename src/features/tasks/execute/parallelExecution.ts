@@ -283,7 +283,7 @@ function fillSlots(
       taskPrefix: isParallel ? taskPrefix : undefined,
       taskColorIndex: isParallel ? colorIndex : undefined,
       taskDisplayLabel: isParallel ? taskDisplayLabel : undefined,
-    }, runOptions);
+    }, runOptions?.ignoreIterationLimit === true ? { ignoreIterationLimit: true } : undefined);
     active.set(promise, task);
   }
 }

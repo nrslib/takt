@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { CapabilityAwareStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
+import { createAutoRoutingAiRouter } from '../../../agents/auto-routing-usecase.js';
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
@@ -24,6 +25,7 @@ import { CycleDetector } from './cycle-detector.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowRunLoop.js';
 import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowStepKind } from '../step-kind.js';
+import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
 import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
@@ -97,7 +99,6 @@ export class WorkflowEngine extends EventEmitter {
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions) {
     super();
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
-    this.config = config;
     this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
     if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
       throw new Error(`Invalid reportDirName: ${options.reportDirName}`);
@@ -109,19 +110,34 @@ export class WorkflowEngine extends EventEmitter {
       ...options.traceTaskMetadata,
       runDir: runPaths.runRootAbs,
     };
+    const autoRoutingAiRouter = options.autoRoutingAiRouter ?? createAutoRoutingAiRouter({
+      cwd,
+      workflowName: config.name,
+      runId: runPaths.slug,
+      language: options.language,
+      childProcessEnv: options.childProcessEnv,
+      onStream: options.onStream,
+    });
+    const effectiveAutoRouting = applyAutoRoutingStrategyOverride(
+      config.autoRouting ?? options.autoRouting,
+      options.autoStrategyOverride,
+    );
+    this.config = config;
     this.options = {
       ...options,
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
+      autoRouting: effectiveAutoRouting,
+      autoRoutingAiRouter,
       traceTaskMetadata,
     };
     this.projectCwd = this.options.projectCwd;
     this.cwd = cwd;
     this.task = task;
-    this.loopDetector = new LoopDetector(config.loopDetection);
-    this.cycleDetector = new CycleDetector(config.loopMonitors ?? []);
-    const initialMaxSteps = this.options.maxStepsOverride ?? config.maxSteps;
+    this.loopDetector = new LoopDetector(this.config.loopDetection);
+    this.cycleDetector = new CycleDetector(this.config.loopMonitors ?? []);
+    const initialMaxSteps = this.options.maxStepsOverride ?? this.config.maxSteps;
     this.sharedRuntime = this.options.sharedRuntime ?? createSharedRuntime(this.options.resumePoint, initialMaxSteps);
     this.sharedRuntime.maxSteps ??= initialMaxSteps;
     this.maxSteps = this.sharedRuntime.maxSteps;
@@ -130,9 +146,9 @@ export class WorkflowEngine extends EventEmitter {
     this.reportDir = this.runPaths.reportsRel;
     ensureRunDirsExist(this.runPaths);
     applyRuntimeEnvironment(this.cwd, this.config, 'init');
-    validateWorkflowConfig(this.config, options);
+    validateWorkflowConfig(this.config, this.options);
 
-    this.state = createInitialState(config, this.options);
+    this.state = createInitialState(this.config, this.options);
     if (this.config.findingContract) {
       this.findingLedgerStore = createFindingLedgerStore({
         projectCwd: this.projectCwd,

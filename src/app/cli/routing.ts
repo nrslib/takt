@@ -14,6 +14,7 @@ import {
   dispatchConversationAction,
   type InteractiveModeResult,
 } from '../../features/interactive/index.js';
+import { cleanupInteractiveResultAttachments } from '../../features/interactive/imageAttachments.js';
 import { INTERACTIVE_MODES } from '../../core/models/index.js';
 import {
   getWorkflowDescription,
@@ -23,6 +24,7 @@ import {
 } from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
+import { toConcreteProvider } from '../../core/workflow/provider-resolution.js';
 import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
@@ -84,6 +86,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       cwd: resolvedCwd,
       provider: agentOverrides?.provider,
       model: agentOverrides?.model,
+      autoStrategy: agentOverrides?.autoStrategy,
     });
 
     if (exitCode !== 0) {
@@ -182,23 +185,24 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
     : undefined;
   let result: InteractiveModeResult;
+  const assistantOverrideProvider = toConcreteProvider(agentOverrides?.provider);
 
   switch (selectedMode) {
     case 'assistant': {
       let selectedSessionId: string | undefined;
       if (opts.continue === true) {
-        const { provider: providerType } = resolveAssistantProviderModelFromConfig(
+        const { provider } = resolveAssistantProviderModelFromConfig(
           resolveAssistantConfigLayers(resolvedCwd),
           {
-            provider: agentOverrides?.provider,
+            provider: assistantOverrideProvider,
             model: agentOverrides?.model,
           },
         );
-        if (!providerType) {
+        if (!provider) {
           throw new Error('Provider is not configured.');
         }
-        const savedSessions = loadPersonaSessions(resolvedCwd, providerType);
-        const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', providerType);
+        const savedSessions = loadPersonaSessions(resolvedCwd, provider);
+        const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', provider);
         if (savedSessionId) {
           selectedSessionId = savedSessionId;
         } else {
@@ -208,7 +212,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       const interactiveOpts = prBranch ? { excludeActions: ['create_issue'] as const } : undefined;
       const assistantModeOptions = {
         ...interactiveOpts,
-        ...(agentOverrides?.provider ? { provider: agentOverrides.provider } : {}),
+        ...(assistantOverrideProvider ? { provider: assistantOverrideProvider } : {}),
         ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
       };
       result = await interactiveMode(
@@ -241,48 +245,52 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
   }
 
-  await dispatchConversationAction(result, {
-    execute: async ({ task: confirmedTask }) => {
-      if (prBranch) {
-        info(`Fetching and checking out PR branch: ${prBranch}`);
-        checkoutBranch(resolvedCwd, prBranch);
-        success(`Checked out PR branch: ${prBranch}`);
-      }
-      selectOptions.interactiveUserInput = true;
-      selectOptions.workflow = workflowId;
-      selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
-      selectOptions.skipTaskList = true;
-      if (result.attachments) {
-        selectOptions.attachments = result.attachments;
-      }
-      await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
-    },
-    create_issue: async ({ task: confirmedTask }) => {
-      const labels = await promptLabelSelection(lang);
-      await createIssueAndSaveTask(resolvedCwd, confirmedTask, workflowId, {
-        confirmAtEndMessage: 'Add this issue to tasks?',
-        labels,
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-    },
-    save_task: async ({ task: confirmedTask }) => {
-      const presetSettings = prBranch
-        ? {
-          worktree: true as const,
-          branch: prBranch,
-          autoPr: true,
-          ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+  try {
+    await dispatchConversationAction(result, {
+      execute: async ({ task: confirmedTask }) => {
+        if (prBranch) {
+          info(`Fetching and checking out PR branch: ${prBranch}`);
+          checkoutBranch(resolvedCwd, prBranch);
+          success(`Checked out PR branch: ${prBranch}`);
         }
-        : undefined;
-      await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
-        presetSettings,
-        ...(prNumber !== undefined ? { prNumber } : {}),
-        ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
-        ...(result.attachments ? { attachments: result.attachments } : {}),
-      });
-    },
-    cancel: () => undefined,
-  });
+        selectOptions.interactiveUserInput = true;
+        selectOptions.workflow = workflowId;
+        selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
+        selectOptions.skipTaskList = true;
+        if (result.attachments) {
+          selectOptions.attachments = result.attachments;
+        }
+        await selectAndExecuteTask(resolvedCwd, confirmedTask, selectOptions, agentOverrides);
+      },
+      create_issue: async ({ task: confirmedTask }) => {
+        const labels = await promptLabelSelection(lang);
+        await createIssueAndSaveTask(resolvedCwd, confirmedTask, workflowId, {
+          confirmAtEndMessage: 'Add this issue to tasks?',
+          labels,
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        });
+      },
+      save_task: async ({ task: confirmedTask }) => {
+        const presetSettings = prBranch
+          ? {
+            worktree: true as const,
+            branch: prBranch,
+            autoPr: true,
+            ...(prBaseBranch ? { baseBranch: prBaseBranch } : {}),
+          }
+          : undefined;
+        await saveTaskFromInteractive(resolvedCwd, confirmedTask, workflowId, {
+          presetSettings,
+          ...(prNumber !== undefined ? { prNumber } : {}),
+          ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
+          ...(result.attachments ? { attachments: result.attachments } : {}),
+        });
+      },
+      cancel: () => undefined,
+    });
+  } finally {
+    cleanupInteractiveResultAttachments(result);
+  }
 }
 
 program

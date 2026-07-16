@@ -1,5 +1,6 @@
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
+import { toConcreteProvider } from '../../core/workflow/provider-resolution.js';
 import { assertResolvedExecConfig } from './configValidation.js';
 import type {
   ExecActorConfig,
@@ -17,11 +18,12 @@ export interface ExecProviderModelDefaults {
 
 export function resolveConfiguredExecProviderModel(cwd: string): ExecProviderModelDefaults {
   const config = resolveWorkflowConfigValues(cwd, ['provider', 'model']);
-  if (config.provider === undefined) {
+  const provider = toConcreteProvider(config.provider);
+  if (provider === undefined) {
     return {};
   }
   return {
-    provider: config.provider,
+    provider,
     ...(config.model !== undefined ? { model: config.model } : {}),
   };
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { program } from '../app/cli/program.js';
 
 describe('CLI --provider option', () => {
@@ -14,6 +14,39 @@ describe('CLI --provider option', () => {
 
     expect(providerOption?.description).toContain('claude-sdk');
     expect(providerOption?.description).toMatch(/claude\|/);
+  });
+
+  it('Given auto routing is available, When inspecting provider help text, Then provider auto is listed', () => {
+    const providerOption = program.options.find((option) => option.long === '--provider');
+
+    expect(providerOption?.description).toContain('auto');
+  });
+
+  it('Given auto routing is available, When inspecting CLI options, Then --auto-strategy is exposed with supported strategies', () => {
+    const autoStrategyOption = program.options.find((option) => option.long === '--auto-strategy');
+    const choices = (autoStrategyOption as unknown as { argChoices?: string[] } | undefined)?.argChoices;
+
+    expect(autoStrategyOption).toBeDefined();
+    expect(autoStrategyOption?.description).toContain('cost');
+    expect(autoStrategyOption?.description).toContain('balanced');
+    expect(autoStrategyOption?.description).toContain('performance');
+    expect(choices).toEqual(['cost', 'balanced', 'performance']);
+  });
+
+  it('Given an unsupported auto strategy, When parsing CLI options, Then Commander rejects it', async () => {
+    const writeErr = vi.fn();
+    vi.resetModules();
+    const { program: isolatedProgram } = await import('../app/cli/program.js');
+    isolatedProgram.exitOverride();
+    isolatedProgram.configureOutput({ writeErr });
+
+    expect(() => isolatedProgram.parse(['node', 'takt', '--auto-strategy', 'invalid'], { from: 'node' }))
+      .toThrow(/invalid choice|allowed choices/i);
+    expect(writeErr.mock.calls.join('\n')).toMatch(/invalid choice|allowed choices/i);
+
+    isolatedProgram.parse(['node', 'takt', '--auto-strategy', 'cost'], { from: 'node' });
+    expect(isolatedProgram.opts().autoStrategy).toBe('cost');
+    expect(program.opts().autoStrategy).toBeUndefined();
   });
 
   it('should expose only one workflow option', () => {

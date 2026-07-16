@@ -31,6 +31,7 @@ function resolveWatchExecutionOptions(cwd: string, options?: RunAllTasksOptions)
         ...(options.providerSource !== undefined ? { providerSource: options.providerSource } : {}),
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.modelSource !== undefined ? { modelSource: options.modelSource } : {}),
+        ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
       }
     : undefined;
 

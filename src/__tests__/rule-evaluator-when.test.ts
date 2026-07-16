@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
 import { RuleEvaluator, type RuleEvaluatorContext } from '../core/workflow/evaluation/RuleEvaluator.js';
 import type { WorkflowState } from '../core/models/types.js';
 import { makeStep } from './test-helpers.js';
@@ -30,6 +31,30 @@ function makeContext(state: WorkflowState): RuleEvaluatorContext {
   };
 }
 
+
+describe('when expression empty clauses', () => {
+  it.each([
+    ['and', 'context.a.exists == true && && context.b.exists == true'],
+    ['or', 'context.a.exists == true || || context.b.exists == true'],
+    ['exists-inner', 'exists(findings.open.items, item.severity == "high" && && item.id == "F-1")'],
+  ])('should throw on empty clauses in %s expressions at evaluation time', (_label, expression) => {
+    const state = {
+      context: { a: { exists: true }, b: { exists: true } },
+      findings: {
+        open: {
+          count: 1,
+          bySeverity: { critical: 0, high: 1, medium: 0, low: 0 },
+          items: [{ id: 'F-1', severity: 'high', title: 't', reviewers: [] }],
+        },
+        resolved: { count: 0 },
+        waived: { count: 0 },
+        conflicts: { count: 0, items: [] },
+      },
+    } as never;
+    expect(() => evaluateWhenExpression(expression, state)).toThrow('contains an empty clause');
+  });
+});
+
 describe('RuleEvaluator with when conditions', () => {
   it('context 参照の真偽式を AI judge なしで評価できる', async () => {
     const state = makeState() as WorkflowState & {
@@ -43,7 +68,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'route_context',
       rules: [
         {
-          condition: 'context.route_context.pr.exists == false && context.route_context.issue.exists == true',
+          condition: 'when(context.route_context.pr.exists == false && context.route_context.issue.exists == true)',
           next: 'plan_from_issue',
         },
       ],
@@ -71,7 +96,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'enqueue_from_issue',
       rules: [
         {
-          condition: 'structured.plan_from_issue.action == "enqueue_new_task" && effect.enqueue_from_issue.enqueue_task.success == true',
+          condition: 'when(structured.plan_from_issue.action == "enqueue_new_task" && effect.enqueue_from_issue.enqueue_task.success == true)',
           next: 'COMPLETE',
         },
       ],
@@ -95,7 +120,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'wait_before_next_scan',
       rules: [
         {
-          condition: 'context.wait_before_next_scan.queue.running_count > 0 && context.wait_before_next_scan.queue.pending_count <= 0',
+          condition: 'when(context.wait_before_next_scan.queue.running_count > 0 && context.wait_before_next_scan.queue.pending_count <= 0)',
           next: 'wait_before_next_scan',
         },
       ],
@@ -124,7 +149,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'route_context',
       rules: [
         {
-          condition: 'context.route_context.prs.length > 1 && context.route_context.prs[0].number == 42 && context.route_context.prs[1].draft == true',
+          condition: 'when(context.route_context.prs.length > 1 && context.route_context.prs[0].number == 42 && context.route_context.prs[1].draft == true)',
           next: 'plan_from_existing_pr',
         },
       ],
@@ -153,7 +178,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'route_context',
       rules: [
         {
-          condition: 'context.route_context.prs.author.length == 2 && context.route_context.prs.author[0] == "nrslib" && context.route_context.prs.number[1] == 41',
+          condition: 'when(context.route_context.prs.author.length == 2 && context.route_context.prs.author[0] == "nrslib" && context.route_context.prs.number[1] == 41)',
           next: 'plan_from_existing_pr',
         },
       ],
@@ -184,7 +209,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'wait_before_next_scan',
       rules: [
         {
-          condition: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running" && item.pr == 42)',
+          condition: 'when(exists(context.wait_before_next_scan.queue.items, item.kind == "running" && item.pr == 42))',
           next: 'wait_before_next_scan',
         },
       ],
@@ -208,7 +233,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'route_context',
       rules: [
         {
-          condition: 'effect.comment_pr.success == true',
+          condition: 'when(effect.comment_pr.success == true)',
           next: 'COMPLETE',
         },
       ],
@@ -234,7 +259,7 @@ describe('RuleEvaluator with when conditions', () => {
       name: 'route_context',
       rules: [
         {
-          condition: 'effect.comment_second.comment_pr.success == true && effect.comment_first.comment_pr.success == false',
+          condition: 'when(effect.comment_second.comment_pr.success == true && effect.comment_first.comment_pr.success == false)',
           next: 'COMPLETE',
         },
       ],
@@ -257,7 +282,7 @@ describe('RuleEvaluator with when conditions', () => {
     const step = makeStep({
       name: 'mixed-step',
       rules: [
-        { condition: 'context.route_context.task.exists == true', next: 'skip' },
+        { condition: 'when(context.route_context.task.exists == true)', next: 'skip' },
         { condition: 'all("done")', next: 'aggregate', isAggregateCondition: true, aggregateType: 'all', aggregateConditionText: 'done' },
         { condition: 'manual approval', next: 'approved' },
         { condition: 'interactive manual check', next: 'interactive', interactiveOnly: true },
@@ -276,5 +301,22 @@ describe('RuleEvaluator with when conditions', () => {
       [{ index: 2, text: 'manual approval' }],
       expect.any(Object),
     );
+  });
+});
+
+describe('operators inside string literals', () => {
+  it('should not split exists() predicates on operators inside quoted strings', () => {
+    const state = makeState() as WorkflowState & { structuredOutputs: Map<string, unknown> };
+    state.structuredOutputs.set('scan', { items: [{ note: 'a == b' }] });
+
+    expect(evaluateWhenExpression('exists(structured.scan.items, "a == b" == item.note)', state)).toBe(true);
+  });
+
+
+  it('should not split on operators that appear inside quoted strings', () => {
+    const state = makeState() as WorkflowState & { structuredOutputs: Map<string, unknown> };
+    state.structuredOutputs.set('plan', { note: 'a == b' });
+
+    expect(evaluateWhenExpression('structured.plan.note == "a == b"', state)).toBe(true);
   });
 });

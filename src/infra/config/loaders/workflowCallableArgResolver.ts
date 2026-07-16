@@ -199,6 +199,45 @@ function resolveExpandedParamValue(
   return value;
 }
 
+function resolveExpandedWorkflowCallArgValue(
+  stepName: string,
+  argName: string,
+  paramRef: WorkflowParamReference,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+): WorkflowCallArgValue {
+  const definition = params?.[paramRef.$param];
+  if (!definition) {
+    throw new Error(`Step "${stepName}" references undeclared param "${paramRef.$param}" in args.${argName}`);
+  }
+  if (definition.type !== 'facet_ref' && definition.type !== 'facet_ref[]') {
+    throw new Error(`Step "${stepName}" expects args.${argName} to use facet_ref or facet_ref[] param "${paramRef.$param}"`);
+  }
+  const value = resolvedArgs[paramRef.$param];
+  if (value === undefined) {
+    throw new Error(`Step "${stepName}" requires workflow_call arg "${paramRef.$param}" for args.${argName}`);
+  }
+  return value;
+}
+
+function expandWorkflowCallArgs(
+  step: RawWorkflowStep,
+  params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
+  resolvedArgs: Record<string, WorkflowCallArgValue>,
+): RawWorkflowStep['args'] {
+  if (!step.args) {
+    return undefined;
+  }
+
+  const expandedArgs: Record<string, WorkflowCallArgValue> = {};
+  for (const [argName, value] of Object.entries(step.args)) {
+    expandedArgs[argName] = isWorkflowParamReference(value)
+      ? resolveExpandedWorkflowCallArgValue(step.name, argName, value, params, resolvedArgs)
+      : value;
+  }
+  return expandedArgs;
+}
+
 function expandStepFields(
   step: RawWorkflowStep,
   params: NonNullable<RawWorkflowConfig['subworkflow']>['params'] | undefined,
@@ -261,6 +300,8 @@ function expandStepFields(
       };
     });
   }
+
+  expandedStep.args = expandWorkflowCallArgs(step, params, resolvedArgs);
 
   if (expandedStep.parallel) {
     expandedStep.parallel = expandedStep.parallel.map((substep) =>

@@ -20,6 +20,14 @@ import { toTaskListItem, toTaskData } from '../infra/task/mapper.js';
 
 // ---- Helpers ----
 
+const taskIdFields = ['issue', 'pr_number', 'context_pr_number'] as const;
+const invalidTaskIdValues = [
+  ['zero', 0],
+  ['negative', -1],
+  ['decimal', 1.5],
+  ['unsafe', Number.MAX_SAFE_INTEGER + 1],
+] as const;
+
 function makePendingRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     name: 'test-task',
@@ -93,6 +101,26 @@ describe('TaskExecutionConfigSchema — pr_number field', () => {
   });
 });
 
+describe('TaskExecutionConfigSchema — task id safe integer fields', () => {
+  it('accepts positive safe integer issue, pr_number, and context_pr_number values', () => {
+    const result = TaskExecutionConfigSchema.safeParse({
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects non-positive, decimal, and unsafe task id values', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(TaskExecutionConfigSchema.safeParse({ [field]: value }).success).toBe(false);
+      }
+    }
+  });
+});
+
 describe('TaskExecutionConfigSchema — source and pr_number together', () => {
   it('accepts source: "pr_review" with pr_number', () => {
     const result = TaskExecutionConfigSchema.safeParse({
@@ -131,6 +159,25 @@ describe('TaskFileSchema — source and pr_number', () => {
       expect(result.data.pr_number).toBeUndefined();
     }
   });
+
+  it('accepts positive safe integer issue, pr_number, and context_pr_number values', () => {
+    const result = TaskFileSchema.safeParse({
+      task: 'Do something',
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects non-positive, decimal, and unsafe task id values', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(TaskFileSchema.safeParse({ task: 'Do something', [field]: value }).success).toBe(false);
+      }
+    }
+  });
 });
 
 // ---- Schema: TaskRecordSchema ----
@@ -153,6 +200,25 @@ describe('TaskRecordSchema — source and pr_number', () => {
     if (result.success) {
       expect(result.data.source).toBeUndefined();
       expect(result.data.pr_number).toBeUndefined();
+    }
+  });
+
+  it('accepts positive safe integer issue, pr_number, and context_pr_number values', () => {
+    const raw = makePendingRecord({
+      issue: Number.MAX_SAFE_INTEGER,
+      pr_number: Number.MAX_SAFE_INTEGER,
+      context_pr_number: Number.MAX_SAFE_INTEGER,
+    });
+    const result = TaskRecordSchema.safeParse(raw);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects non-positive, decimal, and unsafe task id values', () => {
+    for (const field of taskIdFields) {
+      for (const [, value] of invalidTaskIdValues) {
+        expect(TaskRecordSchema.safeParse(makePendingRecord({ [field]: value })).success).toBe(false);
+      }
     }
   });
 });
@@ -214,5 +280,14 @@ describe('toTaskData — source and pr_number pass-through', () => {
     // Then
     expect(data.source).toBeUndefined();
     expect(data.pr_number).toBeUndefined();
+  });
+
+  it('includes context_pr_number in the task file data', () => {
+    const raw = makePendingRecord({ context_pr_number: 938 });
+    const task = TaskRecordSchema.parse(raw);
+
+    const data = toTaskData('/project', task);
+
+    expect(data.context_pr_number).toBe(938);
   });
 });

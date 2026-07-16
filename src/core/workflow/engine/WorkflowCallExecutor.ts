@@ -13,6 +13,8 @@ import type {
 } from '../../models/config-types.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
+import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
+import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import type {
   WorkflowAbortKind,
@@ -21,6 +23,12 @@ import type {
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
 } from '../types.js';
+
+export type WorkflowCallSessionUpdates = ReadonlyMap<string, string | undefined>;
+export interface WorkflowCallIsolatedStateSync {
+  iteration: number;
+  maxSteps?: WorkflowMaxSteps;
+}
 
 function encodeWorkflowNamespaceValue(value: string): string {
   return encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
@@ -41,11 +49,12 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
     return entries;
   }
 
+  const overrideProvider = overrides.provider === 'auto' ? undefined : overrides.provider;
   return Object.fromEntries(
     Object.entries(entries).map(([key, entry]) => {
       const nextEntry: T = {
-        ...(overrides.provider !== undefined
-          ? { provider: overrides.provider }
+        ...(overrideProvider !== undefined
+          ? { provider: overrideProvider }
           : entry.provider !== undefined
             ? { provider: entry.provider }
             : {}),
@@ -53,7 +62,7 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
 
       if (overrides.model !== undefined) {
         nextEntry.model = overrides.model;
-      } else if (overrides.provider === undefined && entry.model !== undefined) {
+      } else if (overrideProvider === undefined && entry.model !== undefined) {
         nextEntry.model = entry.model;
       }
       if (entry.providerOptions !== undefined) {
@@ -128,10 +137,16 @@ interface ExecuteWorkflowCallRequest {
   providerRouting: WorkflowEngineOptions['providerRouting'];
 }
 
+interface ExecuteWorkflowCallOptions {
+  syncParentState: boolean;
+}
+
 export type WorkflowCallExecutionResult = WorkflowState & {
   abortKind?: WorkflowAbortKind;
   abortReason?: string;
   returnValue?: string;
+  sessionUpdates?: WorkflowCallSessionUpdates;
+  isolatedStateSync?: WorkflowCallIsolatedStateSync;
 };
 
 export class WorkflowCallExecutor {
@@ -183,8 +198,7 @@ export class WorkflowCallExecutor {
       ],
       resolveWorkflowCall: (parentWorkflow, nestedStep) => this.deps.resolveWorkflowCall({
         parentWorkflow,
-        identifier: nestedStep.call,
-        stepName: nestedStep.name,
+        step: nestedStep,
         projectCwd: this.deps.projectCwd,
         lookupCwd: this.deps.getCwd(),
       }),
@@ -195,6 +209,7 @@ export class WorkflowCallExecutor {
     for (const eventName of [
       'step:start',
       'step:complete',
+      'routing:decision',
       'step:report',
       'findings:ledger',
       'step:blocked',
@@ -222,10 +237,24 @@ export class WorkflowCallExecutor {
     this.deps.setActiveResumePoint(step, this.deps.state.iteration);
   }
 
-  async execute(request: ExecuteWorkflowCallRequest): Promise<WorkflowCallExecutionResult> {
+  async execute(
+    request: ExecuteWorkflowCallRequest,
+    executeOptions: ExecuteWorkflowCallOptions,
+  ): Promise<WorkflowCallExecutionResult> {
     const options = this.deps.getOptions();
     const parentConfig = this.deps.getConfig();
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
+    const sessionUpdates = new Map<string, string | undefined>();
+    const childAutoStrategyOverride = workflowUsesAutoProvider({
+      workflowConfig: request.childWorkflow,
+      effectiveProvider: request.childProviderInfo.provider,
+      cliProvider: undefined,
+      projectCwd: this.deps.projectCwd,
+      lookupCwd: this.deps.getCwd(),
+      workflowCallResolver: this.deps.resolveWorkflowCall,
+    })
+      ? options.autoStrategyOverride
+      : undefined;
     const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
@@ -236,6 +265,18 @@ export class WorkflowCallExecutor {
         request.parentProviderOptions,
         request.step.overrides?.providerOptions,
       ),
+      autoRouting: applyAutoRoutingStrategyOverride(
+        request.childWorkflow.autoRouting ?? options.autoRouting,
+        childAutoStrategyOverride,
+      ),
+      autoStrategyOverride: childAutoStrategyOverride,
+      // Child workflows need router prompts scoped to the child workflow name and run namespace.
+      autoRoutingAiRouter: undefined,
+      onSessionUpdate: executeOptions.syncParentState
+        ? options.onSessionUpdate
+        : (persona, sessionId) => {
+            sessionUpdates.set(persona, sessionId);
+          },
       personaProviders: request.personaProviders,
       providerRouting: request.providerRouting,
       startStep: this.resolveChildResumeStartStep(request.childWorkflow, childResumePoint),
@@ -253,10 +294,23 @@ export class WorkflowCallExecutor {
     this.relayChildEvents(childEngine);
     const childResult = await childEngine.runWithResult();
     const childState = childResult.state;
-    this.syncStateFromChild(request.step, childState);
+    if (executeOptions.syncParentState) {
+      this.syncStateFromChild(request.step, childState);
+    }
     return {
       ...childState,
       ...(childResult.returnValue !== undefined ? { returnValue: childResult.returnValue } : {}),
+      ...(!executeOptions.syncParentState
+        ? {
+            sessionUpdates,
+            isolatedStateSync: {
+              iteration: childState.iteration,
+              ...(this.deps.sharedRuntime.maxSteps !== undefined
+                ? { maxSteps: this.deps.sharedRuntime.maxSteps }
+                : {}),
+            },
+          }
+        : {}),
       ...(childResult.abort
         ? {
             abortKind: childResult.abort.kind,

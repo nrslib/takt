@@ -16,6 +16,10 @@ export {
   getLanguage,
   setLanguage,
   setProvider,
+  getRoutingTelemetryStatus,
+  enableRoutingTelemetry,
+  disableRoutingTelemetry,
+  type RoutingTelemetryStatus,
 } from './globalConfigAccessors.js';
 
 export {

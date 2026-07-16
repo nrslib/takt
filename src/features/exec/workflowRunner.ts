@@ -4,6 +4,7 @@ import type { PermissionMode } from '../../core/models/status.js';
 import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
 import type { ConversationMessage } from '../interactive/interactive.js';
 import { loadRunSessionContext } from '../interactive/runSessionReader.js';
+import type { TaskAttachment } from '../tasks/attachments.js';
 import { selectAndExecuteTask, type TaskExecutionOptions } from '../tasks/index.js';
 import { EXEC_PROVIDERS } from './configValidation.js';
 import { writeProjectLocalTextFile } from './projectLocalFiles.js';
@@ -102,6 +103,7 @@ export async function runGeneratedWorkflow(
   runtimeConfig: ResolvedExecConfig,
   task: string,
   agentOverrides: TaskExecutionOptions | undefined,
+  attachments?: TaskAttachment[],
 ): Promise<ReturnType<typeof loadRunSessionContext>> {
   const runSlug = generateExecutionReportDir(cwd, task);
   const workflowPath = await generateWorkflowFile(cwd, runtimeConfig, task, `exec-${runSlug}`);
@@ -113,6 +115,7 @@ export async function runGeneratedWorkflow(
     reportDirName: runSlug,
     providerProfileOverrides: buildExecReadonlyProviderProfileOverrides(runtimeConfig),
     exitOnFailure: false,
+    ...(attachments !== undefined && attachments.length > 0 ? { attachments } : {}),
   }, agentOverrides);
   const context = loadCompletedExecRun(cwd, runSlug, runtimeConfig.reviews.map((review) => buildReviewReportName(review.name)));
   return context;

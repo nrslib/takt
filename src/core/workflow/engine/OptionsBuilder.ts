@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry } from '../../models/types.js';
+import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
@@ -11,18 +11,22 @@ import {
   resolveDirectStepProviderOptions,
   resolveStepProviderOptionsLayers,
   mergeStepProviderOptionsLayers,
+  mergeProviderOptions,
   resolveProviderOptionsSources,
+  type ProviderOptionsLayer,
 } from '../../../infra/config/providerOptions.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
   resolveMcpServersForProvider,
+  resolveSessionMcpServersForProvider,
   resolvePartAllowedToolsForProvider,
 } from './engine-provider-options.js';
 import {
   providerSupportsMaxTurns,
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -31,6 +35,7 @@ import type {
   JudgeStageEntry,
   RuntimeStepResolution,
 } from '../types.js';
+import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import { buildSessionKey } from '../session-key.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
@@ -39,6 +44,25 @@ import type { FindingContractInstructionContext } from '../instruction/instructi
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
 };
+
+function isAutoProviderOptionsSource(
+  source: ProviderResolutionSource | undefined,
+): source is 'auto.rules' | 'auto.ai' | 'auto.default' {
+  return source === 'auto.rules'
+    || source === 'auto.ai'
+    || source === 'auto.default';
+}
+
+function mergeRuntimeAndDirectStepProviderOptions(
+  runtime: RuntimeStepResolution,
+  runtimeProviderOptions: StepProviderOptions | undefined,
+  directStepProviderOptions: StepProviderOptions | undefined,
+): StepProviderOptions | undefined {
+  if (runtime.providerInfo?.providerSource === 'promotion') {
+    return mergeProviderOptions(directStepProviderOptions, runtimeProviderOptions);
+  }
+  return mergeProviderOptions(runtimeProviderOptions, directStepProviderOptions);
+}
 
 export class OptionsBuilder {
   constructor(
@@ -59,6 +83,15 @@ export class OptionsBuilder {
   ) {}
 
   private resolveEngineProviderModel(): StepProviderInfo {
+    if (this.engineOptions.provider === 'auto') {
+      return {
+        provider: undefined,
+        providerSource: undefined,
+        model: undefined,
+        modelSource: undefined,
+      };
+    }
+
     return {
       provider: this.engineOptions.provider,
       providerSource: this.engineOptions.providerSource,
@@ -70,7 +103,8 @@ export class OptionsBuilder {
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
     if (runtime?.providerInfo) {
       const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
-      const providerOptionsSources = runtime.providerInfo.providerOptionsSources
+      const providerOptionsSources = this.resolveProviderOptionsSourcesForRuntime(step, runtime)
+        ?? runtime.providerInfo.providerOptionsSources
         ?? this.resolveProviderOptionsSourcesForStep(step);
       return {
         ...runtime.providerInfo,
@@ -119,26 +153,70 @@ export class OptionsBuilder {
       : undefined;
   }
 
+  private resolveProviderOptionsSourcesForRuntime(
+    step: WorkflowStep,
+    runtime: RuntimeStepResolution,
+  ): StepProviderInfo['providerOptionsSources'] {
+    const runtimeSource = runtime.providerInfo?.providerSource;
+    if (!runtime.providerInfo?.providerOptions || !isAutoProviderOptionsSource(runtimeSource)) {
+      return undefined;
+    }
+    const providerOptionsSources = resolveProviderOptionsSources(
+      resolveDirectStepProviderOptions(step),
+      [
+        ...resolveStepProviderOptionsLayers(step, {
+          providerRouting: this.engineOptions.providerRouting,
+          personaProviders: this.engineOptions.personaProviders,
+        }),
+        { source: runtimeSource, options: runtime.providerInfo.providerOptions } satisfies ProviderOptionsLayer,
+      ],
+      this.engineOptions.providerOptions,
+      this.engineOptions.providerOptionsOriginResolver,
+      this.engineOptions.providerOptionsSource,
+    );
+    return Object.keys(providerOptionsSources).length > 0
+      ? providerOptionsSources
+      : undefined;
+  }
+
   private resolveMergedProviderOptions(
     step: WorkflowStep,
     resolvedProvider: StepProviderInfo['provider'],
     runtime?: RuntimeStepResolution,
   ): StepProviderOptions | undefined {
-    if (runtime?.providerInfo?.providerOptions && !runtime.teamLeaderPart) {
-      return runtime.providerInfo.providerOptions;
-    }
-
     const middleProviderOptions = mergeStepProviderOptionsLayers(step, {
       providerRouting: this.engineOptions.providerRouting,
       personaProviders: this.engineOptions.personaProviders,
     });
+    const directStepProviderOptions = resolveDirectStepProviderOptions(step);
+    const runtimeProviderOptions = runtime?.providerInfo?.providerOptions;
+
+    if (runtimeProviderOptions && !runtime.teamLeaderPart) {
+      const stepProviderOptions = mergeRuntimeAndDirectStepProviderOptions(
+        runtime,
+        runtimeProviderOptions,
+        directStepProviderOptions,
+      );
+      return resolveEffectiveProviderOptions(
+        this.engineOptions.providerOptionsSource,
+        this.engineOptions.providerOptionsOriginResolver,
+        this.engineOptions.providerOptions,
+        stepProviderOptions,
+        middleProviderOptions,
+      );
+    }
 
     if (runtime?.teamLeaderPart) {
+      const stepProviderOptions = mergeRuntimeAndDirectStepProviderOptions(
+        runtime,
+        runtimeProviderOptions,
+        directStepProviderOptions,
+      );
       return resolveEffectiveTeamLeaderPartProviderOptions(
         this.engineOptions.providerOptionsSource,
         this.engineOptions.providerOptionsOriginResolver,
         this.engineOptions.providerOptions,
-        resolveDirectStepProviderOptions(step),
+        stepProviderOptions,
         resolvedProvider,
         runtime.teamLeaderPart.partAllowedTools,
         middleProviderOptions,
@@ -149,7 +227,7 @@ export class OptionsBuilder {
       this.engineOptions.providerOptionsSource,
       this.engineOptions.providerOptionsOriginResolver,
       this.engineOptions.providerOptions,
-      resolveDirectStepProviderOptions(step),
+      directStepProviderOptions,
       middleProviderOptions,
     );
   }
@@ -183,7 +261,11 @@ export class OptionsBuilder {
       resolvedModel,
       permissionResolution: {
         stepName: step.name,
-        requiredPermissionMode: step.requiredPermissionMode,
+        // edit: true はステップが編集する宣言。プロファイル解決の結果が
+        // readonly でも、下限として edit を要求する（書けないのに書けと
+        // 指示される構成矛盾を防ぐ）。
+        requiredPermissionMode: step.requiredPermissionMode
+          ?? (step.edit === true ? 'edit' : undefined),
         providerProfiles: this.engineOptions.providerProfiles,
       },
       providerOptions,
@@ -252,6 +334,33 @@ export class OptionsBuilder {
     return providerSupportsMaxTurns(resolvedProvider) === false ? undefined : maxTurns;
   }
 
+  resolveMcpServersForStep(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+  ): Record<string, McpServerConfig> | undefined {
+    const sessionServers = resolveSessionMcpServersForProvider(
+      this.engineOptions.mcpServers,
+      provider,
+      step.name,
+    );
+    const stepServers = resolveMcpServersForProvider(step.mcpServers, provider);
+    if (!sessionServers) {
+      return stepServers;
+    }
+    if (!stepServers) {
+      return sessionServers;
+    }
+    for (const serverName of Object.keys(sessionServers)) {
+      if (Object.prototype.hasOwnProperty.call(stepServers, serverName)) {
+        throw new Error(`MCP server "${serverName}" is defined by both session and step "${step.name}"`);
+      }
+    }
+    return {
+      ...sessionServers,
+      ...stepServers,
+    };
+  }
+
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
@@ -287,7 +396,7 @@ export class OptionsBuilder {
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
       sessionId: shouldResumeSession ? this.getSessionId(buildSessionKey(step, resolvedProvider)) : undefined,
       allowedTools,
-      mcpServers: resolveMcpServersForProvider(step.mcpServers, resolvedProvider),
+      mcpServers: this.resolveMcpServersForStep(step, resolvedProvider),
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
     };
   }

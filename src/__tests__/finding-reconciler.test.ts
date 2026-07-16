@@ -43,9 +43,113 @@ function makeManagerOutput(overrides: Partial<FindingManagerOutput> = {}): Findi
     reopenedFindings: [],
     conflicts: [],
     resolvedConflicts: [],
+    waivedFindings: [],
+    disputeNotes: [],
     ...overrides,
   };
 }
+
+
+function makeLedgerWithOpenFinding(): FindingLedger {
+  return makeLedger({
+    nextId: 2,
+    rawFindings: [makeRawFinding({ rawFindingId: 'raw-1' })],
+    findings: [
+      {
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'new',
+        severity: 'high',
+        title: 'Persisting issue',
+        reviewers: ['coding-reviewer'],
+        rawFindingIds: ['raw-1'],
+        firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+        lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+      },
+    ],
+  });
+}
+
+function makeContext() {
+  return {
+    workflowName: 'peer-review',
+    stepName: 'peer-review',
+    runId: 'run-2',
+    timestamp: '2026-06-13T01:00:00.000Z',
+  };
+}
+
+describe('dispute/waiver transitions', () => {
+  it('should move an open finding to waived with an audit record', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    const result = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'Frozen contract mandates Record', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/types.ts:94',
+      context: makeContext(),
+    });
+
+    const finding = result.findings.find((entry) => entry.id === 'F-0001')!;
+    expect(finding.status).toBe('waived');
+    expect(finding.lifecycle).toBe('waived');
+    expect(finding.waivers?.at(-1)).toMatchObject({ reason: 'Frozen contract mandates Record', evidence: 'src/types.ts:94' });
+  });
+
+  it('should keep a disputed finding open and append the dispute record', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    const result = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        disputeNotes: [{ findingId: 'F-0001', reason: 'coder objection rejected', evidence: 'src/a.ts:1' }],
+      }),
+      context: makeContext(),
+    });
+
+    const finding = result.findings.find((entry) => entry.id === 'F-0001')!;
+    expect(finding.status).toBe('open');
+    expect(finding.disputes).toHaveLength(1);
+  });
+
+  it('should reopen a waived finding and keep the waiver history', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    ledger.findings[0] = {
+      ...ledger.findings[0]!,
+      status: 'waived',
+      lifecycle: 'waived',
+      waivers: [{ reason: 'old reason', evidence: 'src/types.ts:94', decidedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' } }],
+    };
+    const result = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-reopen' })],
+      managerOutput: makeManagerOutput({
+        reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopen'], evidence: 'premise collapsed' }],
+      }),
+      context: makeContext(),
+    });
+
+    const finding = result.findings.find((entry) => entry.id === 'F-0001')!;
+    expect(finding.status).toBe('open');
+    expect(finding.waivers).toHaveLength(1);
+  });
+
+  it('should refuse to waive a critical finding', () => {
+    const ledger = makeLedgerWithOpenFinding();
+    ledger.findings[0]!.severity = 'critical';
+    expect(() => reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: makeManagerOutput({
+        waivedFindings: [{ findingId: 'F-0001', reason: 'reason', evidence: 'src/a.ts:1' }],
+      }),
+      priorStepResponseText: '## Disputed Findings\n- findingId: F-0001\n  evidence: src/a.ts:1',
+      context: makeContext(),
+    })).toThrow('critical findings must stay open');
+  });
+});
 
 describe('reconcileFindingLedger', () => {
   it('should assign engine-owned ids to new findings and ignore raw finding ids', () => {
@@ -634,7 +738,7 @@ describe('reconcileFindingLedger', () => {
     ).toThrow('Finding id "F-0001" appears in multiple manager decisions: matches[0] and resolvedFindings[0]');
   });
 
-  it('should mark an existing open finding as resolved only by existing id', () => {
+  it('should mark an existing open finding as resolved via a current resolution confirmation', () => {
     const previousRawFinding = makeRawFinding({ rawFindingId: 'raw-1' });
     const previousLedger = makeLedger({
       nextId: 2,
@@ -657,7 +761,7 @@ describe('reconcileFindingLedger', () => {
       resolvedFindings: [
         {
           findingId: 'F-0001',
-          rawFindingIds: ['raw-1'],
+          rawFindingIds: ['raw-confirm'],
           evidence: 'The failing path now routes through findings.',
         },
       ],
@@ -665,7 +769,15 @@ describe('reconcileFindingLedger', () => {
 
     const ledger = reconcileFindingLedger({
       previousLedger,
-      rawFindings: [],
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+          title: 'Confirmed fixed',
+          description: 'Verified at src/index.ts:42.',
+        }),
+      ],
       managerOutput,
       context: {
         workflowName: 'peer-review',
@@ -705,7 +817,7 @@ describe('reconcileFindingLedger', () => {
       ],
     });
     const managerOutput = makeManagerOutput({
-      resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-1'], evidence: 'The issue is fixed.' }],
+      resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'The issue is fixed.' }],
       newFindings: [{ rawFindingIds: ['raw-current'], title: 'New unrelated issue', severity: 'high' }],
     });
 
@@ -716,6 +828,13 @@ describe('reconcileFindingLedger', () => {
           rawFindingId: 'raw-current',
           title: 'New unrelated issue',
           description: 'This is a different issue found in the current review.',
+        }),
+        makeRawFinding({
+          rawFindingId: 'raw-confirm',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-0001',
+          title: 'Confirmed fixed',
+          description: 'Verified at src/index.ts:42.',
         }),
       ],
       managerOutput,
@@ -785,7 +904,7 @@ describe('reconcileFindingLedger', () => {
           timestamp: '2026-06-13T01:00:00.000Z',
         },
       }),
-    ).toThrow('Resolved finding "F-0001" references raw finding id "raw-current" that does not belong to the finding');
+    ).toThrow('Resolved finding "F-0001" references current raw finding "raw-current" that is not a resolution_confirmation');
   });
 
   it('should reject resolving when evidence raw ids do not belong to the target finding', () => {
@@ -911,4 +1030,67 @@ describe('reconcileFindingLedger', () => {
       }),
     ).toThrow('Cannot reopen finding "F-0001" because it is not resolved');
   });
+
+  it('should not turn an uncited resolution confirmation into a new open finding', () => {
+    const previousLedger = makeLedger({ nextId: 2, rawFindings: [], findings: [] });
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [
+        makeRawFinding({
+          rawFindingId: 'raw-confirm-stray',
+          kind: 'resolution_confirmation',
+          targetFindingId: 'F-9999',
+          title: 'Confirmed fixed',
+          description: 'Verified but the manager did not cite it.',
+        }),
+      ],
+      managerOutput: makeManagerOutput(),
+      context: {
+        workflowName: 'peer-review',
+        stepName: 'peer-review',
+        runId: 'run-2',
+        timestamp: '2026-06-13T01:00:00.000Z',
+      },
+    });
+
+    expect(ledger.findings).toEqual([]);
+  });
+
+  it('should reject a silence-based resolution citing only previous raw findings', () => {
+    const previousRawFinding = makeRawFinding({ rawFindingId: 'raw-1' });
+    const previousLedger = makeLedger({
+      nextId: 2,
+      rawFindings: [previousRawFinding],
+      findings: [
+        {
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'persists',
+          severity: 'medium',
+          title: 'Existing issue',
+          reviewers: ['coding-reviewer'],
+          rawFindingIds: ['raw-1'],
+          firstSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'peer-review', timestamp: '2026-06-13T00:00:00.000Z' },
+        },
+      ],
+    });
+
+    expect(() =>
+      reconcileFindingLedger({
+        previousLedger,
+        rawFindings: [],
+        managerOutput: makeManagerOutput({
+          resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-1'], evidence: 'No longer reported.' }],
+        }),
+        context: {
+          workflowName: 'peer-review',
+          stepName: 'peer-review',
+          runId: 'run-2',
+          timestamp: '2026-06-13T01:00:00.000Z',
+        },
+      }),
+    ).toThrow('Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it');
+  });
+
 });

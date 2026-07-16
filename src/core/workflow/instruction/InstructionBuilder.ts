@@ -11,6 +11,7 @@
 import type { WorkflowStep, Language, OutputContractItem, OutputContractEntry } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
+import { buildFindingContractInstruction } from './finding-contract-instruction.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
@@ -232,30 +233,13 @@ export class InstructionBuilder {
       return instructions;
     }
 
-    const lines = [
-      instructions,
-      '',
-      '## Finding Contract',
-      `- Consolidated ledger copy: ${this.context.findingContract.ledgerCopyPath}`,
-      '- Use existing finding IDs from the ledger when referring to tracked findings.',
-      '- Do not assign final finding IDs.',
-      '',
-      'Current finding ledger summary:',
-      renderFencedJsonBlock(this.context.findingContract.ledgerSummary),
-    ];
+    const section = buildFindingContractInstruction({
+      contract: this.context.findingContract,
+      language: this.context.language ?? 'en',
+      renderFencedJsonBlock,
+    });
 
-    if (this.context.findingContract.rawFindingsJsonSchema) {
-      lines.push(
-        '',
-        '- Report every issue you observe as structured raw findings.',
-        '- Use rawFindingId values that are unique within this response.',
-        '- Copy each Observed Findings family_tag value into the structured familyTag field.',
-        '- Return structured output matching this raw findings schema:',
-        renderFencedJsonBlock(this.context.findingContract.rawFindingsJsonSchema),
-      );
-    }
-
-    return lines.join('\n');
+    return [instructions, '', section].join('\n');
   }
 }
 

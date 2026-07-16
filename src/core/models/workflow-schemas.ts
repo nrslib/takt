@@ -7,10 +7,12 @@ import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   McpServersSchema,
+  AutoRoutingSchema,
   StepProviderOptionsObjectSchema,
   OutputContractsFieldSchema,
   PermissionModeSchema,
   ProviderReferenceSchema,
+  ProviderReferenceOrAutoSchema,
   RateLimitFallbackSchema,
   QualityGatesSchema,
   hasProviderOptionsLeaf,
@@ -27,6 +29,11 @@ import {
   isAiConditionExpression,
 } from './workflow-condition-expression.js';
 import { FindingContractConfigRawSchema } from './finding-schemas.js';
+import {
+  SESSION_AGENT_STEP_REQUIRED_MESSAGE,
+  SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
+} from './workflow-session-constraints.js';
+import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
 import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
@@ -41,7 +48,10 @@ const WorkflowFacetRefValueSchema = z.union([WorkflowFacetRefScalarSchema, Workf
 const WorkflowFacetRefOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowParamReferenceRawSchema]);
 const WorkflowFacetRefListOrParamSchema = z.union([WorkflowFacetRefScalarSchema, WorkflowFacetRefListSchema, WorkflowParamReferenceRawSchema]);
 
-const WorkflowCallArgsRawSchema = z.record(z.string().min(1), WorkflowFacetRefValueSchema);
+const WorkflowCallArgsRawSchema = z.record(
+  z.string().min(1),
+  z.union([WorkflowFacetRefValueSchema, WorkflowParamReferenceRawSchema]),
+);
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
   extends: z.string().min(1).optional(),
@@ -55,7 +65,7 @@ function hasProviderOptionsTarget(
 }
 
 const WorkflowProviderOptionsWithExtendsSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
+  provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
   runtime: RuntimeConfigSchema,
@@ -99,6 +109,46 @@ export const WorkflowRuleSchema = z.object({
     path: ['condition'],
   },
 );
+
+function validateWorkflowCallRules(
+  rules: readonly z.output<typeof WorkflowRuleSchema>[] | undefined,
+  ctx: z.core.$RefinementCtx,
+  options: { allowExtendedConditions: boolean },
+): void {
+  rules?.forEach((rule, index) => {
+    if (rule.when !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rules', index, 'when'],
+        message: 'workflow_call rules do not allow "when"; use condition: COMPLETE or ABORT',
+      });
+    }
+
+    if (rule.condition === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rules', index, 'condition'],
+        message: 'workflow_call rules require condition: COMPLETE or ABORT',
+      });
+      return;
+    }
+
+    const isBuiltInCondition = rule.condition === 'COMPLETE' || rule.condition === 'ABORT';
+    const isExtendedCondition = options.allowExtendedConditions
+      && !isAiConditionExpression(rule.condition)
+      && !isAggregateConditionExpression(rule.condition);
+
+    if (!isBuiltInCondition && !isExtendedCondition) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rules', index, 'condition'],
+        message: options.allowExtendedConditions
+          ? 'workflow_call rules only allow COMPLETE, ABORT, or callable return conditions'
+          : 'workflow_call rules only allow COMPLETE or ABORT conditions',
+      });
+    }
+  });
+}
 
 const WorkflowPromotionRawSchema = z.object({
   at: z.number().int().positive().optional(),
@@ -202,10 +252,41 @@ export const TeamLeaderConfigRawSchema = z.object({
   }
 });
 
-/** Sub-step schema for parallel execution */
-export const ParallelSubStepRawSchema = z.object({
+/** Workflow step schema - raw YAML format */
+const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
+
+const WorkflowCallOverridesRawSchema = z.object({
+  provider: ProviderReferenceOrAutoSchema.optional(),
+  model: z.string().optional(),
+  provider_options: WorkflowStepProviderOptionsSchema,
+}).strict().superRefine((data, ctx) => {
+  const hasProviderOptionsTargetValue = data.provider_options !== undefined
+    && hasProviderOptionsTarget(data.provider_options);
+
+  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
+    });
+  }
+
+  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['provider_options'],
+      message: 'workflow_call overrides provider_options must include at least one provider-specific option',
+    });
+  }
+});
+
+const AgentParallelSubStepRawSchema = z.object({
   name: z.string().min(1),
+  kind: z.never().optional(),
+  call: z.never().optional(),
+  args: z.never().optional(),
+  overrides: z.never().optional(),
   session_key: z.string().trim().min(1).optional(),
+  session: z.enum(WORKFLOW_SESSION_MODES).optional(),
   persona: z.string().optional(),
   persona_name: z.string().optional(),
   tags: z.array(z.string().min(1)).optional(),
@@ -214,7 +295,7 @@ export const ParallelSubStepRawSchema = z.object({
   allow_git_commit: z.boolean().optional(),
   allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
-  provider: ProviderReferenceSchema.optional(),
+  provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().nullable().optional(),
   promotion: z.never().optional(),
   permission_mode: z.never().optional(),
@@ -240,32 +321,45 @@ export const ParallelSubStepRawSchema = z.object({
   });
 });
 
-/** Workflow step schema - raw YAML format */
-const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
-
-const WorkflowCallOverridesRawSchema = z.object({
-  provider: ProviderReferenceSchema.optional(),
-  model: z.string().optional(),
-  provider_options: WorkflowStepProviderOptionsSchema,
-}).strict().superRefine((data, ctx) => {
-  const hasProviderOptionsTargetValue = data.provider_options !== undefined
-    && hasProviderOptionsTarget(data.provider_options);
-
-  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "workflow_call overrides require at least one of 'provider', 'model', or 'provider_options'",
-    });
-  }
-
-  if (data.provider_options !== undefined && !hasProviderOptionsTargetValue) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['provider_options'],
-      message: 'workflow_call overrides provider_options must include at least one provider-specific option',
-    });
-  }
+const WorkflowCallParallelSubStepRawSchema = z.object({
+  name: z.string().min(1),
+  kind: z.literal('workflow_call').optional(),
+  call: z.string().min(1),
+  overrides: WorkflowCallOverridesRawSchema.optional(),
+  args: WorkflowCallArgsRawSchema.optional(),
+  description: z.string().optional(),
+  session_key: z.never().optional(),
+  persona: z.never().optional(),
+  persona_name: z.never().optional(),
+  tags: z.never().optional(),
+  policy: z.never().optional(),
+  knowledge: z.never().optional(),
+  allow_git_commit: z.never().optional(),
+  allowed_tools: z.never().optional(),
+  mcp_servers: z.never().optional(),
+  provider: z.never().optional(),
+  model: z.never().optional(),
+  promotion: z.never().optional(),
+  permission_mode: z.never().optional(),
+  required_permission_mode: z.never().optional(),
+  provider_options: z.never().optional(),
+  edit: z.never().optional(),
+  requires_user_input: z.never().optional(),
+  instruction: z.never().optional(),
+  instruction_template: z.never().optional(),
+  rules: z.array(WorkflowRuleSchema).optional(),
+  output_contracts: z.never().optional(),
+  quality_gates: z.never().optional(),
+  pass_previous_response: z.never().optional(),
+}).superRefine((data, ctx) => {
+  validateWorkflowCallRules(data.rules, ctx, { allowExtendedConditions: true });
 });
+
+/** Sub-step schema for parallel execution */
+export const ParallelSubStepRawSchema = z.union([
+  WorkflowCallParallelSubStepRawSchema,
+  AgentParallelSubStepRawSchema,
+]);
 
 const WorkflowSubworkflowRawSchema = z.object({
   callable: z.boolean().optional(),
@@ -307,7 +401,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     call: z.string().min(1).optional(),
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
-    session: z.enum(['continue', 'refresh']).optional(),
+    session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: z.string().optional(),
     persona_name: z.string().optional(),
     tags: z.array(z.string().min(1)).optional(),
@@ -316,7 +410,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     allow_git_commit: z.boolean().optional(),
     allowed_tools: z.never().optional(),
     mcp_servers: McpServersSchema,
-    provider: ProviderReferenceSchema.optional(),
+    provider: ProviderReferenceOrAutoSchema.optional(),
     model: z.string().nullable().optional(),
     promotion: z.array(WorkflowPromotionRawSchema).optional(),
     permission_mode: z.never().optional(),
@@ -367,6 +461,25 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         code: z.ZodIssueCode.custom,
         path: ['session_key'],
         message: 'session_key is not supported on parallel parent steps; set it on each parallel sub-step',
+      });
+    }
+
+    if (data.session !== undefined && stepKind !== 'agent') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['session'],
+        message: SESSION_AGENT_STEP_REQUIRED_MESSAGE,
+      });
+    }
+
+    if (
+      data.session !== undefined
+      && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['session'],
+        message: SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
       });
     }
 
@@ -475,39 +588,8 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         }
       }
 
-      data.rules?.forEach((rule, index) => {
-        if (rule.when !== undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['rules', index, 'when'],
-            message: 'workflow_call rules do not allow "when"; use condition: COMPLETE or ABORT',
-          });
-        }
-
-        if (rule.condition === undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['rules', index, 'condition'],
-            message: 'workflow_call rules require condition: COMPLETE or ABORT',
-          });
-          return;
-        }
-
-        const allowExtendedConditions = options?.relaxWorkflowCallConditions === true;
-        const isBuiltInCondition = rule.condition === 'COMPLETE' || rule.condition === 'ABORT';
-        const isExtendedCondition = allowExtendedConditions
-          && !isAiConditionExpression(rule.condition)
-          && !isAggregateConditionExpression(rule.condition);
-
-        if (!isBuiltInCondition && !isExtendedCondition) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['rules', index, 'condition'],
-            message: allowExtendedConditions
-              ? 'workflow_call rules only allow COMPLETE, ABORT, or callable return conditions'
-              : 'workflow_call rules only allow COMPLETE or ABORT conditions',
-          });
-        }
+      validateWorkflowCallRules(data.rules, ctx, {
+        allowExtendedConditions: options?.relaxWorkflowCallConditions === true,
       });
     }
 
@@ -561,6 +643,7 @@ export const WorkflowConfigRawSchema = z.object({
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
   finding_contract: FindingContractConfigRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsWithExtendsSchema,
+  auto_routing: AutoRoutingSchema.optional(),
   rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),
   schemas: z.record(z.string(), z.string()).optional(),

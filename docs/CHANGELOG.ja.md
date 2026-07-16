@@ -6,6 +6,77 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.51.0] - 2026-07-11
+
+### Added
+
+- オートルーティング: `provider: auto` (#921, #964)。TAKT がステップごとにプロバイダ/モデルを選択できるようになりました。`auto_routing` ブロックに `strategy`（`cost`・`balanced`・`performance`）、各ステップを分類する軽量な `router` モデル、名前付きの `candidates`（provider + model + `cost_tier`）を設定します。`rules.tags` でステップタグを特定の candidate へ決定的に固定できます。ルーティングの決定は `.takt/events/` 配下に NDJSON としてローカル記録されるだけでアップロードはされません。ローカル記録は `telemetry.routing_decisions` または `takt telemetry status|enable|disable` で制御できます。
+- exec 入力での画像添付 (#934, #936)。exec の入力行を編集中に、macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルからの OSC 1337 インライン画像も受け付けます。TAKT は `[Image #N]` プレースホルダを挿入し、Assistant メッセージや `/go` のノートでそれを参照するとそのリクエストに画像が送られます。`/go` 実行時には参照された画像が生成タスクスペックへコピーされます。対応フォーマットは PNG・JPEG・GIF・WebP で上限は 10 MiB。ネイティブ画像入力のないプロバイダにはローカルパス参照としてプロンプトに渡されます。
+- `session: compact` モード (#994, #995)。ステップと並列サブステップで `session: compact` を指定すると、保存済みペルソナセッションを resume したうえで Phase 1 の前にプロバイダへセッション圧縮を依頼し、長時間走るペルソナをコンテキスト上限内に保てます。圧縮は Phase 1 前のみ実行され、圧縮 capability のないプロバイダはそのまま続行、圧縮失敗時は warning を出して未圧縮セッションで継続します。
+- Finding Contract マネージャのプロバイダ/モデル指定 (#970, #1008)。`finding_contract.manager` に Finding Manager 合成ステップ専用の `provider` / `model` を指定できるようになりました。設定時は `provider_routing`、非推奨の `persona_providers`、ワークフローデフォルト、解決済み入力プロバイダ/モデルより優先されます。
+
+### Changed
+
+- Finding Manager の機械分類 (#1007)。決定可能な raw finding — 解決確認と、open finding への location+familyTag 完全一致 — をコードで分類し、マネージャ LLM には残余の判断だけを（スリム化した台帳とともに）渡すようになりました。残余ゼロかつ異議申告がなければ LLM 呼び出し自体をスキップします。実測ベンチではマネージャが毎ラウンド約 200 KB の台帳を運ぶ最大のトークン消費源でした。
+- `for-local-llm` ファミリーで `implement` の行き詰まりを ABORT ではなく `plan`（再計画）へ流すようにしました (#1009)。`write_tests` と `fix` の既存挙動に揃えたものです。ABORT はループモニターの裁定・要件不明確・レビュー対立に限定されます。
+- 同梱 SDK を更新: `@openai/codex-sdk` 0.144.1 / `@anthropic-ai/claude-agent-sdk` 0.3.206 (#1015)。同梱の Codex CLI が GPT-5.6 モデルファミリー（`gpt-5.6-sol`・`gpt-5.6-terra`・`gpt-5.6-luna`）を認識するようになり、codex プロバイダの `model` に指定できます。
+
+### Fixed
+
+- OpenCode の無音タイムアウト時にセッションを検死し、プロバイダの 429 を `rate_limited` として分類 (#985, #1010)。OpenCode サーバはプロバイダの 429 を内部リトライで握り `session.error` を流さないため、レート制限されたセッションが進捗ゼロのストールに見え、無音ウォッチドッグがエンジンのレート制限バックオフへ接続せずに落としていました。無音タイムアウトで abort した場合に限り、セッションの最後の assistant メッセージを（5 秒の上限付きで）照会し、429 系エラーを `rate_limited` として返します。
+- Finding Contract の異議申告が `language: ja` でも機能するようになり、index 状態由来の finding を防止 (#1012, #1014)。FC の指示文が英語固定で ja では異議申告の入口が細かったため、機械照合されるトークン（`## Disputed Findings`・フィールド名）は英語のまま散文をローカライズしました。正当な異議を封じていた coder ペルソナの「レビュワーの指摘は絶対。反論しない」という姿勢を証拠の規律へ書き換えました。git ルールに「index/staging の状態を証拠として扱わない」を追加し、TAKT 管理の実行で充足不能な「このファイルをコミットせよ」finding を防ぎます。
+- 異議申告ルートで陳腐化した finding をエンドツーエンドでカバー (#993)。異議申告ガイダンスが現行コードと矛盾する finding（再修正の前に実態と照合し、新しい file:line 証拠で異議を申告する）をカバーするようになり、review-fix のループ判定は「修正は着地したのに finding が残り続ける」状態を、中断ではなく再計画+異議申告で解ける findings 側のデッドロックとして扱います。
+- 実走ベンチ運用からの夜間堅牢化 (#999)。ユーザー設定の部分的な `provider_profiles` がデフォルトマップ全体を置き換えるのではなくプロバイダ単位のオーバーレイになりました。`edit: true` が `edit` 権限フロアを供給し、編集を宣言したステップが読み取り専用ツールマップで走ることがなくなりました。ツール名をローテーションする退化ループを止める呼び出し単位のツールエラーバジェット（25、リセットなし）と、純テキスト断片のスピンループを止める assistant メッセージサイクル上限を追加しました。
+
+### Internal
+
+- ファセットガイダンスの明確化: 出力契約と境界 (#1013)、アクターと認証のナレッジ (#1004)、宣言的バリデーション (#1000)、例外変換の境界 (#998)、MCP の worktree/autoPr 説明 (#997)。
+
+## [0.50.0] - 2026-07-06
+
+### Added
+
+- MCP サーバーエントリポイント `takt-mcp` (#938, #943)。TAKT を stdio Model Context Protocol サーバーとして起動できるようになりました。MCP クライアント（Codex、Claude Code など）から `takt add` / `takt run` を経由せずに TAKT を操作できます。公開ツールは 3 つです。`takt_enqueue_task`（`.takt/tasks.yaml` に pending タスクを保存）、`takt_create_issue_and_enqueue_task`（設定済み issue プロバイダで issue を作成し、その番号でタスクを積む）、`takt_run_next_task`（次の pending タスクを取得して実行）。各ツールの `cwd` は `realpath` で解決され、サーバーの許可プロジェクトルート内に収まる必要があります。Codex には `codex mcp add takt -- takt-mcp` または `[mcp_servers.takt]` ブロックで登録します。ツールスキーマの詳細は CLI Reference を参照してください。
+- ACP エージェントエントリポイント `takt-acp` (#913, #916)。TAKT を stdio JSON-RPC 上の Agent Client Protocol エージェントとして起動できるようになりました。ACP 互換クライアントから起動します。`session/prompt` は既定で enqueue-first です。「タスクを積んで」のようなプロンプトは `.takt/tasks.yaml` に pending タスク（`worktree: true`）を追加し、後で `takt run` で実行できます。「今すぐ実行」のような明示的なプロンプトのみ直接実行します。`initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` をサポートし、`session/new` で渡された stdio MCP サーバーはワークフロー実行へ引き継がれます。
+- `for-local-llm` ワークフローファミリー (#958, #974, #982)。ローカルまたは非力なモデル向けに調整した 5 つのワークフロー（`takt-default-for-local-llm`、`frontend-for-local-llm`、`backend-for-local-llm`、`backend-cqrs-for-local-llm`、`dual-for-local-llm`）を追加。それぞれ 4 つ（dual は 5 つ）の並列ディープレビュアーが Finding Contract（レジャー、解決確認、ディスピュート裁定）を背景に走り、フラットなマージレディネス最終ゲートを備えます。コンパイルを通過する挙動上の欠陥を捉える新しい `implementation-semantics` レビュアー（ペルソナ、ナレッジ、インストラクション、finding-contract 出力契約）を追加。レビュー専用の `peer-review-for-local-llm` ワークフローも同梱します。
+- `cli` ワークフロー (#947)。CLI 開発向けワークフローです（plan → write_tests → draft（実装 + AI セルフレビュー）→ peer-review（並列レビュアー + fix）→ supervise → COMPLETE）。
+- Finding Contract のディスピュート/waiver ライフサイクル (#969)。妥当だが修正できない finding に対し、コーダーが固定見出し `## Disputed Findings` の下でディスピュート（finding id / 理由 / file:line）を宣言できるようになりました。findings マネージャは finding を waive（理由と根拠を記録してブロッキング集合から除外）するか、ディスピュートを却下（open のままブロッキング継続）します。ゲートは従来通り `findings.open.count == 0` 条件を保つため、妥当だが修正不能な finding でデッドロックしていた実行が解けます。
+- エンジン評価条件のための `when()` 構文 (#977)。ルール条件内の決定的な状態式を、既存の `ai()` / `all()` / `any()` ファミリーと同様に `when(...)` で明示的に宣言するようになりました（例: `condition: when(findings.conflicts.count > 0)` や `approved && when(findings.open.count == 0)`）。ルールレベルの `when:` キーは式を自動的にラップするシュガーです。カスタムワークフローについては後述の BREAKING を参照してください。
+- 最終ゲート用のプロバイダルーティングタグ (#954)。ビルトインの最終ゲートステップに `final-gate` タグが付与され、`provider_routing.tags.final-gate` でマージレディネスゲートだけを他のレビューステップと独立して強いプロバイダ/モデルへルーティングできます。
+- マージレディネスレビューゲート (#949)。ビルトインの開発・メンテナンスワークフローに、マージ可能かどうかだけを判定する並列の最終マージレディネスゲート（`merge-readiness-final-gate` / `merge-readiness-dual-final-gate`）を追加しました。
+- OpenCode ネイティブ `json_schema` 構造化出力 (#965) と、レビュアーが不正な構造化出力を出した際の 1 回限りの是正リトライ (#963)。OpenCode レビュアーステップは、手書き JSON に頼らずキー構造をソースで強制する OpenCode ネイティブの `format: json_schema` で構造化出力を要求するようになりました。それでも不正な JSON が出た場合、失敗させる前に同一セッションへ一度だけ修正済みペイロードの再出力を求めます。
+
+### Changed
+
+- **BREAKING:** 決定的なルール条件に `when()` ラッパーが必須になりました (#977)。ルール `condition` 内の裸の比較式（例: `findings.open.count == 0`）はエンジン評価される事実ではなく、単なる散文タグ条件として扱われます。裸の式を含む集約ガードは移行ヒント付きで設定エラーになります。これは、`coverage >= 80%` のような散文を暗黙にマッチ不能なデッドルール化していた脆い比較演算子ヒューリスティックを置き換えるものです。旧ヒューリスティックに依存していたカスタムワークフローは、決定的な句を `when(...)`（またはルールの `when:` キー）でラップする必要があります。ビルトインは移行済みです。
+- **BREAKING:** `-with-fc` ワークフロー系統を削除 (#974)。`takt-default-with-fc` と `peer-review-with-fc`（0.47.0 で追加）は、新しい `for-local-llm` ファミリーに置き換えられました。これが Finding Contract のラインナップになります。旧ワークフロー名への参照は更新してください。
+- fixer が「続行不能」で実行を中断しなくなりました (#986)。fixer がブロッカーを諦めた場合、実行全体を捨てる代わりに planner へ戻して再分解します（planner の席は強いモデルにルーティング可能）。新しい再計画サイクルのループモニターは、連続する再計画が同じ行き詰まりを繰り返したときだけ、人間向けの引き継ぎサマリーとともに中断します。5 つの開発ワークフローに適用されます。
+- Codex の `approval_policy` を `never` に固定。TAKT は Codex を非対話で実行するためエスカレーションを承認する人間がいません。そのためサンドボックスモードが唯一の書き込み境界となり、`readonly` は書き込みを完全にブロック、`edit`/`full` は従来通りに動作します（Codex の既定承認ポリシーが読み取り専用サンドボックスを越えてエスカレーションを自動承認する挙動を防止）。
+- Codex のモデル能力チェックをプロバイダへ委譲 (#983)。
+
+### Fixed
+
+- OpenCode のアイドルウォッチドッグがストールしたセッションで発火するようになりました (#984)。10 分のアイドルウォッチドッグは、サーバー全体のイベント（LSP、ファイルウォッチャー、兄弟セッション）でタイマーがリセットされるためストールを見逃すことがありました。リセットをそのセッション自身のイベントに限定しました。
+- OpenCode セッションがステップフェーズ間でプロンプト単位のツール制限により保持されるようになり (#948)、ワークスペース外拒否は有効かつ非致命的に保たれます (#957)。
+- OpenCode 構造化出力のリカバリ: ネイティブ構造化出力が生成されないときはフォーマットなしのリトライにフォールバックし (#967)、ゲートウェイが `json_schema` を拒否したときも復帰、空または誤字の raw-finding の location/suggestion フィールドは未設定として扱います (#962)。
+- finding-contract の解決が到達可能になり、ガード付きタグルールをサポート (#961)。ディスピュートガイダンスは open な finding が存在するときだけ注入されます (#973)。
+- Cursor CLI の設定ディレクトリが実行間で保持されるようになりました (#960)。
+- シンボリックリンクされた stdio エントリポイントを実パスへ解決 (#955)。`takt-mcp` / `takt-acp` をシンボリックリンク経由で起動しても動作します。
+- レポートフェーズの失敗と空の Phase 1 出力がソフトエラーになりました (#907, #911, #927)。レポート生成の失敗は中断せず Phase 3（ステータス判定）へ継続し、空の Phase 1 出力はエラーとして検出され後続フェーズが無内容で走らないようにし、レポートのフォールバック経路を追加しました。
+- 分離クローンの fetch が、親リポジトリの HEAD が対象ブランチにある場合に失敗しなくなりました (#924)。fetch 前に HEAD をデタッチします。
+- OpenCode の readonly・ツールなしフェーズでの `bash` ツール処理を修正 (#918, #919)。
+- `takt list` の追加指示 + リキューフローを修正 (#942)。
+- フルエリア監査に基づき判定・findings・OpenCode 処理を堅牢化 (#981)。
+
+### Internal
+
+- CQRS+ES のナレッジとガイダンスを強化 (#925, #940, #941, #979, #988)。
+- プロンプト品質ツール: promptfoo ベースのファセット品質 eval (#946) と、implementation-semantics レビュアー向けの rescan-semantics eval スイート (#951, #952, #959)。
+- レビュアーはレビューレポートに再スキャンの証跡を記載する必要があり (#951)、published-state の不変性とファミリーレベルの finding 集約を学習し (#953)、ガード付き Record を指摘しなくなりました (#968)。
+- review / write-tests / test-policy のファセット契約を厳格化 (#915, #917, #932, #944, #966, #987)。
+- Codex: テストゲートの並列化 (#920)、MCP タスクワークフローと auto-PR の判断 (#972)。
+- `when()` ヘルパーをコーディング規約に沿って整理 (#978)。
+
 ## [0.49.0] - 2026-06-28
 
 ### Added

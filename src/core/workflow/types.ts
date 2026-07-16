@@ -6,17 +6,27 @@ import type {
   Language,
   LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowCallStep,
   WorkflowMaxSteps,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
   RateLimitFallbackConfig,
   FallbackContext,
+  McpServerConfig,
 } from '../models/types.js';
-import type { PersonaProviderEntry, ProviderRoutingConfig, ResolvedObservabilityConfig } from '../models/config-types.js';
+import type {
+  AutoRoutingConfig,
+  AutoRoutingStrategy,
+  PersonaProviderEntry,
+  ProviderRoutingConfig,
+  ProviderTypeOrAuto,
+  ResolvedObservabilityConfig,
+} from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
+import type { AutoRoutingAiRouter } from '../../agents/auto-routing-usecase.js';
 import type { SystemStepServicesFactory } from './system/system-step-services.js';
 import type { StructuredOutputNormalizerRegistry } from './engine/structured-output-normalizer.js';
 import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderResolutionSource } from './provider-options-trace.js';
@@ -89,6 +99,12 @@ export interface StepProviderInfo {
   modelSource?: ProviderResolutionSource;
   providerOptions?: StepProviderOptions;
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
+  autoRoutingDecision?: {
+    candidateName: string;
+    costTier: 'high' | 'medium' | 'low';
+    strategy: AutoRoutingStrategy;
+    candidateCount: number;
+  };
 }
 
 export interface StepRunResult {
@@ -156,8 +172,7 @@ export interface WorkflowCallChildEngine {
 
 export interface WorkflowCallResolutionRequest {
   parentWorkflow: WorkflowConfig;
-  identifier: string;
-  stepName: string;
+  step: WorkflowCallStep;
   projectCwd: string;
   lookupCwd: string;
 }
@@ -166,8 +181,18 @@ export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => W
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
-  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo) => void;
+  'step:start': (step: WorkflowStep, iteration: number, instruction: string, providerInfo: StepProviderInfo, workflowName: string) => void;
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
+  'routing:decision': (
+    step: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    providerInfo: StepProviderInfo,
+    stepType: 'normal' | 'parallel' | 'agent',
+    durationMs: number,
+    iteration: number,
+    workflowName: string,
+  ) => void;
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
   'findings:ledger': (ledger: FindingLedger) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
@@ -253,6 +278,8 @@ export interface WorkflowEngineOptions {
   initialUserInputs?: string[];
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
+  /** MCP servers supplied by the application boundary for every phase-1 agent step. */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Callback when iteration limit is reached - returns additional iterations or null to stop */
   onIterationLimit?: IterationLimitCallback;
   /** Ignore workflow maxSteps and keep running */
@@ -271,7 +298,7 @@ export interface WorkflowEngineOptions {
   childProcessEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
@@ -281,6 +308,12 @@ export interface WorkflowEngineOptions {
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  /** Resolved automatic provider/model routing configuration */
+  autoRouting?: AutoRoutingConfig;
+  /** Run-scoped strategy override for automatic provider/model routing. */
+  autoStrategyOverride?: AutoRoutingStrategy;
+  /** Run-scoped AI router for automatic provider/model routing. */
+  autoRoutingAiRouter?: AutoRoutingAiRouter;
   /** Source layer for resolved provider options */
   providerOptionsSource?: ProviderOptionsSource;
   /** Nested origin resolver for provider options traced-config values */

@@ -21,6 +21,8 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, ReportPhaseGenerationError, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
+import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
+import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
 import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
@@ -45,6 +47,7 @@ import type {
 } from './structured-output-normalizer.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+import { compactSessionBeforePhase1 } from './session-compaction.js';
 
 const log = createLogger('step-executor');
 
@@ -214,7 +217,7 @@ export class StepExecutor {
       return instruction;
     }
 
-    return loadTemplate('structured_json_schema_instruction', 'en', {
+    return loadTemplate('parts/structured_json_schema_instruction', 'en', {
       instruction,
       schemaJson: JSON.stringify(step.structuredOutput.schema, null, 2),
     });
@@ -225,8 +228,29 @@ export class StepExecutor {
     response: AgentResponse,
     runtime?: RuntimeStepResolution,
   ): AgentResponse {
+    const result = this.normalizeStructuredOutputWithDiagnostics(step, response, runtime);
+    if (result.invalidDetail !== undefined) {
+      const provider = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime).provider;
+      throw new Error(
+        `Step "${step.name}" requires structured_output for provider "${provider}": ${result.invalidDetail}`,
+      );
+    }
+    return result.response;
+  }
+
+  /**
+   * Like normalizeStructuredOutput, but returns the validation failure as a
+   * diagnostic instead of throwing, so callers can attempt a corrective
+   * retry with the agent (weak models frequently emit malformed JSON on
+   * large structured outputs).
+   */
+  normalizeStructuredOutputWithDiagnostics(
+    step: WorkflowStep,
+    response: AgentResponse,
+    runtime?: RuntimeStepResolution,
+  ): { response: AgentResponse; invalidDetail?: string } {
     if (!step.structuredOutput) {
-      return response;
+      return { response };
     }
 
     const provider = this.deps.optionsBuilder.resolveStepProviderModel(step, runtime).provider;
@@ -246,10 +270,10 @@ export class StepExecutor {
         detail,
       );
       if (fallback) {
-        return fallback;
+        return { response: fallback };
       }
       this.logStructuredOutputFailure(step, failureReason, detail);
-      return response;
+      return { response };
     }
 
     try {
@@ -273,12 +297,14 @@ export class StepExecutor {
         language: this.deps.getLanguage(),
       });
       if (structuredOutput === response.structuredOutput) {
-        return response;
+        return { response };
       }
 
       return {
-        ...response,
-        structuredOutput,
+        response: {
+          ...response,
+          structuredOutput,
+        },
       };
     } catch (error) {
       const detail = getErrorMessage(error);
@@ -289,16 +315,14 @@ export class StepExecutor {
         detail,
       );
       if (fallback) {
-        return fallback;
+        return { response: fallback };
       }
       this.logStructuredOutputFailure(
         step,
         supportsStructuredOutput !== false && response.structuredOutput === undefined ? 'missing' : 'schema_error',
         detail,
       );
-      throw new Error(
-        `Step "${step.name}" requires structured_output for provider "${provider}": ${detail}`,
-      );
+      return { response, invalidDetail: detail };
     }
   }
 
@@ -492,17 +516,31 @@ export class StepExecutor {
     }
 
     if (phase3Result) {
-      log.debug('Rule matched (Phase 3)', {
-        step: step.name,
-        ruleIndex: phase3Result.ruleIndex,
-        method: phase3Result.method,
-      });
-      nextResponse = {
-        ...nextResponse,
-        matchedRuleIndex: phase3Result.ruleIndex,
-        matchedRuleMethod: phase3Result.method,
-      };
-      return nextResponse;
+      // Phase 3 の判定はタグ/構造化出力からルール番号を直接採用するため、
+      // ここでガード（findings 条件）を評価する。不成立なら採用せず、
+      // ガード対応済みの通常ルール評価へフォールバックする。
+      // 採用判定は共通ヘルパに委譲（先行決定的評価 + ガード/決定的再評価）。
+      const adoption = resolvePhase3Adoption(step.rules, phase3Result, state, this.deps.getInteractive(), evaluateWhenExpression);
+      phase3Result = adoption.result;
+      if (adoption.blocked) {
+        log.debug('Phase 3 rule guard failed; falling back to rule evaluation', {
+          step: step.name,
+          ruleIndex: phase3Result.ruleIndex,
+          ruleCondition: step.rules?.[phase3Result.ruleIndex]?.condition,
+        });
+      } else {
+        log.debug('Rule matched (Phase 3)', {
+          step: step.name,
+          ruleIndex: phase3Result.ruleIndex,
+          method: phase3Result.method,
+        });
+        nextResponse = {
+          ...nextResponse,
+          matchedRuleIndex: phase3Result.ruleIndex,
+          matchedRuleMethod: phase3Result.method,
+        };
+        return nextResponse;
+      }
     }
 
     // No Phase 3 — use rule evaluator with Phase 1 content
@@ -571,6 +609,7 @@ export class StepExecutor {
       sequence: 1,
     });
     const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(step, runtime);
+    await compactSessionBeforePhase1(step, baseAgentOptions);
     const agentOptions = {
       ...baseAgentOptions,
       onPromptResolved: (promptParts: PhasePromptParts) => {

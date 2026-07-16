@@ -5,8 +5,7 @@
  * and sets up the preAction hook for initialization.
  */
 
-import { createRequire } from 'node:module';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { resolve } from 'node:path';
 import {
   initGlobalDirs,
@@ -16,11 +15,11 @@ import {
 } from '../../infra/config/index.js';
 import { initGitProvider } from '../../infra/git/index.js';
 import { setQuietMode } from '../../shared/context.js';
+import { packageVersion } from '../../shared/package-info.js';
 import { setLogLevel } from '../../shared/ui/index.js';
 import { initDebugLogger, createLogger, setVerboseConsole } from '../../shared/utils/index.js';
 
-const require = createRequire(import.meta.url);
-const { version: cliVersion } = require('../../../package.json') as { version: string };
+const cliVersion = packageVersion;
 
 const log = createLogger('cli');
 
@@ -50,8 +49,10 @@ program
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
   .option(
     '--provider <name>',
-    'Override agent provider (claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)',
+    'Override agent provider (auto|claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)',
   )
+  .addOption(new Option('--auto-strategy <strategy>', 'Auto routing strategy (cost|balanced|performance)')
+    .choices(['cost', 'balanced', 'performance']))
   .option('--model <name>', 'Override agent model')
   .option('-t, --task <string>', 'Task content (as alternative to issue reference)')
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')

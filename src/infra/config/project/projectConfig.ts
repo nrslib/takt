@@ -1,9 +1,9 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
-import type { QualityGate } from '../../../core/models/workflow-types.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
+import type { TaktProviderConfigEntry } from '../../../core/models/config-types.js';
 import {
   normalizeConfigProviderReference,
   type ConfigProviderReference,
@@ -25,7 +25,11 @@ import {
   denormalizeWorkflowOverrides,
   normalizeRuntime,
   normalizeRateLimitFallback,
+  normalizeConfigAutoRoutingConfig,
+  denormalizeConfigAutoRoutingConfig,
   denormalizeRateLimitFallback,
+  normalizeTelemetryConfig,
+  denormalizeTelemetryConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -87,7 +91,9 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     submodules,
     with_submodules,
     provider_options,
+    auto_routing,
     analytics,
+    telemetry,
     pipeline,
     assistant,
     takt_providers,
@@ -145,7 +151,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   const normalizedTaktProviders = normalizeTaktProviders(
     takt_providers as {
       assistant?: {
-        provider?: ProjectConfig['provider'];
+        provider?: TaktProviderConfigEntry['provider'];
         model?: string;
       };
     } | undefined,
@@ -178,10 +184,12 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
       ...analyticsConfig,
       eventsPath: expandOptionalHomePath(analyticsConfig.eventsPath),
     } : undefined,
+    telemetry: normalizeTelemetryConfig(telemetry),
     observability: normalizeObservabilityConfig(observability),
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
+    autoRouting: normalizeConfigAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -189,12 +197,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
         step_permission_overrides?: Record<string, string>;
       }> | undefined,
     ),
-    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides as {
-      quality_gates?: QualityGate[];
-      quality_gates_edit_only?: boolean;
-      steps?: Record<string, { quality_gates?: QualityGate[] }>;
-      personas?: Record<string, { quality_gates?: QualityGate[] }>;
-    } | undefined),
+    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides),
     runtime: normalizeRuntime(runtime),
     workflowRuntimePrepare: normalizeWorkflowRuntimePreparePolicy(parsedConfigResult.workflow_runtime_prepare),
     workflowCommandGates: normalizeWorkflowCommandGatesPolicy(parsedConfigResult.workflow_command_gates),
@@ -233,6 +236,20 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     savePayload.analytics = rawAnalytics;
   } else {
     delete savePayload.analytics;
+  }
+
+  const rawTelemetry = denormalizeTelemetryConfig(config.telemetry);
+  if (rawTelemetry) {
+    savePayload.telemetry = rawTelemetry;
+  } else {
+    delete savePayload.telemetry;
+  }
+
+  const rawAutoRouting = denormalizeConfigAutoRoutingConfig(config.autoRouting);
+  if (rawAutoRouting) {
+    savePayload.auto_routing = rawAutoRouting;
+  } else {
+    delete savePayload.auto_routing;
   }
 
   const rawObservability = denormalizeObservabilityConfig(config.observability);
@@ -306,7 +323,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

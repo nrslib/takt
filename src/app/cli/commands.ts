@@ -6,7 +6,14 @@
 
 import { join } from 'node:path';
 import type { Command } from 'commander';
-import { clearPersonaSessions, resolveConfigValue } from '../../infra/config/index.js';
+import {
+  clearPersonaSessions,
+  disableRoutingTelemetry,
+  enableRoutingTelemetry,
+  getRoutingTelemetryStatus,
+  resolveConfigValue,
+  type RoutingTelemetryStatus,
+} from '../../infra/config/index.js';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { success, info, error as logError } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks, resumeDirectRun } from '../../features/tasks/index.js';
@@ -275,6 +282,33 @@ program
     }
   });
 
+const telemetry = program
+  .command('telemetry')
+  .description('Manage TAKT local routing event recording');
+
+telemetry
+  .command('status')
+  .description('Show local routing event recording status')
+  .action(() => {
+    info(formatRoutingTelemetryStatus(getRoutingTelemetryStatus(resolvedCwd)));
+  });
+
+telemetry
+  .command('enable')
+  .description('Enable local routing event recording')
+  .action(() => {
+    const status = enableRoutingTelemetry(resolvedCwd);
+    info(formatRoutingTelemetryStatus(status));
+  });
+
+telemetry
+  .command('disable')
+  .description('Disable local routing event recording')
+  .action(() => {
+    const status = disableRoutingTelemetry(resolvedCwd);
+    success(formatRoutingTelemetryStatus(status));
+  });
+
 const repertoire = program
   .command('repertoire')
   .description('Manage repertoire packages');
@@ -301,3 +335,8 @@ repertoire
   .action(async () => {
     await repertoireListCommand();
   });
+
+function formatRoutingTelemetryStatus(status: RoutingTelemetryStatus): string {
+  const state = status.localRecordingEnabled ? 'enabled' : 'disabled';
+  return `Routing decision recording is local only and writes to .takt/events. Local recording: ${state}.`;
+}

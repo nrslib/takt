@@ -1,12 +1,14 @@
 /**
  * Analytics event type definitions for metrics collection.
  *
- * Three event types capture review findings, fix actions, and step results
+ * Event types capture review findings, fix actions, step results, and routing decisions
  * for local-only analysis when analytics.enabled = true.
  */
 
 /** Status of a review finding across iterations */
-export type FindingStatus = 'new' | 'persists' | 'resolved' | 'reopened';
+import type { FindingLifecycle } from '../../core/models/finding-types.js';
+
+export type FindingStatus = FindingLifecycle;
 
 /** Severity level of a review finding */
 export type FindingSeverity = 'error' | 'warning';
@@ -57,8 +59,36 @@ export interface StepResultEvent {
   timestamp: string;
 }
 
+/** Auto routing decision event — emitted without prompt, path, repository content, or task-derived run slug */
+export interface RoutingDecisionEvent {
+  type: 'routing_decision';
+  stepName: string;
+  stepTags: string[];
+  personaKey: string;
+  workflowName: string;
+  stepType: 'normal' | 'parallel' | 'agent';
+  instructionTokenCount: number;
+  phaseCount: number;
+  provider: string;
+  model: string;
+  selectedCategory: string;
+  selectedCostTier: 'high' | 'medium' | 'low';
+  candidateCount: number;
+  strategy: 'cost' | 'balanced' | 'performance';
+  resolutionSource: string;
+  stepSuccess: boolean;
+  durationMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  taktVersion: string;
+  iteration: number;
+  runId: string;
+  timestamp: string;
+}
+
 /** Union of all analytics event types */
 export type AnalyticsEvent =
   | ReviewFindingEvent
   | FixActionEvent
-  | StepResultEvent;
+  | StepResultEvent
+  | RoutingDecisionEvent;

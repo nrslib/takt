@@ -10,6 +10,8 @@ import * as workflowLoader from '../infra/config/loaders/workflowLoader.js';
 import * as workflowResolver from '../infra/config/loaders/workflowResolver.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, resolveWorkflowTrustInfo } from '../infra/config/loaders/workflowTrustSource.js';
+import type { WorkflowConfig } from '../core/models/index.js';
+import { findWorkflowCallStep } from './testUtils/workflowCallStepTestHelper.js';
 
 describe('workflowCallResolver module boundary', () => {
   let projectDir: string;
@@ -57,6 +59,67 @@ describe('workflowCallResolver module boundary', () => {
     expect(workflowLoader).not.toHaveProperty('loadWorkflowByIdentifierForWorkflowCall');
     expect(workflowLoader).not.toHaveProperty('expandCallableSubworkflowRaw');
     expect(workflowLoader).not.toHaveProperty('validateWorkflowCallRulesAgainstChildReturns');
+  });
+
+  it('loads a callable command quality gate with timeout_ms through workflow_call resolution', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  visibility: internal
+initial_step: implement
+max_steps: 3
+steps:
+  - name: implement
+    persona: coder
+    edit: true
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        timeout_ms: 900000
+    instruction: Implement the feature
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeFileSync(
+      join(projectDir, '.takt', 'config.yaml'),
+      'workflow_command_gates:\n  custom_scripts: true\n',
+      'utf-8',
+    );
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    );
+
+    expect(childWorkflow).not.toBeNull();
+    expect(childWorkflow!.steps.find((step) => step.name === 'implement')?.qualityGates).toEqual([
+      {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        timeoutMs: 900000,
+      },
+    ]);
   });
 
   it('prefers parent workflow metadata over fallback context for nested relative workflow_call resolution', () => {
@@ -131,8 +194,7 @@ steps:
 
     const resolvedNestedWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
       childWorkflow!,
-      './nested.yaml',
-      'delegate_nested',
+      findWorkflowCallStep(childWorkflow!, 'delegate_nested'),
       projectDir,
       projectDir,
       {
@@ -226,8 +288,7 @@ steps:
 
     const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     );
@@ -251,6 +312,171 @@ steps:
           format: expect.stringContaining('# Summary Format'),
         }),
       ],
+    });
+  });
+
+  it('expands callable $param values inside nested workflow_call args', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: delegate_parent
+max_steps: 3
+steps:
+  - name: delegate_parent
+    kind: workflow_call
+    call: parent
+    args:
+      parent_knowledge: [domain]
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeProjectWorkflow('parent.yaml', `name: parent
+subworkflow:
+  callable: true
+  params:
+    parent_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture]
+initial_step: delegate_child
+max_steps: 3
+knowledge:
+  architecture: |
+    Architecture reference content.
+  domain: |
+    Domain reference content.
+steps:
+  - name: delegate_child
+    kind: workflow_call
+    call: child
+    args:
+      child_knowledge:
+        $param: parent_knowledge
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  params:
+    child_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+initial_step: review
+max_steps: 3
+knowledge:
+  domain: |
+    Domain reference content.
+steps:
+  - name: review
+    persona: reviewer
+    knowledge:
+      $param: child_knowledge
+    instruction: Review child workflow
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const rootWorkflow = loadProjectWorkflow('root.yaml');
+    expect(rootWorkflow).not.toBeNull();
+
+    const parentWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      rootWorkflow!,
+      findWorkflowCallStep(rootWorkflow!, 'delegate_parent'),
+      projectDir,
+      projectDir,
+    );
+    expect(parentWorkflow).not.toBeNull();
+
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate_child'),
+      projectDir,
+      projectDir,
+    );
+    expect(childWorkflow).not.toBeNull();
+
+    const reviewStep = childWorkflow!.steps.find((step) => step.name === 'review') as Record<string, unknown> | undefined;
+    expect(reviewStep).toMatchObject({
+      knowledgeContents: [expect.stringContaining('Domain reference content')],
+    });
+  });
+
+  it('resolves same-named workflow_call sub-steps from separate parallel parents by the provided step identity', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: fanout_a
+max_steps: 3
+steps:
+  - name: fanout_a
+    parallel:
+      - name: delegate
+        kind: workflow_call
+        call: child-a
+        args:
+          review_policy: strict-review
+        rules:
+          - condition: COMPLETE
+            next: fanout_b
+    rules:
+      - condition: all("COMPLETE")
+        next: fanout_b
+  - name: fanout_b
+    parallel:
+      - name: delegate
+        kind: workflow_call
+        call: child-b
+        args:
+          review_policy: relaxed-review
+        rules:
+          - condition: COMPLETE
+            next: COMPLETE
+    rules:
+      - condition: all("COMPLETE")
+        next: COMPLETE
+`);
+    writeProjectWorkflow('child-b.yaml', `name: child-b
+subworkflow:
+  callable: true
+  returns: [ok]
+  params:
+    review_policy:
+      type: facet_ref
+      facet_kind: policy
+initial_step: review
+max_steps: 3
+policies:
+  relaxed-review: |
+    Use the relaxed child policy.
+steps:
+  - name: review
+    persona: reviewer
+    policy:
+      $param: review_policy
+    instruction: Review child workflow
+    rules:
+      - condition: done
+        return: ok
+`);
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate', 'child-b'),
+      projectDir,
+      projectDir,
+    );
+
+    expect(childWorkflow).not.toBeNull();
+    expect(childWorkflow?.name).toBe('child-b');
+    expect(childWorkflow?.steps[0]).toMatchObject({
+      policyContents: [expect.stringContaining('relaxed child policy')],
     });
   });
 
@@ -308,8 +534,7 @@ steps:
 
     const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/scalar-review',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     );
@@ -367,8 +592,7 @@ steps:
 
     expect(() => workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     )).toThrow(/unknown_param/);
@@ -417,8 +641,7 @@ steps:
 
     expect(() => workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     )).toThrow(/must be a facet_ref\[\] array/);
@@ -467,8 +690,7 @@ steps:
 
     expect(() => workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     )).toThrow(/must be a scalar facet_ref/);
@@ -516,8 +738,7 @@ steps:
 
     expect(() => workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     )).toThrow(/expects instruction to use instruction param "review_knowledge"/);
@@ -563,8 +784,7 @@ steps:
 
     expect(() => workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     )).toThrow(/requires workflow_call arg "fix_instruction"/);
@@ -608,8 +828,7 @@ steps:
 
     expect(() => workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     )).toThrow(/references undeclared param "missing_knowledge"/);
@@ -658,8 +877,7 @@ steps:
 
     expect(() => workflowCallResolver.resolveWorkflowCallTarget(
       parentWorkflow!,
-      'shared/review-loop',
-      'delegate',
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
       projectDir,
       projectDir,
     )).toThrow(/unknown knowledge facet "strict-review"/);
@@ -712,8 +930,7 @@ steps:
 
       const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
         parentWorkflow!,
-        'shared/review-loop',
-        'delegate',
+        findWorkflowCallStep(parentWorkflow!, 'delegate'),
         projectDir,
         worktreeDir,
       );
@@ -777,8 +994,7 @@ steps:
 
       expect(() => workflowCallResolver.resolveWorkflowCallTarget(
         parentWorkflow!,
-        'shared/review-loop',
-        'delegate',
+        findWorkflowCallStep(parentWorkflow!, 'delegate'),
         projectDir,
         worktreeDir,
       )).toThrow(/must reference child-local knowledge facet "architecture" across trust boundary/);
@@ -830,8 +1046,7 @@ steps:
 
       expect(() => workflowCallResolver.resolveWorkflowCallTarget(
         parentWorkflow!,
-        'shared/review-loop',
-        'delegate',
+        findWorkflowCallStep(parentWorkflow!, 'delegate'),
         projectDir,
         worktreeDir,
       )).toThrow(/must reference child-local instruction facet "\.\.\/\.\.\/secret\.md" across trust boundary/);

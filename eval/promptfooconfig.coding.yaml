@@ -1,0 +1,87 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Prompt quality eval for TAKT facets (trial: codex provider only).
+#
+# Evaluates the REAL assembled Phase 1 prompt of the coding-review substep
+# (peer-review subworkflow, the takt-default lineage), rendered via
+# eval/scripts/prepare.mjs. arch-review lives in promptfooconfig.arch.yaml.
+#
+# Run from the repo root:
+#   npm run eval:prompts   # prepare (latest facets -> prompts + snapshots
+#                          # + seeded reports) then eval via local codex login
+
+description: 'TAKT facet eval: peer-review / coding-review'
+
+prompts:
+  - file://prompts/coding-review.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/sample-project
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      # Token saver (user decision): trades some fidelity vs production
+      # runs. Compare scores only against runs with the same effort.
+      model_reasoning_effort: low
+
+# Grader for model-graded assertions (llm-rubric) also runs on codex,
+# so the whole eval stays on the ChatGPT-login auth path (no API billing).
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'recall: planted coding-policy violations must be flagged'
+    vars:
+      task: file://cases/buggy-user-store.md
+      previous_response: file://cases/prev-gather-buggy.md
+    assert:
+      - type: javascript
+        metric: recall/fallback-for-required-data
+        value: |
+          return /(register|user-?store)/i.test(output) &&
+            /(fallback|フォールバック|\?\?|unknown)/i.test(output);
+      - type: javascript
+        metric: recall/swallowed-error
+        value: |
+          return /(loadFromJson|catch)/i.test(output) &&
+            /(swallow|silent|suppress|ignor|握りつぶ|黙殺|隠蔽|無視|空配列|empty array)/i.test(output);
+      - type: javascript
+        metric: recall/any-type
+        value: |
+          return /(updateProfile|patch|:\s*any\b|`any`|any\s*型|any\s+type)/i.test(output) &&
+            /(問題|指摘|禁止|避け|型安全|unsafe|no-explicit-any|type-?safe)/i.test(output);
+      - type: javascript
+        metric: recall/in-place-mutation
+        value: |
+          return /(sortByName|\.sort\()/i.test(output) &&
+            /(直接|破壊|変更|mutat|in-?place|元の|入力|引数|caller)/i.test(output);
+      - type: javascript
+        metric: recall/todo-without-issue
+        value: |
+          return /TODO/i.test(output) &&
+            /(issue|ticket|チケット|課題|根拠|番号|未追跡|管理されていない)/i.test(output);
+
+  - description: 'precision: clean diff must not produce fabricated findings'
+    vars:
+      task: file://cases/clean-logger.md
+      previous_response: file://cases/prev-gather-clean.md
+    assert:
+      - type: llm-rubric
+        metric: precision/no-false-positive
+        value: |
+          The output is a code review of a small, correct Logger class.
+          Pass if the review does NOT assert a substantive defect (bug,
+          policy violation, security risk) in the logger change. Minor or
+          optional improvement suggestions are acceptable. Fail if the
+          review claims the change contains a fallback for required data,
+          a swallowed error, or any other concrete defect requiring a fix.

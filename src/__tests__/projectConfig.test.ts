@@ -210,7 +210,7 @@ describe('projectConfig', () => {
       expect(() => loadProjectConfig(testDir)).toThrow(/provider 'opencode' requires model/);
     });
 
-    it('should reject rate_limit_fallback codex entry with Claude model alias', () => {
+    it('should allow rate_limit_fallback codex entry with arbitrary model name', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
         configPath,
@@ -223,7 +223,11 @@ describe('projectConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+      const config = loadProjectConfig(testDir);
+      expect(config.rateLimitFallback?.switchChain[0]).toMatchObject({
+        provider: 'codex',
+        model: 'sonnet',
+      });
     });
 
     it('should preserve empty quality_gates array in save/load cycle', () => {
@@ -739,6 +743,53 @@ unexpected_overrides:
       expect(raw).not.toContain('allowedTools:');
     });
 
+    it('should save autoRouting as auto_routing with snake_case candidate keys', () => {
+      const config = {
+        autoRouting: {
+          defaultProvider: {
+            provider: 'mock',
+            model: 'project-default-model',
+          },
+          strategy: 'balanced',
+          router: {
+            provider: 'claude-sdk',
+            model: 'claude-haiku-4-5-20251001',
+          },
+          candidates: [
+            {
+              name: 'coding',
+              description: 'Implementation and tests',
+              provider: 'codex',
+              model: 'gpt-5',
+              costTier: 'medium',
+              providerOptions: {
+                codex: {
+                  reasoningEffort: 'high',
+                },
+              },
+            },
+          ],
+        },
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).toContain('auto_routing:');
+      expect(raw).toContain('default_provider:');
+      expect(raw).toContain('model: project-default-model');
+      expect(raw).toContain('cost_tier: medium');
+      expect(raw).toContain('provider_options:');
+      expect(raw).toContain('reasoning_effort: high');
+      expect(raw).not.toContain('autoRouting:');
+      expect(raw).not.toContain('defaultProvider:');
+      expect(raw).not.toContain('costTier:');
+      expect(raw).not.toContain('providerOptions:');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.autoRouting).toEqual(config.autoRouting);
+    });
+
     it('should save interactive preview count with canonical step key', () => {
       saveProjectConfig(testDir, {
         interactivePreviewSteps: 2,
@@ -940,7 +991,7 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid takt_providers\.assistant/);
     });
 
-    it('should throw when takt_providers.assistant uses incompatible provider/model', () => {
+    it('should allow takt_providers.assistant to pass arbitrary codex model names downstream', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
         configPath,
@@ -953,7 +1004,11 @@ unexpected_overrides:
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+      const config = loadProjectConfig(testDir);
+      expect(config.taktProviders?.assistant).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw when persona_providers entry has invalid provider', () => {
@@ -987,7 +1042,7 @@ unexpected_overrides:
       expect(() => loadProjectConfig(testDir)).toThrow(/Configuration error: invalid persona_providers\.coder/);
     });
 
-    it('should throw when persona_providers entry has codex provider with Claude model alias', () => {
+    it('should allow persona_providers entry to pass arbitrary codex model names downstream', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       writeFileSync(
         configPath,
@@ -1000,7 +1055,11 @@ unexpected_overrides:
         'utf-8',
       );
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/Claude model alias/);
+      const config = loadProjectConfig(testDir);
+      expect(config.personaProviders?.coder).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw when persona_providers entry has opencode provider without model', () => {
@@ -1043,7 +1102,7 @@ unexpected_overrides:
       expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Configuration error: 'takt_providers\.assistant' is required when takt_providers is set\./);
     });
 
-    it('should throw on save when takt_providers.assistant has incompatible provider/model', () => {
+    it('should allow arbitrary codex model names in takt_providers.assistant on save', () => {
       const invalidConfig = {
         provider: 'codex',
         taktProviders: {
@@ -1054,7 +1113,12 @@ unexpected_overrides:
         },
       } as unknown as ProjectLocalConfig;
 
-      expect(() => saveProjectConfig(testDir, invalidConfig)).toThrow(/Claude model alias/);
+      saveProjectConfig(testDir, invalidConfig);
+      const config = loadProjectConfig(testDir);
+      expect(config.taktProviders?.assistant).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should throw on save when takt_providers.assistant is empty object', () => {

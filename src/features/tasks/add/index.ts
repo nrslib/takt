@@ -4,100 +4,48 @@
  * Appends a task record to .takt/tasks.yaml.
  */
 
-import * as path from 'node:path';
 import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
 import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
+import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
 import type { Language } from '../../../core/models/types.js';
-import {
-  TaskRunner,
-  TaskExecutionConfigSchema,
-  type TaskFileData,
-  summarizeTaskName,
-  resolveTaskWorkflowValue,
-} from '../../../infra/task/index.js';
+import { saveEnqueuedTaskFile } from '../../../infra/task/enqueuedTaskFile.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
 import type { PrReviewData } from '../../../infra/git/index.js';
-import { firstLine } from '../../../infra/task/naming.js';
-import { extractTitle, createIssueFromTask } from './issueTask.js';
+import { extractTitle, createIssueFromTask, createIssueFromTaskResult } from '../../../infra/task/issueTask.js';
 import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
 import {
-  cleanupPreparedTaskSpec,
+  createIssueAndEnqueueTask,
+  formatIssueEnqueueFailure,
+  IssueEnqueueCancelledError,
+  joinIssueEnqueueFailureText,
+  type SaveEnqueuedTaskFile,
+  type SaveEnqueuedTaskFileOptions,
+} from '../../../infra/task/enqueueService.js';
+import {
   prepareTaskSpecDirectory,
   type TaskAttachment,
 } from '../attachments.js';
-export { extractTitle, createIssueFromTask };
+export { extractTitle, createIssueFromTask, createIssueFromTaskResult };
 
 const log = createLogger('add-task');
 
-type SaveTaskOptions = {
-  workflow?: string;
-  issue?: number;
-  worktree?: boolean | string;
-  branch?: string;
-  baseBranch?: string;
-  autoPr?: boolean;
-  draftPr?: boolean;
-  managedPr?: boolean;
-  shouldPublishBranchToOrigin?: boolean;
-  prNumber?: number;
+export type SaveTaskOptions = SaveEnqueuedTaskFileOptions & {
   attachments?: TaskAttachment[];
 };
 
-function buildValidatedTaskConfig(options?: SaveTaskOptions): Omit<TaskFileData, 'task'> {
-  const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
-  return TaskExecutionConfigSchema.parse({
-    ...(options?.worktree !== undefined && { worktree: options.worktree }),
-    ...(options?.branch && { branch: options.branch }),
-    ...(options?.baseBranch && { base_branch: options.baseBranch }),
-    ...(resolvedWorkflow && { workflow: resolvedWorkflow }),
-    ...(options?.issue !== undefined && { issue: options.issue }),
-    ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
-    ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
-    ...(options?.managedPr !== undefined && { managed_pr: options.managedPr }),
-    ...(options?.shouldPublishBranchToOrigin !== undefined && {
-      should_publish_branch_to_origin: options.shouldPublishBranchToOrigin,
-    }),
-    ...(options?.prNumber !== undefined && {
-      source: 'pr_review' as const,
-      pr_number: options.prNumber,
-    }),
-  });
-}
-
-/**
- * Save a task entry to .takt/tasks.yaml.
- *
- * Common logic extracted from addTask(). Used by both addTask()
- * and saveTaskFromInteractive().
- */
 export async function saveTaskFile(
   cwd: string,
   taskContent: string,
   options?: SaveTaskOptions,
 ): Promise<{ taskName: string; tasksFile: string }> {
-  const runner = new TaskRunner(cwd);
-  const config = buildValidatedTaskConfig(options);
-  const slug = await summarizeTaskName(taskContent, { cwd });
-  const summary = firstLine(taskContent);
-  const preparedSpec = prepareTaskSpecDirectory(cwd, taskContent, options?.attachments);
-  let created;
-  try {
-    created = runner.addTask(taskContent, {
-      ...config,
-      task_dir: preparedSpec.taskDirRelative,
-      slug,
-      summary,
-    });
-  } catch (error) {
-    cleanupPreparedTaskSpec(preparedSpec.taskDir);
-    throw error;
-  }
-  const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
-  log.info('Task created', { taskName: created.name, tasksFile, config });
-  return { taskName: created.name, tasksFile };
+  const { attachments, ...saveOptions } = options ?? {};
+  const prepareTaskSpec = attachments !== undefined
+    ? (saveCwd: string, saveTaskContent: string) => prepareTaskSpecDirectory(saveCwd, saveTaskContent, attachments)
+    : undefined;
+  return saveEnqueuedTaskFile(cwd, taskContent, saveOptions, prepareTaskSpec);
 }
 
 
@@ -143,11 +91,11 @@ export async function saveTaskFromInteractive(
     presetSettings?: WorktreeSettings;
     attachments?: TaskAttachment[];
   },
-): Promise<void> {
+): Promise<{ taskName: string; tasksFile: string } | undefined> {
   if (options?.confirmAtEndMessage) {
     const approved = await confirm(options.confirmAtEndMessage, true);
     if (!approved) {
-      return;
+      return undefined;
     }
   }
   const settings = options?.presetSettings ?? await promptWorktreeSettings(cwd);
@@ -159,6 +107,7 @@ export async function saveTaskFromInteractive(
     ...(options?.attachments ? { attachments: options.attachments } : {}),
   });
   displayTaskCreationResult(created, settings, workflow);
+  return created;
 }
 
 export async function createIssueAndSaveTask(
@@ -167,15 +116,40 @@ export async function createIssueAndSaveTask(
   workflow?: string,
   options?: { confirmAtEndMessage?: string; labels?: string[]; attachments?: TaskAttachment[] },
 ): Promise<void> {
-  const issueNumber = createIssueFromTask(task, { labels: options?.labels, cwd });
-  if (issueNumber === undefined) {
+  const gitProvider = getGitProvider();
+  const saveInteractiveTask: SaveEnqueuedTaskFile = async (saveCwd, taskContent, saveOptions) => {
+    const created = await saveTaskFromInteractive(saveCwd, taskContent, saveOptions?.workflow, {
+      issue: saveOptions?.issue,
+      confirmAtEndMessage: options?.confirmAtEndMessage,
+      ...(options?.attachments ? { attachments: options.attachments } : {}),
+    });
+    if (created === undefined) {
+      throw new IssueEnqueueCancelledError();
+    }
+    return created;
+  };
+  const result = await createIssueAndEnqueueTask({
+    cwd,
+    task,
+    workflow: workflow ?? DEFAULT_WORKFLOW_NAME,
+    worktree: true,
+    autoPr: false,
+    labels: options?.labels,
+    gitProvider,
+    issueOutputMode: 'terminal',
+  }, {
+    saveTaskFile: saveInteractiveTask,
+    createIssueFromTaskResult,
+  });
+  if (!result.success) {
+    if (result.failure.stage !== 'issue_creation') {
+      error(joinIssueEnqueueFailureText(
+        formatIssueEnqueueFailure(result.failure, getErrorMessage),
+        '; ',
+      ));
+    }
     return;
   }
-  await saveTaskFromInteractive(cwd, task, workflow, {
-    issue: issueNumber,
-    confirmAtEndMessage: options?.confirmAtEndMessage,
-    ...(options?.attachments ? { attachments: options.attachments } : {}),
-  });
 }
 
 /**

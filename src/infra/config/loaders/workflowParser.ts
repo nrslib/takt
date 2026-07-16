@@ -12,9 +12,9 @@ import type {
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
-import { validateProviderModelCompatibility } from '../../../core/workflow/provider-model-compatibility.js';
-import { isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
-import { normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
+import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
+import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
+import { normalizeAutoRoutingConfig, normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import {
   extractPersonaDisplayName,
@@ -34,6 +34,12 @@ import {
   type WorkflowCallArgResolutionPolicy,
 } from './workflowCallableArgResolver.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from './workflowCallableDiscoveryArgs.js';
+
+function ruleReferencesFindings(rule: { condition: string; aggregateGuardCondition?: string; guardCondition?: string }): boolean {
+  return isFindingsCondition(rule.condition)
+    || (rule.aggregateGuardCondition !== undefined && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
+    || (rule.guardCondition !== undefined && hasUnquotedFindingsReference(rule.guardCondition));
+}
 
 function normalizeSubworkflowConfig(
   raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow'],
@@ -95,6 +101,7 @@ function normalizeFindingContractConfig(
   if (!outputContract) {
     throw new Error(`Configuration error: failed to resolve finding_contract.manager.output_contract "${raw.manager.output_contract}"`);
   }
+  const providerRoutingPersonaKey = raw.manager.persona.trim();
 
   return {
     ledgerPath: raw.ledger_path,
@@ -102,9 +109,12 @@ function normalizeFindingContractConfig(
     manager: {
       persona: personaSpec,
       personaDisplayName: personaPath ? extractPersonaDisplayName(personaPath) : personaSpec,
+      ...(providerRoutingPersonaKey ? { providerRoutingPersonaKey } : {}),
       ...(personaPath ? { personaPath } : {}),
       instruction,
       outputContract,
+      ...(raw.manager.provider ? { provider: raw.manager.provider } : {}),
+      ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
   };
 }
@@ -120,14 +130,14 @@ function validateFindingsRulesRequireContract(
 
   for (const step of steps) {
     for (const rule of step.rules ?? []) {
-      if (rule.isAiCondition || !isFindingsCondition(rule.condition)) {
+      if (rule.isAiCondition || !ruleReferencesFindings(rule)) {
         continue;
       }
       throw new Error(`Configuration error: step "${step.name}" uses findings.* rule but finding_contract is not configured`);
     }
     for (const subStep of step.parallel ?? []) {
       for (const rule of subStep.rules ?? []) {
-        if (rule.isAiCondition || !isFindingsCondition(rule.condition)) {
+        if (rule.isAiCondition || !ruleReferencesFindings(rule)) {
           continue;
         }
         throw new Error(
@@ -139,7 +149,7 @@ function validateFindingsRulesRequireContract(
 
   for (const monitor of loopMonitors ?? []) {
     for (const rule of monitor.judge.rules) {
-      if (!isFindingsCondition(rule.condition)) {
+      if (!ruleReferencesFindings(rule)) {
         continue;
       }
       throw new Error('Configuration error: loop_monitor judge uses findings.* rule but finding_contract is not configured');
@@ -237,7 +247,7 @@ export function normalizeWorkflowConfig(
       judge: monitor.judge,
       triggeringProviderInfo,
     });
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       judgeProviderInfo.provider,
       judgeProviderInfo.model,
       {
@@ -258,6 +268,7 @@ export function normalizeWorkflowConfig(
     provider: normalizedWorkflowProvider.provider,
     model: normalizedWorkflowProvider.model,
     providerOptions: normalizedWorkflowProvider.providerOptions,
+    autoRouting: normalizeAutoRoutingConfig(parsed.auto_routing, { baseUrlTrust: 'loopback-only' }),
     rateLimitFallback: normalizeRateLimitFallback(parsed.rate_limit_fallback),
     runtime: workflowRuntime,
     personas: parsed.personas,

@@ -232,6 +232,7 @@ AI often changes existing contracts under the banner of "improvement", "standard
 | New contract required by new functionality | OK |
 | Missing information is added while preserving the existing contract | OK |
 | Reason, impact scope, and migration path for the contract change are explicit | OK |
+| Fixing display, accessibility, or test contract breakage newly caused by the requested change | OK. This is change-induced reconciliation, not scope creep |
 
 Verification approach:
 1. Inspect changed strings, attributes, event names, return values, error messages, and log formats in the diff

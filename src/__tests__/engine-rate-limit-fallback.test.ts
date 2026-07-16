@@ -994,6 +994,76 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(detectMatchedRule).toHaveBeenCalledOnce();
   });
 
+  it('team_leader part の fallback retry では auto routing が fallback provider を上書きしない', async () => {
+    // Given
+    const config = teamLeaderStepConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.partTags = ['implementation'];
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
+      provider: 'auto',
+      model: undefined,
+      autoRouting: {
+        strategy: 'balanced',
+        router: {
+          provider: 'claude-sdk',
+          model: 'claude-haiku-4-5-20251001',
+        },
+        candidates: [
+          {
+            name: 'balanced-claude',
+            description: 'Default team leader execution',
+            provider: 'claude',
+            model: 'claude-sonnet',
+            costTier: 'medium',
+          },
+        ],
+        rules: {
+          tags: {
+            implementation: 'balanced-claude',
+          },
+          steps: {
+            implement: 'balanced-claude',
+          },
+        },
+      },
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    }));
+    const parts = [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+    const doneFeedback = { done: true, reasoning: 'enough', parts: [] };
+    mockRunAgentSequence([
+      makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
+      makeRateLimitedResponse('claude', { persona: 'implement.part-1' }),
+      makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
+      makeResponse({ persona: 'team-leader', structuredOutput: { parts } }),
+      makeResponse({ persona: 'implement.part-1', content: '[STEP:1] done' }),
+      makeResponse({ persona: 'team-leader', structuredOutput: doneFeedback }),
+    ]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+
+    // When
+    const state = await engine.run();
+
+    // Then
+    expect(state.status).toBe('completed');
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
+      'claude',
+      'claude',
+      'claude',
+      'codex',
+      'codex',
+      'codex',
+    ]);
+    expect(providerCalls()[4]).toMatchObject({
+      resolvedProvider: 'codex',
+      resolvedModel: 'gpt-5',
+    });
+  });
+
   it('team_leader part が leader と異なる provider で rate_limited の場合は part provider を fallback 判定に使う', async () => {
     // Given
     const engine = new WorkflowEngine(teamLeaderStepConfig(), tmpDir, 'test task', createEngineOptions(tmpDir, {

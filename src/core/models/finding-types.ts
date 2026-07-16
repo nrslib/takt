@@ -1,6 +1,8 @@
+import type { ProviderType } from '../../shared/types/provider.js';
+
 export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
-export const FINDING_STATUSES = ['open', 'resolved'] as const;
-export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened'] as const;
+export const FINDING_STATUSES = ['open', 'resolved', 'waived'] as const;
+export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived'] as const;
 export const FINDING_CONFLICT_STATUSES = ['active', 'resolved'] as const;
 
 export type FindingSeverity = typeof FINDING_SEVERITIES[number];
@@ -12,8 +14,11 @@ export interface FindingContractManagerConfig {
   persona: string;
   personaPath?: string;
   personaDisplayName?: string;
+  providerRoutingPersonaKey?: string;
   instruction: string;
   outputContract: string;
+  provider?: ProviderType;
+  model?: string;
 }
 
 export interface FindingContractConfig {
@@ -26,6 +31,20 @@ export interface FindingObservation {
   runId: string;
   stepName: string;
   timestamp: string;
+}
+
+/** A manager-adjudicated exemption: the finding is valid but cannot be fixed. */
+export interface FindingWaiverRecord {
+  reason: string;
+  evidence: string;
+  decidedAt: FindingObservation;
+}
+
+/** A recorded objection that the manager did NOT accept; the finding stays open. */
+export interface FindingDisputeRecord {
+  reason: string;
+  evidence: string;
+  recordedAt: FindingObservation;
 }
 
 export interface FindingLedgerEntry {
@@ -44,6 +63,10 @@ export interface FindingLedgerEntry {
   resolvedAt?: string;
   resolvedEvidence?: string;
   reopenedEvidence?: string;
+  /** Waiver history, newest last. Kept across reopens for audit. */
+  waivers?: FindingWaiverRecord[];
+  /** Rejected or pending objections, newest last. Kept for audit. */
+  disputes?: FindingDisputeRecord[];
 }
 
 export type FindingRecord = FindingLedgerEntry;
@@ -58,6 +81,9 @@ export interface FindingLedger {
   conflicts: FindingLedgerConflict[];
 }
 
+export const RAW_FINDING_KINDS = ['issue', 'resolution_confirmation'] as const;
+export type RawFindingKind = typeof RAW_FINDING_KINDS[number];
+
 export interface RawFinding {
   rawFindingId: string;
   stepName: string;
@@ -68,6 +94,10 @@ export interface RawFinding {
   location?: string;
   description: string;
   suggestion?: string;
+  /** Omitted means 'issue' (backward compatible with pre-existing ledgers). */
+  kind?: RawFindingKind;
+  /** Ledger finding id this entry confirms as resolved (resolution_confirmation only). */
+  targetFindingId?: string;
 }
 
 export interface FindingManagerMatch {
@@ -105,6 +135,18 @@ export interface FindingManagerResolvedConflict {
   evidence: string;
 }
 
+export interface FindingManagerWaivedFinding {
+  findingId: string;
+  reason: string;
+  evidence: string;
+}
+
+export interface FindingManagerDisputeNote {
+  findingId: string;
+  reason: string;
+  evidence: string;
+}
+
 export interface FindingLedgerConflict {
   id: string;
   status: FindingConflictStatus;
@@ -124,6 +166,8 @@ export interface FindingManagerOutput {
   reopenedFindings: FindingManagerReopenedFinding[];
   conflicts: FindingManagerConflict[];
   resolvedConflicts: FindingManagerResolvedConflict[];
+  waivedFindings: FindingManagerWaivedFinding[];
+  disputeNotes: FindingManagerDisputeNote[];
 }
 
 export interface FindingReconcileContext {
@@ -148,6 +192,9 @@ export interface FindingsRuleContext {
     }>;
   };
   resolved: {
+    count: number;
+  };
+  waived: {
     count: number;
   };
   conflicts: {

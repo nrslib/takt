@@ -42,6 +42,10 @@ When you pass an issue reference (e.g., `#28`), TAKT fetches the issue title, bo
 
 You can also save tasks from interactive mode. After refining requirements through conversation, use `/save` (or the save action when prompted) to persist the task to `tasks.yaml` instead of executing immediately.
 
+### Saving Tasks from MCP Clients
+
+MCP clients can use the `takt-mcp` stdio server to save pending tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`. `takt_create_issue_and_enqueue_task` first creates an issue through the configured TAKT issue provider, then writes the pending record with the issue number. If task saving fails after issue creation, TAKT adds a fixed compensation comment to the created issue and closes it; if that close also fails, the MCP error result reports both failures. Both tools require an absolute `cwd` and a non-empty task body. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
+
 ## Task Directory Format
 
 TAKT stores task metadata in `.takt/tasks.yaml` and each task's detailed specification in `.takt/tasks/{slug}/`.
@@ -70,7 +74,7 @@ Fields:
 | `worktree` | `true` (auto), a path string, or omitted (run in current directory) |
 | `branch` | Branch name (auto-generated if omitted) |
 | `auto_pr` | Whether to auto-create a PR after execution |
-| `issue` | GitHub Issue number (if applicable) |
+| `issue` | Issue number from the configured issue provider (if applicable) |
 | `created_at` | ISO 8601 timestamp |
 | `started_at` | ISO 8601 timestamp (set when execution begins) |
 | `completed_at` | ISO 8601 timestamp (set when execution finishes) |
@@ -115,6 +119,8 @@ The `run` command claims pending tasks and executes them through the configured 
 5. Status update in `tasks.yaml` (`completed`, `failed`, or `exceeded`)
 
 When a workflow reaches `max_steps`, the default `takt run` behavior stops the task with `exceeded` status and saves retry metadata such as `exceeded_max_steps`, `exceeded_current_iteration`, and `resume_point`. Passing `--ignore-exceed` makes `takt run` ignore only that iteration limit, continue the workflow, and skip writing exceeded retry metadata.
+
+MCP clients can execute one pending task with `takt_run_next_task`. This uses the same task claiming and execution path as `takt run`, but claims only one task and suppresses normal workflow output for stdio MCP safety.
 
 ### Parallel Execution (Concurrency)
 

@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: review-backend-cqrs / cqrs-es-review (codex).
+# Run via npm run eval:prompts -- cqrs
+
+description: 'TAKT facet eval: review-backend-cqrs / cqrs-es-review'
+
+prompts:
+  - file://prompts/cqrs-review.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/backend-cqrs
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'recall: planted CQRS+ES violations must be flagged'
+    vars:
+      task: file://cases/cqrs-account.md
+      previous_response: file://cases/prev-gather-cqrs.md
+    assert:
+      - type: javascript
+        metric: recall/event-not-past-tense
+        value: |
+          return /(OpenAccount)/.test(output) &&
+            /(過去形|past|AccountOpened|Opened|命名|name)/i.test(output);
+      - type: javascript
+        metric: recall/logic-in-apply
+        value: |
+          return /apply/i.test(output) &&
+            /(require|throw|例外|バリデーション|validat|ロジック|復元)/i.test(output);
+      - type: javascript
+        metric: recall/handler-writes-db-directly
+        value: |
+          return /(DepositHandler|handler|ハンドラ)/i.test(output) &&
+            /(直接|DB|テーブル|table|イベント|event)/i.test(output);

@@ -62,6 +62,27 @@ describe('traced config boundaries', () => {
     expect(getGlobalTracedSchema().ignore_exceed?.sources?.env).toBe(true);
   });
 
+  it('global/project traced schema tracks every default provider boundary without env overrides', () => {
+    const paths = [
+      'auto_routing.default_provider',
+      'auto_routing.default_provider.provider',
+      'auto_routing.default_provider.model',
+    ];
+
+    for (const path of paths) {
+      expect(getProjectTracedSchema()[path]?.sources).toMatchObject({
+        local: true,
+        env: false,
+        cli: false,
+      });
+      expect(getGlobalTracedSchema()[path]?.sources).toMatchObject({
+        global: true,
+        env: false,
+        cli: false,
+      });
+    }
+  });
+
   it('project traced schema は非許可 env を runtime bridge でも無視する', () => {
     process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_ALLOWED_TOOLS = '["Bash"]';
 

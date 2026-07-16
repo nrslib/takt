@@ -56,6 +56,7 @@ export type {
   WorkflowRuntimeConfig,
   WorkflowStepKind,
   WorkflowCallOverrides,
+  WorkflowSessionMode,
   WorkflowPromotionEntry,
   WorkflowParamType,
   WorkflowParamFacetKind,
@@ -69,6 +70,10 @@ export type {
   FindingLedger,
   FindingsRuleContext,
   AgentWorkflowStep,
+  NormalAgentWorkflowStep,
+  ParallelWorkflowStep,
+  ArpeggioWorkflowStep,
+  TeamLeaderWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
   WorkflowStep,
@@ -85,6 +90,10 @@ export type {
   WorkflowState,
 } from './workflow-types.js';
 
+export {
+  WORKFLOW_SESSION_MODES,
+} from './workflow-types.js';
+
 
 // Provider permission profiles
 export type {
@@ -96,10 +105,17 @@ export type {
 // Configuration types (global and project)
 export type {
   PersonaProviderEntry,
+  ProviderTypeOrAuto,
+  CostTier,
+  AutoRoutingStrategy,
+  AutoRoutingCandidate,
+  AutoRoutingConfig,
+  ConfigAutoRoutingConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   CustomAgentConfig,
   LoggingConfig,
+  TelemetryConfig,
   ObservabilityConfig,
   ResolvedObservabilityConfig,
   Language,

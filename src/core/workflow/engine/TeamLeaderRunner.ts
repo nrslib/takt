@@ -12,7 +12,7 @@ import { incrementStepIteration } from './state-manager.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { runTeamLeaderExecution } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
-import { createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
+import { createPartStep, createTeamLeaderPlanningStep, resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
 import {
   collectUncoveredPartTimeoutIds,
@@ -23,12 +23,13 @@ import type { RunAgentOptions } from '../../../agents/types.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
-import type { RuntimeStepResolution, StepRunResult } from '../types.js';
+import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
 import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
+import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -62,6 +63,17 @@ export interface TeamLeaderRunnerDeps {
     phaseExecutionId?: string,
     iteration?: number,
   ) => void;
+  readonly emitEvent: (
+    event: 'routing:decision',
+    step: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    providerInfo: StepProviderInfo,
+    stepType: 'normal' | 'parallel' | 'agent',
+    durationMs: number,
+    iteration: number,
+    workflowName: string,
+  ) => void;
 }
 
 export class TeamLeaderRunner {
@@ -85,10 +97,6 @@ export class TeamLeaderRunner {
 
     const stepIteration = incrementStepIteration(state, step.name);
     const leaderStep = createTeamLeaderPlanningStep(step);
-    const leaderProviderInfo = runtime
-      ? this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime)
-      : this.deps.optionsBuilder.resolveStepProviderModel(leaderStep);
-    const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
     const instruction = this.deps.stepExecutor.buildInstruction(
       leaderStep,
       stepIteration,
@@ -96,11 +104,15 @@ export class TeamLeaderRunner {
       task,
       maxSteps,
     );
-    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(leaderStep);
+    const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
+    const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
+    const { provider: leaderProvider, model: leaderModel } = leaderProviderInfo;
+    const leaderBaseOptions = this.deps.optionsBuilder.buildBaseOptions(leaderStep, undefined, leaderRuntime);
     const leaderWorkflowMeta = this.deps.optionsBuilder.buildPhase1WorkflowMeta(
       leaderBaseOptions.workflowMeta,
     );
     const inspectTools = resolveInspectToolsForProvider(teamLeaderConfig.inspectTools, leaderProvider);
+    const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
 
     emitTeamLeaderProgressHint(this.deps.engineOptions, 'decompose');
     let didEmitPhaseStart = false;
@@ -115,6 +127,7 @@ export class TeamLeaderRunner {
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
+    const leaderStartedAt = Date.now();
     const parts = await runWithPhaseSpan(
       {
         enabled: this.deps.observabilityEnabled,
@@ -141,6 +154,7 @@ export class TeamLeaderRunner {
         resolvedProvider: leaderProvider,
         language: this.deps.engineOptions.language,
         inspectTools,
+        mcpServers: leaderMcpServers,
         workflowMeta: leaderWorkflowMeta,
         childProcessEnv: this.deps.engineOptions.childProcessEnv,
         onStream: this.deps.engineOptions.onStream,
@@ -165,6 +179,14 @@ export class TeamLeaderRunner {
       timestamp: new Date(),
     };
     this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, phaseExecutionId, parentIteration);
+    this.emitLeaderRoutingDecisionEvent(
+      leaderStep,
+      leaderResponse,
+      instruction,
+      leaderProviderInfo,
+      Math.max(0, Date.now() - leaderStartedAt),
+      parentIteration,
+    );
     log.debug('Team leader decomposed parts', {
       step: step.name,
       partCount: parts.length,
@@ -187,6 +209,7 @@ export class TeamLeaderRunner {
       ))
       : undefined;
     const coveredTimedOutPartIds = new Set<string>();
+    const routedProviderInfoByPart = await this.resolvePartAutoRouting(step, parts, runtime);
 
     const { plannedParts, partResults } = await runTeamLeaderExecution({
       initialParts: parts,
@@ -238,7 +261,7 @@ export class TeamLeaderRunner {
       }) => {
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
         try {
-          return await structuredCaller.requestMoreParts(
+          const moreParts = await structuredCaller.requestMoreParts(
             instruction,
             currentResults.map((result) => ({
               id: result.part.id,
@@ -259,11 +282,14 @@ export class TeamLeaderRunner {
               provider: leaderProvider,
               resolvedModel: leaderModel,
               resolvedProvider: leaderProvider,
+              mcpServers: leaderMcpServers,
               workflowMeta: leaderWorkflowMeta,
               childProcessEnv: this.deps.engineOptions.childProcessEnv,
               onStream: this.deps.engineOptions.onStream,
             },
           );
+          await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
+          return moreParts;
         } catch (error) {
           if (isPlanningBudgetError(error)) {
             throw error;
@@ -288,6 +314,7 @@ export class TeamLeaderRunner {
               detail: getErrorMessage(error),
               parts: summarizeParts(timeoutFallback.parts),
             });
+            await this.addPartAutoRouting(routedProviderInfoByPart, step, timeoutFallback.parts, runtime);
             return timeoutFallback;
           }
           throw error;
@@ -302,9 +329,10 @@ export class TeamLeaderRunner {
         teamLeaderConfig.timeoutMs,
         updatePersonaSession,
         parallelLogger,
-        runtime,
+        this.buildPartRuntime(runtime, routedProviderInfoByPart.get(part.id)),
       ).catch((error) => buildTeamLeaderErrorPartResult(step, part, error)),
     });
+    this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
 
     const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
     if (rateLimitedResult) {
@@ -386,6 +414,36 @@ export class TeamLeaderRunner {
     return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
   }
 
+  private async resolveLeaderAutoRouting(
+    leaderStep: WorkflowStep,
+    runtime: RuntimeStepResolution | undefined,
+  ): Promise<RuntimeStepResolution | undefined> {
+    if (!this.deps.engineOptions.autoRouting || runtime?.fallback) {
+      return runtime;
+    }
+
+    const currentProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, runtime);
+    const autoRuntime = await resolveAutoRoutingRuntime({
+      autoRouting: this.deps.engineOptions.autoRouting,
+      step: {
+        name: leaderStep.name,
+        tags: leaderStep.tags,
+        personaKey: leaderStep.providerRoutingPersonaKey,
+        instruction: leaderStep.instruction,
+      },
+      currentProviderInfo,
+      routeWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeStep,
+      logger: log,
+    });
+    if (!autoRuntime) {
+      return runtime;
+    }
+    return {
+      ...runtime,
+      ...autoRuntime,
+    };
+  }
+
   private async runSinglePart(
     step: WorkflowStep,
     leaderWorkflowMeta: RunAgentOptions['workflowMeta'] | undefined,
@@ -397,7 +455,8 @@ export class TeamLeaderRunner {
     parallelLogger: ParallelLogger | undefined,
     runtime?: RuntimeStepResolution,
   ): Promise<PartResult> {
-    return runTeamLeaderPart(
+    const startedAt = Date.now();
+    const result = await runTeamLeaderPart(
       this.deps.optionsBuilder,
       step,
       leaderWorkflowMeta,
@@ -416,5 +475,125 @@ export class TeamLeaderRunner {
       },
       runtime,
     );
+    return {
+      ...result,
+      durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
+    };
+  }
+
+  private emitPartRoutingDecisionEvents(
+    step: WorkflowStep,
+    partResults: PartResult[],
+    routedProviderInfoByPart: Map<string, StepProviderInfo>,
+    iteration: number,
+  ): void {
+    for (const result of partResults) {
+      const providerInfo = routedProviderInfoByPart.get(result.part.id);
+      if (providerInfo?.autoRoutingDecision === undefined) {
+        continue;
+      }
+      const partStep = createPartStep(step, result.part);
+      this.deps.emitEvent(
+        'routing:decision',
+        partStep,
+        result.response,
+        result.part.instruction,
+        providerInfo,
+        'agent',
+        result.durationMs ?? 0,
+        iteration,
+        this.deps.getWorkflowName(),
+      );
+    }
+  }
+
+  private emitLeaderRoutingDecisionEvent(
+    leaderStep: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    providerInfo: StepProviderInfo,
+    durationMs: number,
+    iteration: number,
+  ): void {
+    if (providerInfo.autoRoutingDecision === undefined) {
+      return;
+    }
+    this.deps.emitEvent(
+      'routing:decision',
+      leaderStep,
+      response,
+      instruction,
+      providerInfo,
+      'agent',
+      durationMs,
+      iteration,
+      this.deps.getWorkflowName(),
+    );
+  }
+
+  private buildPartRuntime(
+    runtime: RuntimeStepResolution | undefined,
+    providerInfo: StepProviderInfo | undefined,
+  ): RuntimeStepResolution | undefined {
+    if (providerInfo === undefined) {
+      return runtime;
+    }
+    return {
+      ...runtime,
+      providerInfo,
+    };
+  }
+
+  private async resolvePartAutoRouting(
+    step: WorkflowStep,
+    parts: PartDefinition[],
+    runtime: RuntimeStepResolution | undefined,
+  ): Promise<Map<string, StepProviderInfo>> {
+    const result = new Map<string, StepProviderInfo>();
+    await this.addPartAutoRouting(result, step, parts, runtime);
+    return result;
+  }
+
+  private async addPartAutoRouting(
+    result: Map<string, StepProviderInfo>,
+    step: WorkflowStep,
+    parts: PartDefinition[],
+    runtime: RuntimeStepResolution | undefined,
+  ): Promise<void> {
+    if (!this.deps.engineOptions.autoRouting || runtime?.fallback || parts.length === 0) {
+      return;
+    }
+
+    const routed = await resolveAutoRoutingBatch({
+      autoRouting: this.deps.engineOptions.autoRouting,
+      items: parts.map((part) => {
+        const partStep = createPartStep(step, part);
+        const partResolutionRuntime = this.getPartProviderResolutionRuntime(runtime);
+        return {
+          id: part.id,
+          step: {
+            name: partStep.name,
+            tags: partStep.tags,
+            personaKey: partStep.providerRoutingPersonaKey,
+          },
+          currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModel(partStep, partResolutionRuntime),
+        };
+      }),
+      routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
+      logger: log,
+    });
+
+    for (const [partId, providerInfo] of routed.entries()) {
+      result.set(partId, providerInfo);
+    }
+  }
+
+  private getPartProviderResolutionRuntime(
+    runtime: RuntimeStepResolution | undefined,
+  ): RuntimeStepResolution | undefined {
+    if (runtime?.fallback || runtime?.providerInfo?.providerSource === 'promotion') {
+      return runtime;
+    }
+    return undefined;
   }
 }

@@ -25,6 +25,20 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
   mock: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
 };
 
+/**
+ * ユーザー定義のグローバルプロファイルを、デフォルト表へのプロバイダ単位の
+ * 上書きとして解決する。?? で丸ごと置き換えると、書かれていないプロバイダの
+ * 既定権限が黙って消える（edit: true のステップが readonly ツールで走る実障害）。
+ */
+export function mergeGlobalPermissionProfiles(
+  userProfiles: ProviderPermissionProfiles | undefined,
+): ProviderPermissionProfiles {
+  return {
+    ...DEFAULT_PROVIDER_PERMISSION_PROFILES,
+    ...(userProfiles ?? {}),
+  };
+}
+
 export function resolveStepPermissionMode(input: ResolvePermissionModeInput): PermissionMode {
   if (!input.provider) {
     return input.requiredPermissionMode ?? 'readonly';

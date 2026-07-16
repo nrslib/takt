@@ -109,6 +109,8 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
       requestMoreParts: vi.fn(),
     },
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+    updateMaxSteps: vi.fn(),
+    setActiveResumePoint: vi.fn(),
   };
   return { runner: new ParallelRunner(deps), deps };
 }
@@ -157,6 +159,15 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     queueAgentResponse(makeAgentResponse({
       persona: 'security-review',
       content: '[SECURITY-REVIEW:1] approved',
+    }));
+    // error 席は新セッションで1回再試行される。terminal のままにするため
+    // 再試行分も同じエラーを返す
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: 'Reconnecting... 2/5',
+      error: 'timeout waiting for child process to exit',
+      failureCategory: 'provider_error',
     }));
 
     const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
@@ -328,6 +339,15 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       error: 'Security reviewer failed after retry.',
       failureCategory: 'provider_error',
     }));
+    // 再試行分も同じエラー（terminal 維持）
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      status: 'error',
+      content: '',
+      error: 'Security reviewer failed after retry.',
+      failureCategory: 'provider_error',
+    }));
+
 
     const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
@@ -340,6 +360,60 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     expect(result.response.content).toContain('status: error');
     expect(result.response.content).toContain('failureCategory: provider_error');
     expect(result.response.content).toContain('Security reviewer failed after retry.');
+  });
+
+  it('purges the stale persona session when the fresh retry returns no session id', async () => {
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: 'assistant message cycle budget exceeded',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+    // 再試行は成功するが sessionId を返さない
+    queueAgentResponse({
+      ...makeAgentResponse({
+        persona: 'ai-antipattern-review-2nd',
+        content: '[AI-ANTIPATTERN-REVIEW-2ND:1] approved',
+      }),
+      sessionId: undefined,
+    });
+
+    const updateSession = vi.fn();
+    const result = await runner.runParallelStep(step, state, 'test task', 5, updateSession);
+
+    expect(result.response.status).toBe('done');
+    // 劣化していた旧セッションが resume 対象に残らない（undefined で削除）
+    expect(updateSession).toHaveBeenCalledWith(expect.stringContaining('ai-antipattern-review-2nd'), undefined);
+  });
+
+  it('does not retry a sub-step whose error is a rate limit', async () => {
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: '429 too many requests',
+      errorKind: 'rate_limit',
+    }));
+    queueAgentResponse(makeAgentResponse({
+      persona: 'security-review',
+      content: '[SECURITY-REVIEW:1] approved',
+    }));
+
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+
+    // rate limit は新セッション再試行の対象外（既存の rate_limited 経路に委ねる）
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
+    expect(result.response.status).toBe('error');
   });
 
   it('redacts sensitive sub-step error details from parent diagnostics', async () => {
@@ -355,6 +429,13 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     queueAgentResponse(makeAgentResponse({
       persona: 'security-review',
       content: '[SECURITY-REVIEW:1] approved',
+    }));
+    // 再試行分も同じエラー（terminal 維持）
+    queueAgentResponse(makeAgentResponse({
+      persona: 'ai-antipattern-review-2nd',
+      status: 'error',
+      content: '',
+      error: 'Provider failed with api_key=top-secret and Authorization: Bearer sk-secret123456',
     }));
 
     const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());

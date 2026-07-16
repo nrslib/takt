@@ -18,6 +18,7 @@ describe('prepareRuntimeEnvironment', () => {
     'npm_config_cache',
     'GH_CONFIG_DIR',
     'GLAB_CONFIG_DIR',
+    'CURSOR_CONFIG_DIR',
     'HOME',
   ] as const;
   const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -247,6 +248,60 @@ describe('prepareRuntimeEnvironment', () => {
 
     expect(result).toBeDefined();
     expect(result?.injectedEnv.GLAB_CONFIG_DIR).toBe(explicitDir);
+  });
+
+  it('should preserve CURSOR_CONFIG_DIR when already set in environment', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+
+    const customCursorDir = '/custom/cursor/config';
+    process.env['CURSOR_CONFIG_DIR'] = customCursorDir;
+
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.CURSOR_CONFIG_DIR).toBe(customCursorDir);
+  });
+
+  it('should use XDG_CONFIG_HOME/cursor when CURSOR_CONFIG_DIR is unset', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+    const fakeHome = mkdtempSync(join(systemTmpDir, 'takt-fake-home-'));
+    tempDirs.push(fakeHome);
+    const fakeXdgConfig = mkdtempSync(join(systemTmpDir, 'takt-xdg-config-'));
+    tempDirs.push(fakeXdgConfig);
+
+    delete process.env['CURSOR_CONFIG_DIR'];
+    process.env['HOME'] = fakeHome;
+    process.env['XDG_CONFIG_HOME'] = fakeXdgConfig;
+
+    const runtimeConfigDir = join(cwd, '.takt', '.runtime', 'config');
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.XDG_CONFIG_HOME).toBe(runtimeConfigDir);
+    expect(result?.injectedEnv.CURSOR_CONFIG_DIR).toBe(join(fakeXdgConfig, 'cursor'));
+    expect(result?.injectedEnv.CURSOR_CONFIG_DIR).not.toBe(join(runtimeConfigDir, 'cursor'));
+  });
+
+  it('should fallback to ~/.cursor when CURSOR_CONFIG_DIR and XDG_CONFIG_HOME are unset', () => {
+    const cwd = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
+    tempDirs.push(cwd);
+    const fakeHome = mkdtempSync(join(systemTmpDir, 'takt-fake-home-'));
+    tempDirs.push(fakeHome);
+
+    delete process.env['CURSOR_CONFIG_DIR'];
+    delete process.env['XDG_CONFIG_HOME'];
+    process.env['HOME'] = fakeHome;
+
+    const runtimeConfigDir = join(cwd, '.takt', '.runtime', 'config');
+    const result = prepareRuntimeEnvironment(cwd, { prepare: ['node'] });
+
+    expect(result).toBeDefined();
+    expect(result?.injectedEnv.XDG_CONFIG_HOME).toBe(runtimeConfigDir);
+    expect(result?.injectedEnv.CURSOR_CONFIG_DIR).toBe(join(fakeHome, '.cursor'));
+    expect(result?.injectedEnv.CURSOR_CONFIG_DIR).not.toBe(join(fakeHome, '.config', 'cursor'));
+    expect(result?.injectedEnv.CURSOR_CONFIG_DIR).not.toBe(join(runtimeConfigDir, 'cursor'));
   });
 
 });

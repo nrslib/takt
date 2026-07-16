@@ -4,6 +4,7 @@ import type { MockInstance } from 'vitest';
 const {
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowConfigValue,
+  mockResolveWorkflowConfigValues,
   mockHeader,
   mockInfo,
   mockError,
@@ -14,6 +15,7 @@ const {
 } = vi.hoisted(() => ({
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
+  mockResolveWorkflowConfigValues: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
@@ -26,6 +28,7 @@ const {
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
   resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
+  resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
 }));
 
 vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
@@ -67,7 +70,17 @@ describe('previewPrompts', () => {
     mockInstructionBuild.mockReturnValue('phase1');
     mockReportBuild.mockReturnValue('phase2');
     mockJudgmentBuild.mockReturnValue('phase3');
-    mockResolveWorkflowConfigValue.mockReturnValue('en');
+    mockResolveWorkflowConfigValue.mockImplementation((_: string, key: string) => {
+      if (key === 'workflow') return undefined;
+      if (key === 'language') return 'en';
+      return undefined;
+    });
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      personaProviders: undefined,
+      providerRouting: undefined,
+    });
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
       maxSteps: 1,
@@ -90,6 +103,10 @@ describe('previewPrompts', () => {
     await previewPrompts('/project');
 
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
+    expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith(
+      '/project',
+      ['provider', 'model', 'personaProviders', 'providerRouting'],
+    );
   });
 
   it('step番号の見出しを表示する', async () => {
@@ -168,5 +185,147 @@ describe('previewPrompts', () => {
     const outputLines = consoleLogSpy.mock.calls.map(([line]) => line);
     expect(outputLines.filter((line) => line === 'Session key: exec-replan')).toHaveLength(1);
     expect(outputLines.filter((line) => line === 'Requires user input: yes')).toHaveLength(1);
+  });
+
+  it('finding manager の設定済み provider/model を表示する', async () => {
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          personaDisplayName: 'Findings Manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+      steps: [
+        {
+          name: 'review',
+          personaDisplayName: 'reviewer',
+          outputContracts: [],
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager: Findings Manager');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
+  });
+
+  it('finding manager の未設定 provider/model は未設定として表示する', async () => {
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+        },
+      },
+      steps: [
+        {
+          name: 'review',
+          personaDisplayName: 'reviewer',
+          outputContracts: [],
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager: findings-manager');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: not configured');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: not configured');
+  });
+
+  it('finding manager の provider/model を runtime と同じ resolver 経由で表示する', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      personaProviders: {
+        'Findings Manager': {
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+      providerRouting: undefined,
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          personaDisplayName: 'Findings Manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+        },
+      },
+      steps: [
+        {
+          name: 'review',
+          personaDisplayName: 'reviewer',
+          outputContracts: [],
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
+  });
+
+  it('finding manager の provider 直接指定時は persona model を表示しない', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      personaProviders: {
+        'Findings Manager': {
+          provider: 'opencode',
+          model: 'opencode/persona-model',
+        },
+      },
+      providerRouting: undefined,
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          personaDisplayName: 'Findings Manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+          provider: 'codex',
+        },
+      },
+      steps: [
+        {
+          name: 'review',
+          personaDisplayName: 'reviewer',
+          outputContracts: [],
+        },
+      ],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: not configured');
   });
 });

@@ -2,16 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockResolveConfigValues,
+  mockResolveNonWorkflowProviderModel,
   mockResolveAssistantConfigLayers,
   mockGetProvider,
 } = vi.hoisted(() => ({
   mockResolveConfigValues: vi.fn(),
+  mockResolveNonWorkflowProviderModel: vi.fn(),
   mockResolveAssistantConfigLayers: vi.fn(),
   mockGetProvider: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
+  resolveNonWorkflowProviderModel: (...args: unknown[]) =>
+    mockResolveNonWorkflowProviderModel(...args),
   loadSessionState: vi.fn(() => null),
   clearSessionState: vi.fn(),
 }));
@@ -42,6 +46,10 @@ describe('initializeSession assistant provider resolution', () => {
     vi.clearAllMocks();
     mockGetProvider.mockReturnValue({ setup: vi.fn() });
     mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'mock',
+      model: 'non-workflow-model',
+    });
   });
 
   it('should prioritize CLI provider/model over takt_providers.assistant and top-level provider/model', () => {
@@ -73,6 +81,27 @@ describe('initializeSession assistant provider resolution', () => {
     expect(ctx.providerType).toBe('opencode');
     expect(ctx.model).toBe('cli-model');
     expect(ctx.lang).toBe('ja');
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
+  });
+
+  it('should use the non-workflow provider resolver for non-interactive personas', () => {
+    mockResolveConfigValues.mockReturnValue({
+      language: 'en',
+      provider: 'auto',
+    });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'codex',
+      model: 'default-non-workflow-model',
+    });
+
+    const ctx = initializeSession('/project', 'instruct');
+
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/project');
+    expect(mockResolveAssistantConfigLayers).not.toHaveBeenCalled();
+    expect(mockGetProvider).toHaveBeenCalledWith('codex');
+    expect(mockGetProvider).not.toHaveBeenCalledWith('auto');
+    expect(ctx.providerType).toBe('codex');
+    expect(ctx.model).toBe('default-non-workflow-model');
   });
 
   it('should fallback to takt_providers.assistant when CLI override is missing', () => {

@@ -96,7 +96,6 @@ describe('loadGlobalConfig', () => {
       'utf-8',
     );
 
-    expect(() => loadGlobalConfig()).not.toThrow();
     const config = loadGlobalConfig();
     expect(config.pipeline).toEqual({ defaultBranchPrefix: 'global/' });
     expect(config.personaProviders).toEqual({ coder: { provider: 'codex' } });
@@ -288,7 +287,7 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('model: haiku');
   });
 
-  it('should fail fast on load when takt_providers.assistant has incompatible provider/model', () => {
+  it('should allow arbitrary codex model names in takt_providers.assistant on load', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(
@@ -303,7 +302,11 @@ describe('loadGlobalConfig', () => {
       'utf-8',
     );
 
-    expect(() => loadGlobalConfig()).toThrow(/Claude model alias/);
+    const config = loadGlobalConfig();
+    expect(config.taktProviders?.assistant).toMatchObject({
+      provider: 'codex',
+      model: 'opus',
+    });
   });
 
   it('should fail fast on save when takt_providers is set without assistant', () => {
@@ -317,7 +320,7 @@ describe('loadGlobalConfig', () => {
     expect(() => saveGlobalConfig(config)).toThrow(/Configuration error: 'takt_providers\.assistant' is required when takt_providers is set\./);
   });
 
-  it('should fail fast on save when takt_providers.assistant has incompatible provider/model', () => {
+  it('should allow arbitrary codex model names in takt_providers.assistant on save', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
@@ -330,7 +333,13 @@ describe('loadGlobalConfig', () => {
       },
     };
 
-    expect(() => saveGlobalConfig(config)).toThrow(/Claude model alias/);
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.taktProviders?.assistant).toMatchObject({
+      provider: 'codex',
+      model: 'opus',
+    });
   });
 
   it('should fail fast on save when takt_providers.assistant is empty object', () => {
@@ -445,6 +454,54 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('provider_options:');
     expect(raw).toContain('copilot:');
     expect(raw).toContain('effort: high');
+  });
+
+  it('should preserve auto_routing when saveGlobalConfig is called with loaded config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'language: en',
+        'provider: auto',
+        'auto_routing:',
+        '  default_provider:',
+        '    provider: mock',
+        '    model: global-default-model',
+        '  strategy: balanced',
+        '  router:',
+        '    provider: claude-sdk',
+        '    model: claude-haiku-4-5-20251001',
+        '  candidates:',
+        '    - name: coding',
+        '      description: Implementation and tests',
+        '      provider: codex',
+        '      model: gpt-5',
+        '      cost_tier: medium',
+        '      provider_options:',
+        '        codex:',
+        '          reasoning_effort: high',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const loaded = loadGlobalConfig();
+    saveGlobalConfig(loaded);
+    invalidateGlobalConfigCache();
+
+    const reloaded = loadGlobalConfig();
+    expect(reloaded.autoRouting).toEqual(loaded.autoRouting);
+    const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
+    expect(raw).toContain('auto_routing:');
+    expect(raw).toContain('default_provider:');
+    expect(raw).toContain('model: global-default-model');
+    expect(raw).toContain('cost_tier: medium');
+    expect(raw).toContain('provider_options:');
+    expect(raw).toContain('reasoning_effort: high');
+    expect(raw).not.toContain('autoRouting:');
+    expect(raw).not.toContain('defaultProvider:');
+    expect(raw).not.toContain('costTier:');
+    expect(raw).not.toContain('providerOptions:');
   });
 
   it('should round-trip copilot global fields', () => {
@@ -1023,7 +1080,7 @@ describe('loadGlobalConfig', () => {
   });
 
   describe('persona_providers', () => {
-    it('should fail fast when persona_providers provider/model alias combination is invalid', () => {
+    it('should allow persona_providers to pass arbitrary codex model names downstream', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1032,7 +1089,11 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow();
+      const config = loadGlobalConfig();
+      expect(config.personaProviders?.coder).toMatchObject({
+        provider: 'codex',
+        model: 'opus',
+      });
     });
 
     it('should fail fast when persona provider block includes provider options', () => {
@@ -1377,7 +1438,7 @@ describe('loadGlobalConfig', () => {
       expect(() => loadGlobalConfig()).toThrow(/sandbox/);
     });
 
-    it('should throw when provider is codex but model is a Claude alias (opus)', () => {
+    it('should allow provider codex with model opus', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1386,10 +1447,11 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/model 'opus' is a Claude model alias but provider is 'codex'/);
+      const config = loadGlobalConfig();
+      expect(config).toMatchObject({ provider: 'codex', model: 'opus' });
     });
 
-    it('should throw when provider is codex but model is sonnet', () => {
+    it('should allow provider codex with model sonnet', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1398,10 +1460,11 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/model 'sonnet' is a Claude model alias but provider is 'codex'/);
+      const config = loadGlobalConfig();
+      expect(config).toMatchObject({ provider: 'codex', model: 'sonnet' });
     });
 
-    it('should throw when provider is codex but model is haiku', () => {
+    it('should allow provider codex with model haiku', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1410,10 +1473,11 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/model 'haiku' is a Claude model alias but provider is 'codex'/);
+      const config = loadGlobalConfig();
+      expect(config).toMatchObject({ provider: 'codex', model: 'haiku' });
     });
 
-    it('should not throw when provider is codex with a compatible model', () => {
+    it('should not throw when provider is codex with a model', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1449,7 +1513,7 @@ describe('loadGlobalConfig', () => {
       expect(() => loadGlobalConfig()).not.toThrow();
     });
 
-    it('should throw when provider is opencode but model is a Claude alias (opus)', () => {
+    it('should throw when provider is opencode but model is not provider/model format (opus)', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1458,10 +1522,10 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/model 'opus' is a Claude model alias but provider is 'opencode'/);
+      expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
     });
 
-    it('should throw when provider is opencode but model is sonnet', () => {
+    it('should throw when provider is opencode but model is not provider/model format (sonnet)', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1470,10 +1534,10 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/model 'sonnet' is a Claude model alias but provider is 'opencode'/);
+      expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
     });
 
-    it('should throw when provider is opencode but model is haiku', () => {
+    it('should throw when provider is opencode but model is not provider/model format (haiku)', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(
@@ -1482,10 +1546,10 @@ describe('loadGlobalConfig', () => {
         'utf-8',
       );
 
-      expect(() => loadGlobalConfig()).toThrow(/model 'haiku' is a Claude model alias but provider is 'opencode'/);
+      expect(() => loadGlobalConfig()).toThrow(/must be in 'provider\/model' format/i);
     });
 
-    it('should not throw when provider is opencode with a compatible model', () => {
+    it('should not throw when provider is opencode with provider/model format', () => {
       const taktDir = join(testHomeDir, '.takt');
       mkdirSync(taktDir, { recursive: true });
       writeFileSync(

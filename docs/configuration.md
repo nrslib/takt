@@ -56,6 +56,12 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     review:
 #       provider: opencode
 #       model: opencode/qwen3-coder-next
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
 #     edit:
 #       provider_options:
 #         codex:
@@ -144,6 +150,10 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     ## Summary
 #     {issue_body}
 #     Closes #{issue}
+
+# Routing decision telemetry is local-only.
+# telemetry:
+#   routing_decisions: true       # Write auto-routing decisions to .takt/events/ (default: true)
 ```
 
 ### Global Config Field Reference
@@ -152,7 +162,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
+| `provider` | `"auto"` \| `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default AI provider (`auto` = select provider/model through auto routing, `claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
@@ -193,6 +203,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
 | `takt_providers` | object | - | TAKT internal provider overrides. `assistant` routes the interactive planning conversation and is also used as the Report phase fallback provider after an OpenCode report retry fails. Project `takt_providers.assistant` overrides global `takt_providers.assistant`; if neither is set, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
+| `telemetry` | object | `{ routing_decisions: true }` | Local-only routing decision recording. `telemetry.routing_decisions` controls whether auto-routing decisions are written as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. |
 | `workflow_mcp_servers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
@@ -249,7 +260,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override provider |
+| `provider` | `"auto"` \| `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
@@ -387,6 +398,8 @@ TAKT resolves model selection in two stages:
 1. **Base input model** - Before workflow execution starts, the input `model` is resolved from CLI `--model`, then config `model`, then the provider default.
 2. **Workflow step model** - For each workflow step, the effective model is resolved from step YAML `model`, then `provider_routing.steps.<step.name>`, then matching `provider_routing.tags` in the order written on the step, then `provider_routing.personas.<raw persona key>`, then deprecated `persona_providers.<persona display name>`, then `workflow_config.model`, then the already-resolved input `model`.
 
+For Finding Contract workflows, `finding_contract.manager.provider` and `finding_contract.manager.model` are treated as step-level provider/model values for the synthetic `findings-manager` step. They override `provider_routing`, deprecated `persona_providers.findings-manager`, workflow defaults, and resolved input values. When neither field is set, the manager uses the same fallback chain as any other workflow step. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
+
 In workflow YAML, `model: null` is an explicit model omission for a normal step, parallel sub-step, or `loop_monitors.judge`. It differs from leaving `model` unspecified: an unspecified model continues to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input sources, while `model: null` stops model resolution at that entry and leaves the effective model undefined. Use it when the resolved provider should use its own CLI or provider default instead of inheriting another model source. Providers that require an explicit model still fail validation when no model is supplied.
 
 ### Provider-specific Model Notes
@@ -486,6 +499,12 @@ provider_routing:
     review:
       provider: opencode
       model: opencode/qwen3-coder-next
+    final-gate:
+      provider: codex
+      model: gpt-5
+      provider_options:
+        codex:
+          reasoning_effort: high
     edit:
       provider_options:
         codex:
@@ -505,7 +524,7 @@ steps:
     tags: [implementation, edit]
 ```
 
-`provider_routing.personas` uses the raw `persona` key from the workflow step, so `persona_name` is display-only and does not affect routing. `provider_routing.tags` applies entries matching the step's `tags`; when multiple tags match, TAKT applies them in the order written on the step, and later tags override the same provider/model/provider_options leaf. `provider_routing.steps` uses the workflow step `name`.
+`provider_routing.personas` uses the raw `persona` key from the workflow step, so `persona_name` is display-only and does not affect routing. `provider_routing.tags` applies entries matching the step's `tags`; when multiple tags match, TAKT applies them in the order written on the step, and later tags override the same provider/model/provider_options leaf. For example, builtin final-gate steps put `final-gate` after `review`, so you can route ordinary reviewers to OpenCode while overriding only merge-readiness / supervisor to a high-reasoning Codex model. For finer routing, target `merge-readiness` and `supervise` separately. `provider_routing.steps` uses the workflow step `name`.
 
 Each routing entry can include `provider`, `model`, and/or `provider_options`. Those fields are individually optional, but each entry must include at least one of them. Empty `provider_options` objects are rejected.
 
@@ -522,6 +541,82 @@ step YAML provider/model
 ```
 
 The resolved input is determined before workflow execution from CLI flags, then project `.takt/config.yaml`, then global `~/.takt/config.yaml`, then the provider default. Promotion entries, when active, are higher priority than the step YAML value.
+
+For the Finding Contract manager, `finding_contract.manager.provider` and `finding_contract.manager.model` occupy the `step YAML provider/model` position for the synthetic `findings-manager` step.
+
+### Auto Routing
+
+Set `provider: auto` when TAKT should choose both provider and model from an effective `auto_routing` candidate list. The following example is for project `.takt/config.yaml` or global `~/.takt/config.yaml`:
+
+```yaml
+provider: auto
+
+takt_providers:
+  assistant:
+    provider: codex
+    model: gpt-5.6-sol
+
+auto_routing:
+  default_provider:
+    provider: codex
+    model: gpt-5.6-luna # optional; omit to use the provider's default model
+  strategy: balanced # cost | balanced | performance
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: advanced
+      description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
+      provider: codex
+      model: gpt-5.6-sol
+      cost_tier: high
+    - name: coding
+      description: Implementation, tests, debugging, and refactoring
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+    - name: lightweight
+      description: Formatting and small mechanical edits
+      provider: codex
+      model: gpt-5.6-luna
+      cost_tier: low
+  rules:
+    tags:
+      implementation: coding
+      architecture: advanced
+    steps:
+      security-audit: advanced
+    personas:
+      architect: advanced
+```
+
+A self-contained workflow may override routing with a workflow-level block. Workflow YAML uses only routing fields and does not accept the config-only `default_provider` field:
+
+```yaml
+workflow_config:
+  provider: auto
+auto_routing:
+  strategy: balanced
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: coding
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+      description: Implementation, testing, debugging, and refactoring
+```
+
+When the effective top-level provider is `auto`, TAKT uses `auto_routing.default_provider` for internal operations that need a concrete provider but have no workflow step context, such as AI task-slug generation. `default_provider.provider` is required and cannot be `auto`; `default_provider.model` is optional. The project `default_provider` takes precedence over the global value as a whole object, so its `provider` and `model` are not merged with fields from the global object. If this setting is missing when such an operation runs, TAKT reports `Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.` A concrete effective top-level provider continues to use its top-level provider/model.
+
+Auto-routing candidate selection applies to workflow step execution only. `auto_routing.router` is only for routing decisions and is never used implicitly as `default_provider`. The interactive assistant does not go through auto routing and continues to use `takt_providers.assistant`; that assistant setting is not used as the default for other internal operations. A top-level `provider: auto` is ignored for the assistant, so pair it with `takt_providers.assistant` (or pass `--provider` on the CLI). Without either, assistant startup fails with `Provider is not configured.`
+
+Resolution order stays conservative: `promotion`, explicit step provider/model, `provider_routing`, and `persona_providers` win before auto routing. Auto routing then checks rules in `tags`, `steps`, `personas` order. If multiple step tags match, the later tag on the step wins. If no rule matches, TAKT asks the configured router model to select a candidate from descriptions; router failures log a warning and fall back to the strategy default: `cost` chooses the first `low` candidate, `balanced` the first `medium`, and `performance` the first `high`.
+
+Candidate `cost_tier` is limited to `high`, `medium`, or `low`. Candidate `provider_options` are merged at step priority, so env/CLI-resolved option leaves still win. `model: auto` is not supported; use multiple candidates instead. CLI can override the strategy with `--auto-strategy cost|balanced|performance`; the override applies when the effective workflow, step, parallel sub-step, workflow_call override, or resolved workflow_call child uses `provider: auto`. When no auto provider path is present, the strategy flag is ignored with a warning.
+
+Routing decisions are local-only telemetry. When `telemetry.routing_decisions` is enabled, TAKT writes them as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. Use `takt telemetry status`, `takt telemetry enable`, and `takt telemetry disable` to inspect or change only this local recording setting.
 
 In workflow YAML, `model: null` is treated as an explicit entry-level value. It stops model resolution at the step, parallel sub-step, or `loop_monitors.judge`, so lower-priority sources and triggering-step inheritance are not consulted for `model`. Omitting the `model` field keeps normal fallback behavior.
 

@@ -1,7 +1,11 @@
 import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
-import type { PersonaProviderEntry, ProviderRoutingConfig } from '../../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import { resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
+import {
+  resolveStepProviderModel,
+  type ProviderModelResolutionContext,
+} from '../../../core/workflow/provider-resolution.js';
+import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import { buildFindingManagerStep } from '../../../core/workflow/findings/manager-step.js';
 import {
   assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
@@ -28,6 +32,8 @@ export interface StepPreview {
   instructionContent: string;
   allowedTools: string[];
   canEdit: boolean;
+  provider?: StepProviderInfo['provider'];
+  model?: StepProviderInfo['model'];
   sessionKey?: string;
   requiresUserInput?: boolean;
   substeps?: StepPreview[];
@@ -39,11 +45,7 @@ export interface FirstStepInfo {
   allowedTools: string[];
 }
 
-interface PreviewProviderResolution {
-  provider: WorkflowStep['provider'];
-  model: WorkflowStep['model'];
-  personaProviders: Record<string, PersonaProviderEntry> | undefined;
-  providerRouting: ProviderRoutingConfig | undefined;
+interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
@@ -82,16 +84,62 @@ function resolvePreviewCanEdit(step: WorkflowStep): boolean {
   return !step.teamLeader && step.edit === true;
 }
 
+function resolvePreviewProviderInfo(
+  step: WorkflowStep,
+  resolution: PreviewProviderResolution,
+): StepProviderInfo {
+  return resolveStepProviderModel({
+    step,
+    provider: resolution.provider,
+    model: resolution.model,
+    providerRouting: resolution.providerRouting,
+    personaProviders: resolution.personaProviders,
+  });
+}
+
+function buildFindingManagerPreview(
+  workflow: WorkflowConfig,
+  projectCwd: string,
+  resolution: PreviewProviderResolution,
+): StepPreview | undefined {
+  if (!workflow.findingContract) {
+    return undefined;
+  }
+  const managerStep = buildFindingManagerStep({
+    contract: workflow.findingContract,
+    workflowProvider: workflow.provider,
+    workflowModel: workflow.model,
+  });
+  const providerInfo = resolvePreviewProviderInfo(managerStep, resolution);
+
+  return {
+    name: managerStep.name,
+    personaDisplayName: managerStep.personaDisplayName,
+    personaContent: readStepPersona(managerStep, projectCwd),
+    instructionContent: managerStep.instruction,
+    allowedTools: [],
+    canEdit: false,
+    provider: providerInfo.provider,
+    model: providerInfo.model,
+  };
+}
+
 function buildStepPreview(
+  workflow: WorkflowConfig,
   step: WorkflowStep,
   projectCwd: string,
   resolution: PreviewProviderResolution,
 ): StepPreview {
   const previewStep = resolvePreviewStep(step);
-  const substeps = previewStep.parallel?.map((substep) =>
-    buildStepPreview(substep, projectCwd, resolution),
+  const parallelSubsteps = previewStep.parallel?.map((substep) =>
+    buildStepPreview(workflow, substep, projectCwd, resolution),
   );
-  const isParallelParent = substeps !== undefined && substeps.length > 0;
+  const isParallelParent = parallelSubsteps !== undefined && parallelSubsteps.length > 0;
+  const managerPreview = isParallelParent
+    ? buildFindingManagerPreview(workflow, projectCwd, resolution)
+    : undefined;
+  const substeps = managerPreview ? [...(parallelSubsteps ?? []), managerPreview] : parallelSubsteps;
+  const providerInfo = isParallelParent ? undefined : resolvePreviewProviderInfo(previewStep, resolution);
 
   return {
     name: step.name,
@@ -100,6 +148,8 @@ function buildStepPreview(
     instructionContent: isParallelParent ? '' : previewStep.instruction,
     allowedTools: isParallelParent ? [] : resolvePreviewAllowedTools(previewStep, resolution),
     canEdit: isParallelParent ? false : resolvePreviewCanEdit(previewStep),
+    ...(providerInfo?.provider !== undefined ? { provider: providerInfo.provider } : {}),
+    ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
     sessionKey: previewStep.sessionKey,
     requiresUserInput: previewStep.requiresUserInput,
     ...(isParallelParent ? { substeps } : {}),
@@ -186,7 +236,7 @@ function buildStepPreviews(
     visited.add(currentName);
     const step = stepMap.get(currentName);
     if (!step) break;
-    previews.push(buildStepPreview(step, projectCwd, resolution));
+    previews.push(buildStepPreview(workflow, step, projectCwd, resolution));
     currentName = step.rules?.[0]?.next;
   }
 

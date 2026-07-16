@@ -231,13 +231,17 @@ export async function runWorkflow(
   workflow: string,
   task: string,
   execCwd: string,
-  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'issueNumber' | 'prNumber'>,
+  options: Pick<PipelineExecutionOptions, 'provider' | 'model' | 'autoStrategy' | 'issueNumber' | 'prNumber'>,
   context: ExecutionContext,
 ): Promise<boolean> {
   const safeWorkflow = sanitizeTerminalText(workflow);
   info(`Running workflow: ${safeWorkflow}`);
-  const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model)
-    ? { provider: options.provider, model: options.model }
+  const agentOverrides: TaskExecutionOptions | undefined = (options.provider || options.model || options.autoStrategy)
+    ? {
+        ...(options.provider !== undefined ? { provider: options.provider } : {}),
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
+      }
     : undefined;
 
   statusLine.start('Running...');

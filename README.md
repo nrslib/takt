@@ -245,6 +245,8 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
+TAKT also ships two client-integration entrypoints: `takt-acp` runs TAKT as an [Agent Client Protocol](./docs/cli-reference.md#acp-agent) agent over stdio JSON-RPC, and `takt-mcp` runs it as a stdio [MCP server](./docs/cli-reference.md#mcp-server) so an MCP client (Codex, Claude Code, …) can enqueue tasks, create an issue and enqueue, or run the next pending task.
+
 ### Instant exec mode
 
 `takt exec` starts TAKT's interactive task-entry mode. The Assistant agent clarifies the request, `/go` turns the conversation into a generated workflow, Worker agent(s) implement the task, Review agent(s) review the result, the Replanning agent asks the user for direction when needed, and loop detection prevents repeated unproductive cycles.
@@ -254,6 +256,8 @@ Exec starts from the previous exec configuration, or the default configuration o
 Exec presets resolve in this order: project `.takt/exec/presets/` → global `$TAKT_CONFIG_DIR/exec/presets/` (default `~/.takt/exec/presets/`) → builtin `builtins/exec/presets/`. Changes made in `/setup` are saved to `$TAKT_CONFIG_DIR/exec.yaml` (default `~/.takt/exec.yaml`) for the next exec session. `/setup` can also save or delete project/global presets, and created facets are stored under `.takt/facets/` or `$TAKT_CONFIG_DIR/facets/` (default `~/.takt/facets/`).
 
 When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it through the normal workflow engine. Inline text after `/go` is treated as an additional note. `/go` without prior conversation or inline task text does not generate the workflow. Use `/cancel` to exit without running.
+
+Exec input supports image attachments while editing the current line. Use `/paste-image` or `Ctrl+V` to attach a clipboard image on macOS, or paste an OSC 1337 inline image from a compatible terminal. TAKT inserts a `[Image #N]` placeholder. Reference that placeholder in an Assistant message or `/go` note to send the image with that Assistant request; placeholders that were not attached in the session are treated as normal text. When `/go` runs, referenced stored images are copied into the generated task spec and listed in its attachment section. Supported image types are PNG, JPEG, GIF, and WebP. Inline and clipboard images are limited to 10 MiB. TAKT rejects unsupported image data, mismatched inline-image filename types, oversized images, and stored attachments whose temp path is missing, a symlink, or not a regular file. Providers without native image input receive the attachment as a local path reference in the prompt.
 
 Normal agent steps, parallel sub-steps, and loop detection judges may set `session_key` to share or isolate persona sessions. System steps, workflow_call steps, and parallel parent steps cannot set `session_key`. TAKT builds the runtime key as `session_key` plus the resolved provider, so values must be non-empty strings that do not collide with other generated session routes.
 
@@ -266,6 +270,49 @@ provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, curs
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
+
+To let TAKT choose provider/model per step, set `provider: auto` and define `auto_routing` candidates:
+
+```yaml
+provider: auto
+takt_providers:
+  assistant:           # the interactive assistant is not auto-routed; give it an explicit provider
+    provider: codex
+    model: gpt-5.6-sol
+auto_routing:
+  default_provider:     # used by internal operations that have no workflow step context
+    provider: codex
+    model: gpt-5.6-luna # optional; omit to use the provider's default model
+  strategy: balanced   # cost, balanced, or performance
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: advanced
+      description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
+      provider: codex
+      model: gpt-5.6-sol
+      cost_tier: high
+    - name: coding
+      description: Implementation, tests, debugging, and refactoring
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+    - name: lightweight
+      description: Formatting and small mechanical edits
+      provider: codex
+      model: gpt-5.6-luna
+      cost_tier: low
+  rules:
+    tags:
+      implementation: coding
+```
+
+When the effective top-level provider is `auto`, TAKT uses `auto_routing.default_provider` for operations that need a concrete provider but have no workflow step context, such as AI task-slug generation. A project-level `.takt/config.yaml` value takes precedence over the global value, and its `provider` and optional `model` are selected together rather than merged across configuration levels. `default_provider.provider` is required and cannot be `auto`; if `default_provider` is missing when such an operation runs, TAKT reports `Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.` A concrete effective top-level provider continues to use its top-level provider/model.
+
+`auto_routing.router` is only for routing decisions and is not an implicit default. Likewise, `takt_providers.assistant` remains dedicated to the interactive assistant and is not used as the default for other internal operations.
+
+Auto-routing decisions are written locally to `.takt/events/` as NDJSON. TAKT does not upload routing decisions. Local recording is enabled by default, can be configured with `telemetry.routing_decisions`, and can be inspected or changed with `takt telemetry status|enable|disable`.
 
 Or use API keys directly (no CLI installation required for Claude, Codex, OpenCode):
 

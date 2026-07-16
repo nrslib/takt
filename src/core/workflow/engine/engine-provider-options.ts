@@ -80,6 +80,23 @@ export function resolveMcpServersForProvider(
   return keepWhenProviderSupports(mcpServers, provider, providerSupportsMcpServers);
 }
 
+export function resolveSessionMcpServersForProvider(
+  mcpServers: Record<string, McpServerConfig> | undefined,
+  provider: ProviderType | undefined,
+  stepName: string,
+): Record<string, McpServerConfig> | undefined {
+  if (mcpServers === undefined || Object.keys(mcpServers).length === 0) {
+    return undefined;
+  }
+  if (providerSupportsMcpServers(provider) === true) {
+    return mcpServers;
+  }
+  if (provider === undefined) {
+    throw new Error(`Step "${stepName}" requires session MCP servers but provider is not resolved`);
+  }
+  throw new Error(`Provider "${provider}" does not support session MCP servers for step "${stepName}"`);
+}
+
 export function resolvePartAllowedToolsForProvider(
   partAllowedTools: string[] | undefined,
   edit: boolean | undefined,

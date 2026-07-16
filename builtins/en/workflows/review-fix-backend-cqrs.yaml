@@ -11,6 +11,7 @@ initial_step: gather
 loop_monitors:
   - cycle:
       - reviewers
+      - final-gate
       - fix
     threshold: 3
     judge:
@@ -20,7 +21,7 @@ loop_monitors:
         - condition: Healthy (progress being made)
           next: reviewers
         - condition: Unproductive (repeated findings, fixes not applied)
-          next: supervise
+          next: final-gate
 
 steps:
   - name: gather
@@ -153,29 +154,6 @@ steps:
           - condition: approved
           - condition: needs_fix
 
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -204,10 +182,33 @@ steps:
 
     rules:
       - condition: all("approved")
-        next: supervise
+        next: final-gate
       - condition: any("needs_fix")
         next: fix
 
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-dual-final-gate
+    args:
+      merge_readiness_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+      supervise_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+      - condition: need_replan
+        next: fix
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding
@@ -239,65 +240,4 @@ steps:
       - condition: Fixes complete
         next: reviewers
       - condition: Unable to proceed with fixes
-        next: supervise
-
-  - name: supervise
-    tags:
-      - review
-    edit: false
-    persona: dual-supervisor
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    instruction: supervise
-    pass_previous_response: false
-    rules:
-      - condition: All validations complete, ready to merge
-        next: COMPLETE
-      - condition: Issues detected
-        next: fix_supervisor
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: summary
-          use_judge: false
-
-  - name: fix_supervisor
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: fix-supervisor
-    pass_previous_response: false
-    rules:
-      - condition: Fixes for supervisor findings complete
-        next: supervise
-      - condition: Unable to proceed with fixes
-        next: supervise
+        next: final-gate

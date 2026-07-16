@@ -188,6 +188,31 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bash'));
   });
 
+  it('reports invalid finding_contract.manager provider/model from workflow doctor output', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/invalid-finding-manager-provider.yaml', `name: invalid-finding-manager-provider
+max_steps: 10
+initial_step: step1
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: opencode
+steps:
+  - name: step1
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('invalid-finding-manager-provider.yaml'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
+  });
+
   it('reports missing loop monitor judge references', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/missing-loop-monitor-refs.yaml', `name: missing-loop-monitor-refs
 max_steps: 10
@@ -671,6 +696,45 @@ steps:
     call: child
     rules:
       - condition: retry_plan
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toContain(
+      'Workflow "parent.yaml" failed to load: workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('reports unsupported parallel workflow_call child return conditions', () => {
+    writeWorkflow(projectDir, '.takt/workflows/child.yaml', `name: child
+subworkflow:
+  callable: true
+  returns: [ok]
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        return: ok
+`);
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/parent.yaml', `name: parent
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    parallel:
+      - name: delegate
+        kind: workflow_call
+        call: child
+        rules:
+          - condition: retry_plan
+            next: COMPLETE
+    rules:
+      - condition: done
         next: COMPLETE
 `);
 

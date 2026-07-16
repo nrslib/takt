@@ -61,7 +61,7 @@ steps:
     instruction: "{task}"
 `;
 
-function writeInvalidWorkflowCallContractFixture(workflowsDir: string): void {
+function writeWorkflowCallContractChildFixture(workflowsDir: string): void {
   mkdirSync(workflowsDir, { recursive: true });
   writeFileSync(join(workflowsDir, 'child.yaml'), `name: child
 subworkflow:
@@ -77,6 +77,10 @@ steps:
       - condition: done
         return: ok
 `);
+}
+
+function writeInvalidWorkflowCallContractFixture(workflowsDir: string): void {
+  writeWorkflowCallContractChildFixture(workflowsDir);
   writeFileSync(join(workflowsDir, 'parent.yaml'), `name: parent
 initial_step: delegate
 max_steps: 3
@@ -86,6 +90,26 @@ steps:
     call: child
     rules:
       - condition: retry_plan
+        next: COMPLETE
+`);
+}
+
+function writeInvalidParallelWorkflowCallContractFixture(workflowsDir: string): void {
+  writeWorkflowCallContractChildFixture(workflowsDir);
+  writeFileSync(join(workflowsDir, 'parent.yaml'), `name: parent
+initial_step: fanout
+max_steps: 3
+steps:
+  - name: fanout
+    parallel:
+      - name: delegate
+        kind: workflow_call
+        call: child
+        rules:
+          - condition: retry_plan
+            next: COMPLETE
+    rules:
+      - condition: all("ok")
         next: COMPLETE
 `);
 }
@@ -831,6 +855,41 @@ describe('public workflow loaders validate workflow_call contracts', () => {
 
     expect(() => loadWorkflow('parent', tempDir)).toThrow(
       'workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+  });
+
+  it('should reject unsupported parallel workflow_call child return conditions through public loaders', () => {
+    const projectWorkflowsDir = join(tempDir, '.takt', 'workflows');
+    writeInvalidParallelWorkflowCallContractFixture(projectWorkflowsDir);
+
+    const entriesWarning = vi.fn();
+    const discoveryWithSourcesWarning = vi.fn();
+    const discoveryWarning = vi.fn();
+
+    expect(() => loadWorkflow('parent', tempDir)).toThrow(
+      'workflow_call step "delegate" cannot route on unsupported child result "retry_plan"',
+    );
+
+    const entries = listWorkflowEntries(tempDir, { onWarning: entriesWarning });
+    const workflowsWithSources = loadAllWorkflowDiscoveryWithSources(tempDir, {
+      onWarning: discoveryWithSourcesWarning,
+    });
+    const workflows = loadAllWorkflowDiscovery(tempDir, { onWarning: discoveryWarning });
+
+    expect(entries.find((entry) => entry.name === 'parent')).toBeUndefined();
+    expect(entries.find((entry) => entry.name === 'child')).toBeDefined();
+    expect(workflowsWithSources.has('parent')).toBe(false);
+    expect(workflowsWithSources.has('child')).toBe(true);
+    expect(workflows.has('parent')).toBe(false);
+    expect(workflows.has('child')).toBe(true);
+    expect(entriesWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
+    );
+    expect(discoveryWithSourcesWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
+    );
+    expect(discoveryWarning).toHaveBeenCalledWith(
+      expect.stringContaining('workflow_call step "delegate" cannot route on unsupported child result "retry_plan"'),
     );
   });
 

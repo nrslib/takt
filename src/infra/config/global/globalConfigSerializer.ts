@@ -6,6 +6,8 @@ import {
   denormalizeWorkflowOverrides,
   denormalizeProviderOptions,
   denormalizeRateLimitFallback,
+  denormalizeTelemetryConfig,
+  denormalizeConfigAutoRoutingConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -40,6 +42,14 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     if (Object.keys(analyticsRaw).length > 0) {
       raw.analytics = analyticsRaw;
     }
+  }
+  const rawTelemetry = denormalizeTelemetryConfig(config.telemetry);
+  if (rawTelemetry) {
+    raw.telemetry = rawTelemetry;
+  }
+  const rawAutoRouting = denormalizeConfigAutoRoutingConfig(config.autoRouting);
+  if (rawAutoRouting) {
+    raw.auto_routing = rawAutoRouting;
   }
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {

@@ -131,6 +131,7 @@ steps:
       - name: supervise
         tags:
           - review
+          - supervise
         edit: false
         persona: dual-supervisor
         policy: review

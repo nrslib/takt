@@ -32,26 +32,36 @@ vi.mock('../infra/config/paths.js', () => ({
 }));
 
 import { GlobalConfigManager } from '../infra/config/global/globalConfigCore.js';
+import {
+  disableRoutingTelemetry,
+  enableRoutingTelemetry,
+  getRoutingTelemetryStatus,
+} from '../infra/config/global/globalConfigAccessors.js';
 
-const cliPathEnvKeys = ['TAKT_CODEX_CLI_PATH', 'TAKT_CLAUDE_CLI_PATH'] as const;
+const configEnvKeys = [
+  'TAKT_CODEX_CLI_PATH',
+  'TAKT_CLAUDE_CLI_PATH',
+  'TAKT_TELEMETRY_ROUTING_DECISIONS',
+] as const;
 
-type CliPathEnvKey = (typeof cliPathEnvKeys)[number];
+type ConfigEnvKey = (typeof configEnvKeys)[number];
 
-function snapshotCliPathEnv(): Record<CliPathEnvKey, string | undefined> {
+function snapshotConfigEnv(): Record<ConfigEnvKey, string | undefined> {
   return {
     TAKT_CODEX_CLI_PATH: process.env.TAKT_CODEX_CLI_PATH,
     TAKT_CLAUDE_CLI_PATH: process.env.TAKT_CLAUDE_CLI_PATH,
+    TAKT_TELEMETRY_ROUTING_DECISIONS: process.env.TAKT_TELEMETRY_ROUTING_DECISIONS,
   };
 }
 
-function clearCliPathEnv(): void {
-  for (const key of cliPathEnvKeys) {
+function clearConfigEnv(): void {
+  for (const key of configEnvKeys) {
     delete process.env[key];
   }
 }
 
-function restoreCliPathEnv(snapshot: Record<CliPathEnvKey, string | undefined>): void {
-  for (const key of cliPathEnvKeys) {
+function restoreConfigEnv(snapshot: Record<ConfigEnvKey, string | undefined>): void {
+  for (const key of configEnvKeys) {
     const value = snapshot[key];
     if (value === undefined) {
       delete process.env[key];
@@ -63,11 +73,11 @@ function restoreCliPathEnv(snapshot: Record<CliPathEnvKey, string | undefined>):
 
 describe('globalConfig', () => {
   let testDir: string;
-  let cliPathEnvSnapshot: Record<CliPathEnvKey, string | undefined>;
+  let configEnvSnapshot: Record<ConfigEnvKey, string | undefined>;
 
   beforeEach(() => {
-    cliPathEnvSnapshot = snapshotCliPathEnv();
-    clearCliPathEnv();
+    configEnvSnapshot = snapshotConfigEnv();
+    clearConfigEnv();
     testDir = mkdtempSync(join(tmpdir(), 'takt-test-global-config-'));
     mkdirSync(testDir, { recursive: true });
     testConfigPath = join(testDir, 'config.yaml');
@@ -79,7 +89,7 @@ describe('globalConfig', () => {
     if (testDir) {
       rmSync(testDir, { recursive: true, force: true });
     }
-    restoreCliPathEnv(cliPathEnvSnapshot);
+    restoreConfigEnv(configEnvSnapshot);
   });
 
   describe('workflow_overrides empty array round-trip', () => {
@@ -545,6 +555,229 @@ logging:
 
       const saved = readFileSync(testConfigPath, 'utf-8');
       expect(saved).toContain('workflow_command_gates:');
+    });
+
+    it('should default local routing decision recording to disabled when telemetry is omitted', () => {
+      writeFileSync(testConfigPath, 'language: en\n', 'utf-8');
+
+      const status = getRoutingTelemetryStatus();
+
+      expect(status.localRecordingEnabled).toBe(false);
+    });
+
+    it('should load local routing decision recording as disabled from telemetry config', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'language: en',
+          'telemetry:',
+          '  routing_decisions: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = GlobalConfigManager.getInstance().load();
+      const status = getRoutingTelemetryStatus();
+
+      expect(loaded.telemetry?.routingDecisions).toBe(false);
+      expect(status.localRecordingEnabled).toBe(false);
+    });
+
+    it('should enable local routing decision recording and preserve unrelated config', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'language: en',
+          'analytics:',
+          '  enabled: false',
+          'telemetry:',
+          '  routing_decisions: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const status = enableRoutingTelemetry();
+      const loaded = GlobalConfigManager.getInstance().load();
+      const saved = readFileSync(testConfigPath, 'utf-8');
+
+      expect(status.localRecordingEnabled).toBe(true);
+      expect(loaded.language).toBe('en');
+      expect(loaded.analytics?.enabled).toBe(false);
+      expect(loaded.telemetry?.routingDecisions).toBe(true);
+      expect(saved).toContain('telemetry:');
+      expect(saved).toContain('routing_decisions: true');
+    });
+
+    it('should disable local routing decision recording and preserve unrelated config', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'language: en',
+          'analytics:',
+          '  enabled: true',
+          'telemetry:',
+          '  routing_decisions: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const status = disableRoutingTelemetry();
+      const loaded = GlobalConfigManager.getInstance().load();
+      const saved = readFileSync(testConfigPath, 'utf-8');
+
+      expect(status.localRecordingEnabled).toBe(false);
+      expect(loaded.language).toBe('en');
+      expect(loaded.analytics?.enabled).toBe(true);
+      expect(loaded.telemetry?.routingDecisions).toBe(false);
+      expect(saved).toContain('telemetry:');
+      expect(saved).toContain('routing_decisions: false');
+    });
+
+    it.each([
+      {
+        actionName: 'enable',
+        action: enableRoutingTelemetry,
+        initialEnabled: false,
+        expectedSavedValue: 'routing_decisions: false',
+      },
+      {
+        actionName: 'disable',
+        action: disableRoutingTelemetry,
+        initialEnabled: true,
+        expectedSavedValue: 'routing_decisions: true',
+      },
+    ])('should keep cached routing decision recording unchanged when $actionName save fails', ({
+      action,
+      initialEnabled,
+      expectedSavedValue,
+    }) => {
+      const originalConfigPath = testConfigPath;
+      writeFileSync(
+        originalConfigPath,
+        [
+          'language: en',
+          'telemetry:',
+          `  routing_decisions: ${initialEnabled}`,
+        ].join('\n'),
+        'utf-8',
+      );
+      expect(getRoutingTelemetryStatus().localRecordingEnabled).toBe(initialEnabled);
+
+      testConfigPath = testDir;
+      try {
+        expect(() => action()).toThrow();
+      } finally {
+        testConfigPath = originalConfigPath;
+      }
+
+      expect(getRoutingTelemetryStatus().localRecordingEnabled).toBe(initialEnabled);
+      expect(readFileSync(originalConfigPath, 'utf-8')).toContain(expectedSavedValue);
+    });
+
+    it('should keep local routing decision recording independent from analytics collection', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'language: en',
+          'analytics:',
+          '  enabled: false',
+          'telemetry:',
+          '  routing_decisions: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const status = getRoutingTelemetryStatus();
+      const loaded = GlobalConfigManager.getInstance().load();
+
+      expect(status).toEqual({ localRecordingEnabled: true });
+      expect(loaded.analytics?.enabled).toBe(false);
+    });
+
+    it('should resolve and update project-local routing decision recording before global config', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'language: en',
+          'telemetry:',
+          '  routing_decisions: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      const projectDir = join(testDir, 'project');
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      const projectConfigPath = join(projectDir, '.takt', 'config.yaml');
+      writeFileSync(
+        projectConfigPath,
+        [
+          'telemetry:',
+          '  routing_decisions: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const disabledStatus = getRoutingTelemetryStatus(projectDir);
+      const enabledStatus = enableRoutingTelemetry(projectDir);
+      const projectConfig = readFileSync(projectConfigPath, 'utf-8');
+      const globalConfig = readFileSync(testConfigPath, 'utf-8');
+
+      expect(disabledStatus.localRecordingEnabled).toBe(false);
+      expect(enabledStatus.localRecordingEnabled).toBe(true);
+      expect(projectConfig).toContain('routing_decisions: true');
+      expect(globalConfig).toContain('routing_decisions: true');
+    });
+
+    it('should reject changing routing decision recording when env override is set', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'language: en',
+          'telemetry:',
+          '  routing_decisions: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      process.env.TAKT_TELEMETRY_ROUTING_DECISIONS = 'false';
+      GlobalConfigManager.resetInstance();
+
+      const status = getRoutingTelemetryStatus();
+
+      expect(status.localRecordingEnabled).toBe(false);
+      expect(() => enableRoutingTelemetry()).toThrow(/TAKT_TELEMETRY_ROUTING_DECISIONS is set/);
+      expect(() => disableRoutingTelemetry()).toThrow(/TAKT_TELEMETRY_ROUTING_DECISIONS is set/);
+      expect(readFileSync(testConfigPath, 'utf-8')).toContain('routing_decisions: true');
+    });
+
+    it('should reject changing project routing decision recording when env override is set', () => {
+      writeFileSync(
+        testConfigPath,
+        [
+          'language: en',
+          'telemetry:',
+          '  routing_decisions: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      const projectDir = join(testDir, 'project-env');
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      const projectConfigPath = join(projectDir, '.takt', 'config.yaml');
+      writeFileSync(
+        projectConfigPath,
+        [
+          'telemetry:',
+          '  routing_decisions: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      process.env.TAKT_TELEMETRY_ROUTING_DECISIONS = 'false';
+      GlobalConfigManager.resetInstance();
+
+      const status = getRoutingTelemetryStatus(projectDir);
+
+      expect(status.localRecordingEnabled).toBe(false);
+      expect(() => enableRoutingTelemetry(projectDir)).toThrow(/TAKT_TELEMETRY_ROUTING_DECISIONS is set/);
+      expect(() => disableRoutingTelemetry(projectDir)).toThrow(/TAKT_TELEMETRY_ROUTING_DECISIONS is set/);
+      expect(readFileSync(projectConfigPath, 'utf-8')).toContain('routing_decisions: true');
     });
 
     it('should load workflow_arpeggio policy block', () => {

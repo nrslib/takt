@@ -65,11 +65,19 @@ function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocal
   const instructionLabel = lang === 'ja' ? 'インストラクション' : 'Instruction';
   const toolsLabel = lang === 'ja' ? 'ツール' : 'Tools';
   const editLabel = lang === 'ja' ? '編集' : 'Edit';
+  const providerLabel = lang === 'ja' ? 'プロバイダー' : 'Provider';
+  const modelLabel = lang === 'ja' ? 'モデル' : 'Model';
 
   const lines = [
     `### ${label}. ${p.name} (${p.personaDisplayName})`,
     ...formatPreviewMetadata(p, lang),
   ];
+  if (p.provider) {
+    lines.push(`**${providerLabel}:** ${p.provider}`);
+  }
+  if (p.model) {
+    lines.push(`**${modelLabel}:** ${p.model}`);
+  }
   if (p.personaContent) {
     lines.push(`**${personaLabel}:**`, p.personaContent);
   }

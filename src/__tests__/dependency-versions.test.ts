@@ -68,12 +68,18 @@ function compareNodeVersions(left: NodeVersion, right: NodeVersion): number {
 }
 
 function getMinimumNodeVersion(range: string): NodeVersion {
-  const normalized = range.trim().replace(/^>=\s+/, '>=');
-  const match = normalized.match(/^>=(\d+(?:\.\d+){0,2})$/);
-  if (!match?.[1]) {
-    throw new Error(`Root Node engine must be a lower-bound range: ${range}`);
-  }
-  return parseNodeVersion(match[1]);
+  const alternatives = range.split('||').map((alternative) => {
+    const normalized = alternative.trim().replace(/([<>=]=?|\^)\s+/g, '$1');
+    const match = normalized.match(/^(?:>=|\^)(\d+(?:\.\d+){0,2})(?:\s+<\d+(?:\.\d+){0,2})?$/);
+    if (!match?.[1]) {
+      throw new Error(`Root Node engine must be a lower-bound range: ${range}`);
+    }
+    return parseNodeVersion(match[1]);
+  });
+
+  return alternatives.reduce((minimum, alternative) => (
+    compareNodeVersions(alternative, minimum) < 0 ? alternative : minimum
+  ));
 }
 
 function satisfiesNodeRange(version: NodeVersion, range: string): boolean {
@@ -151,7 +157,7 @@ describe('dependency versions', () => {
       throw new Error('package.json engines.node is required');
     }
 
-    expect(rootNodeRange).toBe('>=20.6.0');
+    expect(rootNodeRange).toBe('^20.20.0 || >=22.22.0');
 
     const rootMinimum = getMinimumNodeVersion(rootNodeRange);
     const incompatibleDependencies = Object.keys(dependencies).sort().flatMap((dependencyName) => {

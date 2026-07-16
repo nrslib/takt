@@ -91,6 +91,8 @@ test('should return NotFound error when user does not exist', async () => {
 | Reproducibility | Same result every time | Depends on time or randomness |
 | Clarity | Failure cause is obvious | Failure cause is unclear |
 | Focus | One test, one concept | Multiple concerns mixed |
+| UI element identification | Identify targets by user-observable contracts such as role plus exact accessible name | Broad partial matches, first match, or display position used to identify the target |
+| Collision cases | Verify targets remain distinguishable even with valid data sharing the same display string | Deliberately making all fixture display values unique, hiding the possibility of collisions |
 
 ## Testing Side Effects and State Transitions
 
@@ -233,6 +235,7 @@ Verify data flow coupling that unit tests alone cannot cover.
 | Data flow crossing 3+ modules | Integration test required |
 | New status/state merging into an existing workflow | Integration test for the full transition flow required |
 | New option propagating through a call chain to the endpoint | End-to-end chain coupling test required |
+| Handler, middleware, or translator selection and precedence is decided by runtime configuration | Integration test with production-like configuration required. A limited (slice) configuration only proves the behavior of what it includes |
 | All module-level unit tests pass | Unit tests alone are sufficient (when none of the above apply) |
 
 ## Unit Test Criteria

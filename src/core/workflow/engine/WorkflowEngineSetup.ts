@@ -20,12 +20,13 @@ import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
+import { toConcreteProvider } from '../provider-resolution.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import { RawFindingsStructuredOutput } from '../findings/manager-runner.js';
-import { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
+import { ledgerHasOpenFindings, ledgerHasWaivedFindings, renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } from '../findings/context.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 
 const log = createLogger('workflow-engine');
@@ -149,6 +150,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ledgerCopyPath: params.findingLedgerStore.createRunCopy(),
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+      hasOpenFindings: ledgerHasOpenFindings(ledger),
+      hasWaivedFindings: ledgerHasWaivedFindings(ledger),
       ...(includeRawFindingsSchema
         ? {
             rawFindingsJsonSchema: RawFindingsStructuredOutput.schema,
@@ -194,6 +197,24 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     ...phaseRelay,
   });
 
+  const workflowCallRunner = new WorkflowCallRunner({
+    getConfig: () => params.config,
+    getMaxSteps: params.getMaxSteps,
+    updateMaxSteps: params.updateMaxSteps,
+    state: params.state as never,
+    projectCwd: params.projectCwd,
+    getCwd: params.getCwd,
+    task: params.task,
+    getOptions: () => params.options,
+    sharedRuntime: params.sharedRuntime,
+    resumeStackPrefix: params.resumeStackPrefix ?? [],
+    runPaths: params.runPaths,
+    setActiveResumePoint: params.setActiveResumePoint as never,
+    emit: params.emitEvent,
+    resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
+    createEngine: params.createEngine,
+  });
+
   const parallelRunner = new ParallelRunner({
     optionsBuilder,
     stepExecutor,
@@ -211,7 +232,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.config.findingContract,
+    workflowProvider: params.config.provider,
+    workflowModel: params.config.model,
     findingLedgerStore: params.findingLedgerStore,
+    getWorkflowCallRunner: () => workflowCallRunner,
+    updateMaxSteps: params.updateMaxSteps,
+    setActiveResumePoint: params.setActiveResumePoint,
     getRunId: () => params.runPaths.slug,
     runQualityGates,
     ...phaseRelay,
@@ -247,6 +273,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack,
     onPhaseStart: phaseRelay.onPhaseStart,
     onPhaseComplete: phaseRelay.onPhaseComplete,
+    emitEvent: params.emitEvent,
   });
 
   const systemStepExecutor = new SystemStepExecutor({
@@ -258,7 +285,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       const providerInfo = optionsBuilder.resolveStepProviderModel(step);
       return {
         cwd: params.getCwd(),
-          provider: step.provider ?? params.options.provider,
+          provider: toConcreteProvider(step.provider) ?? toConcreteProvider(params.options.provider),
           resolvedProvider: providerInfo.provider,
           resolvedModel: providerInfo.model,
           childProcessEnv: params.options.childProcessEnv,
@@ -280,7 +307,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
     onStepStart: (step, iteration, instruction, providerInfo) => {
-      params.emitEvent('step:start', step, iteration, instruction, providerInfo);
+      params.emitEvent('step:start', step, iteration, instruction, providerInfo, params.config.name);
     },
     onStepComplete: (step, response, instruction) => {
       params.emitEvent('step:complete', step, response, instruction);
@@ -291,24 +318,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       }
     },
     resetCycleDetector: params.resetCycleDetector,
-  });
-
-  const workflowCallRunner = new WorkflowCallRunner({
-    getConfig: () => params.config,
-    getMaxSteps: params.getMaxSteps,
-    updateMaxSteps: params.updateMaxSteps,
-    state: params.state as never,
-    projectCwd: params.projectCwd,
-    getCwd: params.getCwd,
-    task: params.task,
-    getOptions: () => params.options,
-    sharedRuntime: params.sharedRuntime,
-    resumeStackPrefix: params.resumeStackPrefix ?? [],
-    runPaths: params.runPaths,
-    setActiveResumePoint: params.setActiveResumePoint as never,
-    emit: params.emitEvent,
-    resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
-    createEngine: params.createEngine,
   });
 
   return {

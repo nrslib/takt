@@ -97,8 +97,8 @@ function expectAutoImprovementLoopRouteContext(config: NonNullable<ReturnType<ty
     }),
   ]));
   expect(routeContext?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == true', next: 'plan_from_existing_pr' }),
-    expect.objectContaining({ condition: 'context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true', next: 'plan_from_issue' }),
+    expect.objectContaining({ condition: 'when(context.route_context.selected_pr.exists == true)', next: 'plan_from_existing_pr' }),
+    expect.objectContaining({ condition: 'when(context.route_context.selected_pr.exists == false && context.route_context.selected_issue.exists == true)', next: 'plan_from_issue' }),
   ]));
 }
 
@@ -130,10 +130,10 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
   expect(String(planFromExistingPr?.instruction)).not.toContain('pr_comment_markdown');
   expect(String(planFromExistingPr?.instruction)).not.toContain('- noop');
   expect(planFromExistingPr?.rules).toEqual([
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
-    expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
-    expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "enqueue_from_pr")', next: 'enqueue_from_pr' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "prepare_merge")', next: 'prepare_merge' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "reject_pr")', next: 'reject_pr' }),
+    expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
   ]);
   expect(planFromExistingPrStructuredOutput?.schemaRef).toBe('pr-followup-task');
   expect(planFromExistingPrStructuredOutput?.schema).toEqual(expect.objectContaining({
@@ -193,8 +193,8 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
     }),
   ]);
   expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
-    expect.objectContaining({ condition: 'structured.plan_from_issue.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "enqueue_new_task")', next: 'enqueue_from_issue' }),
+    expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
   ]));
   expect((planFromIssueStructuredOutput?.schema.properties?.action as { enum?: string[] } | undefined)?.enum).toEqual([
     'enqueue_new_task',
@@ -239,8 +239,8 @@ function expectAutoImprovementLoopDownstreamContract(config: NonNullable<ReturnT
     ]),
   }));
   expect(planFreshImprovement?.rules).toEqual(expect.arrayContaining([
-    expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' }),
-    expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
+    expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' }),
+    expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
   ]));
   expect((planFreshImprovementStructuredOutput?.schema.properties?.action as { enum?: string[] } | undefined)?.enum).toEqual([
     'enqueue_new_task',
@@ -488,14 +488,14 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     expect(String(planFreshImprovement?.instruction)).toContain('{context:route_context.tracked_issues}');
     expect(String(planFreshImprovement?.instruction)).toContain('{context:route_context.tracked_issues.length}');
     expect(planFromIssue?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "enqueue_new_task"', next: 'enqueue_from_issue' }),
-      expect.objectContaining({ condition: 'structured.plan_from_issue.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "enqueue_new_task")', next: 'enqueue_from_issue' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_issue.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
     ]));
     expect(planFreshImprovement?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "enqueue_new_task"', next: 'enqueue_fresh' }),
-      expect.objectContaining({ condition: 'structured.plan_fresh_improvement.action == "wait_before_next_scan"', next: 'wait_before_next_scan' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+      expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "enqueue_new_task")', next: 'enqueue_fresh' }),
+      expect.objectContaining({ condition: 'when(structured.plan_fresh_improvement.action == "wait_before_next_scan")', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
     ]));
     expect(enqueueFromIssue?.effects).toEqual([
       expect.objectContaining({
@@ -507,14 +507,14 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       }),
     ]);
     expect(planFromExistingPr?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "enqueue_from_pr"', next: 'enqueue_from_pr' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "prepare_merge"', next: 'prepare_merge' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "reject_pr"', next: 'reject_pr' }),
-      expect.objectContaining({ condition: 'true', next: 'ABORT' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "enqueue_from_pr")', next: 'enqueue_from_pr' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "prepare_merge")', next: 'prepare_merge' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "reject_pr")', next: 'reject_pr' }),
+      expect.objectContaining({ condition: 'when(true)', next: 'ABORT' }),
     ]));
     expect(planFromExistingPr?.rules).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "comment_on_pr"', next: 'comment_on_existing_pr' }),
-      expect.objectContaining({ condition: 'structured.plan_from_existing_pr.action == "noop"', next: 'wait_before_next_scan' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "comment_on_pr")', next: 'comment_on_existing_pr' }),
+      expect.objectContaining({ condition: 'when(structured.plan_from_existing_pr.action == "noop")', next: 'wait_before_next_scan' }),
     ]));
     expect(rejectPr?.effects).toEqual([
       expect.objectContaining({
@@ -524,12 +524,12 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     ]);
     expectAutoImprovementLoopDownstreamContract(config!);
     expect(prepareMerge?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.success == true', next: 'merge_pr' }),
-      expect.objectContaining({ condition: 'effect.prepare_merge.sync_with_root.conflicted == true', next: 'resolve_conflicts' }),
+      expect.objectContaining({ condition: 'when(effect.prepare_merge.sync_with_root.success == true)', next: 'merge_pr' }),
+      expect.objectContaining({ condition: 'when(effect.prepare_merge.sync_with_root.conflicted == true)', next: 'resolve_conflicts' }),
     ]));
     expect(resolveConflicts?.rules).toEqual(expect.arrayContaining([
-      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.success == true', next: 'merge_pr' }),
-      expect.objectContaining({ condition: 'effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true', next: 'enqueue_conflict_resolution_task' }),
+      expect.objectContaining({ condition: 'when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true)', next: 'merge_pr' }),
+      expect.objectContaining({ condition: 'when(effect.resolve_conflicts.resolve_conflicts_with_ai.failed == true)', next: 'enqueue_conflict_resolution_task' }),
     ]));
     expect(waitBeforeNextScan?.systemInputs).toEqual([
       expect.objectContaining({
@@ -540,7 +540,7 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
     ]);
     expect(waitBeforeNextScan?.rules).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        condition: 'exists(context.wait_before_next_scan.queue.items, item.kind == "running")',
+        condition: 'when(exists(context.wait_before_next_scan.queue.items, item.kind == "running"))',
         next: 'wait_before_next_scan',
       }),
     ]));
@@ -1150,12 +1150,16 @@ describe('Workflow Loader IT: parallel step loading', () => {
 
     const reviewers2 = config!.steps.find((s) => s.name === 'reviewers_2');
     expect(reviewers2).toBeDefined();
-    expect(reviewers2!.parallel!.length).toBe(4);
+    expect(reviewers2!.parallel!.length).toBe(3);
     const stage2Names = reviewers2!.parallel!.map((s) => s.name);
     expect(stage2Names).toContain('security-review');
     expect(stage2Names).toContain('qa-review');
-    expect(stage2Names).toContain('pure-review');
     expect(stage2Names).toContain('coding-review');
+
+    const finalGate = config!.steps.find((s) => s.name === 'final-gate');
+    expect(finalGate).toBeDefined();
+    expect(finalGate!.kind).toBe('workflow_call');
+    expect(finalGate!.call).toBe('merge-readiness-dual-final-gate');
   });
 });
 
@@ -1343,6 +1347,48 @@ steps:
     ]);
   });
 
+  it('should load a callable command quality gate with timeout_ms from YAML', () => {
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'workflow_command_gates:\n  custom_scripts: true\n');
+
+    writeFileSync(join(workflowsDir, 'callable-command-gate.yaml'), `
+name: callable-command-gate
+description: Callable workflow with a command quality gate timeout
+subworkflow:
+  callable: true
+  visibility: internal
+max_steps: 5
+initial_step: implement
+
+steps:
+  - name: implement
+    persona: coder
+    edit: true
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        timeout_ms: 900000
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadWorkflowConfig('callable-command-gate', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.steps.find((step) => step.name === 'implement')?.qualityGates).toEqual([
+      {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        timeoutMs: 900000,
+      },
+    ]);
+  });
+
   it('rejects workflow command quality gates by default', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
@@ -1495,6 +1541,7 @@ steps:
           - type: command
             name: arch-quality-check
             command: "./.takt/quality-gates/check.sh"
+            timeout_ms: 300000
         rules:
           - condition: approved
     rules:
@@ -1512,6 +1559,7 @@ steps:
         type: 'command',
         name: 'arch-quality-check',
         command: './.takt/quality-gates/check.sh',
+        timeoutMs: 300000,
       },
     ]);
   });

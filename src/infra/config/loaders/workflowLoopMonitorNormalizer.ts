@@ -1,4 +1,5 @@
 import type { LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
+import { splitTagFindingsCondition } from './workflowRuleNormalizer.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
 import { normalizeProviderReference } from './workflowStepNormalizer.js';
@@ -25,6 +26,9 @@ function normalizeLoopMonitorJudge(
     workflowDir,
     context,
   );
+  if (normalizedProvider.provider === 'auto') {
+    throw new Error('Configuration error: loop monitor judge provider does not support "auto"');
+  }
   return {
     sessionKey: raw.session_key,
     persona: personaSpec,
@@ -42,7 +46,16 @@ function normalizeLoopMonitorJudge(
           context,
         )
       : undefined,
-    rules: raw.rules.map((rule) => ({ condition: rule.condition, next: rule.next })),
+    rules: raw.rules.map((rule) => {
+      // loop monitor judge のルールは normalizeRule を通らず、ガード評価の
+      // 経路もない。タグ && findings の複合はここでは未対応として拒否する。
+      if (splitTagFindingsCondition(rule.condition) !== undefined) {
+        throw new Error(
+          `Configuration error: loop_monitor judge rule "${rule.condition}" combines a status condition with findings guards, which is not supported here`,
+        );
+      }
+      return { condition: rule.condition, next: rule.next };
+    }),
   };
 }
 

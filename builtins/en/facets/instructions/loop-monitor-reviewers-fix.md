@@ -12,4 +12,10 @@ whether this loop is healthy (converging) or unproductive (diverging or oscillat
 - When the ledger exists but is incomplete, follow the ledger for mapped findings and treat unmapped raw findings as potential new entries awaiting findings-manager reconciliation.
 - When the ledger is absent, unreadable, or unparseable, use the latest review reports in the Report Directory as primary evidence.
 - Are fixes actually being applied to the code?
+  - If fixes have landed but the same findings keep coming back (the findings
+    no longer match the current code), the deadlock is in the findings, not
+    the code. A dispute route remains (dispute → manager adjudication →
+    waive), so judge this as breakable by replanning and route back to plan.
 - Is the number of new / reopened findings decreasing overall?
+
+Choose ABORT only when neither fixing, replanning, nor disputing can break the deadlock.

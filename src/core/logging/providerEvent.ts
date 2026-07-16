@@ -1,4 +1,5 @@
 import type { ProviderType, StreamEvent } from '../../shared/types/provider.js';
+import type { ProviderTypeOrAuto } from '../models/config-types.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import { USAGE_MISSING_REASONS, type UsageMissingReason } from './contracts.js';
 
@@ -6,7 +7,7 @@ export type StepType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader' | 'wor
 
 export interface ProviderEventLogRecord {
   timestamp: string;
-  provider: ProviderType;
+  provider: ProviderTypeOrAuto;
   event_type: string;
   run_id: string;
   step: string;
@@ -105,7 +106,7 @@ function assertUsageMissingReason(value: string): UsageMissingReason {
 
 export function normalizeProviderEvent(
   event: StreamEvent,
-  provider: ProviderType,
+  provider: ProviderTypeOrAuto,
   step: string,
   runId: string
 ): ProviderEventLogRecord {

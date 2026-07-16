@@ -973,6 +973,35 @@ describe('executePipeline', () => {
       }));
     });
 
+    it('should pass auto strategy override when provider is resolved from config', async () => {
+      mockConfirmAndCreateWorktree.mockResolvedValueOnce({
+        execCwd: '/tmp/test-worktree',
+        isWorktree: true,
+        branch: 'fix/the-bug',
+        baseBranch: 'main',
+        taskSlug: 'fix-the-bug',
+      });
+      mockExecuteTask.mockResolvedValueOnce(true);
+
+      const exitCode = await executePipeline({
+        task: 'Fix the bug',
+        workflow: 'default',
+        autoPr: false,
+        cwd: '/tmp/test',
+        createWorktree: true,
+        autoStrategy: 'cost',
+      });
+
+      expect(exitCode).toBe(0);
+      expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+        task: 'Fix the bug',
+        cwd: '/tmp/test-worktree',
+        workflowIdentifier: 'default',
+        projectCwd: '/tmp/test',
+        agentOverrides: { autoStrategy: 'cost' },
+      }));
+    });
+
     it('should return exit code 4 when worktree creation fails', async () => {
       mockConfirmAndCreateWorktree.mockRejectedValueOnce(new Error('Failed to create worktree'));
 

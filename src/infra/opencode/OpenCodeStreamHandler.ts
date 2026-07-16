@@ -10,18 +10,21 @@ import type { StreamCallback } from '../../shared/types/provider.js';
 /** Subset of OpenCode Part types relevant for stream handling */
 export interface OpenCodeTextPart {
   id: string;
+  sessionID: string;
   type: 'text';
   text: string;
 }
 
 export interface OpenCodeReasoningPart {
   id: string;
+  sessionID: string;
   type: 'reasoning';
   text: string;
 }
 
 export interface OpenCodeToolPart {
   id: string;
+  sessionID: string;
   type: 'tool';
   callID: string;
   tool: string;
@@ -34,7 +37,7 @@ export type OpenCodeToolState =
   | { status: 'completed'; input: Record<string, unknown>; output: string; title: string }
   | { status: 'error'; input: Record<string, unknown>; error: string };
 
-export type OpenCodePart = OpenCodeTextPart | OpenCodeReasoningPart | OpenCodeToolPart | { id: string; type: string };
+export type OpenCodePart = OpenCodeTextPart | OpenCodeReasoningPart | OpenCodeToolPart | { id: string; type: string; sessionID?: string };
 
 /** OpenCode SSE event types relevant for stream handling */
 export interface OpenCodeMessagePartUpdatedEvent {

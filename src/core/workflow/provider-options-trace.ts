@@ -20,6 +20,9 @@ export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTra
 export type ProviderResolutionSource =
   | 'env'
   | 'promotion'
+  | 'auto.rules'
+  | 'auto.ai'
+  | 'auto.default'
   | 'cli'
   | 'persona_providers'
   | 'provider_routing.personas'

@@ -12,6 +12,15 @@ const {
   mockCallCopilotCustom: vi.fn(),
 }));
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 const {
   mockResolveCopilotGithubToken,
   mockResolveCopilotCliPath,
@@ -32,6 +41,14 @@ vi.mock('../infra/config/index.js', () => ({
   resolveCopilotCliPath: mockResolveCopilotCliPath,
   loadProjectConfig: mockLoadProjectConfig,
 }));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../shared/utils/index.js')>();
+  return {
+    ...actual,
+    createLogger: vi.fn(() => mockLogger),
+  };
+});
 
 import { CopilotProvider } from '../infra/providers/copilot.js';
 import { ProviderRegistry } from '../infra/providers/index.js';
@@ -175,6 +192,28 @@ describe('CopilotProvider', () => {
 
     const opts = mockCallCopilot.mock.calls[0]?.[2];
     expect(opts.copilotCliPath).toBeUndefined();
+  });
+
+  it('should ignore unsupported image attachments and log only when non-empty', async () => {
+    mockCallCopilot.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new CopilotProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      imageAttachments: [{ placeholder: '[Image #1]', path: '/tmp/image-1.png' }],
+    });
+
+    const options = mockCallCopilot.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(options.imageAttachments).toBeUndefined();
+    expect(mockLogger.info).toHaveBeenCalledWith('Copilot provider does not support imageAttachments; ignoring');
+
+    mockLogger.info.mockClear();
+    await agent.call('implement', { cwd: '/tmp/work', imageAttachments: [] });
+    await agent.call('implement', { cwd: '/tmp/work' });
+
+    expect(mockLogger.info).not.toHaveBeenCalledWith('Copilot provider does not support imageAttachments; ignoring');
   });
 });
 

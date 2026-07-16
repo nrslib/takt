@@ -1,6 +1,7 @@
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
+import type { ProviderTypeOrAuto } from '../models/config-types.js';
 import { PROVIDER_EVENTS_LOG_FILE_SUFFIX } from './contracts.js';
 import { normalizeProviderEvent } from './providerEvent.js';
 
@@ -8,7 +9,7 @@ export interface ProviderEventLoggerConfig {
   logsDir: string;
   sessionId: string;
   runId: string;
-  provider: ProviderType;
+  provider: ProviderTypeOrAuto;
   step: string;
   enabled: boolean;
 }
@@ -36,7 +37,7 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
 
   const filepath = join(config.logsDir, `${config.sessionId}${PROVIDER_EVENTS_LOG_FILE_SUFFIX}`);
   let step = config.step;
-  let provider = config.provider;
+  let provider: ProviderTypeOrAuto = config.provider;
   let hasReportedWriteFailure = false;
 
   const write = (event: StreamEvent): void => {

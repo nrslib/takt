@@ -23,6 +23,7 @@ const {
   mockFetchPrReviewComments,
   mockListOpenPrs,
   mockTaskRunnerListAllTaskItems,
+  mockResolveNonWorkflowProviderModel,
 } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
   mockGetCurrentBranch: vi.fn(),
@@ -40,6 +41,7 @@ const {
   mockFetchPrReviewComments: vi.fn(),
   mockListOpenPrs: vi.fn(),
   mockTaskRunnerListAllTaskItems: vi.fn(),
+  mockResolveNonWorkflowProviderModel: vi.fn(() => ({ provider: 'codex', model: 'gpt-5.4' })),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -59,6 +61,7 @@ vi.mock('../infra/config/project/projectConfig.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   getLanguage: vi.fn(() => 'en'),
   resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
+  resolveNonWorkflowProviderModel: mockResolveNonWorkflowProviderModel,
 }));
 
 vi.mock('../shared/prompts/index.js', () => ({
@@ -80,14 +83,6 @@ vi.mock('../infra/providers/index.js', () => ({
   })),
 }));
 
-vi.mock('../core/config/provider-resolution.js', () => ({
-  resolveAssistantProviderModelFromConfig: vi.fn(() => ({ provider: 'codex', model: 'gpt-5.4' })),
-}));
-
-vi.mock('../features/interactive/assistantConfig.js', () => ({
-  resolveAssistantConfigLayers: vi.fn(() => ({ local: {}, global: {} })),
-}));
-
 vi.mock('../infra/git/index.js', () => ({
   getGitProvider: vi.fn(() => ({
     checkCliStatus: vi.fn(() => ({ available: true })),
@@ -98,8 +93,11 @@ vi.mock('../infra/git/index.js', () => ({
   })),
 }));
 
-vi.mock('../features/tasks/add/index.js', () => ({
-  saveTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
+vi.mock('../infra/task/enqueuedTaskFile.js', () => ({
+  saveEnqueuedTaskFile: (...args: unknown[]) => mockSaveTaskFile(...args),
+}));
+
+vi.mock('../infra/task/issueTask.js', () => ({
   createIssueFromTask: (...args: unknown[]) => mockCreateIssueFromTask(...args),
 }));
 
@@ -471,9 +469,10 @@ describe('system workflow PR sync integration', () => {
     expect(mockCloneAndIsolate).toHaveBeenCalledTimes(1);
     expect(mockCloneAndIsolate).toHaveBeenCalledWith(projectDir, worktreePath);
     expect(mockRemoveClone).toHaveBeenCalledTimes(1);
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith(projectDir);
     expect(mockAgentCall).toHaveBeenCalledWith(
       'message:Resolve conflicts',
-      expect.objectContaining({ cwd: worktreePath }),
+      expect.objectContaining({ cwd: worktreePath, model: 'gpt-5.4' }),
     );
     expect(mockMergePr).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).toHaveBeenCalledWith(
@@ -570,8 +569,8 @@ describe('system workflow PR sync integration', () => {
         },
       ],
     }, {
-      workflowCallResolver: ({ identifier }: { identifier: string }) => {
-        return identifier === 'prepare-merge-child' ? childConfig : null;
+      workflowCallResolver: ({ step }) => {
+        return step.call === 'prepare-merge-child' ? childConfig : null;
       },
     });
 
@@ -605,7 +604,7 @@ describe('system workflow PR sync integration', () => {
     expect(prepareMergeResult.nextStep).toBe('explode');
     expect(mockRemoveClone).not.toHaveBeenCalled();
 
-    await expect(engine.runSingleIteration()).rejects.toThrow('System effect requires positive integer');
+    await expect(engine.runSingleIteration()).rejects.toThrow('System effect requires positive safe integer');
     expect(mockRemoveClone).toHaveBeenCalledTimes(1);
     expect(mockRemoveClone).toHaveBeenCalledWith(worktreePath);
   });

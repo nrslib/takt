@@ -194,6 +194,24 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
 - Parallel sub-steps do not support `promotion`
 
+### Finding Contract manager provider/model
+
+`finding_contract.manager` can set a dedicated provider and model for the synthetic Finding Manager step:
+
+```yaml
+finding_contract:
+  ledger_path: .takt/findings/review.json
+  raw_findings_path: .takt/findings/review/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: codex
+    model: gpt-5.5
+```
+
+When set, these values are applied as step-level `provider` / `model` for the Finding Manager. They take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, workflow defaults, and resolved input provider/model. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
+
 ### Finding Contract parallel retry failure routing
 
 When a workflow defines `finding_contract`, each parallel parent must declare a deterministic rule for a Finding Manager output that stays semantically invalid after retry. This rule prevents invalid manager output from aborting the workflow or updating the ledger.
@@ -338,6 +356,7 @@ Promotion is not supported on parallel sub-steps.
 | `persona` | - | Persona key (references section map) or file path |
 | `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
 | `session_key` | - | Explicit session key for normal agent steps and parallel sub-steps. The resolved provider is appended to the runtime key; empty and whitespace-only values are invalid |
+| `session` | `continue` | Session handling for normal agent steps and parallel sub-steps. `continue` resumes the saved persona session, `refresh` starts without resuming it, and `compact` resumes it then asks the provider to compact it before Phase 1. `compact` runs only before Phase 1, not before report or status phases. Providers without a compaction capability continue unchanged, and compaction failures are logged as warnings before continuing with the uncompressed session |
 | `requires_user_input` | `false` | Marks a normal agent step as capable of waiting for user input. System steps, workflow-call steps, and parallel parent steps cannot set it. A step with `requires_user_input: true` requires interactive mode and a user input handler before the agent runs; otherwise the workflow aborts without executing that agent. The actual wait is triggered only by a matching rule with `requires_user_input: true` |
 | `tags` | - | Ordered provider routing tags matched against `provider_routing.tags` in config |
 | `policy` | - | Policy key or array of keys |

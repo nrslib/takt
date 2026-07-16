@@ -1,10 +1,16 @@
-import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule } from '../../models/types.js';
+import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, WorkflowStep } from '../../models/types.js';
+import {
+  SESSION_AGENT_STEP_REQUIRED_MESSAGE,
+  SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE,
+} from '../../models/workflow-session-constraints.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
-import { validateProviderModelCompatibility } from '../provider-model-compatibility.js';
+import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
-import { isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
+import { hasUnquotedFindingsReference, isFindingsCondition, isInvalidManagerOutputRule } from '../evaluation/rule-utils.js';
+import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
+import { buildFindingManagerStep } from '../findings/manager-step.js';
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -13,7 +19,10 @@ function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   return isFindingsCondition(rule.condition)
     || ('aggregateGuardCondition' in rule
       && rule.aggregateGuardCondition !== undefined
-      && isFindingsCondition(rule.aggregateGuardCondition));
+      && hasUnquotedFindingsReference(rule.aggregateGuardCondition))
+    || ('guardCondition' in rule
+      && rule.guardCondition !== undefined
+      && hasUnquotedFindingsReference(rule.guardCondition));
 }
 
 function validateFindingsRuleContract(
@@ -41,6 +50,34 @@ function validateFindingContractParallelStructuredOutput(config: WorkflowConfig)
   }
 }
 
+function validateFindingContractManagerProviderModel(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  const findingContract = config.findingContract;
+  if (!findingContract) {
+    return;
+  }
+  const managerStep = buildFindingManagerStep({
+    contract: findingContract,
+    workflowProvider: config.provider,
+    workflowModel: config.model,
+  });
+  const providerInfo = resolveStepProviderModel({
+    step: managerStep,
+    provider: options.provider,
+    providerSource: options.providerSource,
+    model: options.model,
+    modelSource: options.modelSource,
+    providerRouting: options.providerRouting,
+    personaProviders: options.personaProviders,
+  });
+  validateProviderModelRequirements(
+    providerInfo.provider,
+    providerInfo.model,
+    {
+      modelFieldName: 'Configuration error: finding_contract.manager.model',
+    },
+  );
+}
+
 function validateAgentStepProviderModel(
   step: WorkflowConfig['steps'][number],
   options: WorkflowEngineOptions,
@@ -59,7 +96,7 @@ function validateAgentStepProviderModel(
     providerRouting: options.providerRouting,
     personaProviders: options.personaProviders,
   });
-  validateProviderModelCompatibility(
+  validateProviderModelRequirements(
     providerInfo.provider,
     providerInfo.model,
     {
@@ -67,6 +104,27 @@ function validateAgentStepProviderModel(
     },
   );
   validatePromotionProviderModels(agentStep, providerInfo, source);
+}
+
+function validateSessionEntrypoint(step: WorkflowStep, source: string): void {
+  const candidate = step as {
+    session?: unknown;
+    parallel?: unknown[];
+    arpeggio?: unknown;
+    teamLeader?: unknown;
+  };
+
+  if (candidate.session === undefined) {
+    return;
+  }
+
+  if (getWorkflowStepKind(step) !== 'agent') {
+    throw new Error(`${source}: ${SESSION_AGENT_STEP_REQUIRED_MESSAGE}`);
+  }
+
+  if (candidate.parallel !== undefined || candidate.arpeggio !== undefined || candidate.teamLeader !== undefined) {
+    throw new Error(`${source}: ${SESSION_NORMAL_AGENT_STEP_REQUIRED_MESSAGE}`);
+  }
 }
 
 function validatePromotionProviderModels(
@@ -81,7 +139,7 @@ function validatePromotionProviderModels(
       : promotion.providerSpecified
         ? undefined
         : baseProviderInfo.model;
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       provider,
       model,
       {
@@ -114,13 +172,48 @@ function validateFindingContractInvalidManagerOutputRules(config: WorkflowConfig
   }
 }
 
+function validateParallelSubStepNamesUnique(config: WorkflowConfig): void {
+  for (const step of config.steps) {
+    const names = new Set<string>();
+    for (const subStep of step.parallel ?? []) {
+      if (names.has(subStep.name)) {
+        throw new Error(`Configuration error: parallel step "${step.name}" contains duplicate sub-step name "${subStep.name}"`);
+      }
+      names.add(subStep.name);
+    }
+  }
+}
+
+function workflowContainsWorkflowCall(config: WorkflowConfig): boolean {
+  const stepContainsWorkflowCall = (step: WorkflowConfig['steps'][number]): boolean =>
+    isWorkflowCallStep(step) || (step.parallel ?? []).some(stepContainsWorkflowCall);
+
+  return config.steps.some(stepContainsWorkflowCall);
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
   }
+  const workflowProvider = options.provider ?? config.provider;
+  if (
+    workflowUsesAutoProvider({
+      workflowConfig: config,
+      effectiveProvider: workflowProvider,
+      cliProvider: options.provider,
+      projectCwd: options.projectCwd,
+      lookupCwd: options.projectCwd,
+      workflowCallResolver: options.workflowCallResolver,
+    })
+    && options.autoRouting === undefined
+  ) {
+    throw new Error('Configuration error: provider: auto requires auto_routing configuration');
+  }
   validateFindingContractParallelStructuredOutput(config);
+  validateFindingContractManagerProviderModel(config, options);
   validateFindingContractInvalidManagerOutputRules(config);
+  validateParallelSubStepNamesUnique(config);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);
@@ -129,7 +222,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     }
   }
 
-  if (config.steps.some((step) => isWorkflowCallStep(step)) && !options.workflowCallResolver) {
+  if (workflowContainsWorkflowCall(config) && !options.workflowCallResolver) {
     throw new Error('Configuration error: workflowCallResolver is required when workflow contains workflow_call steps');
   }
 
@@ -138,6 +231,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   stepNames.add(ABORT_STEP);
 
   for (const step of config.steps) {
+    validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
     validateAgentStepProviderModel(step, options, `Configuration error: step "${step.name}"`);
     for (const rule of step.rules ?? []) {
       if (rule.next && !stepNames.has(rule.next)) {
@@ -150,6 +244,10 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       );
     }
     for (const subStep of step.parallel ?? []) {
+      validateSessionEntrypoint(
+        subStep,
+        `Configuration error: parallel sub-step "${subStep.name}" of step "${step.name}"`,
+      );
       validateAgentStepProviderModel(
         subStep,
         options,
@@ -197,7 +295,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       judge: monitor.judge,
       triggeringProviderInfo,
     });
-    validateProviderModelCompatibility(
+    validateProviderModelRequirements(
       judgeProviderInfo.provider,
       judgeProviderInfo.model,
       {

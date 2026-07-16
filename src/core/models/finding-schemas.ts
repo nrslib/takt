@@ -1,10 +1,12 @@
 import { z } from 'zod/v4';
+import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
   RawFinding,
 } from './finding-types.js';
 import {
+  RAW_FINDING_KINDS,
   FINDING_CONFLICT_STATUSES,
   FINDING_LIFECYCLES,
   FINDING_SEVERITIES,
@@ -17,6 +19,8 @@ export const FindingContractManagerConfigRawSchema = z.object({
   persona: nonEmptyString,
   instruction: nonEmptyString,
   output_contract: nonEmptyString,
+  provider: z.enum(PROVIDER_TYPES).optional(),
+  model: nonEmptyString.optional(),
 }).strict();
 
 export const FindingContractConfigRawSchema = z.object({
@@ -51,6 +55,16 @@ export const FindingLedgerEntrySchema = z.object({
   resolvedAt: nonEmptyString.optional(),
   resolvedEvidence: nonEmptyString.optional(),
   reopenedEvidence: nonEmptyString.optional(),
+  waivers: z.array(z.object({
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+    decidedAt: FindingObservationSchema,
+  }).strict()).optional(),
+  disputes: z.array(z.object({
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+    recordedAt: FindingObservationSchema,
+  }).strict()).optional(),
 }).strict();
 
 export const RawFindingSchema = z.object({
@@ -60,9 +74,13 @@ export const RawFindingSchema = z.object({
   familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
-  location: nonEmptyString.optional(),
+  // 構造化出力の strict 様式では全プロパティが required になるため、
+  // 該当なしの欄は空文字で埋められる。空文字は未指定として扱う。
+  location: z.string().optional().transform((value) => (value ? value : undefined)),
   description: nonEmptyString,
-  suggestion: nonEmptyString.optional(),
+  suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
+  kind: z.enum(RAW_FINDING_KINDS).optional(),
+  targetFindingId: nonEmptyString.optional(),
 }).strict();
 
 export const ReviewerRawFindingSchema = z.object({
@@ -70,9 +88,15 @@ export const ReviewerRawFindingSchema = z.object({
   familyTag: nonEmptyString,
   severity: FindingSeveritySchema,
   title: nonEmptyString,
-  location: nonEmptyString.optional(),
+  // 構造化出力の strict 様式では全プロパティが required になるため、
+  // 該当なしの欄は空文字で埋められる。空文字は未指定として扱う。
+  location: z.string().optional().transform((value) => (value ? value : undefined)),
   description: nonEmptyString,
-  suggestion: nonEmptyString.optional(),
+  suggestion: z.string().optional().transform((value) => (value ? value : undefined)),
+  kind: z.enum(RAW_FINDING_KINDS).optional(),
+  // 構造化出力の strict 様式では全プロパティが required になるため、
+  // issue 行は空文字で埋める。空文字は未指定として扱う。
+  targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
 }).strict();
 
 export const FindingLedgerConflictSchema = z.object({
@@ -127,12 +151,22 @@ export const FindingManagerOutputSchema = z.object({
     conflictId: nonEmptyString,
     evidence: nonEmptyString,
   }).strict()),
+  waivedFindings: z.array(z.object({
+    findingId: nonEmptyString,
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+  }).strict()).optional().default([]),
+  disputeNotes: z.array(z.object({
+    findingId: nonEmptyString,
+    reason: nonEmptyString,
+    evidence: nonEmptyString,
+  }).strict()).optional().default([]),
 }).strict();
 
 export const FindingManagerOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts'],
+  required: ['matches', 'newFindings', 'resolvedFindings', 'reopenedFindings', 'conflicts', 'resolvedConflicts', 'waivedFindings', 'disputeNotes'],
   properties: {
     matches: {
       type: 'array',
@@ -211,6 +245,32 @@ export const FindingManagerOutputJsonSchema = {
         },
       },
     },
+    waivedFindings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'reason', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          reason: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    disputeNotes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['findingId', 'reason', 'evidence'],
+        properties: {
+          findingId: { type: 'string', minLength: 1 },
+          reason: { type: 'string', minLength: 1 },
+          evidence: { type: 'string', minLength: 1 },
+        },
+      },
+    },
   },
 } as const;
 
@@ -224,9 +284,17 @@ export const RawFindingsOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['rawFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
+        required: ['rawFindingId', 'kind', 'targetFindingId', 'familyTag', 'severity', 'title', 'location', 'description', 'suggestion'],
         properties: {
           rawFindingId: { type: 'string', minLength: 1 },
+          kind: {
+            enum: RAW_FINDING_KINDS,
+            description: 'issue = observed problem. resolution_confirmation = verified that an open ledger finding is fixed.',
+          },
+          targetFindingId: {
+            type: 'string',
+            description: 'Ledger finding id being confirmed as resolved. Empty string for issue entries.',
+          },
           familyTag: {
             type: 'string',
             minLength: 1,
@@ -234,9 +302,15 @@ export const RawFindingsOutputJsonSchema = {
           },
           severity: { enum: FINDING_SEVERITIES },
           title: { type: 'string', minLength: 1 },
-          location: { type: 'string', minLength: 1 },
+          location: {
+            type: 'string',
+            description: 'file:line evidence. Empty string when not applicable.',
+          },
           description: { type: 'string', minLength: 1 },
-          suggestion: { type: 'string', minLength: 1 },
+          suggestion: {
+            type: 'string',
+            description: 'Fix direction. Empty string when not applicable (e.g. resolution confirmations).',
+          },
         },
       },
     },

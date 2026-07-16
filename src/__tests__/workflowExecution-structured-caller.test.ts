@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
 import {
   CapabilityAwareStructuredCaller,
   DefaultStructuredCaller,
@@ -594,15 +594,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: 'takt/coding',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -649,15 +647,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: 'default',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -711,15 +707,13 @@ steps:
     const childWorkflow = (
       MockWorkflowEngine.lastInstance.receivedOptions.workflowCallResolver as (args: {
         parentWorkflow: WorkflowConfig;
-        identifier: string;
-        stepName: string;
+        step: WorkflowCallStep;
         projectCwd: string;
         lookupCwd: string;
       }) => WorkflowConfig | null
     )({
       parentWorkflow: MockWorkflowEngine.lastInstance.receivedConfig,
-      identifier: './child.yaml',
-      stepName: 'delegate',
+      step: MockWorkflowEngine.lastInstance.receivedConfig.steps[0] as WorkflowCallStep,
       projectCwd: projectDir,
       lookupCwd: projectDir,
     });
@@ -878,6 +872,71 @@ steps:
     expect(structuredCaller).toBeInstanceOf(CapabilityAwareStructuredCaller);
     expect(structuredCaller).toBeInstanceOf(DefaultStructuredCaller);
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('mock');
+  });
+
+  it('should not pass ignored autoStrategy override through to WorkflowEngine', async () => {
+    const autoRouting = {
+      strategy: 'cost',
+      router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+      candidates: [
+        {
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'codex',
+          model: 'gpt-5',
+          costTier: 'medium',
+        },
+      ],
+    } satisfies NonNullable<WorkflowConfig['autoRouting']>;
+    const config = {
+      ...makeConfig(),
+      autoRouting,
+    };
+
+    await executeWorkflow(config, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(autoRouting);
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBeUndefined();
+  });
+
+  it('should pass applied autoStrategy override through to WorkflowEngine', async () => {
+    const config = {
+      ...makeConfig(),
+      provider: 'auto',
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+        candidates: [
+          {
+            name: 'reasoning',
+            description: 'Reasoning',
+            provider: 'claude-sdk',
+            model: 'claude-opus-4-20250514',
+            costTier: 'high',
+          },
+          {
+            name: 'coding',
+            description: 'Implementation',
+            provider: 'codex',
+            model: 'gpt-5',
+            costTier: 'medium',
+          },
+        ],
+      },
+    } satisfies WorkflowConfig;
+
+    await executeWorkflow(config, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      autoStrategy: 'performance',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBe('performance');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(expect.objectContaining({
+      strategy: 'performance',
+    }));
   });
 
   it('should avoid native structured output judge calls when the step provider override is unsupported', async () => {

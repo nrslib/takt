@@ -13,6 +13,11 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 |--------------|----------------------|--------------------------|---------------|----------|---------------------------------|
 | {normal entry / derived condition / validation / evaluation / output / re-injection, etc.} | {Requirement} | `src/file.ts:42` | `src/file.test.ts:10` | ✅/❌/⚠️ | {none / evidence} |
 
+## Non-Finding Concerns
+| Item | Location | Classification | Evidence for Not Making a Finding |
+|------|----------|----------------|-----------------------------------|
+| {Concern, or "none"} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {Evidence} |
+
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|--------|----------------|
@@ -38,11 +43,16 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 - Build: {Result, or state unverified}
 - Tests: {Result, or state unverified}
 
+## Re-scan Evidence (required from the second review onward)
+| Policy/Knowledge section checked | Evidence in the diff (`file:line` or "none") |
+|----------------------------------|----------------------------------------------|
+| {section name} | {evidence} |
+
 ## Rejection Gate
 - REJECT only when at least one finding exists in `new`, `persists`, or `reopened`
 - Findings without `finding_id` are invalid
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary plus Contract Entry Check when needed (10 lines or fewer total)
+- APPROVE: Summary plus Verification Evidence, Contract Entry Check, Re-scan Evidence (from the second iteration onward), and Non-Finding Concerns when needed
 - REJECT: Include only relevant finding rows (30 lines or fewer)

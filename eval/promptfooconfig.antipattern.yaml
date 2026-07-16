@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: peer-review / ai-antipattern-review-2nd (codex).
+# Run via npm run eval:prompts -- antipattern
+
+description: 'TAKT facet eval: peer-review / ai-antipattern-review'
+
+prompts:
+  - file://prompts/antipattern-review.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/sample-project
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'recall: planted AI antipatterns must be flagged'
+    vars:
+      task: file://cases/antipattern-retry.md
+      previous_response: file://cases/prev-gather-antipattern.md
+    assert:
+      - type: javascript
+        metric: recall/unwired-options
+        value: |
+          return /(options|retries|strategy)/i.test(output) &&
+            /(渡され|呼び出し元|caller|常に|フォールバック|fallback|配線|wired|未使用|使われて)/i.test(output);
+      - type: javascript
+        metric: recall/overengineered-abstraction
+        value: |
+          return /(RetryStrategy|Strategy|抽象)/i.test(output) &&
+            /(過剰|不要|単一|余計|overengineer|YAGNI|1つ|一つ|唯一)/i.test(output);
+      - type: javascript
+        metric: recall/redundant-branch
+        value: |
+          return /(logSyncResult|分岐|branch)/i.test(output) &&
+            /(同じ|同一|冗長|redundant|重複|不要)/i.test(output);

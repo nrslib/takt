@@ -96,14 +96,14 @@ describe('buildTraceTaskMetadata', () => {
     });
   });
 
-  it('derives source from PR or issue numbers when an explicit source is absent', () => {
+  it('does not derive PR review source from PR context when an explicit source is absent', () => {
     expect(buildTraceTaskMetadata({
       taskContent: 'Review PR comments',
       prNumber: 826,
       branch: 'feature/pr-826',
       baseBranch: 'main',
     })).toMatchObject({
-      taskSource: 'pr_review',
+      taskSource: 'manual',
       prNumber: 826,
       gitBranch: 'feature/pr-826',
       gitBaseBranch: 'main',

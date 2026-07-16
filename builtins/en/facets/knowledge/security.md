@@ -232,6 +232,7 @@ Prevent data access across tenant boundaries. Authorization (who can operate) an
 | Write operations use client-provided tenant ID | REJECT |
 | Endpoint using tenant resolver has no authorization control | REJECT |
 | Some paths in role-based branching don't account for tenant resolution | REJECT |
+| Authentication mechanism coverage does not extend to the endpoint's expected caller (role, token type) | REJECT |
 
 ### Read-Write Consistency
 
@@ -276,6 +277,8 @@ fun getSettings(): SettingsResponse {
 ```
 
 For endpoints with role-based branching, verify that tenant resolution succeeds on all paths.
+
+Watch for the reverse pattern as well. When adding an endpoint dedicated to a specific role, extend the coverage of the mechanism that authenticates that role (filters, etc.) and add role-required authorization in the same change. Outside the authentication mechanism's coverage the expected caller is never authenticated in the first place, and without authorization, unexpected roles get through.
 
 ## OWASP Top 10 Checklist
 

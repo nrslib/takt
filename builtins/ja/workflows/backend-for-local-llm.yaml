@@ -1,0 +1,283 @@
+name: backend-for-local-llm
+description: ローカルLLM向けのバックエンド開発ワークフロー。観点別レビュー4並列 + Finding Contract で弱いモデルの規律を構造で作る
+finding_contract:
+  ledger_path: .takt/findings/backend-for-local-llm.json
+  raw_findings_path: .takt/findings/backend-for-local-llm/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+max_steps: 50
+initial_step: plan
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+
+loop_monitors:
+  - cycle:
+      - plan
+      - write_tests
+      - implement
+      - reviewers
+      - fix
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 直近の fix は修正完了で終わっている（行き詰まりではない）
+          next: reviewers
+        - condition: 健全（再計画のたびに blocker が解消へ向かっている）
+          next: plan
+        - condition: 非生産的（同じ行き詰まりが繰り返されている）
+          next: ABORT
+  - cycle:
+      - reviewers
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（指摘数が減少、修正が反映されている）
+          next: reviewers
+        - condition: 非生産的（同じ指摘が繰り返される）だが、計画の立て直しで打開できる見込みがある
+          next: plan
+        - condition: 非生産的（同じ指摘が繰り返される）で、再計画でも打開できる見込みがない
+          next: ABORT
+  - cycle:
+      - reviewers
+      - final-gate
+      - fix
+    threshold: 3
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（指摘数が減少、修正が反映されている）
+          next: reviewers
+        - condition: 非生産的（同じ指摘が繰り返される）だが、計画の立て直しで打開できる見込みがある
+          next: plan
+        - condition: 非生産的（同じ指摘が繰り返される）で、再計画でも打開できる見込みがない
+          next: ABORT
+
+steps:
+  - name: plan
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    knowledge:
+      - backend
+      - architecture
+    provider_options:
+      extends: review-readonly
+    instruction: plan
+    rules:
+      - condition: タスク分析と計画が完了した
+        next: write_tests
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確で計画を立てられない
+        next: ABORT
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+
+  - name: write_tests
+    tags:
+      - coding
+      - test-planning
+    edit: true
+    persona: coder
+    policy:
+      - coding
+      - testing
+    knowledge:
+      - backend
+      - architecture
+      - unit-testing
+      - e2e-testing
+      - implementation-semantics
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: write-tests-first
+    rules:
+      - condition: テスト作成が完了した
+        next: implement
+      - condition: 実装対象が未実装のためテスト作成をスキップ
+        next: implement
+      - condition: テスト作成を進行できない
+        next: plan
+      - condition: ユーザー入力が必要
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+    output_contracts:
+      report:
+        - name: test-report.md
+          format: test-report
+
+  - name: implement
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+    knowledge:
+      - backend
+      - architecture
+      - implementation-semantics
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: implement
+    rules:
+      - condition: 実装完了
+        next: reviewers
+      - condition: 実装を進められない（環境問題・情報不足）
+        next: plan
+
+  - name: reviewers
+    tags:
+      - review
+    parallel:
+      - name: arch-review
+        tags:
+          - review
+        edit: false
+        persona: architecture-reviewer
+        policy:
+          - review
+        knowledge:
+          - architecture
+        instruction: review-arch
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: architect-review.md
+              format: architecture-review-finding-contract
+
+      - name: ai-antipattern-review
+        tags:
+          - review
+        edit: false
+        persona: ai-antipattern-reviewer
+        policy:
+          - review
+          - ai-antipattern
+        pass_previous_response: false
+        instruction: ai-antipattern-review
+        rules:
+          - condition: AI特有の問題なし
+          - condition: AI特有の問題あり
+        output_contracts:
+          report:
+            - name: ai-antipattern-review.md
+              format: ai-antipattern-review-finding-contract
+
+      - name: coding-review
+        tags:
+          - review
+        edit: false
+        persona: coding-reviewer
+        policy:
+          - review
+          - coding
+        pass_previous_response: false
+        instruction: review-coding
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: coding-review.md
+              format: coding-review-finding-contract
+
+      - name: implementation-semantics-review
+        tags:
+          - review
+        edit: false
+        persona: implementation-semantics-reviewer
+        policy:
+          - review
+        knowledge:
+          - implementation-semantics
+        pass_previous_response: false
+        instruction: review-implementation-semantics
+        rules:
+          - condition: approved
+          - condition: needs_fix
+        output_contracts:
+          report:
+            - name: implementation-semantics-review.md
+              format: implementation-semantics-review-finding-contract
+    rules:
+      - condition: all("approved", "AI特有の問題なし", "approved", "approved") && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: final-gate
+      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix") && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
+        next: fix
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+
+  - name: final-gate
+    tags:
+      - review
+      - final-gate
+    edit: false
+    persona: merge-readiness-reviewer
+    policy: review
+    pass_previous_response: false
+    instruction: review-merge-readiness
+    output_contracts:
+      report:
+        - name: merge-readiness-review.md
+          format: merge-readiness-review-finding-contract
+    rules:
+      - condition: approved && when(findings.open.count == 0 && findings.conflicts.count == 0)
+        next: COMPLETE
+      - condition: needs_fix && when(findings.conflicts.count == 0)
+        next: fix
+      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+        next: fix
+      - condition: ai("未調停の findings.conflicts がある。coder の修正で解決可能な具体的コード変更が必要な場合のみ fix を選ぶ。レビュワー間の判断矛盾や人間判断が必要な場合は選ばない。")
+        next: fix
+      - condition: when(findings.conflicts.count > 0)
+        next: ABORT
+
+  - name: fix
+    tags:
+      - coding
+    edit: true
+    persona: coder
+    policy:
+      - coding
+    knowledge:
+      - backend
+      - architecture
+      - implementation-semantics
+    provider_options:
+      extends: edit
+    required_permission_mode: edit
+    instruction: fix
+    rules:
+      - condition: 修正完了
+        next: reviewers
+      - condition: 修正を進められない、または人間の判断が必要
+        next: plan
+        appendix: |
+          修正が行き詰まりました。直前の差し戻し内容と行き詰まりの理由を読み、
+          作業を分解し直して再計画してください。本当に人間の判断が必要だと
+          判断した場合のみ、その根拠を明記して計画不能を宣言してください。

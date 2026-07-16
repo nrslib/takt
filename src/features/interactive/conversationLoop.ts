@@ -12,7 +12,7 @@ import {
   loadSessionState,
   clearSessionState,
 } from '../../infra/config/index.js';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readInteractiveInput } from './interactiveInput.js';
@@ -40,6 +40,7 @@ import {
 import { prependInitialPromptContext } from './promptSections.js';
 import {
   buildInteractiveResultWithAttachments,
+  cleanupImageAttachmentStore,
   createSessionImageAttachmentStore,
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
@@ -136,208 +137,228 @@ export async function runConversationLoop(
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
   const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
   const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
-  const attachmentStore = createSessionImageAttachmentStore();
+  const attachmentStore = createSessionImageAttachmentStore(initialInput?.attachments);
 
-  info(strategy.introMessage);
-  if (sessionId) {
-    info(ui.resume);
-  }
-  blankLine();
-
-  /** Helper: call AI with current session and update session state */
-  async function doCallAI(prompt: string, sysPrompt: string, tools: string[]): Promise<CallAIResult | null> {
-    const imageAttachments = resolvePromptImageAttachments(prompt, attachmentStore.listAttachments());
-    const { result, sessionId: newSessionId } = await callAIWithRetry(
-      prompt, sysPrompt, tools, cwd, { ...ctx, sessionId }, { imageAttachments },
-    );
-    sessionId = newSessionId;
-    return result;
-  }
-
-  if (sourceContext) {
-    log.debug('Loaded initial input as source context without auto-submitting to AI', {
-      ...createInputLogMeta(sourceContext, sessionId),
-    });
-  }
-
-  async function handleSummaryAction(task: string): Promise<InteractiveModeResult | null> {
-    const selectedAction = strategy.selectAction
-      ? await strategy.selectAction(task, ctx.lang)
-      : await selectPostSummaryAction(task, ui.proposed, ui);
-    if (selectedAction === 'continue' || selectedAction === null) {
-      info(ui.continuePrompt);
-      return null;
+  try {
+    info(strategy.introMessage);
+    if (sessionId) {
+      info(ui.resume);
     }
-    log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
-    return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
-  }
+    blankLine();
 
-  const commandAvailability: CommandAvailability = {
-    enableRetryCommand: strategy.enableRetryCommand,
-    hasPreviousOrder: !!strategy.previousOrderContent,
-  };
-
-  while (true) {
-    const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability, attachmentStore);
-
-    if (input === null) {
-      blankLine();
-      info(ui.cancelled);
-      return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
-    }
-
-    const trimmed = input.trim();
-
-    if (!trimmed) {
-      continue;
-    }
-
-    const match = matchSlashCommand(trimmed);
-
-    // No slash command detected, treat as regular message
-    if (!match) {
-      history.push({ role: 'user', content: trimmed });
-      log.debug('Sending to AI', {
-        messageCount: history.length,
-        ...createSessionLogMeta(sessionId),
-      });
-      process.stdin.pause();
-      info(getLabel('interactive.ui.thinking', ctx.lang));
-
-      const promptWithTransform = prependInitialPromptContext(
-        strategy.transformPrompt(trimmed, sourceContext),
-        shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
-      );
-      const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
-      if (result) {
-        shouldSendInitialPromptContext = false;
-        if (!result.success) {
-          error(result.content);
-          blankLine();
-          history.pop();
-          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
-        }
-        history.push({ role: 'assistant', content: result.content });
+    /** Helper: call AI with current session and update session state */
+    async function doCallAI(prompt: string, sysPrompt: string, tools: string[]): Promise<CallAIResult | null> {
+      let imageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+      try {
+        imageAttachments = resolvePromptImageAttachments(prompt, attachmentStore.listAttachments());
+      } catch (caught) {
+        error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
         blankLine();
-      } else {
-        history.pop();
+        return null;
       }
-      continue;
+      const { result, sessionId: newSessionId } = await callAIWithRetry(
+        prompt, sysPrompt, tools, cwd, { ...ctx, sessionId }, { imageAttachments },
+      );
+      sessionId = newSessionId;
+      return result;
     }
 
-    switch (match.command) {
-      case SlashCommand.Accept: {
-        const assistantMessage = findLatestAssistantMessage(history);
-        if (!assistantMessage) {
-          info(ui.acceptNoAssistant);
-          continue;
-        }
-        return buildInteractiveResultWithAttachments({ action: 'execute', task: assistantMessage.content }, attachmentStore);
-      }
+    if (sourceContext) {
+      log.debug('Loaded initial input as source context without auto-submitting to AI', {
+        ...createInputLogMeta(sourceContext, sessionId),
+      });
+    }
 
-      case SlashCommand.Play: {
-        if (!match.text) {
-          info(ui.playNoTask);
-          continue;
-        }
-        log.info('Play command', createPlayCommandLogMeta(match.text));
-        return buildInteractiveResultWithAttachments({ action: 'execute', task: match.text }, attachmentStore);
+    async function handleSummaryAction(task: string): Promise<InteractiveModeResult | null> {
+      const selectedAction = strategy.selectAction
+        ? await strategy.selectAction(task, ctx.lang)
+        : await selectPostSummaryAction(task, ui.proposed, ui);
+      if (selectedAction === 'continue' || selectedAction === null) {
+        info(ui.continuePrompt);
+        return null;
       }
+      log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
+      return buildInteractiveResultWithAttachments({ action: selectedAction, task }, attachmentStore);
+    }
 
-      case SlashCommand.Retry: {
-        if (!strategy.enableRetryCommand) {
-          info(ui.retryUnavailable);
-          continue;
-        }
-        if (!strategy.previousOrderContent) {
-          info(ui.retryNoOrder);
-          continue;
-        }
-        log.info('Retry command — using previous order.md');
-        const selectedAction = await handleSummaryAction(strategy.previousOrderContent);
-        if (selectedAction === null) {
-          continue;
-        }
-        return selectedAction;
-      }
+    const commandAvailability: CommandAvailability = {
+      enableRetryCommand: strategy.enableRetryCommand,
+      hasPreviousOrder: !!strategy.previousOrderContent,
+    };
 
-      case SlashCommand.Go: {
-        const { summaryHistory, userNote } = resolveGoSummaryInput(
-          history,
-          !!sessionId,
-          !!sourceContext,
-          match.text,
-        );
-        let summaryPrompt = buildSummaryPrompt(
-          summaryHistory,
-          !!sessionId,
-          ctx.lang,
-          noTranscript,
-          conversationLabel,
-          workflowContext,
-          sourceContext,
-          strategy.summaryPromptContext,
-        );
-        if (!summaryPrompt) {
-          info(ui.noConversation);
-          continue;
-        }
-        if (userNote) {
-          summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
-        }
-        process.stdin.pause();
-        info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
-        // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
-        const { result: summaryResult } = await callAIWithRetry(
-          summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
-          { ...ctx, sessionId: undefined },
-          { imageAttachments: resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments()) },
-        );
-        if (!summaryResult) {
-          info(ui.summarizeFailed);
-          continue;
-        }
-        if (!summaryResult.success) {
-          error(summaryResult.content);
-          blankLine();
-          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
-        }
-        const task = summaryResult.content.trim();
-        const selectedAction = await handleSummaryAction(task);
-        if (selectedAction === null) {
-          continue;
-        }
-        return selectedAction;
-      }
+    while (true) {
+      const input = await readInteractiveInput(chalk.green('> '), ctx.lang, commandAvailability, attachmentStore);
 
-      case SlashCommand.Replay: {
-        if (!strategy.previousOrderContent) {
-          const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
-          info(replayNoOrder);
-          continue;
-        }
-        log.info('Replay command');
-        return buildInteractiveResultWithAttachments({ action: 'execute', task: strategy.previousOrderContent }, attachmentStore);
-      }
-
-      case SlashCommand.Cancel: {
+      if (input === null) {
+        blankLine();
         info(ui.cancelled);
         return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
       }
 
-      case SlashCommand.Resume: {
-        const selectedId = await selectRecentSession(cwd, ctx.lang);
-        if (selectedId) {
-          sessionId = selectedId;
-          info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+      const trimmed = input.trim();
+
+      if (!trimmed) {
+        continue;
+      }
+
+      const match = matchSlashCommand(trimmed);
+
+      // No slash command detected, treat as regular message
+      if (!match) {
+        history.push({ role: 'user', content: trimmed });
+        log.debug('Sending to AI', {
+          messageCount: history.length,
+          ...createSessionLogMeta(sessionId),
+        });
+        process.stdin.pause();
+        info(getLabel('interactive.ui.thinking', ctx.lang));
+
+        const promptWithTransform = prependInitialPromptContext(
+          strategy.transformPrompt(trimmed, sourceContext),
+          shouldSendInitialPromptContext ? strategy.initialPromptContext : undefined,
+        );
+        const result = await doCallAI(promptWithTransform, strategy.systemPrompt, strategy.allowedTools);
+        if (result) {
+          shouldSendInitialPromptContext = false;
+          if (!result.success) {
+            error(result.content);
+            blankLine();
+            history.pop();
+            return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+          }
+          history.push({ role: 'assistant', content: result.content });
+          blankLine();
+        } else {
+          history.pop();
         }
         continue;
       }
 
-      case SlashCommand.PasteImage: {
-        info(ui.pasteImageUnavailable);
-        continue;
+      switch (match.command) {
+        case SlashCommand.Accept: {
+          const assistantMessage = findLatestAssistantMessage(history);
+          if (!assistantMessage) {
+            info(ui.acceptNoAssistant);
+            continue;
+          }
+          return buildInteractiveResultWithAttachments({ action: 'execute', task: assistantMessage.content }, attachmentStore);
+        }
+
+        case SlashCommand.Play: {
+          if (!match.text) {
+            info(ui.playNoTask);
+            continue;
+          }
+          log.info('Play command', createPlayCommandLogMeta(match.text));
+          return buildInteractiveResultWithAttachments({ action: 'execute', task: match.text }, attachmentStore);
+        }
+
+        case SlashCommand.Retry: {
+          if (!strategy.enableRetryCommand) {
+            info(ui.retryUnavailable);
+            continue;
+          }
+          if (!strategy.previousOrderContent) {
+            info(ui.retryNoOrder);
+            continue;
+          }
+          log.info('Retry command — using previous order.md');
+          const selectedAction = await handleSummaryAction(strategy.previousOrderContent);
+          if (selectedAction === null) {
+            continue;
+          }
+          return selectedAction;
+        }
+
+        case SlashCommand.Go: {
+          const { summaryHistory, userNote } = resolveGoSummaryInput(
+            history,
+            !!sessionId,
+            !!sourceContext,
+            match.text,
+          );
+          let summaryPrompt = buildSummaryPrompt(
+            summaryHistory,
+            !!sessionId,
+            ctx.lang,
+            noTranscript,
+            conversationLabel,
+            workflowContext,
+            sourceContext,
+            strategy.summaryPromptContext,
+          );
+          if (!summaryPrompt) {
+            info(ui.noConversation);
+            continue;
+          }
+          if (userNote) {
+            summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
+          }
+          process.stdin.pause();
+          info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
+          let summaryImageAttachments: ReturnType<typeof resolvePromptImageAttachments>;
+          try {
+            summaryImageAttachments = resolvePromptImageAttachments(summaryPrompt, attachmentStore.listAttachments());
+          } catch (caught) {
+            error(sanitizeTerminalText(caught instanceof Error ? caught.message : String(caught)));
+            blankLine();
+            continue;
+          }
+          // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
+          const { result: summaryResult } = await callAIWithRetry(
+            summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
+            { ...ctx, sessionId: undefined },
+            { imageAttachments: summaryImageAttachments },
+          );
+          if (!summaryResult) {
+            info(ui.summarizeFailed);
+            continue;
+          }
+          if (!summaryResult.success) {
+            error(summaryResult.content);
+            blankLine();
+            return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+          }
+          const task = summaryResult.content.trim();
+          const selectedAction = await handleSummaryAction(task);
+          if (selectedAction === null) {
+            continue;
+          }
+          return selectedAction;
+        }
+
+        case SlashCommand.Replay: {
+          if (!strategy.previousOrderContent) {
+            const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
+            info(replayNoOrder);
+            continue;
+          }
+          log.info('Replay command');
+          return buildInteractiveResultWithAttachments({ action: 'execute', task: strategy.previousOrderContent }, attachmentStore);
+        }
+
+        case SlashCommand.Cancel: {
+          info(ui.cancelled);
+          return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
+        }
+
+        case SlashCommand.Resume: {
+          const selectedId = await selectRecentSession(cwd, ctx.lang);
+          if (selectedId) {
+            sessionId = selectedId;
+            info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+          }
+          continue;
+        }
+
+        case SlashCommand.PasteImage: {
+          info(ui.pasteImageUnavailable);
+          continue;
+        }
       }
     }
+  } catch (caught) {
+    cleanupImageAttachmentStore(attachmentStore);
+    throw caught;
   }
 }

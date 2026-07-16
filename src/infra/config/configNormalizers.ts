@@ -1,14 +1,18 @@
 import type {
-  CommandQualityGate,
   QualityGate,
   RateLimitFallbackConfig,
   StepProviderOptions,
   WorkflowRuntimeConfig,
 } from '../../core/models/workflow-types.js';
+import type { z } from 'zod';
+import type { QualityGatesSchema } from '../../core/models/schema-base.js';
+import type { WorkflowOverridesSchema } from '../../core/models/config-schemas.js';
 import type { PermissionMode } from '../../core/models/status.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
 import type {
   AssistantConfig,
+  AutoRoutingConfig,
+  ConfigAutoRoutingConfig,
   WorkflowOverrides,
   PersonaProviderEntry,
   PipelineConfig,
@@ -16,18 +20,14 @@ import type {
   ProviderRoutingEntry,
   TaktProviderConfigEntry,
   TaktProvidersConfig,
+  TelemetryConfig,
 } from '../../core/models/config-types.js';
-import { validateProviderModelCompatibility } from './providerModelCompatibility.js';
+import { validateProviderModelRequirements } from './providerModelRequirements.js';
 import {
   normalizeConfigProviderReferenceDetailed,
   type ConfigProviderReference,
 } from './providerReference.js';
-import type { NormalizeProviderOptionsOptions } from './providerOptions.js';
-
-type RawCommandQualityGate = Omit<CommandQualityGate, 'timeoutMs'> & {
-  timeout_ms?: number;
-  timeoutMs?: number;
-};
+import { normalizeProviderOptions, type NormalizeProviderOptionsOptions } from './providerOptions.js';
 
 type RawProviderRoutingEntry = string | {
   type?: string;
@@ -36,8 +36,33 @@ type RawProviderRoutingEntry = string | {
   provider_options?: Record<string, unknown>;
 };
 
-type RawQualityGate = string | RawCommandQualityGate;
-type RawQualityGateOverride = { quality_gates?: RawQualityGate[] };
+type RawQualityGate = NonNullable<z.output<typeof QualityGatesSchema>>[number];
+type RawWorkflowOverrides = z.output<typeof WorkflowOverridesSchema>;
+type SerializedQualityGateOverride = { quality_gates?: RawQualityGate[] };
+
+type RawAutoRoutingConfig = {
+  strategy: AutoRoutingConfig['strategy'];
+  router: {
+    provider: AutoRoutingConfig['router']['provider'];
+    model: string;
+  };
+  candidates: Array<{
+    name: string;
+    description: string;
+    provider: AutoRoutingConfig['candidates'][number]['provider'];
+    model: string;
+    cost_tier: AutoRoutingConfig['candidates'][number]['costTier'];
+    provider_options?: Record<string, unknown>;
+  }>;
+  rules?: AutoRoutingConfig['rules'];
+};
+
+type RawConfigAutoRoutingConfig = RawAutoRoutingConfig & {
+  default_provider?: {
+    provider: NonNullable<ConfigAutoRoutingConfig['defaultProvider']>['provider'];
+    model?: string;
+  };
+};
 
 function normalizeQualityGate(gate: RawQualityGate): QualityGate {
   if (typeof gate === 'string') {
@@ -48,13 +73,11 @@ function normalizeQualityGate(gate: RawQualityGate): QualityGate {
     ...(gate.name !== undefined ? { name: gate.name } : {}),
     command: gate.command,
     ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
-    ...(gate.timeoutMs !== undefined || gate.timeout_ms !== undefined
-      ? { timeoutMs: gate.timeoutMs ?? gate.timeout_ms }
-      : {}),
+    ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
   };
 }
 
-function normalizeQualityGates(gates: RawQualityGate[] | undefined): QualityGate[] | undefined {
+export function normalizeQualityGates(gates: RawQualityGate[] | undefined): QualityGate[] | undefined {
   return gates?.map(normalizeQualityGate);
 }
 
@@ -106,7 +129,7 @@ export function normalizeRateLimitFallback(
   const switchChain = raw.switch_chain ?? [];
   return {
     switchChain: switchChain.map((entry, index) => {
-      validateProviderModelCompatibility(entry.provider, entry.model, {
+      validateProviderModelRequirements(entry.provider, entry.model, {
         modelFieldName: `Configuration error: rate_limit_fallback.switch_chain[${index}].model`,
       });
       return {
@@ -115,6 +138,139 @@ export function normalizeRateLimitFallback(
       };
     }),
   };
+}
+
+export function normalizeAutoRoutingConfig(
+  raw: RawAutoRoutingConfig | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): AutoRoutingConfig | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  validateProviderModelRequirements(raw.router.provider, raw.router.model, {
+    modelFieldName: 'Configuration error: auto_routing.router.model',
+  });
+  return {
+    strategy: raw.strategy,
+    router: {
+      provider: raw.router.provider,
+      model: raw.router.model,
+    },
+    candidates: raw.candidates.map((candidate, index) => {
+      validateProviderModelRequirements(candidate.provider, candidate.model, {
+        modelFieldName: `Configuration error: auto_routing.candidates[${index}].model`,
+      });
+      return {
+        name: candidate.name,
+        description: candidate.description,
+        provider: candidate.provider,
+        model: candidate.model,
+        costTier: candidate.cost_tier,
+        providerOptions: normalizeProviderOptions(candidate.provider_options, {
+          ...options,
+          pathPrefix: `auto_routing.candidates[${index}].provider_options`,
+        }),
+      };
+    }),
+    rules: raw.rules,
+  };
+}
+
+export function normalizeConfigAutoRoutingConfig(
+  raw: RawConfigAutoRoutingConfig | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): ConfigAutoRoutingConfig | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const autoRouting = normalizeAutoRoutingConfig(raw, options);
+  if (autoRouting === undefined) {
+    return undefined;
+  }
+  if (raw.default_provider === undefined) {
+    return autoRouting;
+  }
+
+  validateProviderModelRequirements(
+    raw.default_provider.provider,
+    raw.default_provider.model,
+    { modelFieldName: 'Configuration error: auto_routing.default_provider.model' },
+  );
+  return {
+    ...autoRouting,
+    defaultProvider: {
+      provider: raw.default_provider.provider,
+      ...(raw.default_provider.model !== undefined ? { model: raw.default_provider.model } : {}),
+    },
+  };
+}
+
+export function denormalizeAutoRoutingConfig(
+  config: AutoRoutingConfig | undefined,
+): RawAutoRoutingConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+  return {
+    strategy: config.strategy,
+    router: {
+      provider: config.router.provider,
+      model: config.router.model,
+    },
+    candidates: config.candidates.map((candidate, index) => {
+      const path = `auto_routing.candidates[${index}]`;
+      const rawProviderOptions = denormalizeProviderOptions(candidate.providerOptions);
+      if (candidate.providerOptions !== undefined) {
+        assertNormalizedProviderOptions(path, rawProviderOptions);
+      }
+      return {
+        name: candidate.name,
+        description: candidate.description,
+        provider: candidate.provider,
+        model: candidate.model,
+        cost_tier: candidate.costTier,
+        ...(rawProviderOptions !== undefined ? { provider_options: rawProviderOptions } : {}),
+      };
+    }),
+    ...(config.rules !== undefined ? { rules: config.rules } : {}),
+  };
+}
+
+export function denormalizeConfigAutoRoutingConfig(
+  config: ConfigAutoRoutingConfig | undefined,
+): RawConfigAutoRoutingConfig | undefined {
+  const raw = denormalizeAutoRoutingConfig(config);
+  if (raw === undefined || config?.defaultProvider === undefined) {
+    return raw;
+  }
+
+  return {
+    ...raw,
+    default_provider: {
+      provider: config.defaultProvider.provider,
+      ...(config.defaultProvider.model !== undefined ? { model: config.defaultProvider.model } : {}),
+    },
+  };
+}
+
+export function normalizeTelemetryConfig(
+  raw: { routing_decisions?: boolean } | undefined,
+): TelemetryConfig | undefined {
+  if (!raw || raw.routing_decisions === undefined) {
+    return undefined;
+  }
+  return { routingDecisions: raw.routing_decisions };
+}
+
+export function denormalizeTelemetryConfig(
+  config: TelemetryConfig | undefined,
+): Record<string, unknown> | undefined {
+  if (!config || config.routingDecisions === undefined) {
+    return undefined;
+  }
+  return { routing_decisions: config.routingDecisions };
 }
 
 export function denormalizeRateLimitFallback(
@@ -166,12 +322,7 @@ export function denormalizeProviderProfiles(
 }
 
 export function normalizeWorkflowOverrides(
-  raw: {
-    quality_gates?: RawQualityGate[];
-    quality_gates_edit_only?: boolean;
-    steps?: Record<string, RawQualityGateOverride>;
-    personas?: Record<string, RawQualityGateOverride>;
-  } | undefined,
+  raw: RawWorkflowOverrides,
 ): WorkflowOverrides | undefined {
   if (!raw) return undefined;
   return {
@@ -181,7 +332,7 @@ export function normalizeWorkflowOverrides(
       ? Object.fromEntries(
         Object.entries(raw.steps).map(([name, override]) => [
           name,
-          { qualityGates: normalizeQualityGates(override.quality_gates) },
+          { qualityGates: normalizeQualityGates(override?.quality_gates) },
         ])
       )
       : undefined,
@@ -189,7 +340,7 @@ export function normalizeWorkflowOverrides(
       ? Object.fromEntries(
         Object.entries(raw.personas).map(([name, override]) => [
           name,
-          { qualityGates: normalizeQualityGates(override.quality_gates) },
+          { qualityGates: normalizeQualityGates(override?.quality_gates) },
         ])
       )
       : undefined,
@@ -201,15 +352,15 @@ export function denormalizeWorkflowOverrides(
 ): {
   quality_gates?: RawQualityGate[];
   quality_gates_edit_only?: boolean;
-  steps?: Record<string, RawQualityGateOverride>;
-  personas?: Record<string, RawQualityGateOverride>;
+  steps?: Record<string, SerializedQualityGateOverride>;
+  personas?: Record<string, SerializedQualityGateOverride>;
 } | undefined {
   if (!overrides) return undefined;
   const result: {
     quality_gates?: RawQualityGate[];
     quality_gates_edit_only?: boolean;
-    steps?: Record<string, RawQualityGateOverride>;
-    personas?: Record<string, RawQualityGateOverride>;
+    steps?: Record<string, SerializedQualityGateOverride>;
+    personas?: Record<string, SerializedQualityGateOverride>;
   } = {};
   if (overrides.qualityGates !== undefined) {
     result.quality_gates = denormalizeQualityGates(overrides.qualityGates);
@@ -220,7 +371,7 @@ export function denormalizeWorkflowOverrides(
   if (overrides.steps) {
     result.steps = Object.fromEntries(
       Object.entries(overrides.steps).map(([name, override]) => {
-        const stepOverride: RawQualityGateOverride = {};
+        const stepOverride: SerializedQualityGateOverride = {};
         if (override.qualityGates !== undefined) {
           stepOverride.quality_gates = denormalizeQualityGates(override.qualityGates);
         }
@@ -231,7 +382,7 @@ export function denormalizeWorkflowOverrides(
   if (overrides.personas) {
     result.personas = Object.fromEntries(
       Object.entries(overrides.personas).map(([name, override]) => {
-        const personaOverride: RawQualityGateOverride = {};
+        const personaOverride: SerializedQualityGateOverride = {};
         if (override.qualityGates !== undefined) {
           personaOverride.quality_gates = denormalizeQualityGates(override.qualityGates);
         }
@@ -301,7 +452,7 @@ function normalizeProviderRoutingEntries<TEntry extends PersonaProviderEntry>(
       || normalizedEntry.provider !== 'opencode'
       || normalizedEntry.model !== undefined
     ) {
-      validateProviderModelCompatibility(
+      validateProviderModelRequirements(
         normalizedEntry.provider,
         normalizedEntry.model,
         {
@@ -453,7 +604,7 @@ export function normalizeTaktAssistantProvider(
   if (provider === undefined && model === undefined) {
     throw new Error("Configuration error: 'takt_providers.assistant' must include provider or model.");
   }
-  validateProviderModelCompatibility(
+  validateProviderModelRequirements(
     provider,
     model,
     {

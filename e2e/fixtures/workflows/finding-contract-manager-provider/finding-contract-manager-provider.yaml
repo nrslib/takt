@@ -1,0 +1,54 @@
+name: e2e-finding-contract-manager-provider
+description: Verify finding_contract.manager provider/model during mock workflow execution
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+instructions:
+  findings-manager: |
+    Reconcile reviewer raw findings into the finding ledger.
+report_formats:
+  findings-manager: |
+    Return the finding manager JSON contract.
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager.md
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: mock
+    model: manager-mock-model
+max_steps: 3
+initial_step: review
+steps:
+  - name: review
+    parallel:
+      - name: architecture-review
+        persona: review-agent.md
+        instruction: |
+          Review the task and return no findings.
+        rules:
+          - condition: approved
+          - condition: needs_fix
+      - name: security-review
+        persona: review-agent.md
+        instruction: |
+          Review the task and return no findings.
+        rules:
+          - condition: approved
+          - condition: needs_fix
+    rules:
+      - condition: all("approved") && when(findings.open.count == 0)
+        next: COMPLETE
+      - condition: any("needs_fix")
+        next: fix
+  - name: fix
+    persona: review-agent.md
+    instruction: |
+      This step should not run in the manager provider E2E scenario.
+    rules:
+      - condition: fixed
+        next: review

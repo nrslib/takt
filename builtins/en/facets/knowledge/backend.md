@@ -62,6 +62,7 @@ data class Order(
 | Controller directly referencing Repository | REJECT. Must go through UseCase layer |
 | Outward dependencies from domain layer (DB, HTTP, etc.) | REJECT |
 | Direct dependencies between adapters (inbound → outbound) | REJECT |
+| Types or identifiers in the application/domain layer carry protocol-specific meaning such as HTTP request/response, endpoint, or status code | REJECT. Translate them into use-case concepts at the boundary. A domain term that happens to contain words such as Request is not itself a violation |
 
 ## API Layer Design (Controller)
 
@@ -208,6 +209,37 @@ fun confirm(confirmedBy: String): OrderConfirmedEvent {
 | Structural validation (@NotBlank, etc.) in domain | REJECT. Belongs in API layer |
 | UseCase-level validation inside Aggregate | REJECT. Read Model queries belong in UseCase layer |
 
+### Entry Validation Ownership
+
+Give each entry constraint a single owner and a single enforcement mechanism. Validations with different purposes per layer are not duplication, but do not re-implement the same boundary and the same condition in multiple mechanisms. Where declarative validation is active, invalid input is rejected before the handler; the downstream check remains reachable for valid input but redundantly re-evaluates the same condition and cannot define the violation response. Whether declarative validation is actually active depends on the framework configuration — verify it, then make a single mechanism the effective owner.
+
+```kotlin
+// NG - same constraint twice; declarative validation owns the violation response
+@GetMapping("/orders/{id}")
+fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse {
+    requireIdWithinLimit(id)  // runs only for valid input and cannot define the violation response
+    return orderReadService.get(id).toResponse()
+}
+
+// OK - unify on the declaration and delete the procedural check
+@GetMapping("/orders/{id}")
+fun get(@PathVariable @Size(max = MAX_ID) id: String): OrderResponse =
+    orderReadService.get(id).toResponse()
+```
+
+In the Spring example, constraints on scalar arguments such as `@PathVariable` or `@RequestParam` work only when method validation is active. Older setups commonly require class-level `@Validated`; Spring 6.1+ can use built-in method validation depending on configuration.
+
+On a validation violation, the response may fall through to the framework's default translation outside your own exception hierarchy (some setups translate to 400, others leave it untranslated as 500). Judge not by whether a default translation is used, but by whether the status and response shape match the explicit API contract. The exception type thrown on violation depends on configuration and version, so do not guess; pin the actual exception and response with an integration test. Follow "Exception Translation Scope" for where the translation belongs.
+
+| Criteria | Judgment |
+|----------|----------|
+| Same entry and same condition implemented in multiple validation mechanisms | REJECT. Make a single mechanism the effective owner and delete the unreachable side |
+| Status and response shape on a validation violation do not match the explicit API contract (including implicit reliance on the default translation with no contract defined) | REJECT. Make the contract explicit and wire the translation |
+| No test pinning the status and response shape on validation violation | REJECT. Verify the actual exception type with an integration test |
+| Validation policy is inconsistent across entrypoints sharing the same trust boundary and input contract | REJECT. State the reason for the difference or unify the policy |
+| External error contract depends on messages from the runtime's default locale | REJECT. Use stable error codes or explicit messages as the contract |
+| Constraint values (max length, etc.) share a single constant across validation and API spec | OK |
+
 ### Read and Write Entrypoints
 
 Separate read and write entrypoints. Read-side query boundaries have no side effects; writes are handled by commands or UseCases.
@@ -259,6 +291,7 @@ class OrderExceptionHandler {
 | Throwing generic Exception or RuntimeException | REJECT. Use specific exception types |
 | Empty try-catch blocks | REJECT |
 | Controller swallowing exceptions and returning 200 | REJECT |
+| Expressing an actually reachable call pattern (e.g., a caller with a different role) as a 500 | REJECT. Make it an explicit 4xx; guarantee "unreachable" assumptions with authorization |
 
 ### Exception Translation Scope
 
@@ -270,6 +303,7 @@ Translate exceptions into HTTP status codes at an exception translation layer on
 | API-specific exception mapping is added to a global handler | Scope is too broad. Keep it inside the target API boundary |
 | Authentication failures, input validation, and common error shapes shared by all APIs | OK. Handle at a global boundary |
 | HTTP representation mapping lives in the application or domain layer | REJECT. Keep it at the HTTP adapter boundary |
+| Multiple translation layers handle the same exception type without a contract for scope and precedence | REJECT. Consolidate under a single owner or make the non-overlapping applicability explicit |
 
 ## Domain Model Design
 
@@ -384,6 +418,18 @@ data class OrderEntity(
 | Business logic in Entity | REJECT. Entity is data structure only |
 | Repository implementation in domain layer | REJECT. Belongs in adapter/outbound |
 
+### Persistence Boundary for Structured Attributes
+
+For structured attributes in relational or read-model persistence, choose the storage format based on update granularity, integrity, size, and schema evolution — not just current query requirements. Do not implicitly use a domain type's generic serialized form as the persistence contract; use a persistence-specific representation or an explicit mapping. Event-store type identifiers and payloads may use an explicit, versioned serialization contract; govern their evolution with the CQRS-ES compatibility and upcaster rules.
+
+| Criteria | Judgment |
+|----------|----------|
+| Bounded structure read and written as a whole, with no need for search, joins, referential integrity, or partial updates | Consider a structured column (JSON, etc.) |
+| Referential integrity, an independent lifecycle, or joins with other tables matter | Normalize into its own table |
+| The DB's structured-column features (jsonb, etc.) can guarantee the needed search, indexing, and partial updates, and integrity requirements are met | A structured column is also a valid choice |
+| Domain type is converted directly by a generic serializer, implicitly using its field names as the DB schema | REJECT. Insert a persistence-specific representation or an explicit mapping |
+| Field changes to stored structures have no chosen path among compatible reads, migration, or rebuild, and no test pinning it | REJECT. Choose one path and pin it with a test |
+
 ## Authentication & Authorization Placement
 
 Authentication and authorization are cross-cutting concerns handled at the appropriate layer.
@@ -414,6 +460,34 @@ fun execute(input: DeleteInput, currentUserId: String) {
 | Authorization logic in UseCase or domain layer | REJECT. Belongs in Controller layer |
 | Data access control in Controller | REJECT. Belongs in UseCase layer |
 | Authentication processing inside Controller | REJECT. Belongs in Filter/Interceptor |
+| Application-layer service reads the security context directly (e.g., resolving the current user) | REJECT. Resolve at the boundary and pass as an argument |
+| The same authorization check is duplicated in the Controller and a lower layer | REJECT. Consolidate the responsibility in one place |
+
+## Distinguishing the Caller from the Domain Actor
+
+Treat the API caller (authenticated principal) and the business actor recorded on the data (person in charge, author, confirmer) as separate concepts. They diverge on ingestion, delegated operations, and administrative paths.
+
+| Criteria | Judgment |
+|----------|----------|
+| Unconditionally recording the caller as the business actor | Warning. Verify it does not break on ingestion, delegated, or administrative paths |
+| Reusing the creation-time caller, via state, as the actor of later operations | REJECT. Pass the performer as an argument per operation |
+| Requiring an actor field before the business actor is actually determined | Warning. Check whether it can be recorded at the operation that determines it (approval, confirmation, etc.) |
+| Resolving denormalized display names (etc.) at the boundary of the operation that establishes the fact | OK |
+| Placing resolution logic that assumes the caller is a member of the resource on a path also used by non-members | REJECT |
+
+The author of a memo is "whoever performed that operation"; the confirmer is "whoever performed the confirmation". Obtain the actor from each operation's performer. Facts determined later, such as the person in charge, are recorded at the operation/event that determines them — do not force a value at creation time.
+
+```kotlin
+// NG - Store the creation-time caller in state and reuse it as the actor of later operations
+fun addMemo(text: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = this.registeredBy)  // registrant != memo author
+}
+
+// OK - Receive the performer per operation
+fun addMemo(text: String, authorId: String): MemoAddedEvent {
+    return MemoAddedEvent(id, text, authorId = authorId)
+}
+```
 
 ## Test Strategy
 

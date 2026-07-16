@@ -56,6 +56,12 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     review:
 #       provider: opencode
 #       model: opencode/qwen3-coder-next
+#     final-gate:
+#       provider: codex
+#       model: gpt-5
+#       provider_options:
+#         codex:
+#           reasoning_effort: high
 #     edit:
 #       provider_options:
 #         codex:
@@ -144,6 +150,10 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     ## Summary
 #     {issue_body}
 #     Closes #{issue}
+
+# routing decision telemetry は local-only です。
+# telemetry:
+#   routing_decisions: true       # auto-routing decision を .takt/events/ に書き込む（デフォルト: true）
 ```
 
 ### グローバル設定フィールドリファレンス
@@ -152,7 +162,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルト AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード） |
+| `provider` | `"auto"` \| `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルト AI provider（`auto` = auto routing で provider/model を選択、`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード） |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
@@ -193,6 +203,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `workflow_categories_file` | string | - | カテゴリファイルのパス（[Workflow カテゴリ](#workflow-categories) 参照。デフォルトのユーザー上書きは `workflow-categories.yaml`） |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（git リモート URL から自動検出） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。`assistant` はインタラクティブモードの会話をルーティングし、OpenCode の report retry 失敗後の Report phase fallback provider としても使われます。project の `takt_providers.assistant` は global の `takt_providers.assistant` を上書きします。どちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
+| `telemetry` | object | `{ routing_decisions: true }` | local-only の routing decision 記録。`telemetry.routing_decisions` は auto-routing decision を project `.takt/events/` 配下に NDJSON として書き込むかどうかを制御します。TAKT は routing decision をアップロードしません。 |
 | `workflow_mcp_servers` | object | すべて `false` | MCP サーバートランスポートポリシー（`stdio`, `sse`, `http` トグル） |
 | `workflow_arpeggio` | object | すべて `false` | Arpeggio カスタムコードポリシー（`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`） |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | ランタイム prepare ポリシー（ビルトインプリセットは常に許可） |
@@ -249,7 +260,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | provider 上書き |
+| `provider` | `"auto"` \| `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | provider 上書き |
 | `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
@@ -387,6 +398,8 @@ TAKT のモデル選択は 2 段階で解決されます。
 1. **入力 `model` の解決** - workflow 実行前に、入力 `model` が CLI `--model`、次に config `model`、最後に provider デフォルトの順で解決されます。
 2. **Workflow step の `model` 解決** - 各 step では、実効モデルが step YAML の `model`、次に `provider_routing.steps.<step.name>`、step に書かれた順の `provider_routing.tags`、`provider_routing.personas.<raw persona key>`、deprecated の `persona_providers.<persona display name>`、`workflow_config.model`、最後に解決済みの入力 `model` の順で決まります。
 
+Finding Contract workflow では、`finding_contract.manager.provider` と `finding_contract.manager.model` は合成 `findings-manager` step の step レベル provider/model として扱われます。`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力値より優先されます。両方とも未指定の場合、manager は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
+
 workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` の `model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定の場合は routing、workflow、loop monitor judge のトリガー元 step、入力由来の値など、適用可能な下位優先度のソースへフォールバックしますが、`model: null` はその entry で model 解決を止め、実効 model を未定義のままにします。解決済み provider に CLI または provider 側のデフォルトを使わせたい場合に指定します。明示 model が必須の provider では、model が供給されないため検証エラーになります。
 
 ### Provider 固有のモデルに関する注意
@@ -486,6 +499,12 @@ provider_routing:
     review:
       provider: opencode
       model: opencode/qwen3-coder-next
+    final-gate:
+      provider: codex
+      model: gpt-5
+      provider_options:
+        codex:
+          reasoning_effort: high
     edit:
       provider_options:
         codex:
@@ -505,7 +524,7 @@ steps:
     tags: [implementation, edit]
 ```
 
-`provider_routing.personas` は workflow step の raw `persona` キーを使います。`persona_name` は表示専用で、routing には影響しません。`provider_routing.tags` は step の `tags` に一致する entry を適用します。複数 tag が一致した場合は step に書かれた順に適用され、後ろの tag が同じ provider / model / provider_options leaf を上書きします。`provider_routing.steps` は workflow step の `name` を使います。
+`provider_routing.personas` は workflow step の raw `persona` キーを使います。`persona_name` は表示専用で、routing には影響しません。`provider_routing.tags` は step の `tags` に一致する entry を適用します。複数 tag が一致した場合は step に書かれた順に適用され、後ろの tag が同じ provider / model / provider_options leaf を上書きします。たとえば builtin の最終ゲートは `review` の後に `final-gate` を持つため、通常レビューを OpenCode にしつつ merge-readiness / supervisor だけ Codex の高推論モデルへ上書きできます。より細かく分ける場合は `merge-readiness` と `supervise` タグを個別に指定できます。`provider_routing.steps` は workflow step の `name` を使います。
 
 各 routing entry では `provider`、`model`、`provider_options` を指定できます。これらは個別に省略できますが、各 entry には少なくとも 1 つ必要です。空の `provider_options` オブジェクトは受理されません。
 
@@ -522,6 +541,82 @@ step YAML provider/model
 ```
 
 解決済みの入力は workflow 実行前に CLI フラグ、次に project `.takt/config.yaml`、global `~/.takt/config.yaml`、最後に provider デフォルトの順で決まります。promotion が有効な場合は、step YAML の値よりもさらに高い優先順位になります。
+
+Finding Contract manager では、`finding_contract.manager.provider` と `finding_contract.manager.model` が合成 `findings-manager` step の `step YAML provider/model` 位置に入ります。
+
+### Auto Routing
+
+TAKT に provider と model の両方を実効 `auto_routing` candidate list から選ばせる場合は、`provider: auto` を設定します。次の例は project `.takt/config.yaml` または global `~/.takt/config.yaml` 用です。
+
+```yaml
+provider: auto
+
+takt_providers:
+  assistant:
+    provider: codex
+    model: gpt-5.6-sol
+
+auto_routing:
+  default_provider:
+    provider: codex
+    model: gpt-5.6-luna # 省略時は provider のデフォルトモデルを使用
+  strategy: balanced # cost | balanced | performance
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: advanced
+      description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
+      provider: codex
+      model: gpt-5.6-sol
+      cost_tier: high
+    - name: coding
+      description: Implementation, tests, debugging, and refactoring
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+    - name: lightweight
+      description: Formatting and small mechanical edits
+      provider: codex
+      model: gpt-5.6-luna
+      cost_tier: low
+  rules:
+    tags:
+      implementation: coding
+      architecture: advanced
+    steps:
+      security-audit: advanced
+    personas:
+      architect: advanced
+```
+
+自己完結した workflow では workflow-level block で routing を上書きできます。workflow YAML が受理するのは routing 用フィールドだけであり、config 専用の `default_provider` は指定できません。
+
+```yaml
+workflow_config:
+  provider: auto
+auto_routing:
+  strategy: balanced
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: coding
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+      description: Implementation, testing, debugging, and refactoring
+```
+
+effective top-level provider が `auto` の場合、AI による task slug 生成など、workflow step context を持たず concrete provider を必要とする内部処理では `auto_routing.default_provider` を使用します。`default_provider.provider` は必須で、`auto` は指定できません。`default_provider.model` は省略可能です。project の `default_provider` は global の値よりオブジェクト単位で優先されるため、`provider` と `model` が global のオブジェクトのフィールドと合成されることはありません。このような処理の実行時に設定がない場合は、`Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.` というエラーになります。effective top-level provider が concrete provider の場合は、従来どおり top-level の provider/model を使用します。
+
+auto routing の candidate 選択が適用されるのは workflow の step 実行だけです。`auto_routing.router` は routing 判定専用であり、`default_provider` として暗黙に使用されません。インタラクティブ assistant は auto routing を通らず、引き続き `takt_providers.assistant` を使用します。この assistant 設定がその他の内部処理の default として使用されることもありません。top-level の `provider: auto` は assistant では無視されるため、`takt_providers.assistant` を併記するか、CLI で `--provider` を渡してください。どちらもない場合、assistant は起動時に `Provider is not configured.` で失敗します。
+
+解決順序は保守的です。`promotion`、明示的な step provider/model、`provider_routing`、`persona_providers` が auto routing より優先されます。その後、auto routing は `tags`、`steps`、`personas` の順に rule を確認します。複数の step tag が一致した場合は、step 上で後ろに書かれた tag が優先されます。rule が一致しない場合、TAKT は設定された router model に candidate description から候補を選ばせます。router failure は warning を出し、strategy default にフォールバックします。`cost` は最初の `low` candidate、`balanced` は最初の `medium` candidate、`performance` は最初の `high` candidate を選びます。
+
+candidate の `cost_tier` は `high`、`medium`、`low` のいずれかです。candidate の `provider_options` は step 優先度で merge されるため、env / CLI 由来の option leaf は引き続き優先されます。`model: auto` はサポートされません。複数 candidate を使ってください。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きできます。この上書きは、実効 workflow、step、parallel sub-step、workflow_call override、または解決済み workflow_call child が `provider: auto` を使う場合に適用されます。auto provider 経路がない場合、strategy flag は warning を出して無視されます。
+
+Routing decision は local-only telemetry です。`telemetry.routing_decisions` が有効な場合、TAKT は project `.takt/events/` ディレクトリ配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。この local recording 設定の確認・変更には `takt telemetry status`、`takt telemetry enable`、`takt telemetry disable` を使います。
 
 workflow YAML の `model: null` は、明示的な entry レベル値として扱われます。step、parallel sub-step、`loop_monitors.judge` で model 解決を止めるため、下位優先度のソースやトリガー元 step 継承は `model` には使われません。`model` フィールドを省略した場合は通常どおりフォールバックします。
 

@@ -722,6 +722,25 @@ describe('runAllTasks concurrency', () => {
       expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
     });
 
+    it('should pass autoStrategy to executeWorkflow when provider is resolved from config', async () => {
+      const task1 = createTask('auto-strategy-task');
+
+      mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project', {
+        autoStrategy: 'balanced',
+      } as never);
+
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const workflowOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+        autoStrategy?: string;
+      };
+      expect(workflowOptions?.autoStrategy).toBe('balanced');
+    });
+
     it('should pass abortSignal but not taskPrefix in sequential mode', async () => {
       // Given: Sequential mode
       mockLoadConfig.mockReturnValue({

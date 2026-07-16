@@ -8,7 +8,7 @@ import type {
   WorkflowState,
 } from '../../models/types.js';
 import type { RunPaths } from '../run/run-paths.js';
-import { resolveWorkflowCallProviderModel } from '../provider-resolution.js';
+import { resolveWorkflowCallProviderModel, toConcreteProvider } from '../provider-resolution.js';
 import {
   getResumePointWorkflowReference,
   getWorkflowReference,
@@ -26,7 +26,21 @@ import {
   applyWorkflowCallOverridesToProviderRouting,
   applyWorkflowCallOverridesToPersonaProviders,
   type WorkflowCallExecutionResult,
+  type WorkflowCallIsolatedStateSync,
+  type WorkflowCallSessionUpdates,
 } from './WorkflowCallExecutor.js';
+
+function workflowCallOverrideModel(
+  overrides: WorkflowCallStep['overrides'],
+  inheritedModel: string | undefined,
+): string | undefined {
+  if (overrides?.model !== undefined) {
+    return overrides.model;
+  }
+  return overrides?.provider === undefined || overrides.provider === 'auto'
+    ? inheritedModel
+    : undefined;
+}
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
@@ -84,24 +98,40 @@ export class WorkflowCallRunner {
     };
   }
 
-  private resolveChildProviderModel(step: WorkflowCallStep): { provider: WorkflowEngineOptions['provider']; model: string | undefined } {
+  private resolveChildProviderModel(
+    step: WorkflowCallStep,
+    childWorkflow: WorkflowConfig,
+  ): { provider: WorkflowEngineOptions['provider']; model: string | undefined } {
     const parentProviderInfo = this.resolveParentWorkflowProviderContext();
+    const childProviderInfo = resolveWorkflowCallProviderModel({
+      workflow: childWorkflow,
+      provider: parentProviderInfo.provider,
+      model: parentProviderInfo.model,
+    });
     if (!step.overrides) {
       return {
-        provider: parentProviderInfo.provider,
-        model: parentProviderInfo.model,
+        provider: childProviderInfo.provider,
+        model: childProviderInfo.model,
       };
     }
 
     return {
-      provider: step.overrides.provider ?? parentProviderInfo.provider,
-      model: step.overrides.model ?? (step.overrides.provider !== undefined ? undefined : parentProviderInfo.model),
+      provider: step.overrides.provider ?? childProviderInfo.provider,
+      model: workflowCallOverrideModel(step.overrides, childProviderInfo.model),
     };
   }
 
   resolveRuntime(step: WorkflowCallStep): RuntimeStepResolution {
+    const parentProviderInfo = this.resolveParentWorkflowProviderContext();
+    const workflowCallProviderModel = {
+      provider: step.overrides?.provider ?? parentProviderInfo.provider,
+      model: workflowCallOverrideModel(step.overrides, parentProviderInfo.model),
+    };
     return {
-      providerInfo: this.resolveChildProviderModel(step),
+      providerInfo: {
+        provider: toConcreteProvider(workflowCallProviderModel.provider),
+        model: workflowCallProviderModel.model,
+      },
     };
   }
 
@@ -150,15 +180,38 @@ export class WorkflowCallRunner {
     };
   }
 
-  async run(
+  private requireIsolatedSessionUpdates(
     step: WorkflowCallStep,
-    runtime: RuntimeStepResolution = this.resolveRuntime(step),
-  ): Promise<StepRunResult> {
+    childResult: WorkflowCallExecutionResult,
+  ): WorkflowCallSessionUpdates {
+    if (!childResult.sessionUpdates) {
+      throw new Error(`workflow_call step "${step.name}" isolated execution did not return session updates`);
+    }
+    return childResult.sessionUpdates;
+  }
+
+  private requireIsolatedStateSync(
+    step: WorkflowCallStep,
+    childResult: WorkflowCallExecutionResult,
+  ): WorkflowCallIsolatedStateSync {
+    if (!childResult.isolatedStateSync) {
+      throw new Error(`workflow_call step "${step.name}" isolated execution did not return state sync`);
+    }
+    return childResult.isolatedStateSync;
+  }
+
+  private async executeChildWorkflow(
+    step: WorkflowCallStep,
+    runtime: RuntimeStepResolution,
+    syncParentState: boolean,
+  ): Promise<{
+    childResult: WorkflowCallExecutionResult;
+    providerInfo: NonNullable<StepRunResult['providerInfo']>;
+  }> {
     const parentConfig = this.deps.getConfig();
     const childWorkflow = this.deps.resolveWorkflowCall({
       parentWorkflow: parentConfig,
-      identifier: step.call,
-      stepName: step.name,
+      step,
       projectCwd: this.deps.projectCwd,
       lookupCwd: this.deps.getCwd(),
     });
@@ -184,10 +237,13 @@ export class WorkflowCallRunner {
       throw new Error(`workflow_call depth exceeds limit (5): ${childWorkflow.name}`);
     }
 
-    const childProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
-    if (!childProviderInfo) {
+    const runtimeProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
+    if (!runtimeProviderInfo) {
       throw new Error(`workflow_call step "${step.name}" could not resolve provider context`);
     }
+    const childProviderInfo = runtime.fallback
+      ? runtimeProviderInfo
+      : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
     const childResult = await this.executor.execute({
       step,
@@ -196,7 +252,19 @@ export class WorkflowCallRunner {
       parentProviderOptions: parentProviderContext.providerOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
-    });
+    }, { syncParentState });
+
+    return {
+      childResult,
+      providerInfo: runtimeProviderInfo,
+    };
+  }
+
+  async run(
+    step: WorkflowCallStep,
+    runtime: RuntimeStepResolution = this.resolveRuntime(step),
+  ): Promise<StepRunResult> {
+    const { childResult, providerInfo } = await this.executeChildWorkflow(step, runtime, true);
 
     const response = this.buildWorkflowCallResponse(
       step,
@@ -208,6 +276,29 @@ export class WorkflowCallRunner {
     this.deps.state.stepOutputs.set(step.name, response);
     this.deps.state.lastOutput = response;
     this.deps.state.previousResponseSourcePath = undefined;
-    return { response, instruction: '', providerInfo: childProviderInfo };
+    return { response, instruction: '', providerInfo };
+  }
+
+  async runIsolated(
+    step: WorkflowCallStep,
+    runtime: RuntimeStepResolution = this.resolveRuntime(step),
+  ): Promise<{
+    result: StepRunResult;
+    sessionUpdates: WorkflowCallSessionUpdates;
+    stateSync: WorkflowCallIsolatedStateSync;
+  }> {
+    const { childResult, providerInfo } = await this.executeChildWorkflow(step, runtime, false);
+    const response = this.buildWorkflowCallResponse(
+      step,
+      childResult,
+      childResult.abortKind,
+      childResult.abortReason,
+      childResult.returnValue,
+    );
+    return {
+      result: { response, instruction: '', providerInfo },
+      sessionUpdates: this.requireIsolatedSessionUpdates(step, childResult),
+      stateSync: this.requireIsolatedStateSync(step, childResult),
+    };
   }
 }

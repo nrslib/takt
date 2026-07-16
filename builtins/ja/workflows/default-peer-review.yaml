@@ -1,5 +1,5 @@
 name: default-peer-review
-description: default 系の Phase 2。並列レビュアー（arch + ai-antipattern-2nd + pure-review + coding-review + supervise） ⇄ 修正 ループ。
+description: default 系の Phase 2。専門並列レビュアー（arch + ai-antipattern-2nd + coding-review） ⇄ 修正ループの後、merge-readiness-review と supervise の並列最終ゲートを実行する。
 subworkflow:
   callable: true
   visibility: internal
@@ -16,6 +16,7 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
+      - final-gate
       - fix
     threshold: 3
     judge:
@@ -78,29 +79,6 @@ steps:
           report:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
-      - name: pure-review
-        tags:
-          - review
-        edit: false
-        persona: pure-reviewer
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-pure
-        output_contracts:
-          report:
-            - name: pure-review.md
-              format: pure-review
       - name: coding-review
         tags:
           - review
@@ -127,37 +105,23 @@ steps:
           report:
             - name: coding-review.md
               format: coding-review
-      - name: supervise
-        tags:
-          - review
-        edit: false
-        persona: supervisor
-        policy: review
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: supervise
-        rules:
-          - condition: すべて問題なし
-          - condition: 要求未達成、テスト失敗、ビルドエラー
-        output_contracts:
-          report:
-            - name: supervisor-validation.md
-              format: supervisor-validation
-            - name: summary.md
-              format: summary
-              use_judge: false
     rules:
-      - condition: all("approved", "AI特有の問題なし", "approved", "approved", "すべて問題なし")
-        next: COMPLETE
-      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix", "needs_fix", "要求未達成、テスト失敗、ビルドエラー")
+      - condition: all("approved", "AI特有の問題なし", "approved")
+        next: final-gate
+      - condition: any("needs_fix", "AI特有の問題あり", "needs_fix")
         next: fix
+  - name: final-gate
+    kind: workflow_call
+    call: merge-readiness-final-gate
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: fix
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT
   - name: fix
     tags:
       - coding

@@ -1,4 +1,5 @@
 import type { ProviderType } from '../../shared/types/provider.js';
+import type { AutoRoutingConfig, ProviderTypeOrAuto } from './config-types.js';
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
 import type { InteractiveMode } from './interactive-mode.js';
@@ -15,6 +16,9 @@ import type {
   WorkflowSystemInput,
 } from './workflow-system-input-types.js';
 import type { FindingContractConfig, FindingsRuleContext } from './finding-types.js';
+
+export const WORKFLOW_SESSION_MODES = ['continue', 'refresh', 'compact'] as const;
+export type WorkflowSessionMode = typeof WORKFLOW_SESSION_MODES[number];
 
 export type {
   WorkflowPrListWhere,
@@ -72,6 +76,12 @@ export interface WorkflowRule {
   aggregateType?: 'all' | 'any';
   aggregateConditionText?: string | string[];
   aggregateGuardCondition?: string;
+  /**
+   * Deterministic guard split from a plain-rule compound condition
+   * ("<tag text> && findings...."). The tag part stays in `condition`;
+   * this guard must also hold for the rule to match.
+   */
+  guardCondition?: string;
 }
 
 export type WorkflowMaxSteps = number | 'infinite';
@@ -153,7 +163,7 @@ interface WorkflowStepBase {
   passPreviousResponse?: boolean;
 }
 
-export interface AgentWorkflowStep extends WorkflowStepBase {
+interface AgentWorkflowStepBase extends WorkflowStepBase {
   kind?: 'agent';
   mode?: never;
   call?: never;
@@ -162,10 +172,9 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   requiresUserInput?: boolean;
   persona?: string;
   allowGitCommit?: boolean;
-  session?: 'continue' | 'refresh';
   mcpServers?: Record<string, McpServerConfig>;
   personaPath?: string;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   providerSpecified?: boolean;
   model?: string;
   modelSpecified?: boolean;
@@ -180,13 +189,51 @@ export interface AgentWorkflowStep extends WorkflowStepBase {
   systemInputs?: never;
   effects?: never;
   outputContracts?: OutputContractEntry[];
-  parallel?: AgentWorkflowStep[];
+  parallel?: WorkflowStep[];
   concurrency?: number;
   arpeggio?: ArpeggioStepConfig;
   teamLeader?: TeamLeaderConfig;
   policyContents?: string[];
   knowledgeContents?: string[];
 }
+
+export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
+  session?: WorkflowSessionMode;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio?: never;
+  teamLeader?: never;
+}
+
+export interface ParallelWorkflowStep extends AgentWorkflowStepBase {
+  session?: never;
+  parallel: WorkflowStep[];
+  concurrency?: number;
+  arpeggio?: never;
+  teamLeader?: never;
+}
+
+export interface ArpeggioWorkflowStep extends AgentWorkflowStepBase {
+  session?: never;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio: ArpeggioStepConfig;
+  teamLeader?: never;
+}
+
+export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
+  session?: never;
+  parallel?: never;
+  concurrency?: never;
+  arpeggio?: never;
+  teamLeader: TeamLeaderConfig;
+}
+
+export type AgentWorkflowStep =
+  | NormalAgentWorkflowStep
+  | ParallelWorkflowStep
+  | ArpeggioWorkflowStep
+  | TeamLeaderWorkflowStep;
 
 export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
@@ -198,7 +245,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   persona?: never;
   tags?: never;
   allowGitCommit?: never;
-  session?: 'continue' | 'refresh';
+  session?: never;
   mcpServers?: never;
   personaPath?: never;
   provider?: never;
@@ -308,9 +355,10 @@ export interface WorkflowConfig {
   subworkflow?: WorkflowSubworkflowConfig;
   findingContract?: FindingContractConfig;
   schemas?: Record<string, string>;
-  provider?: ProviderType;
+  provider?: ProviderTypeOrAuto;
   model?: string;
   providerOptions?: StepProviderOptions;
+  autoRouting?: AutoRoutingConfig;
   rateLimitFallback?: RateLimitFallbackConfig;
   runtime?: WorkflowRuntimeConfig;
   personas?: Record<string, string>;

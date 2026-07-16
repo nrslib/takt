@@ -16,14 +16,12 @@ export function createWorkflowCallResolver(
 ): WorkflowEngineOptions['workflowCallResolver'] {
   return ({
     parentWorkflow,
-    identifier,
-    stepName,
+    step,
     projectCwd,
     lookupCwd,
   }) => resolveWorkflowCallTarget(
     parentWorkflow,
-    identifier,
-    stepName,
+    step,
     projectCwd,
     lookupCwd,
     workflowContext,

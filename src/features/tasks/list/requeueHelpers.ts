@@ -17,6 +17,13 @@ const log = createLogger('list-tasks');
 export const DEPRECATED_PROVIDER_CONFIG_WARNING =
   'Detected deprecated provider config in selected run order.md. Please migrate legacy fields to the provider block.';
 
+export function resolveSelectedWorkflowOverride(
+  previousWorkflow: string | undefined,
+  selectedWorkflow: string,
+): string | undefined {
+  return previousWorkflow === selectedWorkflow ? undefined : selectedWorkflow;
+}
+
 export function appendRetryNote(existing: string | undefined, additional: string): string {
   const trimmedAdditional = additional.trim();
   if (trimmedAdditional === '') {

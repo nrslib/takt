@@ -1,41 +1,20 @@
 import type { WorkflowState } from '../../models/types.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
+import { isEscapedQuote, splitTopLevelClausesOrThrow } from '../../models/workflow-condition-expression.js';
 
-function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
-  const parts: string[] = [];
-  let inString = false;
-  let depth = 0;
-  let start = 0;
-  for (let index = 0; index < expression.length - 1; index++) {
-    const current = expression[index];
-    if (current === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (!inString && current === '(') {
-      depth++;
-      continue;
-    }
-    if (!inString && current === ')') {
-      depth--;
-      continue;
-    }
-    if (!inString && depth === 0 && expression.slice(index, index + 2) === separator) {
-      parts.push(expression.slice(start, index).trim());
-      start = index + 2;
-      index++;
-    }
-  }
-  parts.push(expression.slice(start).trim());
-  return parts.filter((part) => part.length > 0);
+export function splitTopLevel(expression: string, separator: '||' | '&&'): string[] {
+  // トークナイズは models の唯一実装に委譲（parse/normalize と同一契約）。
+  // 空節は黙殺しない: when(a && && b) は不正な式として即座に失敗させる
+  // （不正オペランドを throw する評価器の既存の厳格性と同じ扱い）。
+  return splitTopLevelClausesOrThrow(expression, separator, 'when expression');
 }
 
-function findOperator(expression: string): string | undefined {
+function findOperator(expression: string): { operator: string; index: number } | undefined {
   const operators = ['>=', '<=', '!=', '==', '>', '<'] as const;
   let inString = false;
 
   for (let index = 0; index < expression.length; index++) {
-    if (expression[index] === '"') {
+    if (expression[index] === '"' && !isEscapedQuote(expression, index)) {
       inString = !inString;
       continue;
     }
@@ -44,7 +23,7 @@ function findOperator(expression: string): string | undefined {
     }
     for (const operator of operators) {
       if (expression.slice(index, index + operator.length) === operator) {
-        return operator;
+        return { operator, index };
       }
     }
   }
@@ -58,7 +37,7 @@ function splitFunctionArgs(argsText: string): [string, string] {
 
   for (let index = 0; index < argsText.length; index++) {
     const current = argsText[index];
-    if (current === '"') {
+    if (current === '"' && !isEscapedQuote(argsText, index)) {
       inString = !inString;
       continue;
     }
@@ -131,14 +110,13 @@ function parseLiteral(raw: string, state: WorkflowState, item?: unknown): unknow
 
 function evaluateExistsPredicate(predicate: string, item: unknown, state: WorkflowState): boolean {
   return splitTopLevel(predicate, '&&').every((clause) => {
-    const operator = findOperator(clause);
-    if (operator !== '==') {
+    const operatorMatch = findOperator(clause);
+    if (operatorMatch?.operator !== '==') {
       throw new Error(`exists() only supports "==" and "&&": "${predicate}"`);
     }
 
-    const operatorIndex = clause.indexOf(operator);
-    const leftRaw = clause.slice(0, operatorIndex);
-    const rightRaw = clause.slice(operatorIndex + operator.length);
+    const leftRaw = clause.slice(0, operatorMatch.index);
+    const rightRaw = clause.slice(operatorMatch.index + operatorMatch.operator.length);
     if (leftRaw.trim().length === 0 || rightRaw.trim().length === 0) {
       throw new Error(`Invalid exists() clause "${clause}"`);
     }
@@ -170,18 +148,18 @@ function evaluateClause(clause: string, state: WorkflowState): boolean {
     return evaluateExistsClause(normalized, state);
   }
 
-  const operator = findOperator(normalized);
-  if (!operator) {
+  const operatorMatch = findOperator(normalized);
+  if (!operatorMatch) {
     const value = parseLiteral(normalized, state);
     if (typeof value !== 'boolean') {
       throw new Error(`Bare when clause must resolve to boolean: "${normalized}"`);
     }
     return value;
   }
+  const { operator } = operatorMatch;
 
-  const operatorIndex = normalized.indexOf(operator);
-  const leftRaw = normalized.slice(0, operatorIndex);
-  const rightRaw = normalized.slice(operatorIndex + operator.length);
+  const leftRaw = normalized.slice(0, operatorMatch.index);
+  const rightRaw = normalized.slice(operatorMatch.index + operator.length);
   if (leftRaw.trim().length === 0 || rightRaw.trim().length === 0) {
     throw new Error(`Invalid when clause "${normalized}"`);
   }

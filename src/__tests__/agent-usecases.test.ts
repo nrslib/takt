@@ -508,6 +508,29 @@ describe('agent-usecases', () => {
     );
   });
 
+  it('decomposeTask は mcpServers を runAgent に伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      parts: [
+        { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
+      ],
+    }));
+    const mcpServers = {
+      docs: { type: 'stdio' as const, command: 'docs-mcp' },
+    };
+
+    await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      persona: 'team-leader',
+      mcpServers,
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.any(String),
+      expect.objectContaining({ mcpServers }),
+    );
+  });
+
   it('decomposeTask は maxTurns 非対応 provider では内部 maxTurns を渡さない', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
       parts: [
@@ -635,6 +658,35 @@ describe('agent-usecases', () => {
       'team-leader',
       expect.any(String),
       expect.objectContaining({ workflowMeta }),
+    );
+  });
+
+  it('requestMoreParts は mcpServers を runAgent に伝搬する', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('x', {
+      done: true,
+      reasoning: 'enough',
+      parts: [],
+    }));
+    const mcpServers = {
+      docs: { type: 'stdio' as const, command: 'docs-mcp' },
+    };
+
+    await requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      1,
+      {
+        cwd: '/repo',
+        persona: 'team-leader',
+        mcpServers,
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      'team-leader',
+      expect.any(String),
+      expect.objectContaining({ mcpServers }),
     );
   });
 

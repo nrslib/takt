@@ -248,6 +248,8 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
 
+クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）からタスクを積んだり、issue を作成して積んだり、次の pending タスクを実行したりできます。
+
 ### インスタント exec モード
 
 `takt exec` は TAKT の対話型タスク入力モードを開始します。Assistant エージェントがリクエストを明確化し、`/go` で会話をワークフローに変換、Worker エージェントがタスクを実装、Review エージェントがレビュー、Replanning エージェントが必要に応じてユーザーに方針確認を行い、ループ検出が非生産的な繰り返しを防止します。
@@ -257,6 +259,8 @@ exec は前回の設定から開始するか、初回実行時はデフォルト
 exec プリセットの解決順序はプロジェクト `.takt/exec/presets/` → グローバル `$TAKT_CONFIG_DIR/exec/presets/`（デフォルト `~/.takt/exec/presets/`）→ ビルトイン `builtins/exec/presets/` です。`/setup` での変更は `$TAKT_CONFIG_DIR/exec.yaml`（デフォルト `~/.takt/exec.yaml`）に保存されます。`/setup` ではプロジェクト/グローバルプリセットの保存・削除も可能で、作成されたファセットは `.takt/facets/` または `$TAKT_CONFIG_DIR/facets/`（デフォルト `~/.takt/facets/`）に保存されます。
 
 `/go` を実行すると、TAKT は `.takt/exec/workflow.yaml` を生成し、通常のワークフローエンジンで実行します。`/go` の後のインラインテキストは追加メモとして扱われます。会話やインラインタスクテキストなしで `/go` を実行した場合、ワークフローは生成されません。`/cancel` で実行せずに終了します。
+
+exec の入力行を編集中に画像を添付できます。macOS では `/paste-image` または `Ctrl+V` でクリップボード画像を添付でき、対応ターミナルでは OSC 1337 のインライン画像ペーストも使えます。TAKT は `[Image #N]` プレースホルダーを挿入します。そのプレースホルダーを Assistant へのメッセージや `/go` の追加メモで参照すると、その Assistant 依頼に画像が渡されます。同じセッションで添付されていないプレースホルダーは通常テキストとして扱われます。`/go` 実行時は、参照された保存済み画像だけが生成タスク仕様へコピーされ、添付セクションに列挙されます。対応形式は PNG、JPEG、GIF、WebP です。インライン画像とクリップボード画像は 10 MiB までです。未対応形式、インライン画像のファイル名拡張子と実データの不一致、上限超過、保存済み添付の一時パス消失、symlink、通常ファイルではない添付元はエラーになります。ネイティブ画像入力に対応しない provider には、プロンプト内のローカルパス参照として渡されます。
 
 通常のエージェントステップ、並列サブステップ、ループ検出ジャッジで `session_key` を設定して、ペルソナセッションを共有または分離できます。システムステップ、workflow_call ステップ、並列親ステップでは `session_key` を設定できません。TAKT はランタイムキーを `session_key` に解決済みプロバイダを付加して構築するため、値は他の生成されたセッションルートと衝突しない空でない文字列にする必要があります。
 
@@ -269,6 +273,49 @@ provider: codex    # claude, claude-sdk, claude-terminal, codex, opencode, curso
 model: gpt-5.5       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
+
+TAKT にステップごとの provider/model 選択を任せる場合は、`provider: auto` を設定して `auto_routing` の candidates を定義します。
+
+```yaml
+provider: auto
+takt_providers:
+  assistant:           # インタラクティブ assistant は auto routing 対象外のため明示指定する
+    provider: codex
+    model: gpt-5.6-sol
+auto_routing:
+  default_provider:     # workflow step context を持たない内部処理で使用する
+    provider: codex
+    model: gpt-5.6-luna # 省略時は provider のデフォルトモデルを使用する
+  strategy: balanced   # cost, balanced, or performance
+  router:
+    provider: codex
+    model: gpt-5.6-luna
+  candidates:
+    - name: advanced
+      description: Planning, final decisions, requirement-fulfillment judgment, and other advanced reasoning
+      provider: codex
+      model: gpt-5.6-sol
+      cost_tier: high
+    - name: coding
+      description: Implementation, tests, debugging, and refactoring
+      provider: codex
+      model: gpt-5.6-terra
+      cost_tier: medium
+    - name: lightweight
+      description: Formatting and small mechanical edits
+      provider: codex
+      model: gpt-5.6-luna
+      cost_tier: low
+  rules:
+    tags:
+      implementation: coding
+```
+
+effective top-level provider が `auto` の場合、AI による task slug 生成など、workflow step context を持たず concrete provider を必要とする処理では `auto_routing.default_provider` を使用します。project の `.takt/config.yaml` にある値は global の値より優先され、`provider` と省略可能な `model` は設定階層をまたいで合成せず、同じ `default_provider` から一組として選択されます。`default_provider.provider` は必須で、`auto` は指定できません。このような処理の実行時に `default_provider` が未設定の場合は、`Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.` というエラーになります。effective top-level provider が concrete provider の場合は、従来どおり top-level の provider/model を使用します。
+
+`auto_routing.router` は routing 判定専用であり、default provider として暗黙に使用されません。また、`takt_providers.assistant` は引き続きインタラクティブ assistant 専用であり、その他の内部処理の default としては使用されません。
+
+オートルーティングの決定は `.takt/events/` に NDJSON としてローカル書き込みされます。TAKT がルーティング決定をアップロードすることはありません。ローカル記録はデフォルトで有効で、`telemetry.routing_decisions` で設定でき、`takt telemetry status|enable|disable` で確認・変更できます。
 
 API Key を直接使う場合は、CLI のインストールは不要です（Claude、Codex、OpenCode が対象）。
 

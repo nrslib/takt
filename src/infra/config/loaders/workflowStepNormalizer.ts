@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type {
   AgentWorkflowStep,
+  NormalAgentWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
   WorkflowStep,
@@ -10,6 +11,7 @@ import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js'
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
 import type {
   StepProviderOptions,
+  WorkflowCallArgValue,
   WorkflowStepKind,
 } from '../../../core/models/workflow-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
@@ -32,11 +34,31 @@ import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
 import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
 import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
+import { isWorkflowParamReference } from './workflowCallableParamRef.js';
+import { normalizeQualityGates } from '../configNormalizers.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
 type RawPromotionEntry = NonNullable<RawStep['promotion']>[number];
 type NormalizedProviderReference = ReturnType<typeof normalizeProviderReference>;
+
+function normalizeWorkflowCallArgs(
+  stepName: string,
+  args: RawStep['args'],
+): Record<string, WorkflowCallArgValue> | undefined {
+  if (!args) {
+    return undefined;
+  }
+
+  const normalized: Record<string, WorkflowCallArgValue> = {};
+  for (const [argName, value] of Object.entries(args)) {
+    if (isWorkflowParamReference(value)) {
+      throw new Error(`Step "${stepName}" has unresolved $param in args.${argName}`);
+    }
+    normalized[argName] = value;
+  }
+  return normalized;
+}
 
 export function normalizeProviderReference(
   provider: RawProviderReference,
@@ -102,6 +124,9 @@ function normalizePromotionEntry(
     && normalizedProvider.providerOptions === undefined
   ) {
     throw new Error('Configuration error: promotion entry requires at least one of "provider", "model", or "provider_options"');
+  }
+  if (normalizedProvider.provider === 'auto') {
+    throw new Error('Configuration error: promotion entry provider does not support "auto"');
   }
   return {
     at: entry.at,
@@ -238,7 +263,7 @@ export function normalizeStepFromRaw(
             providerOptions: normalizedOverrides.providerOptions,
           }
         : undefined,
-      args: step.args,
+      args: normalizeWorkflowCallArgs(step.name, step.args),
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       rules,
@@ -251,7 +276,6 @@ export function normalizeStepFromRaw(
       name: step.name,
       description: step.description,
       kind: 'system',
-      session: step.session,
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       delayBeforeMs: step.delay_before_ms,
@@ -265,7 +289,7 @@ export function normalizeStepFromRaw(
 
   const qualityGates = applyQualityGateOverrides(
     step.name,
-    step.quality_gates,
+    normalizeQualityGates(step.quality_gates),
     step.edit,
     personaOverrideKey,
     projectOverrides,
@@ -281,7 +305,10 @@ export function normalizeStepFromRaw(
     && !inheritedModelIsWorkflowFallback
     && !normalizedProvider.providerSpecified;
 
-  const normalizedStep: AgentWorkflowStep = {
+  const normalizedAgentFields: Omit<
+    NormalAgentWorkflowStep,
+    'session' | 'parallel' | 'concurrency' | 'arpeggio' | 'teamLeader'
+  > = {
     name: step.name,
     description: step.description,
     sessionKey: step.session_key,
@@ -290,7 +317,6 @@ export function normalizeStepFromRaw(
     persona: personaSpec,
     providerRoutingPersonaKey: normalizedRawPersona,
     tags: tags && tags.length > 0 ? tags : undefined,
-    session: step.session,
     personaDisplayName: resolvedPersonaDisplayName,
     personaPath,
     mcpServers: step.mcp_servers,
@@ -326,37 +352,52 @@ export function normalizeStepFromRaw(
   };
 
   if (step.parallel && step.parallel.length > 0) {
-    normalizedStep.parallel = step.parallel.map((sub) =>
-      normalizeStepFromRaw(
-        sub,
-        workflowDir,
-        sections,
-        workflowSchemas,
-        normalizedStep.provider,
-        normalizedStep.model,
-        normalizedStep.modelSpecified,
-        normalizedStep.directProviderOptions,
-        normalizedStep.workflowProviderOptions,
-        normalizedStep.allowGitCommit,
-        normalizedStep.providerSpecified === false,
-        normalizedStep.modelSpecified === false,
-        context,
-        projectOverrides,
-        globalOverrides,
-        workflowArpeggioPolicy,
-        workflowMcpServersPolicy,
-      ) as AgentWorkflowStep,
-    );
-    if (step.concurrency != null) {
-      normalizedStep.concurrency = step.concurrency;
-    }
+    const normalizedStep: AgentWorkflowStep = {
+      ...normalizedAgentFields,
+      parallel: step.parallel.map((sub) =>
+        normalizeStepFromRaw(
+          sub,
+          workflowDir,
+          sections,
+          workflowSchemas,
+          normalizedAgentFields.provider,
+          normalizedAgentFields.model,
+          normalizedAgentFields.modelSpecified,
+          normalizedAgentFields.directProviderOptions,
+          normalizedAgentFields.workflowProviderOptions,
+          normalizedAgentFields.allowGitCommit,
+          normalizedAgentFields.providerSpecified === false,
+          normalizedAgentFields.modelSpecified === false,
+          context,
+          projectOverrides,
+          globalOverrides,
+          workflowArpeggioPolicy,
+          workflowMcpServersPolicy,
+        ),
+      ),
+      ...(step.concurrency != null ? { concurrency: step.concurrency } : {}),
+    };
+    return normalizedStep;
   }
 
   const arpeggio = normalizeArpeggio(step.arpeggio, workflowDir);
-  if (arpeggio) normalizedStep.arpeggio = arpeggio;
+  if (arpeggio) {
+    return {
+      ...normalizedAgentFields,
+      arpeggio,
+    };
+  }
 
   const teamLeader = normalizeTeamLeader(step.team_leader, workflowDir, sections, context);
-  if (teamLeader) normalizedStep.teamLeader = teamLeader;
+  if (teamLeader) {
+    return {
+      ...normalizedAgentFields,
+      teamLeader,
+    };
+  }
 
-  return normalizedStep;
+  return {
+    ...normalizedAgentFields,
+    session: step.session,
+  };
 }
