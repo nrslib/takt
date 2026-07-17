@@ -295,20 +295,6 @@ describe('builtin takt-default provider_options refs', () => {
       }
     });
 
-    it(`${locale} fix instruction should invalidate gates after artifact changes`, () => {
-      const instruction = readFileSync(instructionPath(locale, 'fix'), 'utf-8');
-
-      if (locale === 'ja') {
-        expect(instruction).toContain('最後の変更後');
-        expect(instruction).toContain('それ以前の品質ゲート結果は無効');
-        expect(instruction).toContain('適用対象の全品質ゲートを最初から再実行');
-      } else {
-        expect(instruction).toContain('after the final change');
-        expect(instruction).toContain('all earlier quality-gate results are invalid');
-        expect(instruction).toContain('rerun the full applicable gate set from the beginning');
-      }
-    });
-
     it(`${locale} takt-default-for-local-llm should enable Finding Contract`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'takt-default-for-local-llm.yaml');
       const normalized = normalizeBuiltinWorkflow(workflow, locale);

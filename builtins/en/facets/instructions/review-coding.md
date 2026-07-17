@@ -12,8 +12,8 @@ Procedure:
 9. If a non-execution entry displays, validates, or explains the same value, compare whether it resolves through the same normalized input, override order, and resolver as the primary execution path
 10. When tests exist, verify that they cover the original requirement's branch conditions such as unset, set, invalid value, override, inherited, non-inherited, and unsupported target, not only value presence
 11. For diffs involving side effects or state changes, trace entry, normal completion, early exit, exception, interruption, and cleanup paths
-12. Include only issues caused by the current diff with a concrete location, impact, and fix direction
-13. Do not report unsupported speculation, preference-only changes, or unrelated pre-existing issues
+12. Limit findings to issues introduced by the current diff or blocking issues in changed code and related callers, contracts, or wiring that directly affect the change's correctness. Include the latter even when they predate the diff, and give a concrete location, impact, and fix direction
+13. Do not report unsupported speculation, preference-only changes, or pre-existing issues unrelated to the change's correctness, contracts, or wiring
 
 **This is review iteration #{step_iteration}.**
 On the first review, cover the entire cumulative diff and report all locations in the same family in that review. On later reviews, apply every Policy / Knowledge criterion to prior open findings, their fixes, and directly affected paths without restarting untouched-area discovery from scratch each time. If the focused check would return APPROVE, first perform a final review of the entire cumulative diff.
