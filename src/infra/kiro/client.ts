@@ -184,6 +184,8 @@ function parseLatestSessionId(stdout: string, stderr: string): string | undefine
   return stdoutMatch?.[0];
 }
 
+const KIRO_LIST_SESSIONS_TIMEOUT_MS = 10_000;
+
 // Runs only for a brand-new session (no `options.sessionId` yet): the main
 // turn already succeeded, so a failure here (non-zero exit, ENOENT, no UUID
 // found) must not turn the overall result into an error — it just leaves the
@@ -193,14 +195,24 @@ async function resolveLatestSessionId(options: KiroCallOptions): Promise<string 
     return undefined;
   }
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KIRO_LIST_SESSIONS_TIMEOUT_MS);
+  timer.unref?.();
+
   try {
-    const { stdout, stderr } = await execKiro(['chat', '--list-sessions'], options);
+    const listOptions: KiroCallOptions = {
+      ...options,
+      abortSignal: controller.signal,
+    };
+    const { stdout, stderr } = await execKiro(['chat', '--list-sessions'], listOptions);
     return parseLatestSessionId(stdout, stderr);
   } catch (rawError) {
     log.debug('kiro-cli --list-sessions failed; session ID unresolved for this turn', {
       error: getErrorMessage(rawError),
     });
     return undefined;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
