@@ -91,6 +91,28 @@ describe('ParallelLogger', () => {
       expect(prefix).toContain('(4/30)(1)');
       expect(prefix).not.toContain('step 1/1');
     });
+
+    it('should keep raw dynamic part IDs as keys while bounding their terminal label', () => {
+      const rawPartId = `part\nforged\x1b[31m-${'x'.repeat(200)}`;
+      const logger = new ParallelLogger({
+        subStepNames: ['initial'],
+        writeFn,
+      });
+
+      const index = logger.addSubStep(rawPartId);
+      const prefix = logger.buildPrefix(rawPartId, index);
+      const handler = logger.createStreamHandler(rawPartId, index);
+      handler({ type: 'text', data: { text: 'done\n' } } as StreamEvent);
+
+      expect(prefix).toContain('[part\\nforged-');
+      expect(prefix).toContain('…');
+      expect(prefix).not.toContain('\n');
+      expect(prefix).not.toContain('\x1b[31m');
+      expect(prefix.length).toBeLessThan(120);
+      expect(output[0]).toContain('done');
+      expect(output[0]).not.toContain('\nforged');
+      expect(output[0]).not.toContain('\x1b[31m');
+    });
   });
 
   describe('text event line buffering', () => {

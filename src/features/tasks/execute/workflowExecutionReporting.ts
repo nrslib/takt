@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { ProviderUsageSnapshot } from '../../../core/models/response.js';
+import type { UsageEventLogContext } from '../../../core/logging/usageEventLogger.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import { saveSessionState, type SessionState } from '../../../infra/config/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
@@ -139,14 +140,15 @@ function reportTraceDiscovery(
 
 export function updateUsageForStepCompletion(
   usageEventLogger: {
-    logUsage: (usage: {
+    logUsageFor: (context: UsageEventLogContext, usage: {
       success: boolean;
       usage: ProviderUsageSnapshot;
     }) => void;
   },
+  context: UsageEventLogContext,
   response: { status: string; providerUsage?: ProviderUsageSnapshot },
 ): void {
-  usageEventLogger.logUsage({
+  usageEventLogger.logUsageFor(context, {
     success: response.status === 'done',
     usage: response.providerUsage ?? { usageMissing: true, reason: USAGE_MISSING_REASONS.NOT_AVAILABLE },
   });

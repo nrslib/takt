@@ -40,6 +40,13 @@ vi.mock('../infra/config/index.js', () => ({
   saveSessionState: vi.fn(),
 }));
 
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveConfigValueWithSource: vi.fn((_cwd, key) => key === 'provider'
+    ? { value: 'mock', source: 'global' }
+    : { value: undefined, source: 'default' }),
+}));
+
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn(() => ({ supportsStructuredOutput: true })),
 }));
@@ -54,19 +61,16 @@ vi.mock('../shared/utils/index.js', () => ({
   getDebugPromptsLogFile: vi.fn(() => undefined),
 }));
 
-vi.mock('../shared/utils/providerEventLogger.js', () => ({
+vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
-    wrapCallback: (callback: unknown) => callback,
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
+    logEvent: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));
 
-vi.mock('../shared/utils/usageEventLogger.js', () => ({
+vi.mock('../core/logging/usageEventLogger.js', () => ({
   createUsageEventLogger: vi.fn(() => ({
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
+    logUsageFor: vi.fn(),
   })),
   isUsageEventsEnabled: vi.fn(() => false),
 }));

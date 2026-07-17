@@ -302,6 +302,59 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       }));
     });
 
+    it('Given effective auto_routing selects the triggering step, When loop judge runs without overrides, Then it inherits the selected concrete candidate', async () => {
+      const config = buildConfigWithLoopMonitor(1);
+      config.loopMonitors![0]!.judge.persona = 'supervisor';
+      config.autoRouting = {
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'router-model' },
+        candidates: [{
+          name: 'workflow-candidate',
+          description: 'Workflow and loop judge execution',
+          provider: 'codex',
+          model: 'gpt-5',
+          costTier: 'medium',
+        }],
+        rules: {
+          steps: {
+            implement: 'workflow-candidate',
+            ai_review: 'workflow-candidate',
+            ai_fix: 'workflow-candidate',
+            reviewers: 'workflow-candidate',
+          },
+        },
+      };
+
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+        model: 'top-level-model',
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'ai_judge_fallback' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
+      expect(judgeCall?.[2]).toEqual(expect.objectContaining({
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5',
+      }));
+    });
+
     it('should prefer loop monitor judge provider and model overrides over the triggering step', async () => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
@@ -352,6 +405,110 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         resolvedProvider: 'codex',
         resolvedModel: 'gpt-5.2-codex',
       }));
+    });
+
+    it.each([
+      {
+        name: 'provider only',
+        provider: 'mock' as const,
+        providerSource: 'cli' as const,
+        model: 'mock/top-level-model',
+        modelSource: 'project' as const,
+        expected: {
+          provider: 'mock',
+          providerSource: 'cli',
+          model: 'codex/judge-model',
+          modelSource: 'step',
+        },
+      },
+      {
+        name: 'model only',
+        provider: 'claude' as const,
+        providerSource: 'project' as const,
+        model: 'codex/cli-model',
+        modelSource: 'cli' as const,
+        expected: {
+          provider: 'codex',
+          providerSource: 'step',
+          model: 'codex/cli-model',
+          modelSource: 'cli',
+        },
+      },
+      {
+        name: 'provider and model',
+        provider: 'mock' as const,
+        providerSource: 'cli' as const,
+        model: 'codex/cli-model',
+        modelSource: 'cli' as const,
+        expected: {
+          provider: 'mock',
+          providerSource: 'cli',
+          model: 'codex/cli-model',
+          modelSource: 'cli',
+        },
+      },
+    ])('should preserve CLI $name over loop monitor judge overrides', async ({
+      provider,
+      providerSource,
+      model,
+      modelSource,
+      expected,
+    }) => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: {
+          persona: 'supervisor',
+          provider: 'codex',
+          model: 'codex/judge-model',
+          rules: [
+            { condition: 'Healthy', next: 'ai_review' },
+            { condition: 'Unproductive', next: 'reviewers' },
+          ],
+        },
+      } as Partial<LoopMonitorConfig>);
+      const aiFixStep = config.steps.find((step) => step.name === 'ai_fix');
+      if (!aiFixStep) {
+        throw new Error('ai_fix step is required for this test');
+      }
+      aiFixStep.provider = 'opencode';
+      aiFixStep.model = 'opencode/step-model';
+      const judgeStart = vi.fn();
+
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider,
+        providerSource,
+        model,
+        modelSource,
+      });
+      engine.on('step:start', (step, _iteration, _instruction, providerInfo) => {
+        if (step.name.startsWith('_loop_judge_')) {
+          judgeStart(providerInfo);
+        }
+      });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found: X' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed X' }),
+        makeResponse({ persona: 'supervisor', content: 'Unproductive loop detected' }),
+        makeResponse({ persona: 'reviewers', content: 'All approved' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 1, method: 'ai_judge_fallback' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
+      expect(judgeCall?.[2]).toMatchObject({
+        resolvedProvider: expected.provider,
+        resolvedModel: expected.model,
+      });
+      expect(judgeStart).toHaveBeenCalledWith(expect.objectContaining(expected));
     });
 
     it('should not inherit the triggering model when judge provider override is set without model', async () => {
@@ -991,6 +1148,49 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           model: 'opencode/zai-coding-plan/glm-5.1',
         });
       }).toThrow('Configuration error: loop_monitors.judge.model');
+    });
+
+    it('should validate a loop judge through workflow-level effective auto routing', () => {
+      const config = buildConfigWithLoopMonitor(3);
+      config.autoRouting = {
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'router-model' },
+        candidates: [{
+          name: 'loop-candidate',
+          description: 'Loop monitor validation',
+          provider: 'codex',
+          model: 'gpt-5',
+          costTier: 'medium',
+        }],
+        rules: { steps: { ai_fix: 'loop-candidate' } },
+      };
+
+      expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'opencode',
+      })).not.toThrow();
+    });
+
+    it('should validate a loop judge through inherited effective auto routing', () => {
+      const config = buildConfigWithLoopMonitor(3);
+      const inheritedAutoRouting = {
+        strategy: 'balanced' as const,
+        router: { provider: 'codex' as const, model: 'router-model' },
+        candidates: [{
+          name: 'loop-candidate',
+          description: 'Loop monitor validation',
+          provider: 'codex' as const,
+          model: 'gpt-5',
+          costTier: 'medium' as const,
+        }],
+        rules: { steps: { ai_fix: 'loop-candidate' } },
+      };
+
+      expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'opencode',
+        autoRouting: inheritedAutoRouting,
+      })).not.toThrow();
     });
   });
 

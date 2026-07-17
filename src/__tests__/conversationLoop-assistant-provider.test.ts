@@ -87,7 +87,7 @@ describe('initializeSession assistant provider resolution', () => {
   it('should use the non-workflow provider resolver for non-interactive personas', () => {
     mockResolveConfigValues.mockReturnValue({
       language: 'en',
-      provider: 'auto',
+      provider: 'codex',
     });
     mockResolveNonWorkflowProviderModel.mockReturnValue({
       provider: 'codex',
@@ -99,7 +99,6 @@ describe('initializeSession assistant provider resolution', () => {
     expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/project');
     expect(mockResolveAssistantConfigLayers).not.toHaveBeenCalled();
     expect(mockGetProvider).toHaveBeenCalledWith('codex');
-    expect(mockGetProvider).not.toHaveBeenCalledWith('auto');
     expect(ctx.providerType).toBe('codex');
     expect(ctx.model).toBe('default-non-workflow-model');
   });

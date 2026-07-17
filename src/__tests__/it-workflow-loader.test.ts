@@ -44,6 +44,7 @@ import { loadWorkflow } from '../infra/config/loaders/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 
 const loadWorkflowConfig = loadWorkflow;
 const listBuiltinWorkflowLabels = listBuiltinWorkflowNames;
@@ -868,7 +869,7 @@ loop_monitors:
     });
   });
 
-  it('should reject bare OpenCode models in loop monitor judge config', () => {
+  it('should defer bare OpenCode loop judge model rejection to effective config validation', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -901,11 +902,14 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-opencode-bare-model', testDir))
+    const config = loadWorkflow('loop-monitor-judge-opencode-bare-model', testDir);
+
+    expect(config).not.toBeNull();
+    expect(() => validateWorkflowConfig(config!, { projectCwd: testDir }))
       .toThrow("Configuration error: loop_monitors.judge.model");
   });
 
-  it('should reject bare OpenCode judge models inherited from the triggering step provider', () => {
+  it('should defer inherited bare OpenCode loop judge model rejection to effective config validation', () => {
     const workflowsDir = join(testDir, '.takt', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
 
@@ -939,7 +943,10 @@ loop_monitors:
           next: step2
 `);
 
-    expect(() => loadWorkflow('loop-monitor-judge-inherited-opencode-bare-model', testDir))
+    const config = loadWorkflow('loop-monitor-judge-inherited-opencode-bare-model', testDir);
+
+    expect(config).not.toBeNull();
+    expect(() => validateWorkflowConfig(config!, { projectCwd: testDir }))
       .toThrow("Configuration error: loop_monitors.judge.model");
   });
 });

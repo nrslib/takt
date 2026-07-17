@@ -103,7 +103,7 @@ async function resolveStepAutoRoutingRuntime(
     !deps.options.autoRouting
     || runtime?.fallback
     || getWorkflowStepKind(step) !== 'agent'
-    || isDelegatedWorkflowStep(step)
+    || (isDelegatedWorkflowStep(step) && step.arpeggio === undefined)
     || step.parallel
   ) {
     return runtime;
@@ -121,6 +121,7 @@ async function resolveStepAutoRoutingRuntime(
     currentProviderInfo,
     routeWithAi: deps.options.autoRoutingAiRouter?.routeStep,
     logger: log,
+    abortSignal: deps.options.abortSignal,
   });
   if (!autoRuntime) {
     return runtime;
@@ -293,6 +294,36 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
   );
 }
 
+function workflowInterruptRequested(deps: WorkflowRunLoopDeps): boolean {
+  return deps.abortRequested() || deps.options.abortSignal?.aborted === true;
+}
+
+function abortInterruptedWorkflow(deps: WorkflowRunLoopDeps): WorkflowAbortResult {
+  return abortWorkflow(deps, 'interrupt', 'Workflow interrupted by user (SIGINT)', {
+    clearLastOutput: true,
+  });
+}
+
+function buildInterruptedIterationResult(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  loopDetected?: boolean,
+): SingleWorkflowIterationResult {
+  const abort = abortInterruptedWorkflow(deps);
+  return {
+    response: {
+      persona: step.persona ?? step.name,
+      status: 'blocked',
+      content: abort.reason,
+      timestamp: new Date(),
+    },
+    nextStep: ABORT_STEP,
+    isComplete: true,
+    ...(loopDetected !== undefined ? { loopDetected } : {}),
+    abort,
+  };
+}
+
 function validateUserInputRuntime(
   deps: WorkflowRunLoopDeps,
   step: WorkflowStep,
@@ -447,7 +478,20 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
     const prebuiltInstruction = stepIteration !== undefined
       ? deps.buildInstruction(step, stepIteration)
       : undefined;
-    const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+    let stepRuntime: RuntimeStepResolution | undefined;
+    try {
+      stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+    } catch (error) {
+      if (workflowInterruptRequested(deps)) {
+        abort = abortInterruptedWorkflow(deps);
+        break;
+      }
+      throw error;
+    }
+    if (workflowInterruptRequested(deps)) {
+      abort = abortInterruptedWorkflow(deps);
+      break;
+    }
     const stepInstruction = prebuiltInstruction
       ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
       : '';
@@ -626,6 +670,9 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
 
 async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
   const step = deps.getStep(deps.state.currentStep);
+  if (workflowInterruptRequested(deps)) {
+    return buildInterruptedIterationResult(deps, step);
+  }
   const userInputRuntimeAbort = validateUserInputRuntime(deps, step);
   if (userInputRuntimeAbort) {
     return {
@@ -661,7 +708,6 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
 
   deps.state.iteration++;
   const activeIteration = deps.state.iteration;
-  deps.setActiveStep(step, activeIteration);
   const isDelegated = isDelegatedWorkflowStep(step);
   const baseStepRuntime = deps.resolveRuntimeForStep(step);
   let stepIteration: number | undefined;
@@ -674,7 +720,19 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   if (!isDelegated && stepIteration !== undefined) {
     prebuiltInstruction = deps.buildInstruction(step, stepIteration);
   }
-  const stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+  let stepRuntime: RuntimeStepResolution | undefined;
+  try {
+    stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+  } catch (error) {
+    if (workflowInterruptRequested(deps)) {
+      return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
+    }
+    throw error;
+  }
+  if (workflowInterruptRequested(deps)) {
+    return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
+  }
+  deps.setActiveStep(step, activeIteration);
   const providerInfo = deps.resolveStepProviderModel(step, stepRuntime);
   const startedAt = Date.now();
   const result = await runWithStepSpan({

@@ -3,6 +3,7 @@ import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { AgentWorkflowStep, WorkflowStep } from '../../models/types.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
+import { applyProviderModelOverride } from '../provider-resolution.js';
 import { evaluatePromotion } from './PromotionEvaluator.js';
 import {
   isFilePreferredProviderOptionPath,
@@ -78,22 +79,6 @@ function filterPromotionProviderOptions(
     : undefined;
 }
 
-function resolvePromotedModel(
-  baseProviderInfo: StepProviderInfo,
-  promotion: NonNullable<AgentWorkflowStep['promotion']>[number],
-): Pick<StepProviderInfo, 'model' | 'modelSource'> {
-  if (promotion.model !== undefined) {
-    return { model: promotion.model, modelSource: 'promotion' };
-  }
-  if (promotion.providerSpecified) {
-    return { model: undefined, modelSource: undefined };
-  }
-  return {
-    model: baseProviderInfo.model,
-    modelSource: baseProviderInfo.modelSource,
-  };
-}
-
 function resolvePromotionProviderOptionsSources(
   baseSources: StepProviderInfo['providerOptionsSources'],
   promotionOptions: StepProviderInfo['providerOptions'],
@@ -147,15 +132,17 @@ export async function resolvePromotionRuntime(
     baseProviderInfo.providerOptionsSources,
     promotion.providerOptions,
   );
-  const promotedModel = resolvePromotedModel(baseProviderInfo, promotion);
+  const promotedProviderInfo = applyProviderModelOverride(baseProviderInfo, {
+    provider: promotion.provider,
+    providerSpecified: promotion.providerSpecified === true || promotion.provider !== undefined,
+    model: promotion.model,
+    modelSpecified: promotion.model !== undefined,
+    source: 'promotion',
+  });
   return {
     ...runtime,
     providerInfo: {
-      ...baseProviderInfo,
-      provider: promotion.provider ?? baseProviderInfo.provider,
-      providerSource: promotion.provider !== undefined ? 'promotion' : baseProviderInfo.providerSource,
-      model: promotedModel.model,
-      modelSource: promotedModel.modelSource,
+      ...promotedProviderInfo,
       providerOptions: mergeProviderOptions(baseProviderInfo.providerOptions, promotionProviderOptions),
       providerOptionsSources: resolvePromotionProviderOptionsSources(
         baseProviderInfo.providerOptionsSources,

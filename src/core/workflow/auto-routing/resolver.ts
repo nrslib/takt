@@ -33,6 +33,7 @@ export interface ResolveAutoRoutingRuntimeInput {
   currentProviderInfo: CurrentProviderInfo;
   routeWithAi?: AutoRouteWithAi;
   logger?: AutoRoutingLogger;
+  abortSignal?: AbortSignal;
 }
 
 export interface ResolveAutoRoutingBatchItem {
@@ -47,6 +48,7 @@ export interface ResolveAutoRoutingBatchInput {
   routeWithAi?: AutoRouteWithAi;
   routeBatchWithAi?: AutoRouteBatchWithAi;
   logger?: AutoRoutingLogger;
+  abortSignal?: AbortSignal;
 }
 
 const STRATEGY_COST_TIER: Record<AutoRoutingStrategy, AutoRoutingCandidate['costTier']> = {
@@ -133,7 +135,7 @@ function collectProviderOptionsSources(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function validateAutoRoutingResolvedProviderModel(
+export function validateAutoRoutingResolvedProviderModel(
   provider: AutoRoutingCandidate['provider'],
   model: string | undefined,
 ): void {
@@ -152,7 +154,7 @@ function validateAutoRoutingResolvedProviderModel(
   }
 }
 
-function candidateToProviderInfo(
+export function resolveAutoRoutingCandidateProviderInfo(
   candidate: AutoRoutingCandidate,
   source: ProviderResolutionSource,
   autoRouting: AutoRoutingConfig,
@@ -210,39 +212,47 @@ export function selectStrategyDefaultCandidate(autoRouting: AutoRoutingConfig): 
   return candidate;
 }
 
+export function resolveRuleBasedAutoRoutingProviderInfo(
+  input: Pick<ResolveAutoRoutingRuntimeInput, 'autoRouting' | 'step' | 'currentProviderInfo'>,
+): StepProviderInfo | undefined {
+  if (input.currentProviderInfo.provider !== undefined) {
+    return undefined;
+  }
+  const candidate = matchAutoRoutingRules(input.autoRouting, input.step);
+  return candidate === undefined
+    ? undefined
+    : resolveAutoRoutingCandidateProviderInfo(candidate, 'auto.rules', input.autoRouting, input.currentProviderInfo);
+}
+
 export async function resolveAutoRoutingRuntime(
   input: ResolveAutoRoutingRuntimeInput,
 ): Promise<RuntimeStepResolution | undefined> {
+  input.abortSignal?.throwIfAborted();
   if (input.currentProviderInfo.provider !== undefined) {
     return undefined;
   }
 
-  const ruleCandidate = matchAutoRoutingRules(input.autoRouting, input.step);
-  if (ruleCandidate !== undefined) {
-    return {
-      providerInfo: candidateToProviderInfo(
-        ruleCandidate,
-        'auto.rules',
-        input.autoRouting,
-        input.currentProviderInfo,
-      ),
-    };
+  const ruleProviderInfo = resolveRuleBasedAutoRoutingProviderInfo(input);
+  if (ruleProviderInfo !== undefined) {
+    return { providerInfo: ruleProviderInfo };
   }
 
   let aiCandidate: AutoRoutingCandidate | undefined;
   if (input.routeWithAi !== undefined) {
     try {
       aiCandidate = await input.routeWithAi(input.autoRouting, input.step);
+      input.abortSignal?.throwIfAborted();
       if (aiCandidate === undefined) {
         input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
       }
     } catch {
+      input.abortSignal?.throwIfAborted();
       input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
     }
   }
   if (aiCandidate !== undefined) {
     return {
-      providerInfo: candidateToProviderInfo(
+      providerInfo: resolveAutoRoutingCandidateProviderInfo(
         aiCandidate,
         'auto.ai',
         input.autoRouting,
@@ -251,9 +261,10 @@ export async function resolveAutoRoutingRuntime(
     };
   }
 
+  input.abortSignal?.throwIfAborted();
   const defaultCandidate = selectStrategyDefaultCandidate(input.autoRouting);
   return {
-    providerInfo: candidateToProviderInfo(
+    providerInfo: resolveAutoRoutingCandidateProviderInfo(
       defaultCandidate,
       'auto.default',
       input.autoRouting,
@@ -265,6 +276,7 @@ export async function resolveAutoRoutingRuntime(
 export async function resolveAutoRoutingBatch(
   input: ResolveAutoRoutingBatchInput,
 ): Promise<Map<string, StepProviderInfo>> {
+  input.abortSignal?.throwIfAborted();
   const result = new Map<string, StepProviderInfo>();
   const aiItems: ResolveAutoRoutingBatchItem[] = [];
 
@@ -277,7 +289,12 @@ export async function resolveAutoRoutingBatch(
     if (ruleCandidate !== undefined) {
       result.set(
         item.id,
-        candidateToProviderInfo(ruleCandidate, 'auto.rules', input.autoRouting, item.currentProviderInfo),
+        resolveAutoRoutingCandidateProviderInfo(
+          ruleCandidate,
+          'auto.rules',
+          input.autoRouting,
+          item.currentProviderInfo,
+        ),
       );
       continue;
     }
@@ -295,9 +312,11 @@ export async function resolveAutoRoutingBatch(
         input.autoRouting,
         aiItems.map((item) => ({ id: item.id, ...item.step })),
       );
+      input.abortSignal?.throwIfAborted();
       validateBatchAiSelections(batchAiCandidates, aiItems);
       aiCandidates = batchAiCandidates;
     } catch {
+      input.abortSignal?.throwIfAborted();
       input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
     }
     if (aiCandidates !== undefined) {
@@ -306,7 +325,12 @@ export async function resolveAutoRoutingBatch(
         if (aiCandidate !== undefined) {
           result.set(
             item.id,
-            candidateToProviderInfo(aiCandidate, 'auto.ai', input.autoRouting, item.currentProviderInfo),
+            resolveAutoRoutingCandidateProviderInfo(
+              aiCandidate,
+              'auto.ai',
+              input.autoRouting,
+              item.currentProviderInfo,
+            ),
           );
         }
       }
@@ -317,10 +341,12 @@ export async function resolveAutoRoutingBatch(
       if (input.routeWithAi !== undefined) {
         try {
           aiCandidate = await input.routeWithAi(input.autoRouting, item.step);
+          input.abortSignal?.throwIfAborted();
           if (aiCandidate === undefined) {
             input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
           }
         } catch {
+          input.abortSignal?.throwIfAborted();
           input.logger?.warn(AI_ROUTER_FAILURE_WARNING);
         }
       }
@@ -331,20 +357,31 @@ export async function resolveAutoRoutingBatch(
       if (aiCandidate !== undefined) {
         result.set(
           item.id,
-          candidateToProviderInfo(aiCandidate, 'auto.ai', input.autoRouting, item.currentProviderInfo),
+          resolveAutoRoutingCandidateProviderInfo(
+            aiCandidate,
+            'auto.ai',
+            input.autoRouting,
+            item.currentProviderInfo,
+          ),
         );
       }
     }
   }
 
   for (const item of aiItems) {
+    input.abortSignal?.throwIfAborted();
     if (result.has(item.id)) {
       continue;
     }
     const defaultCandidate = selectStrategyDefaultCandidate(input.autoRouting);
     result.set(
       item.id,
-      candidateToProviderInfo(defaultCandidate, 'auto.default', input.autoRouting, item.currentProviderInfo),
+      resolveAutoRoutingCandidateProviderInfo(
+        defaultCandidate,
+        'auto.default',
+        input.autoRouting,
+        item.currentProviderInfo,
+      ),
     );
   }
 

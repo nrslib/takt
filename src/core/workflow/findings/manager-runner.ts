@@ -20,6 +20,8 @@ import type { StepProviderInfo } from '../types.js';
 import { renderFencedJsonBlock } from '../instruction/fenced-json.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { buildFindingManagerStep } from './manager-step.js';
+import { resolveAutoRoutingRuntime, type AutoRouteWithAi } from '../auto-routing/resolver.js';
+import type { AutoRoutingConfig } from '../../models/config-types.js';
 
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 
@@ -44,6 +46,15 @@ interface RunFindingManagerForParallelStepInput {
   ledgerCopyPath?: string;
   /** Response text of the step that ran before the reviewers (usually the coder's fix report, which may contain dispute claims). */
   priorStepResponseText?: string;
+  autoRouting?: AutoRoutingConfig;
+  routeWithAi?: AutoRouteWithAi;
+  abortSignal?: AbortSignal;
+  onManagerAttemptUsage?: (
+    step: AgentWorkflowStep,
+    providerInfo: StepProviderInfo,
+    success: boolean,
+    usage: AgentResponse['providerUsage'],
+  ) => void;
 }
 
 export const RAW_FINDINGS_SCHEMA_REF = 'takt.findings.raw.v1';
@@ -287,8 +298,9 @@ function parseManagerOutput(response: AgentResponse): FindingManagerOutput {
 function buildManagerAgentOptions(
   optionsBuilder: OptionsBuilder,
   managerStep: AgentWorkflowStep,
+  providerInfo: StepProviderInfo,
 ): ReturnType<OptionsBuilder['buildAgentOptions']> {
-  const options = optionsBuilder.buildAgentOptions(managerStep);
+  const options = optionsBuilder.buildAgentOptions(managerStep, { providerInfo });
   return {
     ...options,
     sessionId: undefined,
@@ -299,15 +311,43 @@ function buildManagerAgentOptions(
 
 async function runManagerAttempt(input: {
   managerStep: AgentWorkflowStep;
-  instruction: string;
+  phase1Instruction: string;
   optionsBuilder: OptionsBuilder;
-  stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  stepExecutor: Pick<StepExecutor, 'normalizeStructuredOutput'>;
+  providerInfo: StepProviderInfo;
+  onManagerAttemptUsage?: RunFindingManagerForParallelStepInput['onManagerAttemptUsage'];
 }): Promise<FindingManagerOutput> {
-  const phase1Instruction = input.stepExecutor.buildPhase1Instruction(input.instruction, input.managerStep);
-  const agentOptions = buildManagerAgentOptions(input.optionsBuilder, input.managerStep);
-  const rawResponse = await executeAgent(input.managerStep.persona, phase1Instruction, agentOptions);
-  const response = input.stepExecutor.normalizeStructuredOutput(input.managerStep, rawResponse);
-  return parseManagerOutput(response);
+  const agentOptions = buildManagerAgentOptions(input.optionsBuilder, input.managerStep, input.providerInfo);
+  let rawResponse: AgentResponse;
+  try {
+    rawResponse = await executeAgent(input.managerStep.persona, input.phase1Instruction, agentOptions);
+  } catch (error) {
+    input.onManagerAttemptUsage?.(input.managerStep, input.providerInfo, false, undefined);
+    throw error;
+  }
+
+  let response: AgentResponse;
+  let managerOutput: FindingManagerOutput;
+  try {
+    response = input.stepExecutor.normalizeStructuredOutput(input.managerStep, rawResponse);
+    managerOutput = parseManagerOutput(response);
+  } catch (error) {
+    input.onManagerAttemptUsage?.(
+      input.managerStep,
+      input.providerInfo,
+      false,
+      rawResponse.providerUsage,
+    );
+    throw error;
+  }
+
+  input.onManagerAttemptUsage?.(
+    input.managerStep,
+    input.providerInfo,
+    response.status === 'done',
+    response.providerUsage,
+  );
+  return managerOutput;
 }
 
 async function runManagerWithSemanticRetry(input: {
@@ -316,17 +356,22 @@ async function runManagerWithSemanticRetry(input: {
   mechanicalOutput: FindingManagerOutput;
   managerStep: AgentWorkflowStep;
   instruction: string;
+  phase1Instruction: string;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
+  providerInfo: StepProviderInfo;
   priorStepResponseText?: string;
+  onManagerAttemptUsage?: RunFindingManagerForParallelStepInput['onManagerAttemptUsage'];
 }): Promise<ValidatedManagerOutputRun> {
   // 検証は「機械分類 + LLM 分類」を統合した最終形に対して行う。
   // 全 raw finding の網羅性は統合後でしか成立しないため。
   const firstAgentOutput = await runManagerAttempt({
     managerStep: input.managerStep,
-    instruction: input.instruction,
+    phase1Instruction: input.phase1Instruction,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
+    providerInfo: input.providerInfo,
+    onManagerAttemptUsage: input.onManagerAttemptUsage,
   });
   const firstManagerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, firstAgentOutput);
   const firstValidation = validateFindingManagerOutput({
@@ -336,7 +381,11 @@ async function runManagerWithSemanticRetry(input: {
     priorStepResponseText: input.priorStepResponseText,
   });
   if (firstValidation.ok) {
-    return { managerOutput: firstManagerOutput, validation: firstValidation, invalidAttempts: [] };
+    return {
+      managerOutput: firstManagerOutput,
+      validation: firstValidation,
+      invalidAttempts: [],
+    };
   }
 
   const firstAttempt = {
@@ -346,13 +395,18 @@ async function runManagerWithSemanticRetry(input: {
   };
   const retryAgentOutput = await runManagerAttempt({
     managerStep: input.managerStep,
-    instruction: buildManagerRetryInstruction({
-      originalInstruction: input.instruction,
-      validationErrors: firstValidation.errors,
-      managerOutput: firstAgentOutput,
-    }),
+    phase1Instruction: input.stepExecutor.buildPhase1Instruction(
+      buildManagerRetryInstruction({
+        originalInstruction: input.instruction,
+        validationErrors: firstValidation.errors,
+        managerOutput: firstAgentOutput,
+      }),
+      input.managerStep,
+    ),
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
+    providerInfo: input.providerInfo,
+    onManagerAttemptUsage: input.onManagerAttemptUsage,
   });
   const retryManagerOutput = mergeFindingManagerOutputs(input.mechanicalOutput, retryAgentOutput);
   const retryValidation = validateFindingManagerOutput({
@@ -395,8 +449,6 @@ export async function runFindingManagerForParallelStep(
     workflowProvider: input.workflowProvider,
     workflowModel: input.workflowModel,
   });
-  const providerInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
-
   // フィールド等価で確定する raw（解消確認・open 指摘への完全一致）はコードで
   // 分類し、判断が必要な残りだけを LLM manager に渡す。LLM を呼ばないのは
   // 「残りゼロ・prior step response に異議申告（Disputed Findings 見出し）なし・
@@ -406,11 +458,28 @@ export async function runFindingManagerForParallelStep(
   const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
   const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
   const needsAgent = mechanical.residualRawFindings.length > 0 || hasDisputeClaims || hasActiveConflict;
+  const currentProviderInfo = input.optionsBuilder.resolveStepProviderModel(managerStep);
+  let providerInfo = currentProviderInfo;
 
   let managerOutput: FindingManagerOutput;
   let validation: FindingManagerValidationResult;
   let invalidAttempts: FindingManagerValidationAttemptReport[];
   if (needsAgent) {
+    const autoRuntime = input.autoRouting === undefined
+      ? undefined
+      : await resolveAutoRoutingRuntime({
+        autoRouting: input.autoRouting,
+        step: {
+          name: managerStep.name,
+          tags: managerStep.tags,
+          personaKey: managerStep.providerRoutingPersonaKey,
+          instruction: managerStep.instruction,
+        },
+        currentProviderInfo,
+        routeWithAi: input.routeWithAi,
+        abortSignal: input.abortSignal,
+      });
+    providerInfo = autoRuntime?.providerInfo ?? currentProviderInfo;
     const instruction = buildManagerInstruction({
       contract: input.contract,
       previousLedger,
@@ -420,16 +489,21 @@ export async function runFindingManagerForParallelStep(
       mechanicallyClassifiedCount: rawFindings.length - mechanical.residualRawFindings.length,
       priorStepResponseText: input.priorStepResponseText,
     });
-    ({ managerOutput, validation, invalidAttempts } = await runManagerWithSemanticRetry({
+    const phase1Instruction = input.stepExecutor.buildPhase1Instruction(instruction, managerStep);
+    const managerRun = await runManagerWithSemanticRetry({
       previousLedger,
       rawFindings,
       mechanicalOutput: mechanical.output,
       managerStep,
       instruction,
+      phase1Instruction,
       optionsBuilder: input.optionsBuilder,
       stepExecutor: input.stepExecutor,
+      providerInfo,
       priorStepResponseText: input.priorStepResponseText,
-    }));
+      onManagerAttemptUsage: input.onManagerAttemptUsage,
+    });
+    ({ managerOutput, validation, invalidAttempts } = managerRun);
   } else {
     managerOutput = mechanical.output;
     validation = validateFindingManagerOutput({

@@ -1,11 +1,9 @@
 import {
   resolveProviderModelCandidates,
   resolveModelFromCandidates,
-  type ModelProviderCandidate,
   type ProviderModelOutput,
 } from '../provider-resolution.js';
 import type { ProviderType } from '../workflow/types.js';
-import type { ConfigAutoRoutingConfig, ProviderTypeOrAuto } from '../models/config-types.js';
 
 export interface AssistantProviderConfigSource {
   provider?: ProviderType;
@@ -29,9 +27,8 @@ export interface AssistantCliOverrides {
 }
 
 export interface NonWorkflowProviderConfigSource {
-  provider?: ProviderTypeOrAuto;
+  provider?: ProviderType;
   model?: string;
-  autoRouting?: Pick<ConfigAutoRoutingConfig, 'defaultProvider'>;
 }
 
 export interface NonWorkflowProviderConfig {
@@ -39,41 +36,16 @@ export interface NonWorkflowProviderConfig {
   global: NonWorkflowProviderConfigSource;
 }
 
-const MISSING_AUTO_DEFAULT_PROVIDER_ERROR =
-  'Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.';
-
-function toConcreteModelCandidate(
-  source: NonWorkflowProviderConfigSource,
-): ModelProviderCandidate {
-  if (source.provider === 'auto') {
-    return {};
-  }
-  return { provider: source.provider, model: source.model };
-}
-
 export function resolveNonWorkflowProviderModelFromConfig(
   config: NonWorkflowProviderConfig,
 ): ProviderModelOutput {
   const provider = config.project.provider ?? config.global.provider;
-  if (provider !== 'auto') {
-    return {
-      provider,
-      model: resolveModelFromCandidates([
-        toConcreteModelCandidate(config.project),
-        toConcreteModelCandidate(config.global),
-      ], provider),
-    };
-  }
-
-  const defaultProvider = config.project.autoRouting?.defaultProvider
-    ?? config.global.autoRouting?.defaultProvider;
-  if (defaultProvider === undefined) {
-    throw new Error(MISSING_AUTO_DEFAULT_PROVIDER_ERROR);
-  }
-
   return {
-    provider: defaultProvider.provider,
-    model: defaultProvider.model,
+    provider,
+    model: resolveModelFromCandidates([
+      { provider: config.project.provider, model: config.project.model },
+      { provider: config.global.provider, model: config.global.model },
+    ], provider),
   };
 }
 

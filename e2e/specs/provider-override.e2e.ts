@@ -299,11 +299,11 @@ describe('E2E: --provider option override (mock)', () => {
       args: [
         '--task', 'Reject invalid finding manager provider and model',
         '--workflow', invalidWorkflowPath,
-        '--provider', 'mock',
       ],
       cwd: repo.path,
       env: isolatedEnv.env,
       timeout: 60_000,
+      injectProvider: false,
     });
 
     const combined = `${result.stdout}\n${result.stderr}`;

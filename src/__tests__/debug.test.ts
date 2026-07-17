@@ -16,7 +16,7 @@ import {
   errorLog,
   writePromptLog,
 } from '../shared/utils/index.js';
-import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -27,6 +27,27 @@ function resolvePromptsLogFilePath(): string {
     throw new Error(`unexpected debug log file path: ${debugLogFile!}`);
   }
   return debugLogFile!.replace(/\.log$/, '-prompts.jsonl');
+}
+
+function readPersistedDebugData(logFile: string, message: string): string {
+  const persisted = readFileSync(logFile, 'utf-8');
+  const messageIndex = persisted.indexOf(message);
+  if (messageIndex < 0) {
+    throw new Error(`debug message not found: ${message}`);
+  }
+  const dataStart = persisted.indexOf('\n', messageIndex) + 1;
+  return persisted.slice(dataStart).replace(/\n$/, '');
+}
+
+function createDebugDataWithSerializedLength(targetLength: number): Record<string, unknown> {
+  const chunks = Array.from({ length: 50 }, () => 'x'.repeat(990));
+  const baseData = { chunks, padding: '' };
+  const baseLength = JSON.stringify(baseData, null, 2).length;
+  const paddingLength = targetLength - baseLength;
+  if (paddingLength < 0 || paddingLength > 1_000) {
+    throw new Error(`unsupported debug data target length: ${targetLength}`);
+  }
+  return { ...baseData, padding: 'x'.repeat(paddingLength) };
 }
 
 describe('debug logging', () => {
@@ -51,8 +72,7 @@ describe('debug logging', () => {
     });
 
     it('should enable debug when enabled is true', () => {
-      const projectDir = join(tmpdir(), 'takt-test-debug-enable-' + Date.now());
-      mkdirSync(projectDir, { recursive: true });
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-enable-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -64,8 +84,7 @@ describe('debug logging', () => {
     });
 
     it('should write debug log to project .takt/runs/*/logs/ directory', () => {
-      const projectDir = join(tmpdir(), 'takt-test-debug-project-' + Date.now());
-      mkdirSync(projectDir, { recursive: true });
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-project-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -82,8 +101,7 @@ describe('debug logging', () => {
     });
 
     it('should create prompts log file with -prompts suffix', () => {
-      const projectDir = join(tmpdir(), 'takt-test-debug-prompts-' + Date.now());
-      mkdirSync(projectDir, { recursive: true });
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-prompts-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -104,8 +122,7 @@ describe('debug logging', () => {
     });
 
     it('should use custom log file when provided', () => {
-      const logDir = join(tmpdir(), 'takt-test-debug-' + Date.now());
-      mkdirSync(logDir, { recursive: true });
+      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-'));
       const logFile = join(logDir, 'test.log');
 
       try {
@@ -123,8 +140,7 @@ describe('debug logging', () => {
     });
 
     it('should only initialize once', () => {
-      const projectDir = join(tmpdir(), 'takt-test-debug-once-' + Date.now());
-      mkdirSync(projectDir, { recursive: true });
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-once-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -154,8 +170,7 @@ describe('debug logging', () => {
 
   describe('writePromptLog', () => {
     it('should append prompt log record when debug is enabled', () => {
-      const projectDir = join(tmpdir(), 'takt-test-debug-write-prompts-' + Date.now());
-      mkdirSync(projectDir, { recursive: true });
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-write-prompts-'));
 
       try {
         initDebugLogger({ enabled: true }, projectDir);
@@ -315,8 +330,7 @@ describe('debug logging', () => {
 
   describe('file logging with verbose console', () => {
     it('should write to both file and stderr when both are enabled', () => {
-      const logDir = join(tmpdir(), 'takt-test-debug-both-' + Date.now());
-      mkdirSync(logDir, { recursive: true });
+      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-both-'));
       const logFile = join(logDir, 'test.log');
 
       const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -354,6 +368,110 @@ describe('debug logging', () => {
         expect(output).toContain('console only');
       } finally {
         stderrSpy.mockRestore();
+      }
+    });
+
+    it('should redact and bound string metadata before writing debug data', () => {
+      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-sensitive-'));
+      const logFile = join(logDir, 'test.log');
+      const secret = 'UNIQUE_DEBUG_LEAK_VALUE';
+      const credentialUrl = `https://${'a'.repeat(980)}:${secret}@example.com`;
+
+      try {
+        initDebugLogger({ enabled: true, logFile }, '/tmp');
+        debugLog('team-leader-runner', 'Team leader decomposed parts', {
+          partIds: [credentialUrl],
+          parts: [{ id: credentialUrl, title: `password=${secret}-${'x'.repeat(2_000)}` }],
+          reasoning: credentialUrl,
+        });
+
+        const persisted = readFileSync(logFile, 'utf-8');
+        expect(persisted).toContain('[REDACTED]');
+        expect(persisted).not.toContain(secret);
+        expect(persisted).not.toContain(credentialUrl);
+        expect(persisted.length).toBeLessThan(50_000);
+      } finally {
+        rmSync(logDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should redact sensitive messages and nested credential fields from file and console logs', () => {
+      const logDir = mkdtempSync(join(tmpdir(), 'takt-test-debug-nested-sensitive-'));
+      const logFile = join(logDir, 'test.log');
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      try {
+        initDebugLogger({ enabled: true, logFile }, '/tmp');
+        setVerboseConsole(true);
+        debugLog('security', 'Authorization: Bearer MESSAGE_TOKEN', {
+          headers: {
+            authorization: 'Bearer OBJECT_TOKEN',
+            cookie: 'session=COOKIE_TOKEN',
+            'set-cookie': 'session=SET_COOKIE_TOKEN',
+          },
+          authToken: 'NESTED_TOKEN',
+          status: 'safe',
+        });
+
+        const persisted = readFileSync(logFile, 'utf-8');
+        const consoleOutput = stderrSpy.mock.calls.map(([value]) => String(value)).join('');
+        expect(persisted).toContain('[REDACTED]');
+        expect(persisted).toContain('"status": "safe"');
+        expect(consoleOutput).toContain('[REDACTED]');
+        for (const secret of [
+          'MESSAGE_TOKEN',
+          'OBJECT_TOKEN',
+          'COOKIE_TOKEN',
+          'SET_COOKIE_TOKEN',
+          'NESTED_TOKEN',
+        ]) {
+          expect(persisted).not.toContain(secret);
+          expect(consoleOutput).not.toContain(secret);
+        }
+      } finally {
+        stderrSpy.mockRestore();
+        rmSync(logDir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      { inputLength: 1_000, truncated: false },
+      { inputLength: 1_001, truncated: true },
+    ])('should enforce the $inputLength character metadata boundary through debugLog', ({ inputLength, truncated }) => {
+      const logDir = mkdtempSync(join(tmpdir(), `takt-test-debug-metadata-${inputLength}-`));
+      const logFile = join(logDir, 'test.log');
+      const message = `metadata boundary ${inputLength}`;
+
+      try {
+        initDebugLogger({ enabled: true, logFile }, '/tmp');
+        debugLog('test', message, 'x'.repeat(inputLength));
+
+        const persistedData = readPersistedDebugData(logFile, message);
+        expect(persistedData).toHaveLength(1_000);
+        expect(persistedData.endsWith('...[truncated]')).toBe(truncated);
+      } finally {
+        rmSync(logDir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      { serializedLength: 50_000, truncated: false },
+      { serializedLength: 50_001, truncated: true },
+    ])('should enforce the $serializedLength character serialized data boundary through debugLog', ({ serializedLength, truncated }) => {
+      const logDir = mkdtempSync(join(tmpdir(), `takt-test-debug-data-${serializedLength}-`));
+      const logFile = join(logDir, 'test.log');
+      const message = `serialized data boundary ${serializedLength}`;
+      const data = createDebugDataWithSerializedLength(serializedLength);
+
+      try {
+        initDebugLogger({ enabled: true, logFile }, '/tmp');
+        debugLog('test', message, data);
+
+        const persistedData = readPersistedDebugData(logFile, message);
+        expect(persistedData).toHaveLength(50_000);
+        expect(persistedData.endsWith('...[truncated]')).toBe(truncated);
+      } finally {
+        rmSync(logDir, { recursive: true, force: true });
       }
     });
   });

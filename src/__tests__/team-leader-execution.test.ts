@@ -74,6 +74,80 @@ describe('runTeamLeaderExecution', () => {
     expect(requestMoreParts).not.toHaveBeenCalled();
   });
 
+  it('開始前に中断済みの場合はパートをqueueせず実行しない', async () => {
+    const abortController = new AbortController();
+    abortController.abort(new Error('execution aborted before scheduling'));
+    const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
+    const requestMoreParts = vi.fn();
+    const onPartQueued = vi.fn();
+
+    await expect(runTeamLeaderExecution({
+      initialParts: [makePart('p1'), makePart('p2')],
+      maxConcurrency: 2,
+      refillThreshold: 0,
+      abortSignal: abortController.signal,
+      runPart,
+      requestMoreParts,
+      onPartQueued,
+    })).rejects.toThrow('execution aborted before scheduling');
+
+    expect(runPart).not.toHaveBeenCalled();
+    expect(requestMoreParts).not.toHaveBeenCalled();
+    expect(onPartQueued).not.toHaveBeenCalled();
+  });
+
+  it('queue通知中に中断された場合はパートを実行しない', async () => {
+    const abortController = new AbortController();
+    const runPart = vi.fn(async (part: PartDefinition) => makeResult(part));
+    const requestMoreParts = vi.fn();
+    const onPartQueued = vi.fn(() => {
+      abortController.abort(new Error('execution aborted while queueing'));
+    });
+
+    await expect(runTeamLeaderExecution({
+      initialParts: [makePart('p1')],
+      maxConcurrency: 1,
+      refillThreshold: 0,
+      abortSignal: abortController.signal,
+      runPart,
+      requestMoreParts,
+      onPartQueued,
+    })).rejects.toThrow('execution aborted while queueing');
+
+    expect(onPartQueued).toHaveBeenCalledOnce();
+    expect(runPart).not.toHaveBeenCalled();
+    expect(requestMoreParts).not.toHaveBeenCalled();
+  });
+
+  it('逐次実行中に中断された場合は次のパートとfeedbackを開始しない', async () => {
+    const abortController = new AbortController();
+    const parts = [makePart('p1'), makePart('p2')];
+    const runPart = vi.fn(async (part: PartDefinition) => {
+      abortController.abort(new Error('execution aborted after part completion'));
+      return makeResult(part);
+    });
+    const requestMoreParts = vi.fn();
+    const onPartQueued = vi.fn();
+    const onPartCompleted = vi.fn();
+
+    await expect(runTeamLeaderExecution({
+      initialParts: parts,
+      maxConcurrency: 1,
+      refillThreshold: 1,
+      abortSignal: abortController.signal,
+      runPart,
+      requestMoreParts,
+      onPartQueued,
+      onPartCompleted,
+    })).rejects.toThrow('execution aborted after part completion');
+
+    expect(runPart).toHaveBeenCalledOnce();
+    expect(runPart).toHaveBeenCalledWith(parts[0], 0);
+    expect(requestMoreParts).not.toHaveBeenCalled();
+    expect(onPartQueued).toHaveBeenCalledOnce();
+    expect(onPartCompleted).toHaveBeenCalledOnce();
+  });
+
   it('refill threshold 到達時に追加パートを取り込んで完了する', async () => {
     const part1 = makePart('p1');
     const part2 = makePart('p2');
@@ -153,6 +227,29 @@ describe('runTeamLeaderExecution', () => {
     })).rejects.toThrow('Structured output produced too many parts: 2 > 1');
 
     expect(onPlanningError).not.toHaveBeenCalled();
+  });
+
+  it('feedback 中に中断された場合は planning error として握りつぶさない', async () => {
+    const abortController = new AbortController();
+    const part = makePart('p1');
+    const onPlanningError = vi.fn();
+    const requestMoreParts = vi.fn().mockImplementation(async () => {
+      abortController.abort(new Error('feedback aborted'));
+      throw abortController.signal.reason;
+    });
+
+    await expect(runTeamLeaderExecution({
+      initialParts: [part],
+      maxConcurrency: 1,
+      refillThreshold: 0,
+      abortSignal: abortController.signal,
+      runPart: async () => makeResult(part),
+      requestMoreParts,
+      onPlanningError,
+    })).rejects.toThrow('feedback aborted');
+
+    expect(onPlanningError).not.toHaveBeenCalled();
+    expect(requestMoreParts).toHaveBeenCalledOnce();
   });
 
   it('重複IDだけ返された場合は追加せず終了する', async () => {

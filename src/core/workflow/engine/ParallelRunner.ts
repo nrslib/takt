@@ -31,6 +31,7 @@ import type { WorkflowEngineOptions, PhaseName, PhasePromptParts, JudgeStageEntr
 import type { RuntimeStepResolution } from '../types.js';
 import type { ParallelLoggerOptions } from './parallel-logger.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
+import type { RunAgentOptions } from '../../../agents/types.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { resolveAutoRoutingBatch } from '../auto-routing/resolver.js';
 import type { QualityGateRunResult } from '../quality-gates/types.js';
@@ -48,6 +49,7 @@ import { isNonAiReturnValueRule } from '../evaluation/rule-utils.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
 import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
+import { recordDelegatedAgentUsage } from './delegated-agent-usage.js';
 
 const log = createLogger('parallel-runner');
 
@@ -254,6 +256,7 @@ export class ParallelRunner {
           })),
           routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
           logger: log,
+          abortSignal: this.deps.engineOptions.abortSignal,
         })
       : new Map();
 
@@ -261,6 +264,7 @@ export class ParallelRunner {
     // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
     const subStepStartedAtByName = new Map<string, number>();
     const subStepInstructionByName = new Map<string, string>();
+    const subStepProviderInfoByName = new Map<string, NonNullable<StepRunResult['providerInfo']>>();
     const settled = await Promise.allSettled(
       subSteps.map(async (subStep, index) => {
         if (semaphore) {
@@ -311,6 +315,7 @@ export class ParallelRunner {
           const subPm = subRuntime
             ? this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, subRuntime)
             : this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep);
+          subStepProviderInfoByName.set(subStep.name, subPm);
           const subRuleCtx = {
             ...parentRuleCtx,
             provider: subPm.provider,
@@ -337,7 +342,15 @@ export class ParallelRunner {
 
         // Override onStream with parallel logger's prefixed handler (immutable)
         const agentOptions = parallelLogger
-          ? { ...baseOptions, onStream: parallelLogger.createStreamHandler(subStep.name, index) }
+          ? {
+              ...baseOptions,
+              onStream: this.deps.optionsBuilder.buildProviderStream(
+                executableSubStep,
+                subPm.provider,
+                subPm.model,
+                parallelLogger.createStreamHandler(subStep.name, index),
+              ),
+            }
           : { ...baseOptions };
         agentOptions.onPromptResolved = (promptParts: PhasePromptParts) => {
           resolvedPromptParts = promptParts;
@@ -358,7 +371,7 @@ export class ParallelRunner {
           sanitizeText: this.deps.sanitizeObservabilityText,
           providerInfo: subPm,
           getPromptParts: () => resolvedPromptParts,
-        }, () => executeAgent(executableSubStep.persona, phase1Instruction, agentOptions), (result) => ({
+        }, () => this.executeSubStepAgent(executableSubStep, subPm, phase1Instruction, agentOptions), (result) => ({
           status: result.status,
           content: result.content,
           error: result.error,
@@ -406,7 +419,7 @@ export class ParallelRunner {
             workflowStack: this.deps.getCurrentWorkflowStack?.(),
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo: subPm,
-          }, () => executeAgent(executableSubStep.persona, phase1Instruction, retryOptions), (result) => ({
+          }, () => this.executeSubStepAgent(executableSubStep, subPm, phase1Instruction, retryOptions), (result) => ({
             status: result.status,
             content: result.content,
             error: result.error,
@@ -442,12 +455,17 @@ export class ParallelRunner {
             ].join('\n');
             // 是正は JSON 再出力のみ: ツール・編集権限は不要なので絞り、
             // Phase 1 のイベントコールバックも引き継がない。
-            const correctiveResponse = await executeAgent(executableSubStep.persona, correctionInstruction, {
+            const correctiveResponse = await this.executeSubStepAgent(executableSubStep, subPm, correctionInstruction, {
               ...agentOptions,
               permissionMode: 'readonly',
               allowedTools: [],
               onPromptResolved: undefined,
-              onStream: undefined,
+              onStream: this.deps.optionsBuilder.buildProviderStream(
+                executableSubStep,
+                subPm.provider,
+                subPm.model,
+                undefined,
+              ),
               ...(subResponse.sessionId !== undefined ? { sessionId: subResponse.sessionId } : {}),
             });
             // 非ネイティブ構造化出力プロバイダでは是正 JSON が content に入る
@@ -504,6 +522,7 @@ export class ParallelRunner {
 
         // Phase 2/3 context resolves the same runtime-aware session key as Phase 1.
         const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
+          subStep,
           state,
           subResponse.content,
           updatePersonaSession,
@@ -512,6 +531,20 @@ export class ParallelRunner {
           this.deps.onJudgeStage,
           parentIteration,
           subRuntime,
+          (
+            providerInfo: NonNullable<StepRunResult['providerInfo']>,
+            success: boolean,
+            usage: AgentResponse['providerUsage'],
+          ): void => {
+            recordDelegatedAgentUsage(
+              this.deps.engineOptions,
+              subStep.name,
+              'parallel',
+              providerInfo,
+              success,
+              usage,
+            );
+          },
         );
 
         // Phase 2: report output for sub-step
@@ -659,7 +692,7 @@ export class ParallelRunner {
         subStep: failedStep,
         response: errorResponse,
         instruction: instruction === undefined ? '' : instruction,
-        providerInfo: routedProviderInfoByStep.get(failedStep.name),
+        providerInfo: subStepProviderInfoByName.get(failedStep.name),
         durationMs: startedAt === undefined
           ? 0
           : Math.max(0, errorResponse.timestamp.getTime() - startedAt),
@@ -734,7 +767,13 @@ export class ParallelRunner {
       };
     }
 
-    const findingManagerResult = await this.runFindingContractManager(step, stepIteration, subResults, findingLedgerCopyPath, priorStepResponseText);
+    const findingManagerResult = await this.runFindingContractManager(
+      step,
+      stepIteration,
+      subResults,
+      findingLedgerCopyPath,
+      priorStepResponseText,
+    );
     if (findingManagerResult?.status === 'invalid_manager_output') {
       const response = this.createFindingManagerInvalidOutputResult({
         step,
@@ -885,6 +924,19 @@ export class ParallelRunner {
       timestamp: new Date().toISOString(),
       ledgerCopyPath,
       priorStepResponseText,
+      autoRouting: this.deps.engineOptions.autoRouting,
+      routeWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeStep,
+      abortSignal: this.deps.engineOptions.abortSignal,
+      onManagerAttemptUsage: (managerStep, providerInfo, success, usage) => {
+        recordDelegatedAgentUsage(
+          this.deps.engineOptions,
+          managerStep.name,
+          'parallel',
+          providerInfo,
+          success,
+          usage,
+        );
+      },
     });
     if (result.status === 'updated') {
       this.deps.refreshFindingsState();
@@ -911,6 +963,37 @@ export class ParallelRunner {
         this.deps.getWorkflowName(),
       );
     }
+  }
+
+  private async executeSubStepAgent(
+    subStep: AgentWorkflowStep,
+    providerInfo: NonNullable<StepRunResult['providerInfo']>,
+    instruction: string,
+    options: RunAgentOptions,
+  ): Promise<AgentResponse> {
+    let response: AgentResponse;
+    try {
+      response = await executeAgent(subStep.persona, instruction, options);
+    } catch (error) {
+      recordDelegatedAgentUsage(
+        this.deps.engineOptions,
+        subStep.name,
+        'parallel',
+        providerInfo,
+        false,
+        undefined,
+      );
+      throw error;
+    }
+    recordDelegatedAgentUsage(
+      this.deps.engineOptions,
+      subStep.name,
+      'parallel',
+      providerInfo,
+      response.status === 'done',
+      response.providerUsage,
+    );
+    return response;
   }
 
   private prepareFindingContractLedgerCopy(): string | undefined {

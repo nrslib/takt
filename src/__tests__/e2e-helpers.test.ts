@@ -77,8 +77,7 @@ describe('createIsolatedEnv', () => {
     const isolated = createIsolatedEnv();
     cleanups.push(isolated.cleanup);
 
-    expect(isolated.env.GIT_CONFIG_GLOBAL).toBeDefined();
-    expect(isolated.env.GIT_CONFIG_GLOBAL).toContain('takt-e2e-');
+    expect(isolated.env.GIT_CONFIG_GLOBAL).toBe(join(isolated.taktDir, '..', '.gitconfig'));
   });
 
   it('should create config.yaml from E2E fixture with notification_sound disabled', () => {

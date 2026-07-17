@@ -1,4 +1,4 @@
-const SENSITIVE_KEY_PATTERN = String.raw`[A-Za-z0-9_.-]*(?:api[_-]?key|token|password|secret|access[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key)[A-Za-z0-9_.-]*`;
+const SENSITIVE_KEY_PATTERN = String.raw`[A-Za-z0-9_.-]{0,64}(?:api[_-]?key|token|password|secret|access[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key)[A-Za-z0-9_.-]{0,64}`;
 const SENSITIVE_QUOTED_VALUE_PATTERN = String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`;
 const SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX = new RegExp(
   String.raw`(["']?(?:${SENSITIVE_KEY_PATTERN})["']?\s*[:=]\s*)(${SENSITIVE_QUOTED_VALUE_PATTERN})`,
@@ -18,10 +18,30 @@ const URL_USERINFO_CREDENTIALS_REGEX = /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s
 const CURL_USER_EQUALS_REGEX = /(\B--(?:proxy-)?user=)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/gi;
 const CURL_USER_SPACE_REGEX = /(\B(?:-u|--(?:proxy-)?user)\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/gi;
 const CURL_SHORT_USER_COMPACT_REGEX = /(^|\s)(-u)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/gi;
+const PRIVATE_KEY_BEGIN_REGEX = /-----BEGIN (?:[A-Z0-9]{1,32} )?PRIVATE KEY-----/g;
+
+function redactPrivateKeyBlocks(text: string): string {
+  PRIVATE_KEY_BEGIN_REGEX.lastIndex = 0;
+  let cursor = 0;
+  let result = '';
+  let match = PRIVATE_KEY_BEGIN_REGEX.exec(text);
+  while (match !== null) {
+    result += `${text.slice(cursor, match.index)}[REDACTED]`;
+    const endMarker = match[0].replace('BEGIN', 'END');
+    const endIndex = text.indexOf(endMarker, PRIVATE_KEY_BEGIN_REGEX.lastIndex);
+    if (endIndex < 0) {
+      return result;
+    }
+    cursor = endIndex + endMarker.length;
+    PRIVATE_KEY_BEGIN_REGEX.lastIndex = cursor;
+    match = PRIVATE_KEY_BEGIN_REGEX.exec(text);
+  }
+  return result + text.slice(cursor);
+}
 
 export function sanitizeSensitiveText(text: string): string {
   if (!text) return text;
-  return text
+  return redactPrivateKeyBlocks(text)
     .replace(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX, (_match, prefix: string, quotedValue: string) => {
       const quote = quotedValue[0];
       return `${prefix}${quote}[REDACTED]${quote}`;

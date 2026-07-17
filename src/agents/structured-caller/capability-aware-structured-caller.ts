@@ -1,6 +1,5 @@
 import type {
   WorkflowRule,
-  PartDefinition,
 } from '../../core/models/types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type {
@@ -10,6 +9,7 @@ import type {
 } from '../judge-status-usecase.js';
 import type {
   DecomposeTaskOptions,
+  DecomposeTaskResponse,
   MorePartsOptions,
   MorePartsResponse,
 } from '../decompose-task-usecase.js';
@@ -62,7 +62,7 @@ export class CapabilityAwareStructuredCaller extends DefaultStructuredCaller {
     instruction: string,
     maxTotalParts: number,
     options: DecomposeTaskOptions,
-  ): Promise<PartDefinition[]> {
+  ): Promise<DecomposeTaskResponse> {
     const provider = resolveProvider(options.provider, options.resolvedProvider);
     if (shouldUsePromptBased(provider)) {
       return this.promptBased.decomposeTask(instruction, maxTotalParts, options);

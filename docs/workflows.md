@@ -210,7 +210,7 @@ finding_contract:
     model: gpt-5.5
 ```
 
-When set, these values are applied as step-level `provider` / `model` for the Finding Manager. They take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, workflow defaults, and resolved input provider/model. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
+When set, these values are applied as step-level `provider` / `model` for the Finding Manager. Explicit CLI and environment overrides remain higher priority. The manager values take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, effective auto routing, and workflow/project/global fallbacks. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
 
 ### Finding Contract parallel retry failure routing
 
@@ -345,7 +345,7 @@ steps:
           network_access: true
 ```
 
-Entries are evaluated in declaration order; the **last matching entry wins**. Promotion is the **highest-priority source** in provider / model / provider_options resolution (above step-level `provider` / `model`).
+Entries are evaluated in declaration order; the **last matching entry wins**. Promotion overrides step-level `provider` / `model` / `provider_options`, but explicit CLI and environment-variable provider / model overrides remain higher priority.
 
 Promotion is not supported on parallel sub-steps.
 

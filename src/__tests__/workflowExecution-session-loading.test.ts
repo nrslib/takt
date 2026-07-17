@@ -21,6 +21,7 @@ const {
   mockStepResponse,
   mockInitializeOtelFoundation,
   mockObservabilityShutdown,
+  mockResolveConfigValueWithSource,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
@@ -29,12 +30,11 @@ const {
   const mockLoadWorktreeSessions = vi.fn().mockReturnValue({ coder: 'worktree-session-id' });
   const mockUsageLogger = {
     filepath: '/tmp/test-usage-events.jsonl',
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
-    logUsage: vi.fn(),
+    logUsageFor: vi.fn(),
   };
   const mockCreateUsageEventLogger = vi.fn().mockReturnValue(mockUsageLogger);
   const mockObservabilityShutdown = vi.fn().mockResolvedValue(undefined);
+  const mockResolveConfigValueWithSource = vi.fn();
   const mockInitializeOtelFoundation = vi.fn().mockResolvedValue({
     shutdown: mockObservabilityShutdown,
   });
@@ -129,6 +129,7 @@ const {
     mockStepResponse,
     mockInitializeOtelFoundation,
     mockObservabilityShutdown,
+    mockResolveConfigValueWithSource,
   };
 });
 
@@ -168,6 +169,11 @@ vi.mock('../infra/config/index.js', () => ({
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
+}));
+
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveConfigValueWithSource: mockResolveConfigValueWithSource,
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -226,7 +232,7 @@ vi.mock('../shared/prompt/index.js', () => ({
   selectOption: vi.fn(),
   promptInput: vi.fn(),
 }));
-vi.mock('../shared/utils/usageEventLogger.js', () => ({
+vi.mock('../core/logging/usageEventLogger.js', () => ({
   createUsageEventLogger: mockCreateUsageEventLogger,
   isUsageEventsEnabled: vi.fn().mockReturnValue(true),
 }));
@@ -353,6 +359,9 @@ describe('executeWorkflow session loading', () => {
       shutdown: mockObservabilityShutdown,
     });
     vi.mocked(resolveWorkflowConfigValues).mockReturnValue({ ...defaultResolvedConfigValues });
+    mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
+      ? { value: 'claude', source: 'global' }
+      : { value: undefined, source: 'default' });
     mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
     mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
     MockWorkflowEngine.runError = undefined;
@@ -390,9 +399,12 @@ describe('executeWorkflow session loading', () => {
     });
 
     expect(mockCreateUsageEventLogger).toHaveBeenCalledOnce();
-    expect(mockUsageLogger.setStep).toHaveBeenCalledWith('implement', 'normal');
-    expect(mockUsageLogger.setProvider).toHaveBeenCalledWith('claude', '(default)');
-    expect(mockUsageLogger.logUsage).toHaveBeenCalledWith({
+    expect(mockUsageLogger.logUsageFor).toHaveBeenCalledWith({
+      provider: 'claude',
+      providerModel: '(default)',
+      step: 'implement',
+      stepType: 'normal',
+    }, {
       success: true,
       usage: {
         inputTokens: 3,
@@ -410,7 +422,10 @@ describe('executeWorkflow session loading', () => {
       projectCwd: '/tmp/project',
     });
 
-    expect(mockUsageLogger.logUsage).toHaveBeenCalledWith({
+    expect(mockUsageLogger.logUsageFor).toHaveBeenCalledWith(expect.objectContaining({
+      step: 'implement',
+      stepType: 'normal',
+    }), {
       success: true,
       usage: {
         usageMissing: true,
@@ -1069,6 +1084,9 @@ describe('executeWorkflow session loading', () => {
       ...defaultResolvedConfigValues,
       model: 'gpt-4.1',
     });
+    mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
+      ? { value: 'claude', source: 'global' }
+      : { value: 'gpt-4.1', source: 'global' });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -1084,6 +1102,9 @@ describe('executeWorkflow session loading', () => {
       provider: 'claude',
       model: 'gpt-5.4',
     });
+    mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
+      ? { value: 'claude', source: 'global' }
+      : { value: 'gpt-5.4', source: 'global' });
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -1115,7 +1136,7 @@ describe('executeWorkflow session loading', () => {
       projectCwd: '/tmp/project',
     });
 
-    expect(mockUsageLogger.setStep).toHaveBeenCalledWith('implement', 'parallel');
+    expect(mockUsageLogger.logUsageFor).not.toHaveBeenCalled();
   });
 
   it('should pass step type to usage logger for arpeggio step', async () => {
@@ -1123,7 +1144,10 @@ describe('executeWorkflow session loading', () => {
       projectCwd: '/tmp/project',
     });
 
-    expect(mockUsageLogger.setStep).toHaveBeenCalledWith('implement', 'arpeggio');
+    expect(mockUsageLogger.logUsageFor).toHaveBeenCalledWith(
+      expect.objectContaining({ step: 'implement', stepType: 'arpeggio' }),
+      expect.any(Object),
+    );
   });
 
   it('should pass step type to usage logger for team leader step', async () => {
@@ -1136,6 +1160,6 @@ describe('executeWorkflow session loading', () => {
       },
     );
 
-    expect(mockUsageLogger.setStep).toHaveBeenCalledWith('implement', 'team_leader');
+    expect(mockUsageLogger.logUsageFor).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 export interface IsolatedEnv {
-  runId: string;
   taktDir: string;
   env: NodeJS.ProcessEnv;
   cleanup: () => void;
@@ -87,8 +86,7 @@ export function updateIsolatedConfig(taktDir: string, patch: E2EConfig): void {
  * - Uses the real ~/.claude/ for Claude authentication
  */
 export function createIsolatedEnv(): IsolatedEnv {
-  const runId = `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const baseDir = mkdtempSync(join(tmpdir(), `takt-e2e-${runId}-`));
+  const baseDir = mkdtempSync(join(tmpdir(), 'te-'));
 
   const taktDir = join(baseDir, '.takt');
   const gitConfigPath = join(baseDir, '.gitconfig');
@@ -151,7 +149,6 @@ export function createIsolatedEnv(): IsolatedEnv {
   };
 
   return {
-    runId,
     taktDir,
     env,
     cleanup: () => {

@@ -189,12 +189,14 @@ async function runNpmCommand(npmArgs) {
   });
 }
 
-export async function runNpmTest(args) {
+export async function runNpmTest(args, runCommand) {
   const runs = selectNpmTestRuns(args);
-  const results = await Promise.all(runs.map(async (run) => {
-    const result = await runNpmCommand(run.npmArgs);
-    return { run, result };
-  }));
+  const results = args.length === 0
+    ? await runNpmTestCommandsSequentially(runs, runCommand)
+    : await Promise.all(runs.map(async (run) => {
+        const result = await runCommand(run.npmArgs);
+        return { run, result };
+      }));
 
   const failed = results.filter(({ result }) => result.code !== 0);
   for (const { run, result } of failed) {
@@ -205,7 +207,16 @@ export async function runNpmTest(args) {
   return failed[0]?.result.code ?? 0;
 }
 
+async function runNpmTestCommandsSequentially(runs, runCommand) {
+  let results = [];
+  for (const run of runs) {
+    const result = await runCommand(run.npmArgs);
+    results = [...results, { run, result }];
+  }
+  return results;
+}
+
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const code = await runNpmTest(process.argv.slice(2));
+  const code = await runNpmTest(process.argv.slice(2), runNpmCommand);
   process.exit(code);
 }

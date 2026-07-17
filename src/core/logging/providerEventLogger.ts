@@ -1,7 +1,6 @@
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
-import type { ProviderTypeOrAuto } from '../models/config-types.js';
+import type { ProviderType, StreamEvent } from '../../shared/types/provider.js';
 import { PROVIDER_EVENTS_LOG_FILE_SUFFIX } from './contracts.js';
 import { normalizeProviderEvent } from './providerEvent.js';
 
@@ -9,16 +8,18 @@ export interface ProviderEventLoggerConfig {
   logsDir: string;
   sessionId: string;
   runId: string;
-  provider: ProviderTypeOrAuto;
-  step: string;
   enabled: boolean;
+}
+
+export interface ProviderEventLogContext {
+  readonly provider: ProviderType;
+  readonly providerModel: string;
+  readonly step: string;
 }
 
 export interface ProviderEventLogger {
   readonly filepath: string;
-  setStep(step: string): void;
-  setProvider(provider: ProviderType): void;
-  wrapCallback(original?: StreamCallback): StreamCallback;
+  logEvent(context: ProviderEventLogContext, event: StreamEvent): void;
 }
 
 function assertNonEmpty(value: string, field: string): void {
@@ -32,17 +33,20 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
     assertNonEmpty(config.logsDir, 'logsDir');
     assertNonEmpty(config.sessionId, 'sessionId');
     assertNonEmpty(config.runId, 'runId');
-    assertNonEmpty(config.step, 'step');
   }
 
   const filepath = join(config.logsDir, `${config.sessionId}${PROVIDER_EVENTS_LOG_FILE_SUFFIX}`);
-  let step = config.step;
-  let provider: ProviderTypeOrAuto = config.provider;
   let hasReportedWriteFailure = false;
 
-  const write = (event: StreamEvent): void => {
-    const record = normalizeProviderEvent(event, provider, step, config.runId);
+  const write = (context: ProviderEventLogContext, event: StreamEvent): void => {
     try {
+      const record = normalizeProviderEvent(
+        event,
+        context.provider,
+        context.providerModel,
+        context.step,
+        config.runId,
+      );
       appendFileSync(filepath, JSON.stringify(record) + '\n', 'utf-8');
     } catch (error) {
       if (hasReportedWriteFailure) {
@@ -56,25 +60,13 @@ export function createProviderEventLogger(config: ProviderEventLoggerConfig): Pr
 
   return {
     filepath,
-    setStep(nextStep: string): void {
-      assertNonEmpty(nextStep, 'step');
-      step = nextStep;
-    },
-    setProvider(nextProvider: ProviderType): void {
-      provider = nextProvider;
-    },
-    wrapCallback(original?: StreamCallback): StreamCallback {
-      if (!config.enabled && original) {
-        return original;
-      }
+    logEvent(context: ProviderEventLogContext, event: StreamEvent): void {
       if (!config.enabled) {
-        return () => {};
+        return;
       }
-
-      return (event: StreamEvent): void => {
-        write(event);
-        original?.(event);
-      };
+      assertNonEmpty(context.step, 'step');
+      assertNonEmpty(context.providerModel, 'providerModel');
+      write(context, event);
     },
   };
 }

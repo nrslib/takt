@@ -1003,7 +1003,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     }
     step.teamLeader.partTags = ['implementation'];
     const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {
-      provider: 'auto',
+      provider: 'mock',
       model: undefined,
       autoRouting: {
         strategy: 'balanced',

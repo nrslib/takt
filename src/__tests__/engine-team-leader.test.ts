@@ -10,6 +10,12 @@ import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { initNdjsonLog } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { renderTraceReportFromLogs } from '../features/tasks/execute/traceReport.js';
+import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
+import { createUsageEventLogger, type UsageEventLoggerConfig } from '../core/logging/usageEventLogger.js';
+import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
+import type { ProviderEventLogRecord } from '../core/logging/providerEvent.js';
+import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -79,6 +85,19 @@ function createAutoRoutingConfig(): AutoRoutingConfig {
   };
 }
 
+function createTeamLeaderAutoRoutingConfig(): AutoRoutingConfig {
+  const autoRouting = createAutoRoutingConfig();
+  return {
+    ...autoRouting,
+    rules: {
+      ...autoRouting.rules,
+      personas: {
+        'team-leader': 'coding',
+      },
+    },
+  };
+}
+
 function mockRunAgentWithPrompt(...responses: ReturnType<typeof makeResponse>[]): void {
   const mock = vi.mocked(runAgent);
   for (const response of responses) {
@@ -92,16 +111,44 @@ function mockRunAgentWithPrompt(...responses: ReturnType<typeof makeResponse>[])
   }
 }
 
+function mockRunAgentRejectingOnAbort(onWaitingForAbort?: () => void): void {
+  vi.mocked(runAgent).mockImplementationOnce(async (persona, instruction, options) => {
+    options?.onPromptResolved?.({
+      systemPrompt: typeof persona === 'string' ? persona : '',
+      userInstruction: instruction,
+    });
+    const abortSignal = options?.abortSignal;
+    if (!abortSignal) {
+      throw new Error('abortSignal is required');
+    }
+
+    return new Promise<never>((_resolve, reject) => {
+      const rejectWithAbortReason = (): void => {
+        reject(abortSignal.reason);
+      };
+      if (abortSignal.aborted) {
+        rejectWithAbortReason();
+        return;
+      }
+      abortSignal.addEventListener('abort', rejectWithAbortReason, { once: true });
+      onWaitingForAbort?.();
+    });
+  });
+}
+
 describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
   let tmpDir: string;
 
   beforeEach(() => {
     vi.resetAllMocks();
     applyDefaultMocks();
+    DebugLogger.getInstance().reset();
     tmpDir = createTestTmpDir();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    DebugLogger.getInstance().reset();
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -142,6 +189,52 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('API done');
     expect(output!.content).toContain('## part-2: Test');
     expect(output!.content).toContain('Tests done');
+  });
+
+  it('親 AbortSignal を decomposition call に渡し、cancel 後に再試行しない', async () => {
+    const config = buildTeamLeaderConfig();
+    const abortController = new AbortController();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      abortSignal: abortController.signal,
+    });
+    mockRunAgentRejectingOnAbort(() => abortController.abort());
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.abortSignal).toBe(abortController.signal);
+  });
+
+  it('feedback call 中の親中断を workflow aborted として伝播し後続callを停止する', async () => {
+    const config = buildTeamLeaderConfig();
+    const abortController = new AbortController();
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      abortSignal: abortController.signal,
+    });
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+    );
+    vi.mocked(runAgent).mockImplementationOnce(async () => {
+      abortController.abort(new Error('feedback aborted'));
+      throw abortController.signal.reason;
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls[2]?.[2]?.abortSignal).toBe(abortController.signal);
   });
 
   // buildGitRules は team-leader-part-runner の buildTeamLeaderPartInstruction 経由でも
@@ -191,13 +284,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     step.teamLeader.partTags = ['implementation'];
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
       projectCwd: tmpDir,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
     });
-    const routingEvents: unknown[][] = [];
-    engine.on('routing:decision', (...args) => {
-      routingEvents.push(args);
-    });
+    const routingDecision = vi.fn();
+    engine.on('routing:decision', routingDecision);
 
     mockRunAgentWithPrompt(
       makeResponse({
@@ -217,6 +308,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
     const state = await engine.run();
+    const routingEvents = routingDecision.mock.calls;
 
     expect(state.status).toBe('completed');
     expect(routingEvents).toHaveLength(2);
@@ -250,7 +342,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(typeof routingEvents[1]?.[5]).toBe('number');
   });
 
-  it('team leader の providerRoutingPersonaKey に一致する persona rule で leader 候補を選ぶ', async () => {
+  it('team leader と worker の実 provider を候補ごとに JSONL へ記録する', async () => {
     const config = buildTeamLeaderConfig();
     const step = config.steps[0];
     if (!step?.teamLeader) {
@@ -289,17 +381,37 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         },
       },
     };
+    const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const providerLogger = createProviderEventLogger({
+      logsDir,
+      sessionId: 'team-routing',
+      runId: 'team-routing-run',
+      enabled: true,
+    });
+    const usageLogger = createUsageEventLogger({
+      logsDir,
+      sessionId: 'team-routing',
+      runId: 'team-routing-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
       projectCwd: tmpDir,
-      provider: 'auto',
+      provider: 'claude-sdk',
+      model: 'top-level-model',
       autoRouting,
+      onProviderStream: (context, event) => providerLogger.logEvent(context, event),
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
     });
-    const routingEvents: unknown[][] = [];
-    engine.on('routing:decision', (...args) => {
-      routingEvents.push(args);
-    });
+    const routingDecision = vi.fn();
+    engine.on('routing:decision', routingDecision);
 
-    mockRunAgentWithPrompt(
+    const responses = [
       makeResponse({
         persona: 'team-leader',
         structuredOutput: {
@@ -308,15 +420,45 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           ],
         },
       }),
-      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({
+        persona: 'coder',
+        content: 'API done',
+        providerUsage: {
+          inputTokens: 13,
+          outputTokens: 8,
+          totalTokens: 21,
+          usageMissing: false,
+        },
+      }),
       makeResponse({
         persona: 'team-leader',
         structuredOutput: { done: true, reasoning: 'enough', parts: [] },
       }),
-    );
+    ];
+    let responseIndex = 0;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+      options?.onStream?.({
+        type: 'init',
+        data: {
+          model: options.resolvedModel ?? '(default)',
+          sessionId: `team-session-${responseIndex}`,
+        },
+      });
+      const response = responses[responseIndex];
+      responseIndex += 1;
+      if (!response) {
+        throw new Error('Unexpected team leader agent call');
+      }
+      return response;
+    });
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
     const state = await engine.run();
+    const routingEvents = routingDecision.mock.calls;
 
     expect(state.status).toBe('completed');
     expect(routingEvents.map((event) => (event[0] as { name: string }).name)).toEqual([
@@ -343,6 +485,229 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       resolvedProvider: 'mock',
       resolvedModel: 'mock-1',
     });
+
+    const providerRecords = readFileSync(providerLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(providerRecords.filter((record) => record.step === 'implement')).toHaveLength(2);
+    expect(providerRecords.filter((record) => record.step === 'implement')).toEqual([
+      expect.objectContaining({ provider: 'mock' }),
+      expect.objectContaining({ provider: 'mock' }),
+    ]);
+    expect(providerRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: 'implement.part-1', provider: 'codex' }),
+    ]));
+    expect(providerRecords).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude-sdk' }),
+    ]));
+
+    const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    expect(usageRecords.filter((record) => record.step === 'implement')).toEqual([
+      expect.objectContaining({ provider: 'mock', provider_model: 'mock-1', usage_missing: true }),
+      expect.objectContaining({ provider: 'mock', provider_model: 'mock-1', usage_missing: true }),
+    ]);
+    expect(usageRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        step: 'implement.part-1',
+        step_type: 'team_leader',
+        provider: 'codex',
+        provider_model: 'gpt-5',
+        usage: expect.objectContaining({ total_tokens: 21 }),
+      }),
+    ]));
+  });
+
+  it('長大な動的part IDを実AI batch routerでroutingし安全なJSONLを記録する', async () => {
+    const debugLogSpy = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.providerRoutingPersonaKey = 'team-leader';
+    const secret = 'Authorization: Bearer TOP_SECRET_VALUE';
+    const metadataSecret = 'UNIQUE_TEAM_LEADER_METADATA_SECRET';
+    const credentialUrl = `https://${'a'.repeat(980)}:${metadataSecret}@example.com`;
+    const longPartId = `part-${secret}-${'x'.repeat(520)}`;
+    const shortPartId = 'part-short';
+    const autoRouting: AutoRoutingConfig = {
+      strategy: 'balanced',
+      router: {
+        provider: 'claude-sdk',
+        model: 'claude-haiku-4-5-20251001',
+      },
+      candidates: [
+        {
+          name: 'leader',
+          description: 'Team leader planning',
+          provider: 'mock',
+          model: 'mock-1',
+          costTier: 'medium',
+        },
+        {
+          name: 'coding',
+          description: 'Implementation and tests',
+          provider: 'codex',
+          model: 'gpt-5',
+          costTier: 'medium',
+        },
+      ],
+      rules: {
+        personas: {
+          'team-leader': 'leader',
+        },
+      },
+    };
+    const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const debugLogPath = join(logsDir, 'team-leader-debug.log');
+    DebugLogger.getInstance().init({ enabled: true, logFile: debugLogPath }, tmpDir);
+    const providerLogger = createProviderEventLogger({
+      logsDir,
+      sessionId: 'team-long-id-routing',
+      runId: 'team-long-id-routing-run',
+      enabled: true,
+    });
+    const usageLogger = createUsageEventLogger({
+      logsDir,
+      sessionId: 'team-long-id-routing',
+      runId: 'team-long-id-routing-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude-sdk',
+      model: 'top-level-model',
+      autoRouting,
+      onProviderStream: (context, event) => providerLogger.logEvent(context, event),
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
+    });
+    const routingDecision = vi.fn();
+    engine.on('routing:decision', routingDecision);
+    const nextLeaderResponse = vi.fn()
+      .mockReturnValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: longPartId, title: credentialUrl, instruction: 'Implement API' },
+            { id: shortPartId, title: 'Short ID part', instruction: 'Add tests' },
+          ],
+        },
+      }))
+      .mockReturnValueOnce(makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: credentialUrl, parts: [] },
+      }));
+
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: instruction,
+      });
+      if (options?.resolvedProvider === 'claude-sdk') {
+        options.onStream?.({ type: 'text', data: { text: 'routing' } });
+        const selections = [
+          { id: longPartId, selected_candidate: 'coding' },
+          { id: shortPartId, selected_candidate: 'coding' },
+        ];
+        return makeResponse({
+          persona: 'auto-router',
+          content: JSON.stringify({ selections }),
+          structuredOutput: { selections },
+        });
+      }
+      if (options?.resolvedProvider === 'mock') {
+        return nextLeaderResponse();
+      }
+      if (options?.resolvedProvider === 'codex') {
+        options.onStream?.({ type: 'text', data: { text: 'part execution' } });
+        return makeResponse({
+          persona: 'coder',
+          content: 'part done',
+          providerUsage: {
+            inputTokens: 13,
+            outputTokens: 8,
+            totalTokens: 21,
+            usageMissing: false,
+          },
+        });
+      }
+      throw new Error(`Unexpected provider: ${options?.resolvedProvider ?? '(missing)'}`);
+    });
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+    const state = await engine.run();
+    const routingEvents = routingDecision.mock.calls;
+
+    expect(state.status).toBe('completed');
+    expect(nextLeaderResponse).toHaveBeenCalledTimes(2);
+    const partRoutingEvents = routingEvents.filter((event) => {
+      const name = (event[0] as { name?: string }).name;
+      return name === `implement.${longPartId}` || name === `implement.${shortPartId}`;
+    });
+    expect(partRoutingEvents).toHaveLength(2);
+    expect(partRoutingEvents.every((event) => (
+      (event[3] as { providerSource?: string }).providerSource === 'auto.ai'
+    ))).toBe(true);
+    expect(routingEvents.some((event) => (
+      (event[3] as { providerSource?: string }).providerSource === 'auto.default'
+    ))).toBe(false);
+    expect(debugLogSpy.mock.calls.some(([level, component, message]) => (
+      level === 'WARN'
+      && component === 'team-leader-runner'
+      && message === 'Auto routing AI router failed; falling back to strategy default'
+    ))).toBe(false);
+
+    const providerLog = readFileSync(providerLogger.filepath, 'utf-8').trim();
+    const providerRecords = providerLog
+      .split('\n')
+      .map((line) => JSON.parse(line) as ProviderEventLogRecord);
+    expect(providerRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        step: 'auto-router',
+      }),
+      expect.objectContaining({
+        provider: 'codex',
+        provider_model: 'gpt-5',
+      }),
+    ]));
+    const longPartProvider = providerRecords.find((record) => record.step.includes('[REDACTED]'));
+    expect(longPartProvider?.step.length).toBeLessThanOrEqual(1_000);
+    expect(longPartProvider?.step).toContain('[REDACTED]');
+    expect(providerRecords.every((record) => !('step_digest' in record))).toBe(true);
+    expect(providerLog).not.toContain(secret);
+    expect(providerLog).not.toContain(longPartId);
+
+    const usageLog = readFileSync(usageLogger.filepath, 'utf-8').trim();
+    const usageRecords = usageLog
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    const longPartUsage = usageRecords.find((record) => record.step.includes('[REDACTED]'));
+    expect(longPartUsage).toMatchObject({
+      step_type: 'team_leader',
+      provider: 'codex',
+      provider_model: 'gpt-5',
+    });
+    expect(usageRecords.every((record) => !('step_digest' in record))).toBe(true);
+    expect(longPartUsage?.step.length).toBeLessThanOrEqual(1_000);
+    expect(usageLog).not.toContain(secret);
+    expect(usageLog).not.toContain(longPartId);
+
+    const debugLog = readFileSync(debugLogPath, 'utf-8');
+    expect(debugLog).toContain('[REDACTED]');
+    expect(debugLog).not.toContain('TOP_SECRET_VALUE');
+    expect(debugLog).not.toContain(metadataSecret);
+    expect(debugLog).not.toContain(longPartId);
+    expect(debugLog.length).toBeLessThan(50_000);
   });
 
   it('team leader の AI routing には raw instruction だけを渡し worker part instruction は渡さない', async () => {
@@ -356,7 +721,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       new Map(steps.map((step) => [step.id, autoRouting.candidates[0]])));
     const engine = new WorkflowEngine(config, tmpDir, 'SECRET_TASK_SHOULD_NOT_REACH_ROUTER', {
       projectCwd: tmpDir,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting,
       autoRoutingAiRouter: {
         routeStep,
@@ -442,15 +807,13 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         },
       },
     };
-    const abortReasons: string[] = [];
+    const workflowAborted = vi.fn();
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
       projectCwd: tmpDir,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting,
     });
-    engine.on('workflow:abort', (_state, reason) => {
-      abortReasons.push(reason);
-    });
+    engine.on('workflow:abort', workflowAborted);
 
     mockRunAgentWithPrompt(
       makeResponse({
@@ -466,7 +829,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(abortReasons[0]).toBe(
+    expect(workflowAborted.mock.calls[0]?.[1]).toBe(
       "Step execution failed: Configuration error: auto_routing resolved model 'sonnet' is a Claude model alias but provider is 'codex'. " +
       'Either choose a Claude provider or specify a codex-compatible model.',
     );
@@ -484,13 +847,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     step.teamLeader.partTags = ['implementation'];
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
       projectCwd: tmpDir,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
     });
-    const routingEvents: unknown[][] = [];
-    engine.on('routing:decision', (...args) => {
-      routingEvents.push(args);
-    });
+    const routingDecision = vi.fn();
+    engine.on('routing:decision', routingDecision);
 
     mockRunAgentWithPrompt(
       makeResponse({
@@ -521,6 +882,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
     const state = await engine.run();
+    const routingEvents = routingDecision.mock.calls;
 
     expect(state.status).toBe('completed');
     expect(routingEvents).toHaveLength(3);
@@ -605,10 +967,178 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     });
   });
 
-  it('全パート失敗時でも team leader step_complete と trace に分類付き失敗理由を残す', async () => {
+  it('team leader call が reject した場合も失敗 usage を1件だけ記録する', async () => {
     const config = buildTeamLeaderConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.providerRoutingPersonaKey = 'team-leader';
+    step.teamLeader.partTags = ['implementation'];
+    const autoRouting = createTeamLeaderAutoRoutingConfig();
     const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const usageLogger = createUsageEventLogger({
+      logsDir,
+      sessionId: 'team-leader-rejection',
+      runId: 'team-leader-rejection-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude-sdk',
+      model: 'top-level-model',
+      autoRouting,
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
+    });
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('leader provider rejected'));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+    expect(usageRecords).toEqual([
+      expect.objectContaining({
+        step: 'implement',
+        step_type: 'team_leader',
+        provider: 'codex',
+        provider_model: 'gpt-5',
+        success: false,
+      }),
+    ]);
+  });
+
+  it('prompt-based team leader の retry response と reject を全attempt分記録する', async () => {
+    vi.useFakeTimers();
+    try {
+      const config = buildTeamLeaderConfig();
+      const step = config.steps[0];
+      if (!step?.teamLeader) {
+        throw new Error('teamLeader configuration is required');
+      }
+      step.teamLeader.maxConcurrency = 1;
+      const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+      const usageLogger = createUsageEventLogger({
+        logsDir,
+        sessionId: 'team-leader-retries',
+        runId: 'team-leader-retries-run',
+        enabled: true,
+      } satisfies UsageEventLoggerConfig);
+      const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+        projectCwd: tmpDir,
+        provider: 'cursor',
+        onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+          success: result.success,
+          usage: result.usage ?? {
+            usageMissing: true,
+            reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+          },
+        }),
+      });
+      vi.mocked(runAgent)
+        .mockImplementationOnce(async (persona, instruction, options) => {
+          options?.onPromptResolved?.({
+            systemPrompt: typeof persona === 'string' ? persona : '',
+            userInstruction: instruction,
+          });
+          return makeResponse({ persona: 'team-leader', status: 'error', error: 'first failed' });
+        })
+        .mockRejectedValueOnce(new Error('second rejected'))
+        .mockImplementationOnce(async (persona, instruction, options) => {
+          options?.onPromptResolved?.({
+            systemPrompt: typeof persona === 'string' ? persona : '',
+            userInstruction: instruction,
+          });
+          return makeResponse({
+            persona: 'team-leader',
+            content: [
+              '```json',
+              JSON.stringify([{ id: 'part-1', title: 'API', instruction: 'Implement API' }]),
+              '```',
+            ].join('\n'),
+          });
+        })
+        .mockResolvedValueOnce(makeResponse({ persona: 'coder', content: 'API done' }))
+        .mockResolvedValueOnce(makeResponse({
+          persona: 'team-leader',
+          status: 'error',
+          error: 'feedback first failed',
+        }))
+        .mockRejectedValueOnce(new Error('feedback second rejected'))
+        .mockResolvedValueOnce(makeResponse({
+          persona: 'team-leader',
+          content: [
+            '```json',
+            JSON.stringify({ done: true, reasoning: 'enough', parts: [] }),
+            '```',
+          ].join('\n'),
+        }));
+      vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
+
+      const runPromise = engine.run();
+      await vi.advanceTimersByTimeAsync(4_000);
+      const state = await runPromise;
+      const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as UsageEventLogRecord);
+      const leaderRecords = usageRecords.filter((record) => record.step === 'implement');
+
+      expect(state.status).toBe('completed');
+      expect(usageRecords).toHaveLength(vi.mocked(runAgent).mock.calls.length);
+      expect(leaderRecords.map((record) => record.success)).toEqual([
+        false,
+        false,
+        true,
+        false,
+        false,
+        true,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('実際の part timeout でも失敗 usage を呼び出しごとに1件記録し親aggregateを記録しない', async () => {
+    const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.providerRoutingPersonaKey = 'team-leader';
+    step.teamLeader.partTags = ['implementation'];
+    step.teamLeader.timeoutMs = 5;
+    step.teamLeader.maxTotalParts = 2;
+    const autoRouting = createTeamLeaderAutoRoutingConfig();
+    const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const usageLogger = createUsageEventLogger({
+      logsDir,
+      sessionId: 'team-leader-abort',
+      runId: 'team-leader-abort-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude-sdk',
+      model: 'top-level-model',
+      autoRouting,
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
+    });
     const ndjsonPath = initNdjsonLog('session-team-leader-abort', 'implement feature', config.name, { logsDir });
     const sessionLogger = new SessionLogger(ndjsonPath, true);
 
@@ -632,29 +1162,15 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
           ],
         },
       }),
-      makeResponse({
-        persona: 'coder',
-        status: 'error',
-        content: '',
-        error: 'external abort: Workflow interrupted by user (SIGINT)',
-        failureCategory: 'external_abort',
-      }),
-      makeResponse({
-        persona: 'coder',
-        status: 'error',
-        content: '',
-        error: 'part timeout: Part timeout after 10000ms',
-        failureCategory: 'part_timeout',
-      }),
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
-      }),
     );
+    mockRunAgentRejectingOnAbort();
+    mockRunAgentRejectingOnAbort();
 
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
+    const expectedError =
+      'All team leader parts failed: part-1: part timeout: Part timeout after 5ms; part-2: part timeout: Part timeout after 5ms';
 
     const records = readFileSync(ndjsonPath, 'utf-8')
       .trim()
@@ -667,11 +1183,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       type: 'step_complete',
       step: 'implement',
       status: 'error',
-      error: 'All team leader parts failed: part-1: external abort: Workflow interrupted by user (SIGINT); part-2: part timeout: Part timeout after 10000ms',
+      error: expectedError,
     });
     expect(workflowAbort).toMatchObject({
       type: 'workflow_abort',
-      reason: expect.stringContaining('All team leader parts failed: part-1: external abort: Workflow interrupted by user (SIGINT); part-2: part timeout: Part timeout after 10000ms'),
+      reason: expect.stringContaining(expectedError),
     });
 
     const trace = renderTraceReportFromLogs(
@@ -691,7 +1207,39 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     );
 
     expect(trace).toContain('- Step Status: error');
-    expect(trace).toContain('All team leader parts failed: part-1: external abort: Workflow interrupted by user (SIGINT); part-2: part timeout: Part timeout after 10000ms');
+    expect(trace).toContain(expectedError);
+
+    const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    const leaderRecords = usageRecords.filter((record) => record.step === 'implement');
+    const partRecords = usageRecords.filter((record) => record.step.startsWith('implement.part-'));
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(usageRecords).toHaveLength(vi.mocked(runAgent).mock.calls.length);
+    expect(leaderRecords).toHaveLength(1);
+    expect(leaderRecords.every((record) => (
+      record.provider === 'codex'
+      && record.provider_model === 'gpt-5'
+      && record.success
+    ))).toBe(true);
+    expect(partRecords).toHaveLength(2);
+    expect(partRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        step: 'implement.part-1',
+        step_type: 'team_leader',
+        provider: 'codex',
+        provider_model: 'gpt-5',
+        success: false,
+      }),
+      expect.objectContaining({
+        step: 'implement.part-2',
+        step_type: 'team_leader',
+        provider: 'codex',
+        provider_model: 'gpt-5',
+        success: false,
+      }),
+    ]));
   });
 
   it('全パート失敗時は stream idle timeout の分類を集約メッセージと trace に残す', async () => {
@@ -795,15 +1343,38 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(trace).toContain(expectedError);
   });
 
-  it('reason なしの親 abort でも external abort 分類を集約メッセージに残す', async () => {
+  it('実際の親 AbortSignal でも part の失敗 usage を1件だけ記録する', async () => {
     const config = buildTeamLeaderConfig();
+    const step = config.steps[0];
+    if (!step?.teamLeader) {
+      throw new Error('teamLeader configuration is required');
+    }
+    step.teamLeader.providerRoutingPersonaKey = 'team-leader';
+    step.teamLeader.partTags = ['implementation'];
+    step.teamLeader.maxTotalParts = 1;
     const abortController = new AbortController();
+    const autoRouting = createTeamLeaderAutoRoutingConfig();
+    const logsDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'logs');
+    const usageLogger = createUsageEventLogger({
+      logsDir,
+      sessionId: 'team-leader-external-abort',
+      runId: 'team-leader-external-abort-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
       projectCwd: tmpDir,
-      provider: 'claude',
+      provider: 'claude-sdk',
+      model: 'top-level-model',
+      autoRouting,
       abortSignal: abortController.signal,
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
     });
-    const mock = vi.mocked(runAgent);
 
     mockRunAgentWithPrompt(
       makeResponse({
@@ -815,38 +1386,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
         },
       }),
     );
-    mock.mockImplementationOnce(async (persona, instruction, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: instruction,
-      });
-
-      return new Promise((_, reject) => {
-        const abortSignal = options?.abortSignal;
-        if (!abortSignal) {
-          reject(new Error('abortSignal is required'));
-          return;
-        }
-
-        const rejectWithAbortReason = (): void => {
-          reject(abortSignal.reason);
-        };
-
-        if (abortSignal.aborted) {
-          rejectWithAbortReason();
-          return;
-        }
-
-        abortSignal.addEventListener('abort', rejectWithAbortReason, { once: true });
-        queueMicrotask(() => abortController.abort());
-      });
-    });
-    mockRunAgentWithPrompt(
-      makeResponse({
-        persona: 'team-leader',
-        structuredOutput: { done: true, reasoning: 'stop', parts: [] },
-      }),
-    );
+    mockRunAgentRejectingOnAbort(() => abortController.abort());
 
     const state = await engine.run();
 
@@ -859,6 +1399,28 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       status: 'error',
       error: 'All team leader parts failed: part-1: external abort: This operation was aborted',
     });
+
+    const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(usageRecords).toHaveLength(2);
+    expect(usageRecords.filter((record) => record.step === 'implement')).toEqual([
+      expect.objectContaining({
+        provider: 'codex',
+        provider_model: 'gpt-5',
+        success: true,
+      }),
+    ]);
+    expect(usageRecords.filter((record) => record.step === 'implement.part-1')).toEqual([
+      expect.objectContaining({
+        step_type: 'team_leader',
+        provider: 'codex',
+        provider_model: 'gpt-5',
+        success: false,
+      }),
+    ]);
   });
 
   it('全パート失敗時は provider error の分類も集約メッセージに残す', async () => {
@@ -1396,11 +1958,8 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
   it('team leader の phase:start には分解実行時の実 instruction を記録する', async () => {
     const config = buildTeamLeaderConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'implement feature', { projectCwd: tmpDir, provider: 'claude' });
-    const phaseStarts: string[] = [];
-    engine.on('phase:start', (step, phase, phaseName, instruction) => {
-      if (step.name !== 'implement' || phase !== 1 || phaseName !== 'execute') return;
-      phaseStarts.push(instruction);
-    });
+    const phaseStarted = vi.fn();
+    engine.on('phase:start', phaseStarted);
 
     mockRunAgentWithPrompt(
       makeResponse({
@@ -1418,6 +1977,11 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     vi.mocked(detectMatchedRule).mockResolvedValueOnce({ index: 0, method: 'phase1_tag' });
 
     const state = await engine.run();
+    const phaseStarts = phaseStarted.mock.calls
+      .filter(([step, phase, phaseName]) => (
+        step.name === 'implement' && phase === 1 && phaseName === 'execute'
+      ))
+      .map(([, , , instruction]) => instruction);
 
     expect(state.status).toBe('completed');
     expect(phaseStarts.length).toBeGreaterThan(0);

@@ -177,7 +177,7 @@ describe('PromptBasedStructuredCaller', () => {
       personaPath: '/tmp/personas/team-leader.md',
     });
 
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
       { id: 'p2', title: 'Second task', instruction: 'Do the second thing' },
     ]);
@@ -430,7 +430,7 @@ describe('PromptBasedStructuredCaller', () => {
     const result = await promise;
 
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
     ]);
   });
@@ -466,7 +466,7 @@ describe('PromptBasedStructuredCaller', () => {
     const result = await promise;
 
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'p1', title: 'Recovered', instruction: 'Do it' },
     ]);
   });
@@ -528,9 +528,51 @@ describe('PromptBasedStructuredCaller', () => {
     const result = await promise;
 
     expect(mockRunAgent).toHaveBeenCalledTimes(2);
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'p1', title: 'Recovered', instruction: 'Do it' },
     ]);
+  });
+
+  it('should report every decomposition provider response and rejection at attempt boundaries', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'error',
+        content: '',
+        error: 'first failed',
+        timestamp: new Date(),
+      })
+      .mockRejectedValueOnce(new Error('second rejected'))
+      .mockResolvedValueOnce({
+        persona: 'leader',
+        status: 'done',
+        content: [
+          '```json',
+          JSON.stringify([
+            { id: 'p1', title: 'First task', instruction: 'Do the first thing' },
+          ]),
+          '```',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+    const onAgentResponse = vi.fn();
+    const onAgentError = vi.fn();
+    const caller = new PromptBasedStructuredCaller();
+
+    const promise = caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      onAgentResponse,
+      onAgentError,
+    });
+    const result = expect(promise).resolves.toMatchObject({ parts: [{ id: 'p1' }] });
+    await vi.advanceTimersByTimeAsync(RETRY_DELAY_MS * 2);
+
+    await result;
+    expect(mockRunAgent).toHaveBeenCalledTimes(3);
+    expect(onAgentResponse).toHaveBeenCalledTimes(2);
+    expect(onAgentError).toHaveBeenCalledTimes(1);
+    expect(onAgentError).toHaveBeenCalledWith(expect.objectContaining({ message: 'second rejected' }));
   });
 
   it('should throw decomposeTask after three consecutive status:error responses with original detail', async () => {
@@ -557,6 +599,31 @@ describe('PromptBasedStructuredCaller', () => {
     await assertion;
 
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should stop decomposeTask retries immediately after cancellation', async () => {
+    const abortController = new AbortController();
+    mockRunAgent.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {
+        persona: 'leader',
+        status: 'error',
+        content: '',
+        error: 'cancelled',
+        timestamp: new Date(),
+      };
+    });
+    const caller = new PromptBasedStructuredCaller();
+
+    await expect(caller.decomposeTask('break down the work', 3, {
+      cwd: '/tmp/project',
+      provider: 'cursor',
+      persona: 'team-leader',
+      abortSignal: abortController.signal,
+    })).rejects.toThrow('Structured call aborted');
+
+    expect(mockRunAgent).toHaveBeenCalledOnce();
+    expect(infoMock).not.toHaveBeenCalled();
   });
 
   it('should succeed decomposeTask on the third attempt (boundary case)', async () => {
@@ -592,7 +659,7 @@ describe('PromptBasedStructuredCaller', () => {
     const result = await promise;
 
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'p1', title: 'Late success', instruction: 'Done' },
     ]);
   });
@@ -1083,6 +1150,36 @@ describe('PromptBasedStructuredCaller', () => {
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
   });
 
+  it('should stop requestMoreParts retries immediately after cancellation', async () => {
+    const abortController = new AbortController();
+    mockRunAgent.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {
+        persona: 'leader',
+        status: 'error',
+        content: '',
+        error: 'cancelled',
+        timestamp: new Date(),
+      };
+    });
+    const caller = new PromptBasedStructuredCaller();
+
+    await expect(caller.requestMoreParts(
+      'original task',
+      [{ id: 'p1', title: 'First', status: 'done', content: 'done' }],
+      ['p1'],
+      2,
+      {
+        cwd: '/tmp/project',
+        provider: 'cursor',
+        abortSignal: abortController.signal,
+      },
+    )).rejects.toThrow('Structured call aborted');
+
+    expect(mockRunAgent).toHaveBeenCalledOnce();
+    expect(infoMock).not.toHaveBeenCalled();
+  });
+
   it('should succeed requestMoreParts on the third attempt (boundary case)', async () => {
     const failingResponse = {
       persona: 'leader',
@@ -1273,6 +1370,38 @@ describe('PromptBasedStructuredCaller', () => {
 
     expect(result).toEqual({ ruleIndex: 1, method: 'ai_judge' });
     expect(mockRunAgent).toHaveBeenCalledTimes(3);
+  });
+
+  it('should report a rejected tag judgment after a completed structured attempt', async () => {
+    mockRunAgent
+      .mockResolvedValueOnce({
+        persona: 'conductor',
+        status: 'done',
+        content: 'not-json',
+        timestamp: new Date(),
+      })
+      .mockRejectedValueOnce(new Error('tag provider rejected'));
+    const onJudgeStage = vi.fn();
+    const caller = new PromptBasedStructuredCaller();
+
+    await expect(caller.judgeStatus(
+      'structured instruction',
+      'tag instruction',
+      [
+        { condition: 'approved', next: 'COMPLETE' },
+        { condition: 'needs_fix', next: 'fix' },
+      ],
+      { cwd: '/tmp/project', stepName: 'review', onJudgeStage },
+    )).rejects.toThrow('tag provider rejected');
+
+    expect(onJudgeStage).toHaveBeenCalledTimes(2);
+    expect(onJudgeStage.mock.calls.map(([entry]) => entry.status)).toEqual(['done', 'error']);
+    expect(onJudgeStage).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 2,
+      method: 'phase3_tag',
+      status: 'error',
+      response: 'tag provider rejected',
+    }));
   });
 
   it('should omit maxTurns for prompt-based judgeStatus internal stages when resolved provider does not support it', async () => {

@@ -1,48 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-
-type ProviderType = 'claude' | 'codex' | 'opencode';
-type StepType = 'normal' | 'parallel' | 'arpeggio' | 'team_leader';
-
-interface ProviderUsageSnapshot {
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
-  readonly totalTokens?: number;
-  readonly cachedInputTokens?: number;
-  readonly usageMissing: boolean;
-  readonly reason?: string;
-}
-
-interface UsageEventLoggerConfig {
-  readonly logsDir: string;
-  readonly sessionId: string;
-  readonly runId: string;
-  readonly provider: ProviderType;
-  readonly providerModel: string;
-  readonly step: string;
-  readonly stepType: StepType;
-  readonly enabled: boolean;
-}
-
-interface UsageEventLogger {
-  readonly filepath: string;
-  setStep(step: string, stepType: StepType): void;
-  setProvider(provider: ProviderType, providerModel: string): void;
-  logUsage(params: {
-    readonly success: boolean;
-    readonly usage: ProviderUsageSnapshot;
-    readonly timestamp?: Date;
-  }): void;
-}
+import type {
+  UsageEventLogger,
+  UsageEventLoggerConfig,
+} from '../core/logging/usageEventLogger.js';
+import type { StepType } from '../core/logging/usageEvent.js';
+import type { ProviderType } from '../shared/types/provider.js';
 
 interface UsageEventLoggerModule {
   createUsageEventLogger(config: UsageEventLoggerConfig): UsageEventLogger;
   isUsageEventsEnabled(config?: { logging?: { usageEvents?: boolean } }): boolean;
 }
 
-const USAGE_EVENT_LOGGER_MODULE_PATH = ['..', 'shared', 'utils', 'usageEventLogger.js'].join('/');
+const USAGE_EVENT_LOGGER_MODULE_PATH = ['..', 'core', 'logging', 'usageEventLogger.js'].join('/');
 
 async function loadUsageEventLoggerModule(): Promise<UsageEventLoggerModule> {
   return (await import(USAGE_EVENT_LOGGER_MODULE_PATH)) as UsageEventLoggerModule;
@@ -52,8 +24,7 @@ describe('usageEventLogger', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = join(tmpdir(), `takt-usage-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-    mkdirSync(tempDir, { recursive: true });
+    tempDir = mkdtempSync(join(tmpdir(), 'takt-usage-events-'));
   });
 
   afterEach(() => {
@@ -81,14 +52,15 @@ describe('usageEventLogger', () => {
       logsDir: tempDir,
       sessionId: 'session-1',
       runId: 'run-1',
+      enabled: true,
+    });
+
+    logger.logUsageFor({
       provider: 'codex',
       providerModel: 'gpt-5-codex',
       step: 'implement',
       stepType: 'normal',
-      enabled: true,
-    });
-
-    logger.logUsage({
+    }, {
       success: true,
       usage: {
         inputTokens: 12,
@@ -143,14 +115,15 @@ describe('usageEventLogger', () => {
       logsDir: tempDir,
       sessionId: 'session-2',
       runId: 'run-2',
+      enabled: true,
+    });
+
+    logger.logUsageFor({
       provider: 'opencode',
       providerModel: 'openai/gpt-4.1',
       step: 'implement',
       stepType: 'normal',
-      enabled: true,
-    });
-
-    logger.logUsage({
+    }, {
       success: true,
       usage: {
         usageMissing: true,
@@ -177,27 +150,25 @@ describe('usageEventLogger', () => {
     expect(parsed.usage).toEqual({});
   });
 
-  it('should update step and provider metadata for subsequent records', async () => {
+  it('should require explicit immutable context for each record', async () => {
     const { createUsageEventLogger } = await loadUsageEventLoggerModule();
     const logger = createUsageEventLogger({
       logsDir: tempDir,
       sessionId: 'session-3',
       runId: 'run-3',
-      provider: 'claude',
-      providerModel: 'sonnet',
-      step: 'plan',
-      stepType: 'normal',
       enabled: true,
     });
 
-    logger.logUsage({
+    logger.logUsageFor({
+      provider: 'claude', providerModel: 'sonnet', step: 'plan', stepType: 'normal',
+    }, {
       success: true,
       usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false },
     });
 
-    logger.setStep('implement', 'parallel');
-    logger.setProvider('codex', 'gpt-5-codex');
-    logger.logUsage({
+    logger.logUsageFor({
+      provider: 'codex', providerModel: 'gpt-5-codex', step: 'implement', stepType: 'parallel',
+    }, {
       success: true,
       usage: { inputTokens: 4, outputTokens: 5, totalTokens: 9, usageMissing: false },
     });
@@ -219,20 +190,112 @@ describe('usageEventLogger', () => {
     expect(second.step_type).toBe('parallel');
   });
 
+  it('should keep explicit context for interleaved delegated usage records', async () => {
+    const { createUsageEventLogger } = await loadUsageEventLoggerModule();
+    const logger = createUsageEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-delegated',
+      runId: 'run-delegated',
+      enabled: true,
+    });
+    const usage = { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false };
+
+    logger.logUsageFor(
+      { provider: 'codex', providerModel: 'gpt-5', step: 'review-a', stepType: 'parallel' },
+      { success: true, usage },
+    );
+    logger.logUsageFor(
+      { provider: 'opencode', providerModel: 'openai/gpt-4.1', step: 'review-b', stepType: 'parallel' },
+      { success: true, usage },
+    );
+    logger.logUsageFor(
+      { provider: 'codex', providerModel: 'gpt-5', step: 'review-a', stepType: 'parallel' },
+      { success: false, usage },
+    );
+
+    const records = readFileSync(logger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { provider: ProviderType; provider_model: string; step: string });
+    expect(records).toEqual([
+      expect.objectContaining({ provider: 'codex', provider_model: 'gpt-5', step: 'review-a' }),
+      expect.objectContaining({ provider: 'opencode', provider_model: 'openai/gpt-4.1', step: 'review-b' }),
+      expect.objectContaining({ provider: 'codex', provider_model: 'gpt-5', step: 'review-a' }),
+    ]);
+  });
+
+  it('should redact and bound delegated step metadata without adding derived identifiers', async () => {
+    const { createUsageEventLogger } = await loadUsageEventLoggerModule();
+    const logger = createUsageEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-sensitive-delegated',
+      runId: 'run-sensitive-delegated',
+      enabled: true,
+    });
+    const usage = { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false };
+    const firstStep = `implement.Authorization: Bearer TOP_SECRET_VALUE-${'x'.repeat(50_000)}\uD800`;
+    const secondStep = `implement.Authorization: Bearer TOP_SECRET_VALUE-${'x'.repeat(50_000)}\uD801`;
+
+    for (const step of [firstStep, secondStep]) {
+      logger.logUsageFor({
+        provider: 'codex',
+        providerModel: 'gpt-5',
+        step,
+        stepType: 'team_leader',
+      }, { success: true, usage });
+    }
+
+    const serialized = readFileSync(logger.filepath, 'utf-8').trim();
+    const records = serialized
+      .split('\n')
+      .map((line) => JSON.parse(line) as { step: string });
+    expect(serialized).not.toContain('TOP_SECRET_VALUE');
+    expect(records.every((record) => record.step.length <= 1_000)).toBe(true);
+    expect(records[0]?.step).toContain('[REDACTED]');
+    expect(records[0]).not.toHaveProperty('step_digest');
+    expect(records[1]).not.toHaveProperty('step_digest');
+  });
+
+  it('should redact URL credentials before applying the delegated step length limit', async () => {
+    const { createUsageEventLogger } = await loadUsageEventLoggerModule();
+    const logger = createUsageEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-url-credentials',
+      runId: 'run-url-credentials',
+      enabled: true,
+    });
+    const secret = 'UNIQUE_USAGE_LEAK_VALUE';
+    const credentialUrl = `https://${'a'.repeat(980)}:${secret}@example.com`;
+
+    logger.logUsageFor({
+      provider: 'codex',
+      providerModel: 'gpt-5',
+      step: credentialUrl,
+      stepType: 'team_leader',
+    }, {
+      success: true,
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false },
+    });
+
+    const persisted = readFileSync(logger.filepath, 'utf-8').trim();
+    const record = JSON.parse(persisted) as { step: string };
+    expect(record.step).toContain('[REDACTED]');
+    expect(record).not.toHaveProperty('step_digest');
+    expect(persisted).not.toContain(secret);
+  });
+
   it('should not write records when disabled', async () => {
     const { createUsageEventLogger } = await loadUsageEventLoggerModule();
     const logger = createUsageEventLogger({
       logsDir: tempDir,
       sessionId: 'session-disabled',
       runId: 'run-disabled',
-      provider: 'claude',
-      providerModel: 'sonnet',
-      step: 'plan',
-      stepType: 'normal',
       enabled: false,
     });
 
-    logger.logUsage({
+    logger.logUsageFor({
+      provider: 'claude', providerModel: 'sonnet', step: 'plan', stepType: 'normal',
+    }, {
       success: true,
       usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, usageMissing: false },
     });
@@ -246,20 +309,20 @@ describe('usageEventLogger', () => {
       logsDir: join(tempDir, 'missing', 'nested'),
       sessionId: 'session-err',
       runId: 'run-err',
-      provider: 'claude',
-      providerModel: 'sonnet',
-      step: 'plan',
-      stepType: 'normal',
       enabled: true,
     });
 
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      logger.logUsage({
+      logger.logUsageFor({
+        provider: 'claude', providerModel: 'sonnet', step: 'plan', stepType: 'normal',
+      }, {
         success: true,
         usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, usageMissing: false },
       });
-      logger.logUsage({
+      logger.logUsageFor({
+        provider: 'claude', providerModel: 'sonnet', step: 'plan', stepType: 'normal',
+      }, {
         success: true,
         usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4, usageMissing: false },
       });

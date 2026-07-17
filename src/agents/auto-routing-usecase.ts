@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { AutoRoutingCandidate, AutoRoutingConfig, Language } from '../core/models/config-types.js';
 import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
 import { buildMaxTurnsOption } from './provider-call-options.js';
+import type { StreamEvent } from '../shared/types/provider.js';
 
 export interface AutoRoutingAiStep {
   id: string;
@@ -17,7 +18,16 @@ export interface AutoRoutingAiRouterOptions {
   runId: string;
   language?: Language;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
+  abortSignal?: RunAgentOptions['abortSignal'];
   onStream?: StreamCallback;
+  onProviderStream?: (
+    context: {
+      provider: AutoRoutingConfig['router']['provider'];
+      providerModel: string;
+      step: string;
+    },
+    event: StreamEvent,
+  ) => void;
 }
 
 export interface AutoRoutingAiRouter {
@@ -55,6 +65,61 @@ const BATCH_ROUTING_OUTPUT_SCHEMA = {
 };
 
 const AUTO_ROUTING_AI_TIMEOUT_MS = 30_000;
+
+interface RouterAbortScope {
+  signal: AbortSignal;
+  aborted: Promise<never>;
+  cleanup(): void;
+}
+
+function abortReason(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error('Auto routing AI router aborted');
+}
+
+function createRouterAbortScope(parentSignal: AbortSignal | undefined): RouterAbortScope {
+  const controller = new AbortController();
+  const abortListenerScope = new AbortController();
+  const abortFromParent = (): void => {
+    controller.abort(parentSignal?.reason);
+  };
+
+  if (parentSignal?.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+  }
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  if (!controller.signal.aborted) {
+    timeoutId = setTimeout(() => {
+      controller.abort(new Error(`Auto routing AI router timed out after ${AUTO_ROUTING_AI_TIMEOUT_MS}ms`));
+    }, AUTO_ROUTING_AI_TIMEOUT_MS);
+  }
+
+  const aborted = new Promise<never>((_, reject) => {
+    const rejectOnAbort = (): void => reject(abortReason(controller.signal.reason));
+    if (controller.signal.aborted) {
+      rejectOnAbort();
+      return;
+    }
+    controller.signal.addEventListener('abort', rejectOnAbort, {
+      once: true,
+      signal: abortListenerScope.signal,
+    });
+  });
+
+  return {
+    signal: controller.signal,
+    aborted,
+    cleanup(): void {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+      parentSignal?.removeEventListener('abort', abortFromParent);
+      abortListenerScope.abort();
+    },
+  };
+}
 
 function formatCandidates(autoRouting: AutoRoutingConfig): string {
   return autoRouting.candidates
@@ -194,22 +259,54 @@ function createRoutingCacheKey(runId: string, step: AutoRoutingAiStep): string {
   return [runId, step.name, hashInstruction(step.instruction), hashStepRoutingMetadata(step)].join('\0');
 }
 
+function createRouterStreamCallback(
+  autoRouting: AutoRoutingConfig,
+  options: AutoRoutingAiRouterOptions,
+  firstStep: AutoRoutingAiStep,
+  steps: readonly AutoRoutingAiStep[],
+  signal: AbortSignal,
+): StreamCallback | undefined {
+  if (options.onProviderStream === undefined && options.onStream === undefined) {
+    return undefined;
+  }
+  return (event) => {
+    if (signal.aborted) {
+      return;
+    }
+    options.onProviderStream?.({
+      provider: autoRouting.router.provider,
+      providerModel: autoRouting.router.model,
+      step: steps.length === 1 ? firstStep.name : 'auto-router',
+    }, event);
+    if (signal.aborted) {
+      return;
+    }
+    options.onStream?.(event);
+  };
+}
+
 async function runAutoRouterAgent(
   autoRouting: AutoRoutingConfig,
   options: AutoRoutingAiRouterOptions,
   prompt: string,
   outputSchema: Record<string, unknown>,
+  steps: readonly AutoRoutingAiStep[],
 ): Promise<Awaited<ReturnType<typeof runAgent>>> {
-  const controller = new AbortController();
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`Auto routing AI router timed out after ${AUTO_ROUTING_AI_TIMEOUT_MS}ms`));
-      controller.abort();
-    }, AUTO_ROUTING_AI_TIMEOUT_MS);
-  });
+  const firstStep = steps[0];
+  if (firstStep === undefined) {
+    throw new Error('Auto routing AI router requires at least one step');
+  }
+  options.abortSignal?.throwIfAborted();
+  const abortScope = createRouterAbortScope(options.abortSignal);
 
   try {
+    const onStream = createRouterStreamCallback(
+      autoRouting,
+      options,
+      firstStep,
+      steps,
+      abortScope.signal,
+    );
     return await Promise.race([
       runAgent('auto-router', prompt, {
         cwd: options.cwd,
@@ -218,19 +315,17 @@ async function runAutoRouterAgent(
         model: autoRouting.router.model,
         resolvedModel: autoRouting.router.model,
         ...buildMaxTurnsOption(autoRouting.router.provider, autoRouting.router.provider, 1),
-        abortSignal: controller.signal,
+        abortSignal: abortScope.signal,
         permissionMode: 'readonly',
         language: options.language,
         childProcessEnv: options.childProcessEnv,
-        onStream: options.onStream,
+        onStream,
         outputSchema,
       }),
-      timeout,
+      abortScope.aborted,
     ]);
   } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
+    abortScope.cleanup();
   }
 }
 
@@ -241,6 +336,7 @@ export function createAutoRoutingAiRouter(options: AutoRoutingAiRouterOptions): 
     autoRouting: AutoRoutingConfig,
     steps: AutoRoutingAiStep[],
   ): Promise<Map<string, AutoRoutingCandidate | undefined>> {
+    options.abortSignal?.throwIfAborted();
     const result = new Map<string, AutoRoutingCandidate | undefined>();
     const uncachedSteps: AutoRoutingAiStep[] = [];
     const cacheKeyByStepId = new Map<string, string>();
@@ -263,7 +359,13 @@ export function createAutoRoutingAiRouter(options: AutoRoutingAiRouterOptions): 
     const outputSchema = uncachedSteps.length === 1
       ? SINGLE_ROUTING_OUTPUT_SCHEMA
       : BATCH_ROUTING_OUTPUT_SCHEMA;
-    const response = await runAutoRouterAgent(autoRouting, options, prompt, outputSchema);
+    const response = await runAutoRouterAgent(
+      autoRouting,
+      options,
+      prompt,
+      outputSchema,
+      uncachedSteps,
+    );
     if (response.status !== 'done') {
       throw new Error('Auto routing AI router returned a non-done status');
     }

@@ -6,7 +6,7 @@ import {
   resolveAutoRoutingRuntime,
   selectStrategyDefaultCandidate,
 } from '../core/workflow/auto-routing/resolver.js';
-import type { ConfigAutoRoutingConfig } from '../core/models/config-types.js';
+import type { AutoRoutingConfig } from '../core/models/config-types.js';
 
 function createAutoRoutingConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -168,10 +168,9 @@ describe('applyAutoRoutingStrategyOverride', () => {
 });
 
 describe('resolveAutoRoutingRuntime', () => {
-  it('Given config auto routing includes a non-workflow default provider, When a workflow rule matches, Then the rule candidate remains authoritative', async () => {
-    const autoRouting: ConfigAutoRoutingConfig = {
+  it('Given auto routing is configured, When a workflow rule matches, Then the rule candidate is authoritative', async () => {
+    const autoRouting: AutoRoutingConfig = {
       strategy: 'balanced',
-      defaultProvider: { provider: 'mock', model: 'non-workflow-default-model' },
       router: { provider: 'claude-sdk', model: 'router-model' },
       candidates: [
         {
@@ -374,6 +373,26 @@ describe('resolveAutoRoutingRuntime', () => {
       },
       routeWithAi: vi.fn().mockResolvedValue(createAutoRoutingConfig().candidates[1]),
     })).rejects.toThrow(/model 'sonnet'|provider is 'codex'|auto_routing resolved model/i);
+  });
+
+  it('Given single AI routing is cancelled, When the router rejects, Then cancellation bypasses warning and default fallback', async () => {
+    const abortController = new AbortController();
+    const reason = new Error('single routing cancelled');
+    const warn = vi.fn();
+    const routeWithAi = vi.fn(async () => {
+      abortController.abort(reason);
+      throw reason;
+    });
+
+    await expect(resolveAutoRoutingRuntime({
+      autoRouting: createAutoRoutingConfig({ strategy: 'cost', rules: {} }),
+      step: createStepMetadata({ name: 'unknown', tags: ['unknown'], personaKey: 'unknown' }),
+      currentProviderInfo: { provider: undefined, model: undefined },
+      routeWithAi,
+      logger: { warn },
+      abortSignal: abortController.signal,
+    })).rejects.toBe(reason);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 
@@ -616,6 +635,36 @@ describe('resolveAutoRoutingBatch', () => {
         costTier: 'low',
       },
     });
+  });
+
+  it('Given batch AI routing is cancelled, When the router rejects, Then cancellation bypasses warning and all defaults', async () => {
+    const abortController = new AbortController();
+    const reason = new Error('batch routing cancelled');
+    const warn = vi.fn();
+    const routeBatchWithAi = vi.fn(async () => {
+      abortController.abort(reason);
+      throw reason;
+    });
+
+    await expect(resolveAutoRoutingBatch({
+      autoRouting: createAutoRoutingConfig({ strategy: 'cost', rules: {} }),
+      items: [
+        {
+          id: 'part-1',
+          step: createStepMetadata({ name: 'part-1', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+        {
+          id: 'part-2',
+          step: createStepMetadata({ name: 'part-2', tags: ['unknown'] }),
+          currentProviderInfo: { provider: undefined, model: undefined },
+        },
+      ],
+      routeBatchWithAi,
+      logger: { warn },
+      abortSignal: abortController.signal,
+    })).rejects.toBe(reason);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('Given batch AI routing omits an item, When resolving a batch, Then the router failure is warned before strategy default fallback', async () => {

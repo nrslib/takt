@@ -19,8 +19,8 @@ function createBuilder(engineOverrides: Partial<WorkflowEngineOptions>): Options
   return new OptionsBuilder(
     {
       projectCwd: '/project',
-      provider: 'auto' as never,
-      providerSource: 'cli',
+      provider: 'mock',
+      providerSource: 'project',
       ...engineOverrides,
     } as WorkflowEngineOptions,
     () => '/project',
@@ -39,8 +39,8 @@ function createAutoRuntime(): RuntimeStepResolution {
     providerInfo: {
       provider: 'codex',
       model: 'gpt-5',
-      providerSource: 'auto.rules' as never,
-      modelSource: 'auto.rules' as never,
+      providerSource: 'auto.rules',
+      modelSource: 'auto.rules',
       providerOptions: {
         codex: {
           networkAccess: true,
@@ -48,8 +48,8 @@ function createAutoRuntime(): RuntimeStepResolution {
         },
       },
       providerOptionsSources: {
-        'codex.networkAccess': 'auto.rules' as never,
-        'codex.reasoningEffort': 'auto.rules' as never,
+        'codex.networkAccess': 'auto.rules',
+        'codex.reasoningEffort': 'auto.rules',
       },
     },
   };

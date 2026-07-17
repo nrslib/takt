@@ -11,8 +11,6 @@ import type {
   WorkflowStep,
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
-import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../../../core/workflow/provider-resolution.js';
-import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
 import { hasUnquotedFindingsReference, isFindingsCondition } from '../../../core/workflow/evaluation/rule-utils.js';
 import { normalizeAutoRoutingConfig, normalizeRateLimitFallback, normalizeRuntime } from '../configNormalizers.js';
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
@@ -233,29 +231,6 @@ export function normalizeWorkflowConfig(
   );
 
   const loopMonitors = normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context);
-  for (const monitor of loopMonitors ?? []) {
-    const triggeringStep = steps.find((step) => step.name === monitor.cycle[monitor.cycle.length - 1]);
-    if (!triggeringStep) {
-      continue;
-    }
-    const triggeringProviderInfo = resolveStepProviderModel({
-      step: triggeringStep,
-      provider: normalizedWorkflowProvider.provider,
-      model: normalizedWorkflowProvider.model,
-    });
-    const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
-      judge: monitor.judge,
-      triggeringProviderInfo,
-    });
-    validateProviderModelRequirements(
-      judgeProviderInfo.provider,
-      judgeProviderInfo.model,
-      {
-        modelFieldName: 'Configuration error: loop_monitors.judge.model',
-      },
-    );
-  }
-
   const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
   validateFindingsRulesRequireContract(steps, loopMonitors, findingContract);
 

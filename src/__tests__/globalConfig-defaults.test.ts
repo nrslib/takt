@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { vi } from 'vitest';
@@ -14,7 +14,7 @@ import {
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 // Mock the home directory to use a temp directory
-const testHomeDir = join(tmpdir(), `takt-gc-test-${Date.now()}`);
+const testHomeDir = mkdtempSync(join(tmpdir(), 'takt-gc-test-'));
 
 vi.mock('node:os', async () => {
   const actual = await vi.importActual('node:os');
@@ -463,11 +463,9 @@ describe('loadGlobalConfig', () => {
       getGlobalConfigPath(),
       [
         'language: en',
-        'provider: auto',
+        'provider: mock',
+        'model: global-default-model',
         'auto_routing:',
-        '  default_provider:',
-        '    provider: mock',
-        '    model: global-default-model',
         '  strategy: balanced',
         '  router:',
         '    provider: claude-sdk',
@@ -490,15 +488,18 @@ describe('loadGlobalConfig', () => {
     invalidateGlobalConfigCache();
 
     const reloaded = loadGlobalConfig();
+    expect(reloaded.provider).toBe('mock');
+    expect(reloaded.model).toBe('global-default-model');
     expect(reloaded.autoRouting).toEqual(loaded.autoRouting);
     const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
-    expect(raw).toContain('auto_routing:');
-    expect(raw).toContain('default_provider:');
+    expect(raw).toContain('provider: mock');
     expect(raw).toContain('model: global-default-model');
+    expect(raw).toContain('auto_routing:');
     expect(raw).toContain('cost_tier: medium');
     expect(raw).toContain('provider_options:');
     expect(raw).toContain('reasoning_effort: high');
     expect(raw).not.toContain('autoRouting:');
+    expect(raw).not.toContain('default_provider:');
     expect(raw).not.toContain('defaultProvider:');
     expect(raw).not.toContain('costTier:');
     expect(raw).not.toContain('providerOptions:');

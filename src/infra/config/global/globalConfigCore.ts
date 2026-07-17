@@ -16,7 +16,7 @@ import {
   buildRawTaktProvidersOrThrow,
   normalizeRuntime,
   normalizeRateLimitFallback,
-  normalizeConfigAutoRoutingConfig,
+  normalizeAutoRoutingConfig,
   normalizeTelemetryConfig,
 } from '../configNormalizers.js';
 import {
@@ -127,7 +127,7 @@ export class GlobalConfigManager {
       language: parsed.language,
       provider: normalizedProvider.provider,
       model: normalizedProvider.model,
-      autoRouting: normalizeConfigAutoRoutingConfig(parsed.auto_routing),
+      autoRouting: normalizeAutoRoutingConfig(parsed.auto_routing),
       logging: parsed.logging ? {
         level: parsed.logging.level,
         trace: parsed.logging.trace,

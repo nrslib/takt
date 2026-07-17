@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
@@ -16,15 +16,33 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const MOCK_WORKFLOW_PATH = resolve(__dirname, '../fixtures/workflows/mock-single-step.yaml');
 const MOCK_SCENARIO_PATH = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
-const AUTO_DEFAULT_PROVIDER_SCENARIO_PATH = resolve(
+const AUTO_ROUTING_SCENARIO_PATH = resolve(
   __dirname,
-  '../fixtures/scenarios/auto-default-provider-worktree.json',
+  '../fixtures/scenarios/auto-routing-worktree.json',
 );
 
 interface CompletedTaskMeta {
   status?: string;
   branch?: string;
   worktree_path?: string;
+}
+
+interface RoutingDecisionRecord {
+  type?: string;
+  stepName?: string;
+  provider?: string;
+  model?: string;
+  resolutionSource?: string;
+}
+
+function readRoutingDecisions(repoPath: string): RoutingDecisionRecord[] {
+  const eventsDir = join(repoPath, '.takt', 'events');
+  return readdirSync(eventsDir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) => readFileSync(join(eventsDir, name), 'utf-8')
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as RoutingDecisionRecord));
 }
 
 function writeCompletedTask(repoPath: string, name: string, branch: string): void {
@@ -269,16 +287,16 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
     expect(stagedFiles.trim()).toBe('README.md');
   }, 240_000);
 
-  it('should create a queued worktree with the auto default provider for AI slug generation', () => {
-    const taskName = 'e2e-auto-default-provider';
+  it('should use top-level concrete provider for AI slug generation and auto_routing for workflow execution', () => {
+    const taskName = 'e2e-auto-routing';
     updateIsolatedConfig(isolatedEnv.taktDir, {
-      provider: 'auto',
+      provider: 'mock',
+      model: 'mock-summary-model',
       branch_name_strategy: 'ai',
+      telemetry: {
+        routing_decisions: true,
+      },
       auto_routing: {
-        default_provider: {
-          provider: 'mock',
-          model: 'mock-summary-model',
-        },
         strategy: 'balanced',
         router: {
           provider: 'mock',
@@ -293,30 +311,41 @@ describe('E2E: List tasks non-interactive (takt list)', () => {
             cost_tier: 'medium',
           },
         ],
+        rules: {
+          steps: { execute: 'coding' },
+        },
       },
     });
     writePendingWorktreeTask(
       testRepo.path,
       taskName,
-      'Create a worktree using the configured auto default provider',
+      'Create a worktree using the configured automatic routing',
     );
 
     const result = runTakt({
-      args: ['run', '--provider', 'mock'],
+      args: ['run'],
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,
-        TAKT_MOCK_SCENARIO: AUTO_DEFAULT_PROVIDER_SCENARIO_PATH,
+        TAKT_MOCK_SCENARIO: AUTO_ROUTING_SCENARIO_PATH,
       },
       timeout: 240_000,
+      injectProvider: false,
     });
 
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
     const taskMeta = readTaskMeta(testRepo.path, taskName);
     expect(taskMeta.status).toBe('completed');
-    expect(taskMeta.branch).toContain('auto-default-provider-slug');
-    expect(taskMeta.worktree_path).toContain('auto-default-provider-slug');
-    expect(result.stdout + result.stderr).not.toContain('Unknown provider type: auto');
+    expect(taskMeta.branch).toContain('auto-routing-slug');
+    expect(taskMeta.worktree_path).toContain('auto-routing-slug');
+    expect(readRoutingDecisions(testRepo.path)).toContainEqual(expect.objectContaining({
+      type: 'routing_decision',
+      stepName: 'execute',
+      provider: 'mock',
+      model: 'mock/workflow-model',
+      resolutionSource: 'auto.rules',
+    }));
+    expect(result.stdout + result.stderr).not.toMatch(/provider:\s*auto|default_provider/);
   }, 240_000);
 
   it('should create a completed worktree task via mock run and merge from root', () => {

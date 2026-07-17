@@ -25,6 +25,29 @@ function writeWorkflow(projectDir: string, relativePath: string, content: string
   return filePath;
 }
 
+function buildAutoRoutingYaml(stepCandidate: 'coding' | 'review'): string {
+  return `auto_routing:
+  strategy: balanced
+  router:
+    provider: claude-sdk
+    model: claude-haiku-4-5-20251001
+  candidates:
+    - name: coding
+      description: Coding candidate
+      provider: codex
+      model: gpt-5
+      cost_tier: medium
+    - name: review
+      description: Review candidate
+      provider: claude-sdk
+      model: claude-sonnet-4-20250514
+      cost_tier: medium
+  rules:
+    steps:
+      implement: ${stepCandidate}
+`;
+}
+
 interface WorktreeRootCase {
   name: string;
   rootDirRelativePath: string;
@@ -60,10 +83,14 @@ function writeConfigForCase(rootCase: WorktreeRootCase): void {
 describe('workflow doctor', () => {
   let projectDir: string;
   const previousConfigDir = process.env.TAKT_CONFIG_DIR;
+  const previousProvider = process.env.TAKT_PROVIDER;
+  const previousModel = process.env.TAKT_MODEL;
 
   beforeEach(() => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-'));
     process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-global-'));
+    delete process.env.TAKT_PROVIDER;
+    delete process.env.TAKT_MODEL;
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
     mockSuccess.mockClear();
@@ -78,11 +105,19 @@ describe('workflow doctor', () => {
     }
     if (previousConfigDir === undefined) {
       delete process.env.TAKT_CONFIG_DIR;
+      if (previousProvider === undefined) delete process.env.TAKT_PROVIDER;
+      else process.env.TAKT_PROVIDER = previousProvider;
+      if (previousModel === undefined) delete process.env.TAKT_MODEL;
+      else process.env.TAKT_MODEL = previousModel;
       invalidateGlobalConfigCache();
       invalidateAllResolvedConfigCache();
       return;
     }
     process.env.TAKT_CONFIG_DIR = previousConfigDir;
+    if (previousProvider === undefined) delete process.env.TAKT_PROVIDER;
+    else process.env.TAKT_PROVIDER = previousProvider;
+    if (previousModel === undefined) delete process.env.TAKT_MODEL;
+    else process.env.TAKT_MODEL = previousModel;
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
   });
@@ -211,6 +246,152 @@ steps:
 
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('invalid-finding-manager-provider.yaml'));
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
+  });
+
+  it.each([
+    {
+      label: 'provider only',
+      workflowProvider: 'opencode',
+      envProvider: 'mock',
+      envModel: undefined,
+    },
+    {
+      label: 'model only',
+      workflowProvider: 'mock',
+      envProvider: undefined,
+      envModel: 'mock/env-model',
+    },
+    {
+      label: 'provider and model',
+      workflowProvider: 'opencode',
+      envProvider: 'mock',
+      envModel: 'mock/env-model',
+    },
+  ])('uses environment $label before workflow values during runtime validation', async ({
+    workflowProvider,
+    envProvider,
+    envModel,
+  }) => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/env-provider-manager.yaml', `name: env-provider-manager
+max_steps: 10
+initial_step: step1
+finding_contract:
+  ledger_path: .takt/findings/peer-review.json
+  raw_findings_path: .takt/findings/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: ${workflowProvider}
+steps:
+  - name: step1
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    if (envProvider === undefined) delete process.env.TAKT_PROVIDER;
+    else process.env.TAKT_PROVIDER = envProvider;
+    if (envModel === undefined) delete process.env.TAKT_MODEL;
+    else process.env.TAKT_MODEL = envModel;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('env-provider-manager.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('uses workflow_config provider/model before project config during doctor validation', async () => {
+    writeWorkflow(join(projectDir, '.takt'), 'config.yaml', [
+      'provider: opencode',
+      'model: invalid-project-model',
+    ].join('\n'));
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/workflow-priority.yaml', `name: workflow-priority
+workflow_config:
+  provider: codex
+  model: gpt-5
+initial_step: implement
+max_steps: 1
+steps:
+  - name: implement
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    invalidateAllResolvedConfigCache();
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('workflow-priority.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it.each(['global', 'project'] as const)(
+    'uses inherited %s auto_routing during doctor runtime validation',
+    async (scope) => {
+      const configDir = scope === 'global'
+        ? process.env.TAKT_CONFIG_DIR!
+        : join(projectDir, '.takt');
+      writeWorkflow(configDir, 'config.yaml', buildAutoRoutingYaml('coding'));
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
+      const filePath = writeWorkflow(projectDir, '.takt/workflows/auto-routing-inherited.yaml', `name: auto-routing-inherited
+initial_step: implement
+max_steps: 1
+steps:
+  - name: implement
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+      await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+      expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('auto-routing-inherited.yaml'));
+      expect(mockError).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses workflow auto_routing instead of an incompatible project configuration during doctor validation', async () => {
+    writeWorkflow(join(projectDir, '.takt'), 'config.yaml', buildAutoRoutingYaml('coding'));
+    invalidateAllResolvedConfigCache();
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/auto-routing-workflow-override.yaml', `name: auto-routing-workflow-override
+${buildAutoRoutingYaml('review')}initial_step: implement
+max_steps: 1
+steps:
+  - name: implement
+    model: claude-sonnet-4-20250514
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('auto-routing-workflow-override.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('reports an inherited auto_routing provider and explicit step model mismatch from doctor output', async () => {
+    writeWorkflow(join(projectDir, '.takt'), 'config.yaml', buildAutoRoutingYaml('coding'));
+    invalidateAllResolvedConfigCache();
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/auto-routing-invalid-model.yaml', `name: auto-routing-invalid-model
+initial_step: implement
+max_steps: 1
+steps:
+  - name: implement
+    model: sonnet
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('auto-routing-invalid-model.yaml'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringMatching(/auto_routing resolved model.*provider is 'codex'/i));
+    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('reports missing loop monitor judge references', () => {

@@ -68,13 +68,13 @@ function createStructuredCaller(): StructuredCaller {
         systemPrompt: options.persona ?? 'testing-reviewer',
         userInstruction: instruction,
       });
-      return [
+      return { parts: [
         {
           id: 'part-1',
           title: 'Audit flow',
           instruction: 'Inspect the workflow end-to-end',
         },
-      ];
+      ] };
     },
     requestMoreParts: async () => ({
       done: true,
@@ -194,6 +194,146 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
     expect(reportInstruction).toContain('Part audit finished');
     expect(state.personaSessions.get('audit.part-1:mock')).toBe('part-session-1');
     expect(state.personaSessions.get('testing-reviewer:mock')).toBe('report-session-1');
+  });
+
+  it('should record team_leader part and report attempts across retry and fallback providers', async () => {
+    // Given
+    const reportDirName = 'test-report-dir';
+    const reportPath = join(tmpDir, '.takt', 'runs', reportDirName, 'reports', '02-e2e-audit.md');
+    const partUsage = {
+      inputTokens: 11,
+      outputTokens: 7,
+      totalTokens: 18,
+      usageMissing: false as const,
+    };
+    const firstReportUsage = {
+      inputTokens: 13,
+      outputTokens: 1,
+      totalTokens: 14,
+      usageMissing: false as const,
+    };
+    const retryReportUsage = {
+      inputTokens: 17,
+      outputTokens: 1,
+      totalTokens: 18,
+      usageMissing: false as const,
+    };
+    const fallbackReportUsage = {
+      inputTokens: 19,
+      outputTokens: 5,
+      totalTokens: 24,
+      usageMissing: false as const,
+    };
+    queueRunAgentResponses([
+      {
+        persona: 'testing-reviewer',
+        status: 'done',
+        content: 'Part audit finished',
+        timestamp: new Date('2026-04-22T01:55:00Z'),
+        sessionId: 'part-session-1',
+        providerUsage: partUsage,
+      },
+      {
+        persona: 'testing-reviewer',
+        status: 'done',
+        content: '   ',
+        timestamp: new Date('2026-04-22T01:55:01Z'),
+        sessionId: 'leader-session',
+        providerUsage: firstReportUsage,
+      },
+      {
+        persona: 'testing-reviewer',
+        status: 'done',
+        content: '   ',
+        timestamp: new Date('2026-04-22T01:55:02Z'),
+        sessionId: 'report-retry-session',
+        providerUsage: retryReportUsage,
+      },
+      {
+        persona: 'testing-reviewer',
+        status: 'done',
+        content: '# E2E Audit Report\nRecovered with fallback',
+        timestamp: new Date('2026-04-22T01:55:03Z'),
+        sessionId: 'report-fallback-session',
+        providerUsage: fallbackReportUsage,
+      },
+    ]);
+    const delegatedUsage = vi.fn<(
+      context: {
+        step: string;
+        stepType: 'parallel' | 'team_leader';
+        provider: string;
+        providerModel: string;
+      },
+      result: {
+        success: boolean;
+        usage?: AgentResponse['providerUsage'];
+      },
+    ) => void>();
+    engine = new WorkflowEngine(createConfig(), tmpDir, 'run audit', {
+      projectCwd: tmpDir,
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+      reportFallbackProvider: {
+        provider: 'mock',
+        model: 'mock/fallback',
+      },
+      reportDirName,
+      detectRuleIndex,
+      structuredCaller: createStructuredCaller(),
+      initialSessions: {
+        'testing-reviewer:opencode': 'leader-session',
+      },
+      onDelegatedAgentUsage: delegatedUsage,
+    });
+
+    // When
+    const state = await engine.run();
+
+    // Then
+    expect(state.status).toBe('completed');
+    expect(readFileSync(reportPath, 'utf-8')).toBe('# E2E Audit Report\nRecovered with fallback');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+    expect(delegatedUsage.mock.calls
+      .filter(([, result]) => result.usage !== undefined)
+      .map(([context, result]) => ({ context, result }))).toEqual([
+      {
+        context: {
+          step: 'audit.part-1',
+          stepType: 'team_leader',
+          provider: 'opencode',
+          providerModel: 'opencode/qwen3-coder-next',
+        },
+        result: { success: true, usage: partUsage },
+      },
+      {
+        context: {
+          step: 'audit',
+          stepType: 'team_leader',
+          provider: 'opencode',
+          providerModel: 'opencode/qwen3-coder-next',
+        },
+        result: { success: false, usage: firstReportUsage },
+      },
+      {
+        context: {
+          step: 'audit',
+          stepType: 'team_leader',
+          provider: 'opencode',
+          providerModel: 'opencode/qwen3-coder-next',
+        },
+        result: { success: false, usage: retryReportUsage },
+      },
+      {
+        context: {
+          step: 'audit',
+          stepType: 'team_leader',
+          provider: 'mock',
+          providerModel: 'mock/fallback',
+        },
+        result: { success: true, usage: fallbackReportUsage },
+      },
+    ]);
   });
 
   it('should complete audit-e2e with a new report session for the audit step', async () => {

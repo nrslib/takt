@@ -112,8 +112,11 @@ export async function runStatusJudgmentPhase(
     });
   }
 
+  let stepProvider: ReturnType<StatusJudgmentPhaseContext['resolveStepProviderModel']> | undefined;
+  let didRecordProviderAttempt = false;
   try {
-    const stepProvider = ctx.resolveStepProviderModel(step);
+    const resolvedStepProvider = ctx.resolveStepProviderModel(step);
+    stepProvider = resolvedStepProvider;
     const result = await runWithPhaseSpan(
       {
         enabled: ctx.observabilityEnabled === true,
@@ -127,15 +130,15 @@ export async function runStatusJudgmentPhase(
         phaseExecutionId,
         workflowStack: ctx.getCurrentWorkflowStack?.(),
         sanitizeText: ctx.sanitizeObservabilityText,
-        providerInfo: stepProvider,
+        providerInfo: resolvedStepProvider,
         getPromptParts: () => resolvedPromptParts,
       },
       () => ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, rules, {
         cwd: ctx.cwd,
         stepName: step.name,
-        provider: stepProvider.provider,
-        resolvedProvider: stepProvider.provider,
-        resolvedModel: stepProvider.model,
+        provider: resolvedStepProvider.provider,
+        resolvedProvider: resolvedStepProvider.provider,
+        resolvedModel: resolvedStepProvider.model,
         language: ctx.language,
         interactive: ctx.interactive,
         childProcessEnv: ctx.childProcessEnv,
@@ -146,6 +149,12 @@ export async function runStatusJudgmentPhase(
           }
         },
         onJudgeStage: (entry) => {
+          didRecordProviderAttempt = true;
+          ctx.onProviderAttempt?.(
+            resolvedStepProvider,
+            entry.status === 'done',
+            entry.providerUsage,
+          );
           recordJudgeStageSpan({
             enabled: ctx.observabilityEnabled === true,
             runId: ctx.observabilityRunId,
@@ -156,7 +165,7 @@ export async function runStatusJudgmentPhase(
             workflowStack: ctx.getCurrentWorkflowStack?.(),
             entry,
             sanitizeText: ctx.sanitizeObservabilityText,
-            providerInfo: stepProvider,
+            providerInfo: resolvedStepProvider,
           });
           ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration);
         },
@@ -174,6 +183,9 @@ export async function runStatusJudgmentPhase(
     ctx.onPhaseComplete?.(step, 3, 'judge', tag, 'done', undefined, phaseExecutionId, ctx.iteration);
     return { tag, ruleIndex: result.ruleIndex, method: result.method };
   } catch (error) {
+    if (stepProvider !== undefined && !didRecordProviderAttempt) {
+      ctx.onProviderAttempt?.(stepProvider, false, undefined);
+    }
     const errorMsg = error instanceof Error ? error.message : String(error);
     ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg, phaseExecutionId, ctx.iteration);
     throw error;

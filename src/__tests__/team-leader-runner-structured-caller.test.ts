@@ -60,9 +60,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -228,9 +228,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -497,10 +497,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
           { id: 'part-2', title: 'UI', instruction: 'Implement UI' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -620,9 +620,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -736,9 +736,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -857,9 +857,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -1012,9 +1012,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -1126,9 +1126,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -1239,9 +1239,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -1349,9 +1349,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -1449,9 +1449,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -1552,9 +1552,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           systemPrompt: 'team-leader-system',
           userInstruction: 'leader instruction',
         });
-        return [
+        return { parts: [
           { id: 'part-1', title: 'API', instruction: 'Implement API' },
-        ];
+        ] };
       }),
       requestMoreParts: vi.fn().mockResolvedValue({
         done: true,
@@ -1749,7 +1749,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+          return { parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }] };
         }),
         requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'enough', parts: [] }),
       };
@@ -1776,7 +1776,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+          return { parts: [{ id: 'part-1', title: 'API', instruction: 'Implement API' }] };
         }),
         requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'enough', parts: [] }),
       };
@@ -1886,11 +1886,11 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
             { id: 'part-3', title: 'Implementation 3', instruction: 'Implement third area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockResolvedValue({ done: true, reasoning: 'complete', parts: [] }),
       };
@@ -1956,7 +1956,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('Structured output produced too many parts: 2 > 1')),
       };
@@ -1994,7 +1994,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -2044,7 +2044,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -2103,10 +2103,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -2170,10 +2170,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -2229,10 +2229,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -2273,10 +2273,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };
@@ -2362,10 +2362,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [
+          return { parts: [
             { id: 'part-1', title: 'Implementation 1', instruction: 'Implement first area' },
             { id: 'part-2', title: 'Implementation 2', instruction: 'Implement second area' },
-          ];
+          ] };
         }),
         requestMoreParts: vi.fn()
           .mockRejectedValueOnce(new Error('feedback failed'))
@@ -2450,7 +2450,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
             systemPrompt: 'team-leader-system',
             userInstruction: 'leader instruction',
           });
-          return [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }];
+          return { parts: [{ id: 'part-1', title: 'Implementation', instruction: 'Implement everything' }] };
         }),
         requestMoreParts: vi.fn().mockRejectedValue(new Error('feedback failed')),
       };

@@ -1,4 +1,4 @@
-import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
+import type { AgentResponse, WorkflowRule } from '../../core/models/types.js';
 import {
   buildPromptBasedDecomposePrompt,
   buildPromptBasedMorePartsPrompt,
@@ -13,7 +13,12 @@ import {
   type JudgeStatusOptions,
   type JudgeStatusResult,
 } from '../judge-status-usecase.js';
-import type { DecomposeTaskOptions, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
+import type {
+  DecomposeTaskOptions,
+  DecomposeTaskResponse,
+  MorePartsOptions,
+  MorePartsResponse,
+} from '../decompose-task-usecase.js';
 import type { StructuredCaller } from './contracts.js';
 import {
   buildPromptBasedStructuredInstruction,
@@ -46,18 +51,30 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 
     const interactiveEnabled = options.interactive === true;
 
-    const structuredResponse = await runAgent('conductor', buildPromptBasedStructuredInstruction(structuredInstruction), {
-      cwd: options.cwd,
-      provider: options.provider,
-      resolvedProvider: options.resolvedProvider,
-      resolvedModel: options.resolvedModel,
-      ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 3),
-      permissionMode: 'readonly',
-      language: options.language,
-      onStream: options.onStream,
-      childProcessEnv: options.childProcessEnv,
-      onPromptResolved: options.onStructuredPromptResolved,
-    });
+    let structuredResponse: AgentResponse;
+    try {
+      structuredResponse = await runAgent('conductor', buildPromptBasedStructuredInstruction(structuredInstruction), {
+        cwd: options.cwd,
+        provider: options.provider,
+        resolvedProvider: options.resolvedProvider,
+        resolvedModel: options.resolvedModel,
+        ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 3),
+        permissionMode: 'readonly',
+        language: options.language,
+        onStream: options.onStream,
+        childProcessEnv: options.childProcessEnv,
+        onPromptResolved: options.onStructuredPromptResolved,
+      });
+    } catch (error) {
+      options.onJudgeStage?.({
+        stage: 1,
+        method: 'structured_output',
+        status: 'error',
+        instruction: structuredInstruction,
+        response: getErrorMessage(error),
+      });
+      throw error;
+    }
 
     options.onJudgeStage?.({
       stage: 1,
@@ -104,14 +121,23 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
 
     if (conditions.length > 0) {
       const stage3 = createJudgeStageRecorder();
-      const fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
-        cwd: options.cwd,
-        provider: options.provider,
-        resolvedProvider: options.resolvedProvider,
-        resolvedModel: options.resolvedModel,
-        childProcessEnv: options.childProcessEnv,
-        onJudgeResponse: stage3.capture,
-      });
+      let fallbackIndex: number;
+      try {
+        fallbackIndex = await this.evaluateCondition(structuredInstruction, conditions, {
+          cwd: options.cwd,
+          provider: options.provider,
+          resolvedProvider: options.resolvedProvider,
+          resolvedModel: options.resolvedModel,
+          childProcessEnv: options.childProcessEnv,
+          onJudgeResponse: stage3.capture,
+        });
+      } catch (error) {
+        options.onJudgeStage?.(stage3.stage({
+          stage: 3,
+          method: 'ai_judge',
+        }));
+        throw error;
+      }
 
       options.onJudgeStage?.(stage3.stage({
         stage: 3,
@@ -135,15 +161,25 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     options: EvaluateConditionOptions,
   ): Promise<number> {
     const prompt = buildJudgePrompt(agentOutput, conditions);
-    const response = await runAgent(undefined, prompt, {
-      cwd: options.cwd,
-      provider: options.provider,
-      resolvedProvider: options.resolvedProvider,
-      resolvedModel: options.resolvedModel,
-      ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
-      permissionMode: 'readonly',
-      childProcessEnv: options.childProcessEnv,
-    });
+    let response: AgentResponse;
+    try {
+      response = await runAgent(undefined, prompt, {
+        cwd: options.cwd,
+        provider: options.provider,
+        resolvedProvider: options.resolvedProvider,
+        resolvedModel: options.resolvedModel,
+        ...buildMaxTurnsOption(options.provider, options.resolvedProvider, 1),
+        permissionMode: 'readonly',
+        childProcessEnv: options.childProcessEnv,
+      });
+    } catch (error) {
+      options.onJudgeResponse?.({
+        instruction: prompt,
+        status: 'error',
+        response: getErrorMessage(error),
+      });
+      throw error;
+    }
 
     options.onJudgeResponse?.({
       instruction: prompt,
@@ -163,7 +199,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     instruction: string,
     maxTotalParts: number,
     options: DecomposeTaskOptions,
-  ): Promise<PartDefinition[]> {
+  ): Promise<DecomposeTaskResponse> {
     const prompt = buildPromptBasedDecomposePrompt(
       instruction,
       maxTotalParts,
@@ -172,30 +208,41 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     );
 
     return withRetry(async () => {
-      const response = await runAgent(options.persona, prompt, {
-        cwd: options.cwd,
-        personaPath: options.personaPath,
-        language: options.language,
-        model: options.model,
-        provider: options.provider,
-        resolvedModel: options.resolvedModel,
-        resolvedProvider: options.resolvedProvider,
-        allowedTools: options.inspectTools ?? [],
-        mcpServers: options.mcpServers,
-        permissionMode: 'readonly',
-        onStream: options.onStream,
-        workflowMeta: options.workflowMeta,
-        childProcessEnv: options.childProcessEnv,
-        onPromptResolved: options.onPromptResolved,
-      });
+      let response: AgentResponse;
+      try {
+        response = await runAgent(options.persona, prompt, {
+          cwd: options.cwd,
+          personaPath: options.personaPath,
+          language: options.language,
+          model: options.model,
+          provider: options.provider,
+          resolvedModel: options.resolvedModel,
+          resolvedProvider: options.resolvedProvider,
+          allowedTools: options.inspectTools ?? [],
+          mcpServers: options.mcpServers,
+          permissionMode: 'readonly',
+          onStream: options.onStream,
+          workflowMeta: options.workflowMeta,
+          childProcessEnv: options.childProcessEnv,
+          abortSignal: options.abortSignal,
+          onPromptResolved: options.onPromptResolved,
+        });
+      } catch (error) {
+        options.onAgentError?.(error);
+        throw error;
+      }
+      options.onAgentResponse?.(response);
 
       if (response.status !== 'done') {
         const detail = response.error || response.content || response.status;
         throw new Error(`Team leader failed: ${detail}`);
       }
 
-      return parseParts(response.content, maxTotalParts);
-    });
+      return {
+        parts: parseParts(response.content, maxTotalParts),
+        ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
+      };
+    }, options.abortSignal);
   }
 
   async requestMoreParts(
@@ -214,46 +261,85 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     );
 
     return withRetry(async () => {
-      const response = await runAgent(options.persona, prompt, {
-        cwd: options.cwd,
-        personaPath: options.personaPath,
-        language: options.language,
-        model: options.model,
-        provider: options.provider,
-        resolvedModel: options.resolvedModel,
-        resolvedProvider: options.resolvedProvider,
-        allowedTools: [],
-        mcpServers: options.mcpServers,
-        permissionMode: 'readonly',
-        onStream: options.onStream,
-        workflowMeta: options.workflowMeta,
-        childProcessEnv: options.childProcessEnv,
-      });
+      let response: AgentResponse;
+      try {
+        response = await runAgent(options.persona, prompt, {
+          cwd: options.cwd,
+          personaPath: options.personaPath,
+          language: options.language,
+          model: options.model,
+          provider: options.provider,
+          resolvedModel: options.resolvedModel,
+          resolvedProvider: options.resolvedProvider,
+          allowedTools: [],
+          mcpServers: options.mcpServers,
+          permissionMode: 'readonly',
+          onStream: options.onStream,
+          workflowMeta: options.workflowMeta,
+          childProcessEnv: options.childProcessEnv,
+          abortSignal: options.abortSignal,
+        });
+      } catch (error) {
+        options.onAgentError?.(error);
+        throw error;
+      }
+      options.onAgentResponse?.(response);
 
       if (response.status !== 'done') {
         const detail = response.error || response.content || response.status;
         throw new Error(`Team leader feedback failed: ${detail}`);
       }
 
-      return toMorePartsResponse(parseLastJsonBlock(response.content), maxAdditionalParts);
-    });
+      return {
+        ...toMorePartsResponse(parseLastJsonBlock(response.content), maxAdditionalParts),
+        ...(response.providerUsage !== undefined ? { providerUsage: response.providerUsage } : {}),
+      };
+    }, options.abortSignal);
   }
 }
 
-async function withRetry<T>(runOnce: () => Promise<T>): Promise<T> {
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error('Structured call aborted');
+  }
+}
+
+async function delayWithAbort(milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) {
+    await delay(milliseconds);
+    return;
+  }
+  throwIfAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error('Structured call aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function withRetry<T>(runOnce: () => Promise<T>, abortSignal: AbortSignal | undefined): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    throwIfAborted(abortSignal);
     try {
       return await runOnce();
     } catch (error) {
       lastError = error;
+      throwIfAborted(abortSignal);
       if (attempt < RETRY_MAX_ATTEMPTS) {
         log.info('Structured call failed, retrying', {
           attempt,
           maxAttempts: RETRY_MAX_ATTEMPTS,
           error: getErrorMessage(error),
         });
-        await delay(RETRY_DELAY_MS);
+        await delayWithAbort(RETRY_DELAY_MS, abortSignal);
       }
     }
   }

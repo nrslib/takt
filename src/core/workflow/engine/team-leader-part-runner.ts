@@ -97,7 +97,12 @@ export async function runTeamLeaderPart(
     ? {
       ...baseOptions,
       abortSignal: signal,
-      onStream: parallelLogger.createStreamHandler(part.id, partIndex),
+      onStream: optionsBuilder.buildProviderStream(
+        partStep,
+        partProviderInfo.provider,
+        partProviderInfo.model,
+        parallelLogger.createStreamHandler(part.id, partIndex),
+      ),
     }
     : {
       ...baseOptions,
@@ -141,7 +146,10 @@ export async function runTeamLeaderPart(
       },
     };
   } catch (error) {
-    return buildTeamLeaderErrorPartResult(step, part, error, signal);
+    return {
+      ...buildTeamLeaderErrorPartResult(step, part, error, signal),
+      providerInfo: partProviderInfo,
+    };
   } finally {
     dispose();
   }

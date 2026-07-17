@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskRecordSchema, type TaskRecord } from '../infra/task/schema.js';
@@ -59,18 +60,16 @@ function createPendingRecord(overrides: Record<string, unknown>): Record<string,
 }
 
 describe('TaskRunner (tasks.yaml)', () => {
-  const testDir = `/tmp/takt-task-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-task-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should add tasks to .takt/tasks.yaml', () => {

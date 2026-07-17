@@ -2,7 +2,8 @@ import { error, success, warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { validateWorkflowConfig } from '../../core/workflow/engine/WorkflowValidator.js';
-import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
+import { resolveConfigValueWithSource, resolveWorkflowConfigValues } from '../../infra/config/index.js';
+import { resolveEffectiveAutoRouting } from '../../core/workflow/auto-routing/effective-auto-routing.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../../infra/config/loaders/workflowDoctor.js';
 import { isMissingWorkflowCallArgError } from '../../infra/config/loaders/workflowCallableArgResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from '../../infra/config/loaders/workflowResolvedLoader.js';
@@ -49,15 +50,23 @@ function validateWorkflowRuntimeContract(
     const workflow = loadWorkflowForRuntimeValidation(target, projectDir);
     const config = resolveWorkflowConfigValues(
       projectDir,
-      ['provider', 'model', 'personaProviders', 'providerRouting', 'autoRouting'],
+      ['personaProviders', 'providerRouting', 'autoRouting'],
     );
+    const provider = resolveConfigValueWithSource(projectDir, 'provider', {
+      workflowContext: workflow,
+    });
+    const model = resolveConfigValueWithSource(projectDir, 'model', {
+      workflowContext: workflow,
+    });
     validateWorkflowConfig(workflow, {
       projectCwd: projectDir,
-      provider: workflow.provider ?? config.provider,
-      model: workflow.model ?? config.model,
+      provider: provider.value,
+      providerSource: provider.source,
+      model: model.value,
+      modelSource: model.source,
       personaProviders: config.personaProviders,
       providerRouting: config.providerRouting,
-      autoRouting: workflow.autoRouting ?? config.autoRouting,
+      autoRouting: resolveEffectiveAutoRouting(workflow, config.autoRouting),
       workflowCallResolver: () => null,
     });
   } catch (validationError) {

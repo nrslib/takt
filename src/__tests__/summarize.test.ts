@@ -203,9 +203,9 @@ describe('summarizeTaskName', () => {
     );
   });
 
-  it('should use the concrete default provider and model for auto AI summarization', async () => {
+  it('should use the concrete top-level provider and model for AI summarization', async () => {
     mockResolveConfigValues.mockReturnValue({
-      provider: 'auto',
+      provider: 'mock',
       branchNameStrategy: 'ai',
     });
     mockResolveNonWorkflowProviderModel.mockReturnValue({
@@ -224,7 +224,6 @@ describe('summarizeTaskName', () => {
     expect(result).toBe('auto-default-slug');
     expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/project');
     expect(mockGetProvider).toHaveBeenCalledWith('mock');
-    expect(mockGetProvider).not.toHaveBeenCalledWith('auto');
     expect(mockProviderCall).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ model: 'default-summary-model' }),

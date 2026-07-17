@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
+import type { AutoRoutingCandidate, AutoRoutingConfig } from '../core/models/config-types.js';
 import type { FindingLedger, FindingLedgerStore, RawFinding } from '../core/workflow/findings/types.js';
+import type { StepProviderInfo } from '../core/workflow/types.js';
 import { runFindingManagerForParallelStep } from '../core/workflow/findings/manager-runner.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -56,7 +58,14 @@ interface Harness {
   }) => ReturnType<typeof runFindingManagerForParallelStep>;
 }
 
-function makeHarness(ledger: FindingLedger): Harness {
+interface HarnessOptions {
+  optionsBuilder?: object;
+  autoRouting?: AutoRoutingConfig;
+  routeWithAi?: Parameters<typeof runFindingManagerForParallelStep>[0]['routeWithAi'];
+  onManagerAttemptUsage?: Parameters<typeof runFindingManagerForParallelStep>[0]['onManagerAttemptUsage'];
+}
+
+function makeHarness(ledger: FindingLedger, options: HarnessOptions = {}): Harness {
   const savedLedgers: FindingLedger[] = [];
   const savedRawFindings: RawFinding[][] = [];
   const ledgerStore: FindingLedgerStore = {
@@ -69,7 +78,7 @@ function makeHarness(ledger: FindingLedger): Harness {
     },
     saveManagerValidationReport: () => '/tmp/manager-report.json',
   };
-  const optionsBuilder = {
+  const optionsBuilder = options.optionsBuilder ?? {
     buildAgentOptions: () => ({}),
     resolveStepProviderModel: () => ({ provider: 'codex', model: 'gpt-test' }),
   };
@@ -112,6 +121,9 @@ function makeHarness(ledger: FindingLedger): Harness {
       runId: 'run-2',
       timestamp: '2026-06-14T00:00:00.000Z',
       priorStepResponseText: input.priorStepResponseText,
+      autoRouting: options.autoRouting,
+      routeWithAi: options.routeWithAi,
+      onManagerAttemptUsage: options.onManagerAttemptUsage,
     }),
   };
 }
@@ -146,10 +158,29 @@ beforeEach(() => {
 
 describe('runFindingManagerForParallelStep mechanical path', () => {
   it('Given only mechanically classifiable confirmations and no prior response When run Then the manager agent is not called and the ledger is updated', async () => {
-    const harness = makeHarness(makeLedger());
+    const routeWithAi = vi.fn();
+    const onManagerAttemptUsage = vi.fn();
+    const harness = makeHarness(makeLedger(), {
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'mock', model: 'mock/router' },
+        candidates: [{
+          name: 'manager',
+          description: 'Finding manager',
+          provider: 'mock',
+          model: 'mock/manager',
+          costTier: 'medium',
+        }],
+        rules: {},
+      },
+      routeWithAi,
+      onManagerAttemptUsage,
+    });
     const result = await harness.run({ reviewerRawFindings: [CONFIRMATION_RAW] });
 
     expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(routeWithAi).not.toHaveBeenCalled();
+    expect(onManagerAttemptUsage).not.toHaveBeenCalled();
     expect(result.status).toBe('updated');
     expect(harness.savedLedgers).toHaveLength(1);
     const finding = harness.savedLedgers[0]?.findings.find((entry) => entry.id === 'F-0001');
@@ -251,6 +282,161 @@ describe('runFindingManagerForParallelStep invalid manager output', () => {
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
     expect(result.status).toBe('invalid_manager_output');
     expect(harness.savedLedgers).toHaveLength(0);
+  });
+
+  it('Given effective auto_routing resolves the synthetic manager, When semantic retry runs, Then routing and every attempt usage use the same concrete candidate', async () => {
+    const candidate: AutoRoutingCandidate = {
+      name: 'coding',
+      description: 'Finding manager',
+      provider: 'codex',
+      model: 'gpt-5',
+      costTier: 'medium',
+    };
+    const autoRouting: AutoRoutingConfig = {
+      strategy: 'balanced',
+      router: { provider: 'mock', model: 'mock/router' },
+      candidates: [candidate],
+      rules: {},
+    };
+    const providerInfo: StepProviderInfo = {
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'auto.ai',
+      modelSource: 'auto.ai',
+      autoRoutingDecision: {
+        candidateName: 'coding',
+        costTier: 'medium',
+        strategy: 'balanced',
+        candidateCount: 1,
+      },
+    };
+    const resolveStepProviderModel = vi.fn((): StepProviderInfo => ({
+      provider: undefined,
+      model: undefined,
+    }));
+    const buildAgentOptions = vi.fn((
+      _step: WorkflowStep,
+      runtime?: { providerInfo?: StepProviderInfo },
+    ) => ({
+      resolvedProvider: runtime?.providerInfo?.provider ?? 'mock',
+      resolvedModel: runtime?.providerInfo?.model ?? 'top-level-model',
+    }));
+    const firstResponse = {
+      status: 'done',
+      content: '',
+      providerUsage: {
+        inputTokens: 11,
+        outputTokens: 7,
+        totalTokens: 18,
+        usageMissing: false,
+      },
+      structuredOutput: {
+        matches: [{
+          findingId: 'F-9999',
+          rawFindingIds: ['run-2:reviewers:2:arch-review:i-1'],
+          evidence: null,
+        }],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+      },
+    } as unknown as AgentResponse;
+    const retryResponse = {
+      status: 'done',
+      content: '',
+      providerUsage: {
+        inputTokens: 13,
+        outputTokens: 9,
+        totalTokens: 22,
+        usageMissing: false,
+      },
+      structuredOutput: {
+        matches: [],
+        newFindings: [{
+          rawFindingIds: ['run-2:reviewers:2:arch-review:i-1'],
+          title: 'New unmatched issue',
+          severity: 'medium',
+        }],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+      },
+    } as unknown as AgentResponse;
+    executeAgentMock
+      .mockResolvedValueOnce(firstResponse)
+      .mockResolvedValueOnce(retryResponse);
+    const routeWithAi = vi.fn().mockResolvedValue(candidate);
+    const onManagerAttemptUsage = vi.fn();
+    const harness = makeHarness(makeLedger(), {
+      optionsBuilder: {
+        buildAgentOptions,
+        resolveStepProviderModel,
+      },
+      autoRouting,
+      routeWithAi,
+      onManagerAttemptUsage,
+    });
+
+    const result = await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW] });
+
+    expect(result.status).toBe('updated');
+    expect(result.providerInfo).toEqual(providerInfo);
+    expect(routeWithAi).toHaveBeenCalledTimes(1);
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(executeAgentMock.mock.calls.map((call) => call[2])).toEqual([
+      expect.objectContaining({ resolvedProvider: 'codex', resolvedModel: 'gpt-5' }),
+      expect.objectContaining({ resolvedProvider: 'codex', resolvedModel: 'gpt-5' }),
+    ]);
+    expect(buildAgentOptions).toHaveBeenCalledTimes(2);
+    expect(buildAgentOptions).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ name: 'findings-manager' }),
+      { providerInfo },
+    );
+    expect(buildAgentOptions).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ name: 'findings-manager' }),
+      { providerInfo },
+    );
+    expect(onManagerAttemptUsage).toHaveBeenCalledTimes(2);
+    expect(onManagerAttemptUsage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ name: 'findings-manager' }),
+      providerInfo,
+      true,
+      firstResponse.providerUsage,
+    );
+    expect(onManagerAttemptUsage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ name: 'findings-manager' }),
+      providerInfo,
+      true,
+      retryResponse.providerUsage,
+    );
+  });
+
+  it('Given the manager agent rejects When run Then the failed attempt usage is reported once and the error propagates', async () => {
+    const onManagerAttemptUsage = vi.fn();
+    executeAgentMock.mockRejectedValueOnce(new Error('manager rejected'));
+    const harness = makeHarness(makeLedger(), { onManagerAttemptUsage });
+
+    await expect(harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW] }))
+      .rejects.toThrow('manager rejected');
+
+    expect(onManagerAttemptUsage).toHaveBeenCalledTimes(1);
+    expect(onManagerAttemptUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'findings-manager' }),
+      expect.objectContaining({ provider: 'codex', model: 'gpt-test' }),
+      false,
+      undefined,
+    );
   });
 });
 

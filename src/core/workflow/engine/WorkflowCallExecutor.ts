@@ -13,10 +13,10 @@ import type {
 } from '../../models/config-types.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
-import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
-import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
+import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import type {
+  StepProviderInfo,
   WorkflowAbortKind,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
@@ -49,7 +49,7 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
     return entries;
   }
 
-  const overrideProvider = overrides.provider === 'auto' ? undefined : overrides.provider;
+  const overrideProvider = overrides.provider;
   return Object.fromEntries(
     Object.entries(entries).map(([key, entry]) => {
       const nextEntry: T = {
@@ -128,10 +128,7 @@ interface WorkflowCallExecutorDeps {
 interface ExecuteWorkflowCallRequest {
   step: WorkflowCallStep;
   childWorkflow: WorkflowConfig;
-  childProviderInfo: {
-    provider: WorkflowEngineOptions['provider'];
-    model: string | undefined;
-  };
+  childProviderInfo: StepProviderInfo;
   parentProviderOptions: WorkflowEngineOptions['providerOptions'];
   personaProviders: WorkflowEngineOptions['personaProviders'];
   providerRouting: WorkflowEngineOptions['providerRouting'];
@@ -245,31 +242,21 @@ export class WorkflowCallExecutor {
     const parentConfig = this.deps.getConfig();
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
     const sessionUpdates = new Map<string, string | undefined>();
-    const childAutoStrategyOverride = workflowUsesAutoProvider({
-      workflowConfig: request.childWorkflow,
-      effectiveProvider: request.childProviderInfo.provider,
-      cliProvider: undefined,
-      projectCwd: this.deps.projectCwd,
-      lookupCwd: this.deps.getCwd(),
-      workflowCallResolver: this.deps.resolveWorkflowCall,
-    })
-      ? options.autoStrategyOverride
-      : undefined;
+    const childAutoRouting = resolveEffectiveAutoRouting(request.childWorkflow, options.autoRouting);
     const childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
       provider: request.childProviderInfo.provider,
+      providerSource: request.childProviderInfo.providerSource,
       model: request.childProviderInfo.model,
+      modelSource: request.childProviderInfo.modelSource,
       providerOptions: mergeProviderOptions(
         request.parentProviderOptions,
         request.step.overrides?.providerOptions,
       ),
-      autoRouting: applyAutoRoutingStrategyOverride(
-        request.childWorkflow.autoRouting ?? options.autoRouting,
-        childAutoStrategyOverride,
-      ),
-      autoStrategyOverride: childAutoStrategyOverride,
+      autoRouting: childAutoRouting,
+      autoStrategyOverride: options.autoStrategyOverride,
       // Child workflows need router prompts scoped to the child workflow name and run namespace.
       autoRoutingAiRouter: undefined,
       onSessionUpdate: executeOptions.syncParentState

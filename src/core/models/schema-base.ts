@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod/v4';
+import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { STATUS_VALUES } from './status.js';
 import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, COPILOT_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
 
@@ -89,19 +90,12 @@ export const StepProviderOptionsObjectSchema = z.object({
 export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
 
 /** Provider key schema for profile maps */
-export const ProviderProfileNameSchema = z.enum([
-  'claude',
-  'claude-sdk',
-  'claude-terminal',
-  'codex',
-  'opencode',
-  'cursor',
-  'copilot',
-  'kiro',
-  'mock',
-]);
+export const ProviderProfileNameSchema = z.enum(PROVIDER_TYPES, {
+  error: (issue) => issue.input === 'auto'
+    ? 'provider: auto has been removed; set a concrete provider and configure auto_routing separately'
+    : undefined,
+});
 export const ProviderTypeSchema = ProviderProfileNameSchema;
-export const ProviderTypeOrAutoSchema = z.union([ProviderTypeSchema, z.literal('auto')]);
 
 export const ProviderBlockSchema = z.object({
   type: ProviderTypeSchema,
@@ -172,7 +166,6 @@ export const ProviderBlockSchema = z.object({
 });
 
 export const ProviderReferenceSchema = z.union([ProviderTypeSchema, ProviderBlockSchema]);
-export const ProviderReferenceOrAutoSchema = z.union([ProviderTypeOrAutoSchema, ProviderBlockSchema]);
 
 export const CostTierSchema = z.enum(['high', 'medium', 'low']);
 export const AutoRoutingStrategySchema = z.enum(['cost', 'balanced', 'performance']);
@@ -208,6 +201,10 @@ const AutoRoutingSchemaBase = z.object({
     steps: z.record(z.string(), z.string().min(1)).optional(),
     personas: z.record(z.string(), z.string().min(1)).optional(),
   }).strict().optional(),
+}, {
+  error: (issue) => issue.code === 'unrecognized_keys' && issue.keys.includes('default_provider')
+    ? 'auto_routing.default_provider has been removed; move its provider and model to the top-level provider and model fields'
+    : undefined,
 }).strict();
 
 function validateAutoRoutingSchema(
@@ -249,13 +246,6 @@ function validateAutoRoutingSchema(
 }
 
 export const AutoRoutingSchema = AutoRoutingSchemaBase.superRefine(validateAutoRoutingSchema);
-
-export const ConfigAutoRoutingSchema = AutoRoutingSchemaBase.extend({
-  default_provider: z.object({
-    provider: ProviderTypeSchema,
-    model: z.string().trim().min(1).optional(),
-  }).strict().optional(),
-}).strict().superRefine(validateAutoRoutingSchema);
 
 export const RateLimitFallbackSchema = z.object({
   switch_chain: z.array(z.object({
