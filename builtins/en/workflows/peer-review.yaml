@@ -33,11 +33,13 @@ loop_monitors:
     threshold: 5
     judge:
       persona: supervisor
-      instruction: loop-monitor-reviewers-fix
+      instruction: loop-monitor-peer-review-fix
       rules:
-        - condition: Healthy (findings decreasing, fixes applied)
+        - condition: Verified progress (at least one previously open finding is resolved with no stagnation, same-family migration, or late discovery in unchanged areas)
           next: reviewers
-        - condition: Unproductive (open findings are not decreasing, or findings in the same family keep moving to different locations)
+        - condition: Insufficient evidence (missing, corrupt, or contradictory history prevents verification of resolution or causality)
+          next: reviewers
+        - condition: Unproductive (no previously open finding is resolved, or findings stagnate, migrate within a family, or are revealed late in unchanged areas)
           next: ABORT
   - cycle:
       - reviewers
@@ -46,11 +48,13 @@ loop_monitors:
     threshold: 5
     judge:
       persona: supervisor
-      instruction: loop-monitor-reviewers-fix
+      instruction: loop-monitor-peer-review-fix
       rules:
-        - condition: Healthy (findings decreasing, fixes applied)
+        - condition: Verified progress (at least one previously open finding is resolved with no stagnation, same-family migration, or late discovery in unchanged areas)
           next: reviewers
-        - condition: Unproductive (open findings are not decreasing, or findings in the same family keep moving to different locations)
+        - condition: Insufficient evidence (missing, corrupt, or contradictory history prevents verification of resolution or causality)
+          next: reviewers
+        - condition: Unproductive (no previously open finding is resolved, or findings stagnate, migrate within a family, or are revealed late in unchanged areas)
           next: ABORT
 steps:
   - name: reviewers
