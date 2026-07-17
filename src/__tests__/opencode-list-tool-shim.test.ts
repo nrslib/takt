@@ -120,10 +120,13 @@ describe('list tool shim upstream collision guard', () => {
   it('allows only the version range verified to lack the list tool (fail-closed elsewhere)', () => {
     expect(versionAllowsListToolShim('1.17.18')).toBe(true);
     expect(versionAllowsListToolShim('1.17.25')).toBe(true);
+    expect(versionAllowsListToolShim('1.18.2')).toBe(true);
     // 未検証の範囲は fail-closed。
     expect(versionAllowsListToolShim('1.17.17')).toBe(false);
     expect(versionAllowsListToolShim('1.16.2')).toBe(false);
     expect(versionAllowsListToolShim('1.18.0')).toBe(false);
+    expect(versionAllowsListToolShim('1.18.1')).toBe(false);
+    expect(versionAllowsListToolShim('1.18.3')).toBe(false);
     expect(versionAllowsListToolShim('2.0.0')).toBe(false);
     expect(versionAllowsListToolShim('garbage')).toBe(false);
     expect(versionAllowsListToolShim('')).toBe(false);

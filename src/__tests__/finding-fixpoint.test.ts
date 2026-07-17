@@ -19,6 +19,7 @@ import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../c
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -273,6 +274,7 @@ function writeFixtureFile(relativePath: string, lineCount: number): void {
   writeFileSync(fullPath, `${Array.from({ length: lineCount }, (_, index) => `// line ${index + 1}`).join('\n')}\n`);
 }
 writeFixtureFile('src/real.ts', 60);
+initializeGitFixture(FIXTURE_CWD, ['src/real.ts']);
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });

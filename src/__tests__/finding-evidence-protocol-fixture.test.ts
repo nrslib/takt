@@ -34,6 +34,7 @@ import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -60,6 +61,7 @@ function writeFixtureFile(relativePath: string, lineCount: number): void {
 // 無関係な内容の実在ファイル — 実 v3-r4 実測どおり「path は実在するが引用内容は
 // 架空」を再現する。20行を超える内容にして line 20 を範囲内にする。
 writeFixtureFile('src/shared/constants.ts', 29);
+initializeGitFixture(FIXTURE_CWD, ['src/shared/constants.ts']);
 // finding-1〜6 が指すパスは意図的に作らない（実際に存在しない）。
 
 afterAll(() => {

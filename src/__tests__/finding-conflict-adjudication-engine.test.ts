@@ -50,6 +50,7 @@ import { createFindingLedgerStore, resolveFindingLedgerRoot } from '../core/work
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 function createTestTmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-adjudication-engine-'));
@@ -63,6 +64,7 @@ function createTestTmpDir(): string {
   writeFileSync(join(dir, 'src', 'secret.ts'), Array.from({ length: 300 }, (_, i) => `// line ${i + 1}`).join('\n') + '\n');
   mkdirSync(join(dir, 'personas'), { recursive: true });
   writeFileSync(join(dir, 'personas', 'supervisor.md'), SUPERVISOR_PERSONA_BODY);
+  initializeGitFixture(dir, ['src/a.ts', 'src/secret.ts', 'personas/supervisor.md']);
   return dir;
 }
 

@@ -7,6 +7,7 @@ import type { FindingLedger, FindingLedgerStore, RawFinding } from '../core/work
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -28,6 +29,7 @@ writeFixtureFile('src/a.ts', 30);
 writeFixtureFile('src/b.ts', 30);
 writeFixtureFile('src/c.ts', 5);
 writeFixtureFile('src/dup.ts', 20);
+initializeGitFixture(FIXTURE_CWD, ['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/dup.ts']);
 
 afterAll(() => {
   rmSync(FIXTURE_CWD, { recursive: true, force: true });
@@ -601,6 +603,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     mkdirSync(join(projectCwd, 'src'), { recursive: true });
     writeFileSync(join(projectCwd, 'src/a.ts'), `${Array.from({ length: 15 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
     writeFileSync(join(projectCwd, 'src/b.ts'), `${Array.from({ length: 25 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
+    initializeGitFixture(projectCwd, ['src/a.ts', 'src/b.ts']);
 
     // workflow_call の並列子は親から継承した同一の FindingLedgerStore
     // インスタンスを共有する（WorkflowCallExecutor.ts の inheritedFindingContract
@@ -744,6 +747,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     cleanupDirs.add(reportDir);
     mkdirSync(join(projectCwd, 'src'), { recursive: true });
     writeFileSync(join(projectCwd, 'src/dup.ts'), `${Array.from({ length: 15 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
+    initializeGitFixture(projectCwd, ['src/dup.ts']);
 
     const store = createFindingLedgerStore({
       projectCwd,

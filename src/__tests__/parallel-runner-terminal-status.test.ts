@@ -363,9 +363,12 @@ describe('ParallelRunner terminal sub-step statuses', () => {
   });
 
   it('purges the stale persona session when the fresh retry returns no session id', async () => {
-    const { runner } = makeRunner();
+    const { runner, deps } = makeRunner();
     const step = makeParallelStep();
     const state = makeState();
+    const staleSessionId = 'stale-session';
+    state.personaSessions.set('ai-antipattern-review-2nd:claude', staleSessionId);
+    vi.mocked(deps.optionsBuilder.buildAgentOptions).mockReturnValue({ sessionId: staleSessionId } as never);
     queueAgentResponse(makeAgentResponse({
       persona: 'ai-antipattern-review-2nd',
       status: 'error',

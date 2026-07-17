@@ -20,6 +20,7 @@ import { runFindingManagerForStep } from '../core/workflow/findings/manager-runn
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 const FINDING_CONTRACT: FindingContractConfig = {
   ledgerPath: '.takt/findings/peer-review.json',
@@ -41,6 +42,7 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       join(cwd, 'src', 'example.ts'),
       Array.from({ length: 10 }, (_, i) => `// line ${i + 1}`).join('\n') + '\n',
     );
+    initializeGitFixture(cwd, ['src/example.ts']);
   });
 
   afterEach(() => {

@@ -23,6 +23,7 @@ import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger, FindingLedgerEntry, FindingLedgerStore, FindingManagerDecisions, RawFinding } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -227,6 +228,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-findings-admission-'));
     mkdirSync(join(projectDir, 'src'), { recursive: true });
     writeFileSync(join(projectDir, 'src/real.ts'), `${Array.from({ length: 5 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
+    initializeGitFixture(projectDir, ['src/real.ts']);
     executeAgentMock.mockReset();
   });
 

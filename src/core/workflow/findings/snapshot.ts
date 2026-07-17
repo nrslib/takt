@@ -184,6 +184,7 @@ function hashFileContent(absPath: Buffer, path: Buffer, expectedStat: Stats): Bu
 
   const hash = createHash('sha256');
   let failure: unknown;
+  let closeFailure: unknown;
   try {
     let openedStat: Stats;
     try {
@@ -216,9 +217,12 @@ function hashFileContent(absPath: Buffer, path: Buffer, expectedStat: Stats): Bu
       closeSync(fd);
     } catch (cause) {
       if (failure === undefined) {
-        return fail('close', displayPath(path), cause);
+        closeFailure = cause;
       }
     }
+  }
+  if (closeFailure !== undefined) {
+    return fail('close', displayPath(path), closeFailure);
   }
   return hash.digest();
 }

@@ -10,23 +10,27 @@
  *   起動前に確定させる必要があるため再起動が要る（共有サーバプールの寿命
  *   管理を複雑化する）
  *
- * allowlist は「registry に 'list' が無いことを実測済みのバージョン範囲」のみを
+ * allowlist は「registry に 'list' が無いことを実測済みのバージョン」のみを
  * 許可し、未知のバージョン（将来の minor 以降）や検出失敗は fail-closed で
- * 登録しない。1.17.18 の実測 registry: invalid, question, bash, read, glob,
+ * 登録しない。1.17.18 と 1.18.2 の実測 registry: invalid, question, bash, read, glob,
  * grep, edit, write, task, webfetch, todowrite, websearch, skill, apply_patch
  * （'list' なし）。
  */
 
 /**
  * opencode バイナリのバージョンがシム登録を許可する範囲か。
- * 1.17.18 で 'list' 不在を実測済み。1.17 系（>= .18）のみ許可し、1.18 以降は
- * 再検証（registry の実測）まで fail-closed。
+ * 1.17.18 と 1.18.2 で 'list' 不在を実測済み。1.17 系（>= .18）と、依存を
+ * 固定して実測した1.18.2のみ許可し、それ以外は再検証まで fail-closed。
  */
 export function versionAllowsListToolShim(version: string): boolean {
   // 末尾アンカー付きの厳密形。"1.17.18-beta.1" / "1.17.18junk" / "1.17.18.1" の
   // ような亜種は未検証バージョンとして fail-closed（codex 指摘: アンカー無しだと
   // 全部許可されていた）。
-  const match = /^1\.17\.(\d+)$/.exec(version.trim());
+  const normalized = version.trim();
+  if (normalized === '1.18.2') {
+    return true;
+  }
+  const match = /^1\.17\.(\d+)$/.exec(normalized);
   if (!match) {
     return false;
   }

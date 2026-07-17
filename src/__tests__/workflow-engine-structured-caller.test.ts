@@ -27,6 +27,7 @@ import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 // raw admission validation（manager-runner.ts の cwd 引数）が実 fs を見るため、
 // このテストファイル全体が引用する raw finding の location に対応する実ファイルを
@@ -63,6 +64,7 @@ function createTestTmpDir(): string {
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'context', 'previous_responses'), { recursive: true });
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'logs'), { recursive: true });
   writeFindingLocationFixtures(dir);
+  initializeGitFixture(dir, FINDING_LOCATION_FIXTURE_PATHS);
   return dir;
 }
 
