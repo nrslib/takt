@@ -29,6 +29,18 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
+      - fix
+    threshold: 5
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (findings decreasing, fixes applied)
+          next: reviewers
+        - condition: Unproductive (same findings repeating)
+          next: ABORT
+  - cycle:
+      - reviewers
       - final-gate
       - fix
     threshold: 5
@@ -39,7 +51,7 @@ loop_monitors:
         - condition: Healthy (findings decreasing, fixes applied)
           next: reviewers
         - condition: Unproductive (same findings repeating)
-          next: COMPLETE
+          next: ABORT
 steps:
   - name: reviewers
     tags:

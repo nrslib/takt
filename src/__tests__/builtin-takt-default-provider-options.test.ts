@@ -20,6 +20,13 @@ interface WorkflowStepRaw {
 
 interface BuiltinWorkflowRaw {
   finding_contract?: unknown;
+  loop_monitors?: Array<{
+    cycle?: string[];
+    threshold?: number;
+    judge?: {
+      rules?: Array<{ condition?: string; next?: string }>;
+    };
+  }>;
   workflow_config?: {
     provider_options?: unknown;
   };
@@ -268,6 +275,33 @@ describe('builtin takt-default provider_options refs', () => {
 
       expect(workflow.finding_contract).toBeUndefined();
       expect(normalized.findingContract).toBeUndefined();
+    });
+
+    it(`${locale} peer-review should abort both unproductive fix loops`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
+
+      expect(workflow.loop_monitors?.map((monitor) => monitor.cycle)).toEqual([
+        ['reviewers', 'fix'],
+        ['reviewers', 'final-gate', 'fix'],
+      ]);
+      for (const monitor of workflow.loop_monitors ?? []) {
+        expect(monitor.threshold).toBe(5);
+        expect(monitor.judge?.rules?.at(-1)?.next).toBe('ABORT');
+      }
+    });
+
+    it(`${locale} fix instruction should invalidate gates after artifact changes`, () => {
+      const instruction = readFileSync(instructionPath(locale, 'fix'), 'utf-8');
+
+      if (locale === 'ja') {
+        expect(instruction).toContain('最後の変更後');
+        expect(instruction).toContain('それ以前の品質ゲート結果は無効');
+        expect(instruction).toContain('適用対象の全品質ゲートを最初から再実行');
+      } else {
+        expect(instruction).toContain('after the final change');
+        expect(instruction).toContain('all earlier quality-gate results are invalid');
+        expect(instruction).toContain('rerun the full applicable gate set from the beginning');
+      }
     });
 
     it(`${locale} takt-default-for-local-llm should enable Finding Contract`, () => {
