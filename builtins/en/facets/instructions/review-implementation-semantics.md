@@ -12,7 +12,5 @@ Steps:
 4. Do not raise unfounded speculation or preference-only rewrites
 
 **This is review iteration {step_iteration}.**
-From the second iteration onward, as a separate step from confirming previous findings,
-re-scan the entire cumulative diff from the base (task start) against every chapter of the
-Policy / Knowledge criteria. Record the chapters checked and the evidence in the report's
-Re-scan Evidence section (required even on APPROVE).
+On the first review, cover the entire cumulative diff and report all locations in the same family in that review. On later reviews, apply every Policy / Knowledge criterion to prior open findings, their fixes, and directly affected paths without restarting untouched-area discovery from scratch each time. If the focused check would return APPROVE, first perform a final review of the entire cumulative diff.
+Record the chapters checked and the evidence in the report's Re-scan Evidence section (required even on APPROVE).

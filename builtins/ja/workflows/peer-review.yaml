@@ -37,7 +37,7 @@ loop_monitors:
       rules:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: 非生産的（open findingが減らない、または同一familyの指摘箇所が移動し続ける）
           next: ABORT
   - cycle:
       - reviewers
@@ -50,7 +50,7 @@ loop_monitors:
       rules:
         - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 非生産的（同じ指摘が繰り返される）
+        - condition: 非生産的（open findingが減らない、または同一familyの指摘箇所が移動し続ける）
           next: ABORT
 steps:
   - name: reviewers

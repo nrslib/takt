@@ -1,9 +1,8 @@
 **This is AI Review iteration #{step_iteration}.**
 
-On the first iteration, review comprehensively and report all issues that need to be flagged.
-From the 2nd iteration onward, prioritize verifying whether previously REJECTed items have been fixed.
-Do not stop at prior-finding verification: also re-check any adapter, normalizer, builder, external notification, and interruption/cancellation path touched by the fix diff.
-In addition, when the fix diff includes a new public entry, meaningful metadata, external side effect, or identifier that is persisted, displayed, or reused, perform a fresh finding search separate from prior-finding resolution.
+On the first review, review comprehensively and report every issue that should be raised.
+When you detect a new problem, search the review scope for every location in the same family and report them in the same review.
+On later reviews, apply every criterion to prior open findings, their fixes, and directly affected adapters, normalizers, builders, external notifications, and interruption paths without restarting untouched-area discovery from scratch each time. If the focused check would return APPROVE, first perform a final review of the entire cumulative diff.
 
 Review the diff for AI-specific issues.
 

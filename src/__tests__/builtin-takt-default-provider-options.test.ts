@@ -76,6 +76,15 @@ const PEER_REVIEW_OUTPUT_CONTRACTS = [
   ...PEER_REVIEW_PARALLEL_OUTPUT_CONTRACTS,
   'merge-readiness-review',
 ] as const;
+const ITERATIVE_REVIEW_INSTRUCTIONS = [
+  'review-arch',
+  'review-security',
+  'review-qa',
+  'review-test',
+  'review-coding',
+  'ai-antipattern-review',
+  'review-implementation-semantics',
+] as const;
 
 function workflowDir(locale: 'en' | 'ja'): string {
   return join(process.cwd(), 'builtins', locale, 'workflows');
@@ -105,6 +114,10 @@ function outputContractPath(locale: 'en' | 'ja', name: string): string {
 
 function instructionPath(locale: 'en' | 'ja', name: string): string {
   return join(process.cwd(), 'builtins', locale, 'facets', 'instructions', `${name}.md`);
+}
+
+function policyPath(locale: 'en' | 'ja', name: string): string {
+  return join(process.cwd(), 'builtins', locale, 'facets', 'policies', `${name}.md`);
 }
 
 function personaPath(locale: 'en' | 'ja', name: string): string {
@@ -301,6 +314,65 @@ describe('builtin takt-default provider_options refs', () => {
         expect(instruction).toContain('after the final change');
         expect(instruction).toContain('all earlier quality-gate results are invalid');
         expect(instruction).toContain('rerun the full applicable gate set from the beginning');
+      }
+    });
+
+    it(`${locale} review policy should exhaust finding families and bound repeated discovery`, () => {
+      const policy = readFileSync(policyPath(locale, 'review'), 'utf-8');
+
+      expect(policy).toContain('`family_tag`');
+      if (locale === 'ja') {
+        expect(policy).toContain('同じ回のレビューで出し切る');
+        expect(policy).toContain('未変更の領域を毎回ゼロから再探索しない');
+        expect(policy).toContain('APPROVEを出す段階');
+      } else {
+        expect(policy).toContain('report them in the same review');
+        expect(policy).toContain('do not restart broad discovery from scratch in untouched areas');
+        expect(policy).toContain('would return APPROVE');
+      }
+    });
+
+    it(`${locale} iterative review instructions should stage discovery without weakening criteria`, () => {
+      for (const name of ITERATIVE_REVIEW_INSTRUCTIONS) {
+        const instruction = readFileSync(instructionPath(locale, name), 'utf-8');
+
+        if (locale === 'ja') {
+          expect(instruction, name).toContain('初回');
+          expect(instruction, name).toContain('2回目以降');
+          expect(instruction, name).toContain('最終レビュー');
+        } else {
+          expect(instruction, name).toContain('On the first review');
+          expect(instruction, name).toContain('On later reviews');
+          expect(instruction, name).toContain('final review');
+        }
+      }
+    });
+
+    it(`${locale} loop monitor should detect migrating finding families without relaxing quality`, () => {
+      const instruction = readFileSync(instructionPath(locale, 'loop-monitor-reviewers-fix'), 'utf-8');
+
+      expect(instruction).toContain('`family_tag`');
+      if (locale === 'ja') {
+        expect(instruction).toContain('別のfindingがnewになった事実だけでは、健全と判定しない');
+        expect(instruction).toContain('厳密な品質基準は維持');
+      } else {
+        expect(instruction).toContain('different findings become new is not enough by itself');
+        expect(instruction).toContain('Maintain strict quality standards');
+      }
+    });
+
+    it(`${locale} mutation and callback policies should respect local test ownership`, () => {
+      const codingPolicy = readFileSync(policyPath(locale, 'coding'), 'utf-8');
+      const aiAntipatternPolicy = readFileSync(policyPath(locale, 'ai-antipattern'), 'utf-8');
+
+      if (locale === 'ja') {
+        expect(codingPolicy).toContain('局所的な蓄積用コレクションは、その所有範囲内で変更してよい');
+        expect(aiAntipatternPolicy).toContain('テストが局所的に記録する');
+        expect(aiAntipatternPolicy).toContain('戻り値で同じ契約を表現できる場合だけ');
+      } else {
+        expect(codingPolicy).toContain('local accumulator collection that it creates internally');
+        expect(aiAntipatternPolicy).toContain('Record callback or event observations in test-local state');
+        expect(aiAntipatternPolicy).toContain('Only when it can');
       }
     });
 

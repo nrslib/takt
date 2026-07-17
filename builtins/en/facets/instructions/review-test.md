@@ -5,6 +5,7 @@ Procedure:
 2. List every `##` section in each of them (do not cherry-pick)
 3. Match the criteria in each listed section against the diff and detect any issues
 
+**This is review iteration #{step_iteration}.** On the first review, cover the entire cumulative diff and report all locations in the same family in that review. On later reviews, apply every criterion to prior open findings, their fixes, and directly affected paths without restarting untouched-area discovery from scratch each time. If the focused check would return APPROVE, first perform a final review of the entire cumulative diff.
 ## Step-Specific Additional Procedure
 
 1. Cross-reference the test plan / test scope reports in the Report Directory with the implemented tests

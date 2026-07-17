@@ -37,7 +37,7 @@ loop_monitors:
       rules:
         - condition: Healthy (findings decreasing, fixes applied)
           next: reviewers
-        - condition: Unproductive (same findings repeating)
+        - condition: Unproductive (open findings are not decreasing, or findings in the same family keep moving to different locations)
           next: ABORT
   - cycle:
       - reviewers
@@ -50,7 +50,7 @@ loop_monitors:
       rules:
         - condition: Healthy (findings decreasing, fixes applied)
           next: reviewers
-        - condition: Unproductive (same findings repeating)
+        - condition: Unproductive (open findings are not decreasing, or findings in the same family keep moving to different locations)
           next: ABORT
 steps:
   - name: reviewers
