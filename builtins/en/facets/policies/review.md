@@ -48,7 +48,7 @@ REJECT without exception if any of the following apply.
 - Fallback value abuse (`?? 'unknown'`)
 - Explanatory comments (What/How comments)
 - Unused code ("just in case" code)
-- Direct mutation of objects/arrays
+- Direct mutation of caller-owned, shared, or externally exposed objects/arrays
 - Swallowed errors (empty catch blocks)
 - TODO/FIXME without an issue number, external blocker, and removal condition
 - Essentially identical logic duplicated (DRY violation)
@@ -127,6 +127,8 @@ If tool output is unreadable, re-read using a reliable method before making any 
 ## Writing Specific Feedback
 
 Every issue raised must include the following.
+
+When one new problem is found, search the review scope for all locations that may share the same `family_tag` before finalizing the report, and report them in the same review. Do not report one location at a time and reveal another location from the same family only after the first is fixed.
 
 When the same kind of problem appears in multiple locations, report one representative finding and list the other locations inline as `also: src/store.ts:L232, src/projection.ts:L243`. Do not spend rows enumerating the same kind of issue; use the remaining attention to hunt different kinds of problems. Do not merge, however, in these cases:
 
@@ -281,9 +283,12 @@ Common procedure that every reviewer must follow. Do not duplicate this in indiv
 
 The review target is the entire cumulative diff from the task's starting point (the base), not just the changes from the most recent iteration.
 
-- In the fix ↔ review loop, recompute the diff from the base every time and evaluate the whole. Do not move the baseline to the latest fix
+- In the fix ↔ review loop, keep recomputing the diff from the base. Do not move the baseline to the latest fix
 - The base is the merge-base with the integration branch, or the starting point recorded in `plan` / `order`. Do not treat only the "changes" section of `Previous Response` as the diff
-- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests, environment-dependent tool-generated diffs — version stamps, re-serialization, order-only rewrites) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile against them every time and confirm their causal link to the request
+- On the first review, evaluate the entire cumulative diff and exhaust all locations in each detected finding family
+- On the second and later reviews, prioritize prior open findings, their fixes, and directly affected paths. Apply every Policy / Knowledge criterion in that scope, but do not restart broad discovery from scratch in untouched areas of the cumulative diff
+- On the second and later reviews, if the focused scope has no blocking finding and the reviewer would return APPROVE, first perform a final review of the entire cumulative diff and reconcile every remaining area and contract
+- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests, environment-dependent tool-generated diffs — version stamps, re-serialization, order-only rewrites) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile them on the first and final reviews and confirm their causal link to the request
 - Track finding states (new / persists / resolved) on a fixed baseline. Do not narrow the diff scope and conclude "it is no longer in the diff"
 
 ### Referring to Primary Sources
@@ -348,3 +353,5 @@ When a change involves side effects or state changes such as external calls, con
 ## Detecting Circular Arguments
 
 When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating granular fix instructions.
+
+If a finding is resolved and another finding with the same family appears at a different location in the next review, treat that as a failure to exhaust the family in the prior review, not as evidence that the unverified scope is shrinking.

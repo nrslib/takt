@@ -1312,6 +1312,39 @@ describe('loadGlobalConfig', () => {
     });
   });
 
+  describe('run retry global config', () => {
+    it('should load auto_requeue_max_attempts and ignore_exceed from config.yaml', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        ['language: en', 'auto_requeue_max_attempts: 3', 'ignore_exceed: true'].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig() as Record<string, unknown>;
+
+      expect(config.autoRequeueMaxAttempts).toBe(3);
+      expect(config.ignoreExceed).toBe(true);
+    });
+
+    it('should save and reload auto_requeue_max_attempts and ignore_exceed', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig() as Record<string, unknown>;
+      config.autoRequeueMaxAttempts = 3;
+      config.ignoreExceed = true;
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig() as Record<string, unknown>;
+      expect(reloaded.autoRequeueMaxAttempts).toBe(3);
+      expect(reloaded.ignoreExceed).toBe(true);
+    });
+  });
+
   describe('workflow_mcp_servers global config', () => {
     it('should load workflow_mcp_servers from config.yaml', () => {
       const taktDir = join(testHomeDir, '.takt');

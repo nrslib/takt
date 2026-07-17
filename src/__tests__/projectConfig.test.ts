@@ -1456,6 +1456,61 @@ unexpected_overrides:
     });
   });
 
+  describe('run retry config round-trip', () => {
+    it('should load auto_requeue_max_attempts and ignore_exceed config keys', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(
+        configPath,
+        ['auto_requeue_max_attempts: 2', 'ignore_exceed: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(loaded.autoRequeueMaxAttempts).toBe(2);
+      expect(loaded.ignoreExceed).toBe(true);
+    });
+
+    it('should round-trip auto_requeue_max_attempts and ignore_exceed config keys', () => {
+      const config = {
+        autoRequeueMaxAttempts: 2,
+        ignoreExceed: true,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+      const reloaded = loadProjectConfig(testDir) as Record<string, unknown>;
+
+      expect(reloaded.autoRequeueMaxAttempts).toBe(2);
+      expect(reloaded.ignoreExceed).toBe(true);
+    });
+
+    it('should save run retry config using snake_case keys', () => {
+      const config = {
+        autoRequeueMaxAttempts: 2,
+        ignoreExceed: true,
+      } as ProjectLocalConfig;
+
+      saveProjectConfig(testDir, config);
+
+      const saved = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(saved).toContain('auto_requeue_max_attempts: 2');
+      expect(saved).toContain('ignore_exceed: true');
+    });
+
+    it.each([
+      ['negative auto_requeue_max_attempts', 'auto_requeue_max_attempts: -1', /auto_requeue_max_attempts/i],
+      ['non-integer auto_requeue_max_attempts', 'auto_requeue_max_attempts: 1.5', /auto_requeue_max_attempts/i],
+      ['string auto_requeue_max_attempts', 'auto_requeue_max_attempts: "2"', /auto_requeue_max_attempts/i],
+      ['numeric ignore_exceed', 'ignore_exceed: 1', /ignore_exceed/i],
+      ['string ignore_exceed', 'ignore_exceed: "true"', /ignore_exceed/i],
+    ])('should reject invalid %s through loadProjectConfig', (_caseName, yaml, expectedMessage) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, `${yaml}\n`, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(expectedMessage);
+    });
+  });
+
   describe('workflow_mcp_servers round-trip', () => {
     it('should load workflow_mcp_servers config block', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');

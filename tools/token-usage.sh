@@ -100,6 +100,27 @@ function extractTaskName(sourcePath) {
   return null;
 }
 
+function optionalString(value) {
+  return typeof value === "string" && value.length > 0 ? value : "";
+}
+
+function optionalStringArray(value) {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every(item => typeof item === "string" && item.length > 0)
+    ? [...value]
+    : [];
+}
+
+function csvCell(value) {
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll("\"", "\"\"")}"` : text;
+}
+
+function csvRow(values) {
+  return values.map(csvCell).join(",");
+}
+
 const byRun = new Map();
 for (const r of records) {
   const key = r.run_id;
@@ -127,9 +148,21 @@ for (const r of records) {
   run.total.total += u.total_tokens || 0;
   run.total.cached += u.cached_input_tokens || 0;
 
-  const stepKey = r.step || "unknown";
+  const step = r.step || "unknown";
+  const persona = optionalString(r.persona);
+  const tags = optionalStringArray(r.tags);
+  const stepKey = JSON.stringify([step, persona, tags]);
   if (!run.steps.has(stepKey)) {
-    run.steps.set(stepKey, { input: 0, output: 0, total: 0, cached: 0, count: 0 });
+    run.steps.set(stepKey, {
+      step,
+      persona,
+      tags,
+      input: 0,
+      output: 0,
+      total: 0,
+      cached: 0,
+      count: 0,
+    });
   }
   const s = run.steps.get(stepKey);
   s.input += u.input_tokens || 0;
@@ -155,10 +188,23 @@ const grandInput = runs.reduce((s, r) => s + r.total.input, 0);
 const grandOutput = runs.reduce((s, r) => s + r.total.output, 0);
 
 if (csv) {
-  console.log("task,run_id,provider,model,step,input_tokens,output_tokens,total_tokens,cached_tokens,calls");
+  console.log("task,run_id,provider,model,step,persona,tags,input_tokens,output_tokens,total_tokens,cached_tokens,calls");
   for (const run of runs.slice(0, top)) {
-    for (const [step, s] of [...run.steps.entries()].sort((a, b) => b[1].total - a[1].total)) {
-      console.log([run.task || "-", run.run_id, run.provider, run.model, step, s.input, s.output, s.total, s.cached, s.count].join(","));
+    for (const s of [...run.steps.values()].sort((a, b) => b.total - a.total)) {
+      console.log(csvRow([
+        run.task || "-",
+        run.run_id,
+        run.provider,
+        run.model,
+        s.step,
+        s.persona,
+        s.tags.join("|"),
+        s.input,
+        s.output,
+        s.total,
+        s.cached,
+        s.count,
+      ]));
     }
   }
   process.exit(0);
@@ -186,9 +232,13 @@ for (const run of shown) {
   console.log(`  ${header}  ${"·".repeat(pad)}  ${right}`);
   console.log(`  ${run.provider}/${run.model}  ${run.records} calls  cached: ${pct(run.total.cached, run.total.input)}`);
 
-  const steps = [...run.steps.entries()].sort((a, b) => b[1].total - a[1].total);
-  for (const [name, s] of steps) {
-    const label = `    ${name} (×${s.count})`;
+  const steps = [...run.steps.values()].sort((a, b) => b.total - a.total);
+  for (const s of steps) {
+    const metadata = [
+      s.persona ? `persona: ${s.persona}` : "",
+      s.tags.length > 0 ? `tags: ${s.tags.join("|")}` : "",
+    ].filter(Boolean).join("; ");
+    const label = `    ${s.step}${metadata ? ` [${metadata}]` : ""} (×${s.count})`;
     const val = fmt(s.total);
     const dots = Math.max(2, W - 4 - label.length - val.length);
     console.log(`  ${label}  ${"·".repeat(dots)}  ${val}`);

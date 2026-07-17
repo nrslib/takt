@@ -240,6 +240,8 @@ export class GlobalConfigManager {
       taskPollIntervalMs: parsed.task_poll_interval_ms as number | undefined,
       interactivePreviewSteps: resolveAliasedPreviewCount(parsed as Record<string, unknown>),
       syncProjectLocalTaktOnRetry: parsed.sync_project_local_takt_on_retry as boolean | undefined,
+      autoRequeueMaxAttempts: parsed.auto_requeue_max_attempts as number | undefined,
+      ignoreExceed: parsed.ignore_exceed as boolean | undefined,
     };
     validateProviderModelRequirements(config.provider, config.model);
     this.cachedConfig = config;

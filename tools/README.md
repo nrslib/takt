@@ -17,6 +17,8 @@ TAKT の開発・運用に使うユーティリティスクリプト集。
 デフォルトでは `../takt-worktrees/` と `.takt/runs/` の両方をスキャンする。
 `observability.usage_events_phase: true` が設定されている必要がある（`~/.takt/config.yaml`）。
 
+CSV 出力には `persona` と `tags` の列が含まれる。tags は `|` で連結し、persona または tags が異なる record は別の行として集計する。
+
 出力例:
 
 ```

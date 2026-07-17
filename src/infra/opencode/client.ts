@@ -117,8 +117,8 @@ interface SharedServer {
   close: () => void;
   model: string;
   apiKey?: string;
-  busy: boolean;
-  queue: SharedServerQueueEntry[];
+  sessionBusy: Set<string>;
+  sessionQueues: Map<string, SharedServerQueueEntry[]>;
 }
 
 interface SharedServerQueueEntry {
@@ -138,6 +138,8 @@ interface AcquiredOpenCodeClient {
   release: () => void;
 }
 
+let nextProvisionalId = 1;
+
 const sharedServers = new Map<string, SharedServerEntry>();
 
 async function acquireClient(
@@ -145,19 +147,21 @@ async function acquireClient(
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   abortSignal?: AbortSignal,
+  sessionId?: string,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   const key = buildSharedServerKey(model, apiKey, childProcessEnv);
   const entry = getSharedServerEntry(key);
+  const sessionKey = sessionId ?? '';
 
   if (entry.initPromise) {
     const server = await entry.initPromise;
     throwIfAborted(abortSignal);
-    return acquireSharedServer(server, abortSignal);
+    return acquireSharedServer(server, sessionKey, abortSignal);
   }
 
   if (entry.server) {
-    return acquireSharedServer(entry.server, abortSignal);
+    return acquireSharedServer(entry.server, sessionKey, abortSignal);
   }
 
   entry.initPromise = createSharedServer(model, apiKey, childProcessEnv)
@@ -171,7 +175,7 @@ async function acquireClient(
 
   const server = await entry.initPromise;
   throwIfAborted(abortSignal);
-  return acquireSharedServer(server, abortSignal);
+  return acquireSharedServer(server, sessionKey, abortSignal);
 }
 
 function buildSharedServerKey(
@@ -250,29 +254,35 @@ async function createSharedServer(
   };
 
   log.debug('OpenCode server started', { model, port });
-  return { client, close: closeServer, model, apiKey, busy: false, queue: [] };
+  return { client, close: closeServer, model, apiKey, sessionBusy: new Set(), sessionQueues: new Map() };
 }
 
 function acquireSharedServer(
   server: SharedServer,
+  sessionKey: string,
   abortSignal?: AbortSignal,
 ): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
-  if (!server.busy) {
-    server.busy = true;
-    return { client: server.client, release: createReleaseHandle(server) };
+  if (!server.sessionBusy.has(sessionKey)) {
+    server.sessionBusy.add(sessionKey);
+    return { client: server.client, release: createReleaseHandle(server, sessionKey) };
   }
 
   return new Promise((resolve, reject) => {
     const entry: SharedServerQueueEntry = { resolve, reject, signal: abortSignal };
     if (abortSignal) {
       entry.onAbort = () => {
-        removeQueuedClient(server, entry);
+        removeQueuedClient(server, sessionKey, entry);
         reject(new Error(OPENCODE_STREAM_ABORTED_MESSAGE));
       };
       abortSignal.addEventListener('abort', entry.onAbort, { once: true });
     }
-    server.queue.push(entry);
+    let queue = server.sessionQueues.get(sessionKey);
+    if (!queue) {
+      queue = [];
+      server.sessionQueues.set(sessionKey, queue);
+    }
+    queue.push(entry);
   });
 }
 
@@ -282,7 +292,7 @@ export async function getOpenCodeSessionSnapshot(
   directory: string,
   apiKey?: string,
 ): Promise<OpenCodeSessionSnapshot> {
-  const { client, release } = await acquireClient(model, apiKey, undefined);
+  const { client, release } = await acquireClient(model, apiKey, undefined, undefined, sessionID);
   try {
     const result = await client.session.get({ sessionID, directory });
     if (!result.data) {
@@ -388,7 +398,7 @@ export async function getOpenCodeSessionMessages(
   directory: string,
   apiKey?: string,
 ): Promise<OpenCodeSessionMessages> {
-  const { client, release } = await acquireClient(model, apiKey, undefined);
+  const { client, release } = await acquireClient(model, apiKey, undefined, undefined, sessionID);
   try {
     const result = await client.session.messages({ sessionID, directory });
     if (!result.data) {
@@ -400,20 +410,32 @@ export async function getOpenCodeSessionMessages(
   }
 }
 
-function releaseClient(server: SharedServer): void {
-  const next = server.queue.shift();
+function releaseClient(server: SharedServer, sessionKey: string): void {
+  const queue = server.sessionQueues.get(sessionKey);
+  const next = queue?.shift();
   if (next) {
     if (next.signal && next.onAbort) {
       next.signal.removeEventListener('abort', next.onAbort);
     }
-    next.resolve({ client: server.client, release: createReleaseHandle(server) });
+    next.resolve({ client: server.client, release: createReleaseHandle(server, sessionKey) });
     return;
   }
-  server.busy = false;
+  if (queue !== undefined) {
+    server.sessionQueues.delete(sessionKey);
+  }
+  server.sessionBusy.delete(sessionKey);
 }
 
-function removeQueuedClient(server: SharedServer, entry: SharedServerQueueEntry): void {
-  server.queue = server.queue.filter((queued) => queued !== entry);
+function removeQueuedClient(server: SharedServer, sessionKey: string, entry: SharedServerQueueEntry): void {
+  const queue = server.sessionQueues.get(sessionKey);
+  if (queue) {
+    const filtered = queue.filter((queued) => queued !== entry);
+    if (filtered.length === 0) {
+      server.sessionQueues.delete(sessionKey);
+    } else {
+      server.sessionQueues.set(sessionKey, filtered);
+    }
+  }
   if (entry.signal && entry.onAbort) {
     entry.signal.removeEventListener('abort', entry.onAbort);
   }
@@ -448,12 +470,12 @@ function createExternalAbortPromise(
   return { promise, removeListener };
 }
 
-function createReleaseHandle(server: SharedServer): () => void {
+function createReleaseHandle(server: SharedServer, sessionKey: string): () => void {
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    releaseClient(server);
+    releaseClient(server, sessionKey);
   };
 }
 
@@ -725,6 +747,9 @@ export class OpenCodeClient {
     // 1回だけ確保する: 先行の transient エラーで予算を使い切っていても、
     // 最終試行の format 失敗から救済できるようにする。
     let maxAttempts = OPENCODE_RETRY_MAX_ATTEMPTS;
+    const provisionalKey = options.sessionId === undefined
+      ? `provisional-${nextProvisionalId++}`
+      : undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
@@ -813,6 +838,7 @@ export class OpenCodeClient {
           options.opencodeApiKey,
           options.childProcessEnv,
           options.abortSignal,
+          sessionId ?? provisionalKey,
         );
         opencodeApiClient = acquired.client;
         release = acquired.release;
@@ -846,6 +872,18 @@ export class OpenCodeClient {
           sessionId = sessionResult.data?.id;
           if (!sessionId) {
             throw new Error('Failed to create OpenCode session');
+          }
+
+          if (provisionalKey !== undefined) {
+            const realAcquired = await acquireClient(
+              fullModel,
+              options.opencodeApiKey,
+              options.childProcessEnv,
+              options.abortSignal,
+              sessionId,
+            );
+            release!();
+            release = realAcquired.release;
           }
         }
 
@@ -1485,6 +1523,7 @@ export class OpenCodeClient {
       options.opencodeApiKey,
       options.childProcessEnv,
       options.abortSignal,
+      options.sessionId,
     );
 
     try {

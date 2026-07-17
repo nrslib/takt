@@ -173,6 +173,16 @@ describe('config resolution defaults and project-local priority', () => {
         projectYaml: 'sync_project_local_takt_on_retry: false\n',
         expected: false,
       },
+      {
+        key: 'autoRequeueMaxAttempts',
+        projectYaml: 'auto_requeue_max_attempts: 2\n',
+        expected: 2,
+      },
+      {
+        key: 'ignoreExceed',
+        projectYaml: 'ignore_exceed: true\n',
+        expected: true,
+      },
     ])('should resolve $key from project config', ({ key, projectYaml, expected }) => {
       writeFileSync(globalConfigPath, 'language: en\n', 'utf-8');
       invalidateGlobalConfigCache();
@@ -350,6 +360,14 @@ describe('config resolution defaults and project-local priority', () => {
         value: true,
         source: 'default',
       });
+      expect(resolveConfigValueWithSource(projectDir, 'autoRequeueMaxAttempts' as ConfigParameterKey)).toEqual({
+        value: 0,
+        source: 'default',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'ignoreExceed' as ConfigParameterKey)).toEqual({
+        value: false,
+        source: 'default',
+      });
     });
 
     it('should resolve observability to disabled defaults when unset', () => {
@@ -448,6 +466,8 @@ describe('config resolution defaults and project-local priority', () => {
           'task_poll_interval_ms: 1200',
           'interactive_preview_steps: 2',
           'sync_project_local_takt_on_retry: false',
+          'auto_requeue_max_attempts: 3',
+          'ignore_exceed: true',
         ].join('\n'),
         'utf-8',
       );
@@ -475,6 +495,47 @@ describe('config resolution defaults and project-local priority', () => {
       expect(resolveConfigValueWithSource(projectDir, 'syncProjectLocalTaktOnRetry' as ConfigParameterKey)).toEqual({
         value: false,
         source: 'global',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'autoRequeueMaxAttempts' as ConfigParameterKey)).toEqual({
+        value: 3,
+        source: 'global',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'ignoreExceed' as ConfigParameterKey)).toEqual({
+        value: true,
+        source: 'global',
+      });
+    });
+
+    it('should let project auto requeue and ignore-exceed values override global values', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'auto_requeue_max_attempts: 3',
+          'ignore_exceed: true',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        [
+          'auto_requeue_max_attempts: 0',
+          'ignore_exceed: false',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      expect(resolveConfigValueWithSource(projectDir, 'autoRequeueMaxAttempts' as ConfigParameterKey)).toEqual({
+        value: 0,
+        source: 'project',
+      });
+      expect(resolveConfigValueWithSource(projectDir, 'ignoreExceed' as ConfigParameterKey)).toEqual({
+        value: false,
+        source: 'project',
       });
     });
 

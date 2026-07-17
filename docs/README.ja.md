@@ -280,7 +280,7 @@ TAKT に workflow step ごとの provider/model 選択を任せる場合は、to
 provider: codex          # workflow step 外と auto_routing がない場合に使用する
 model: gpt-5.6-luna
 takt_providers:
-  assistant:             # 省略可。既存の assistant 専用上書きを維持する
+  assistant:             # 省略可。interactive / instruct / retry は auto routing 対象外
     provider: codex
     model: gpt-5.6-sol
 auto_routing:
@@ -309,7 +309,7 @@ auto_routing:
       implementation: coding
 ```
 
-AI による task slug 生成など workflow step context を持たない処理は、具体的な top-level provider/model を使用します。`auto_routing.router` と candidates は workflow routing 専用であり、default として暗黙に使用されません。`takt_providers.assistant` は既存の assistant 専用優先順位を維持します。
+AI による task slug 生成など workflow step context を持たない処理は、具体的な top-level provider/model を使用します。`auto_routing.router` と candidates は workflow routing 専用であり、default として暗黙に使用されません。assistant 会話（インタラクティブモードの計画会話、instruct、retry）は auto routing を通らず、設定済みなら `takt_providers.assistant`、未設定なら top-level provider/model を使用します。CLI の provider/model override が適用されるのはインタラクティブモードの計画会話だけで、instruct / retry には適用されません。
 
 オートルーティングの決定は `.takt/events/` に NDJSON としてローカル書き込みされます。TAKT がルーティング決定をアップロードすることはありません。ローカル記録はデフォルトで有効で、`telemetry.routing_decisions` で設定でき、`takt telemetry status|enable|disable` で確認・変更できます。
 

@@ -56,6 +56,21 @@ These assets change often during wording improvements and reorganization, so mak
 
 Verify non-executable asset changes with review, Markdown lint, link checks, or sample command execution when needed.
 
+## Natural-Language and Prompt Contract Tests
+
+Prompts, instructions, and natural-language conditions are runtime inputs, but exact prose presence or full-string equality does not verify the intended judgment or behavior. Do not treat string-pinning tests as regression tests for semantic contracts.
+
+| Criteria | Verdict |
+|----------|---------|
+| Claiming that a prompt performs the intended classification or judgment based only on `toContain` or full-string equality | REJECT |
+| Pinning a condition description by exact equality so wording-only changes fail | REJECT |
+| Verifying machine-processed structure such as schemas, reference resolution, rule counts, and transition targets | OK |
+| Extracting semantic decisions into deterministic code and testing inputs and results at boundaries | OK |
+| Evaluating model judgment with scenarios while keeping it separate from deterministic tests | OK |
+| Using exact equality when the string itself is a compatibility contract, such as CLI output, protocol values, or error codes | OK |
+
+When natural-language semantics must be verified, use scenario evaluations with representative examples and counterexamples, or test deterministic decision logic. Do not inflate test counts or coverage with low-value string-pinning tests.
+
 ## Tests for Replaced Old Specifications
 
 When a specification change replaces elements of an old design (UI, API, events, state, labels, etc.) with a new design, tests must positively verify the new behavior. Do not freeze only the absence of the old specification.

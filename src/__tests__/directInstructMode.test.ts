@@ -98,11 +98,22 @@ describe('runDirectInstructMode', () => {
     mockRunConversationLoop.mockResolvedValue({ action: 'execute', task: 'Add regression coverage' });
   });
 
-  it('Given provider is not configured, When direct instruct starts, Then it fails before opening a session', async () => {
+  it('Given top-level provider is unset, When direct instruct starts, Then provider resolution is deferred to initializeSession', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({ language: 'en', provider: undefined });
 
+    await runDirectInstructMode(buildOptions(null));
+
+    expect(mockInitializeSession).toHaveBeenCalledWith('/project', 'instruct');
+    expect(mockRunConversationLoop).toHaveBeenCalled();
+  });
+
+  it('Given initializeSession rejects missing provider, When direct instruct starts, Then the error propagates', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({ language: 'en', provider: undefined });
+    mockInitializeSession.mockImplementation(() => {
+      throw new Error('Provider is not configured.');
+    });
+
     await expect(runDirectInstructMode(buildOptions(null))).rejects.toThrow('Provider is not configured.');
-    expect(mockInitializeSession).not.toHaveBeenCalled();
   });
 
   it('Given order.md content exists, When direct instruct starts, Then the dedicated prompt receives order provenance', async () => {

@@ -197,4 +197,55 @@ describe('KiroProvider integration', () => {
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     expect(args).not.toContain('--agent');
   });
+
+  it('Given a resolved model, When provider agent calls real client, Then --model reaches spawn args', async () => {
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+      ].join('\n'),
+      'utf-8',
+    );
+    mockSpawnSuccess('model ok');
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement', {
+      cwd: testDir,
+      permissionMode: 'readonly',
+      model: 'claude-3-opus',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const modelFlagIndex = args.indexOf('--model');
+    expect(modelFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[modelFlagIndex + 1]).toBe('claude-3-opus');
+  });
+
+  it('Given no model, When provider agent calls real client, Then spawn args have no --model flag', async () => {
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+      ].join('\n'),
+      'utf-8',
+    );
+    mockSpawnSuccess('no model ok');
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement', {
+      cwd: testDir,
+      permissionMode: 'readonly',
+    });
+
+    expect(result.status).toBe('done');
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--model');
+  });
 });

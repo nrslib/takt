@@ -249,5 +249,11 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.syncProjectLocalTaktOnRetry !== undefined) {
     raw.sync_project_local_takt_on_retry = config.syncProjectLocalTaktOnRetry;
   }
+  if (config.autoRequeueMaxAttempts !== undefined) {
+    raw.auto_requeue_max_attempts = config.autoRequeueMaxAttempts;
+  }
+  if (config.ignoreExceed !== undefined) {
+    raw.ignore_exceed = config.ignoreExceed;
+  }
   return raw;
 }

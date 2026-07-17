@@ -277,7 +277,7 @@ To let TAKT choose provider/model per workflow step, keep a concrete top-level p
 provider: codex          # used outside workflow steps and when auto_routing is absent
 model: gpt-5.6-luna
 takt_providers:
-  assistant:             # optional; keeps the existing assistant-specific override
+  assistant:             # optional override; interactive / instruct / retry are not auto-routed
     provider: codex
     model: gpt-5.6-sol
 auto_routing:
@@ -306,7 +306,7 @@ auto_routing:
       implementation: coding
 ```
 
-Operations without workflow-step context, such as AI task-slug generation, use the concrete top-level provider/model. `auto_routing.router` and candidates are only for workflow routing and are never implicit defaults. `takt_providers.assistant` retains its existing assistant-specific precedence.
+Operations without workflow-step context, such as AI task-slug generation, use the concrete top-level provider/model. `auto_routing.router` and candidates are only for workflow routing and are never implicit defaults. Assistant conversations (interactive planning, instruct, and retry) are not auto-routed: they use `takt_providers.assistant` when set and otherwise fall back to the top-level provider/model. CLI provider/model overrides apply only to interactive planning, not instruct or retry.
 
 Auto-routing decisions are written locally to `.takt/events/` as NDJSON. TAKT does not upload routing decisions. Local recording is enabled by default, can be configured with `telemetry.routing_decisions`, and can be inspected or changed with `takt telemetry status|enable|disable`.
 

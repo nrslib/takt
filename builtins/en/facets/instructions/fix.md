@@ -24,7 +24,8 @@ When no ledger is available, use reports in the Report Directory and fix the iss
 - For findings you fixed where the code defect can be verified by an automated test at the appropriate layer, at least one regression test per `family_tag` has been added (mandatory for config-contract and boundary-check findings). When a meaningful automated test cannot be created, state the reason and the verification steps taken (commands run and results) in the work results. Do not satisfy this criterion with a meta-test such as asserting a file exists. Do not write tests for findings you disputed
 - Findings with the same `family_tag` from multiple reviewers have been merged and addressed as one fix
 
-**Important**: After fixing, run the build (type check) and tests.
+**Important:** Immediately before declaring completion, run every applicable quality gate after the final change to code, configuration, tests, or generated artifacts. This includes the build, type check, lint, tests, and any other checks defined by the project or workflow.
+If any artifact changes after a quality gate runs, all earlier quality-gate results are invalid. After the final change, rerun the full applicable gate set from the beginning.
 
 **Required output (include headings)**
 If you disputed any findings, include `## Disputed Findings` (follow the format in the Finding Contract instructions).
