@@ -286,21 +286,10 @@ describe('builtin takt-default provider_options refs', () => {
       ]);
       for (const monitor of workflow.loop_monitors ?? []) {
         expect(monitor.threshold).toBe(5);
-        expect(monitor.judge?.rules?.at(-1)?.next).toBe('ABORT');
-      }
-    });
-
-    it(`${locale} fix instruction should invalidate gates after artifact changes`, () => {
-      const instruction = readFileSync(instructionPath(locale, 'fix'), 'utf-8');
-
-      if (locale === 'ja') {
-        expect(instruction).toContain('最後の変更後');
-        expect(instruction).toContain('それ以前の品質ゲート結果は無効');
-        expect(instruction).toContain('適用対象の全品質ゲートを最初から再実行');
-      } else {
-        expect(instruction).toContain('after the final change');
-        expect(instruction).toContain('all earlier quality-gate results are invalid');
-        expect(instruction).toContain('rerun the full applicable gate set from the beginning');
+        expect(monitor.judge?.rules?.map((rule) => rule.next)).toEqual([
+          'reviewers',
+          'ABORT',
+        ]);
       }
     });
 

@@ -5,6 +5,8 @@ Procedure:
 2. List every `##` section in each of them (do not cherry-pick)
 3. Match the criteria in each listed section against the diff and detect any issues
 
+**This is review iteration #{step_iteration}.** On the first review, cover the entire cumulative diff and report all locations in the same family in that review. On later reviews, apply every criterion to prior open findings, their fixes, and directly affected paths without restarting untouched-area discovery from scratch each time. If the focused check would return APPROVE, first perform a final review of the entire cumulative diff.
+
 ## Step-Specific Notes
 
 - Do not treat documented precedence rules, extension points, or configuration override behavior as vulnerabilities by themselves
