@@ -175,6 +175,24 @@ function loadBuiltinAutoImprovementLoopForPrExecution(projectDir: string) {
   };
 }
 
+function loadBuiltinAutoImprovementLoopWithProductionWaitTransition(projectDir: string) {
+  const config = normalizeWorkflowConfig(
+    parse(readFileSync(
+      join(process.cwd(), 'builtins', 'en', 'workflows', 'auto-improvement-loop.yaml'),
+      'utf-8',
+    )),
+    projectDir,
+  );
+  return {
+    ...config,
+    maxSteps: 4,
+    steps: config.steps.map((step) => ({
+      ...step,
+      delayBeforeMs: 0,
+    })),
+  };
+}
+
 function createFollowupStructuredOutput(overrides: {
   action: 'enqueue_new_task' | 'wait_before_next_scan';
   title?: string;
@@ -645,6 +663,82 @@ describe('system workflow execution integration', () => {
     });
   });
 
+  it.each(['pending', 'running'] as const)(
+    'builtin auto-improvement-loop は %s task がある間 route_context に進まない',
+    async (kind) => {
+      mockTaskRunnerListAllTaskItems.mockReturnValue([
+        {
+          name: 'fix-storage-regression',
+          kind,
+          runSlug: `${kind}-fix-run`,
+          prNumber: 2,
+        },
+      ]);
+
+      const startedSteps: string[] = [];
+      const config = {
+        ...loadBuiltinAutoImprovementLoopWithProductionWaitTransition(projectDir),
+        initialStep: 'wait_before_next_scan',
+        maxSteps: 2,
+      };
+      const engine = new WorkflowEngine(
+        config,
+        projectDir,
+        'Current task body',
+        createSystemEngineOptions(projectDir),
+      );
+      engine.on('step:start', (step) => {
+        startedSteps.push(step.name);
+      });
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(startedSteps).toEqual([
+        'wait_before_next_scan',
+        'wait_before_next_scan',
+      ]);
+      expect(startedSteps).not.toContain('route_context');
+    },
+  );
+
+  it.each(['pending', 'running'] as const)(
+    'builtin auto-improvement-loop は %s task があると route_context から wait_before_next_scan へ遷移する',
+    async (kind) => {
+      mockTaskRunnerListAllTaskItems.mockReturnValue([
+        {
+          name: 'fix-storage-regression',
+          kind,
+          runSlug: `${kind}-route-run`,
+          prNumber: 2,
+        },
+      ]);
+
+      const startedSteps: string[] = [];
+      const config = {
+        ...loadBuiltinAutoImprovementLoopWithProductionWaitTransition(projectDir),
+        maxSteps: 2,
+      };
+      const engine = new WorkflowEngine(
+        config,
+        projectDir,
+        'Current task body',
+        createSystemEngineOptions(projectDir),
+      );
+      engine.on('step:start', (step) => {
+        startedSteps.push(step.name);
+      });
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(startedSteps).toEqual([
+        'route_context',
+        'wait_before_next_scan',
+      ]);
+    },
+  );
+
   it('comment_pr.pr の full template を context 数値へ解決できる', async () => {
     mockCommentOnPr.mockReturnValue({ success: true });
 
@@ -906,96 +1000,7 @@ describe('system workflow execution integration', () => {
     });
   });
 
-  it('followup-task の labels 省略時も issue 作成まで伝搬できる', async () => {
-    setMockScenario([
-      {
-        persona: 'planner',
-        status: 'done',
-        content: 'Enqueue a follow-up without labels.',
-        structuredOutput: {
-          action: 'enqueue_new_task',
-          title: 'Implement unlabeled follow-up issue',
-          type: 'feature',
-          scope: 'workflow',
-          summary: 'Implement unlabeled follow-up',
-          goals: ['Implement the follow-up without labels'],
-          acceptance_criteria: ['The follow-up is implemented', 'Validation passes'],
-          issue: {
-            create: true,
-          },
-        },
-      },
-    ]);
-
-    const config = normalizeWorkflowConfig(
-      {
-        name: 'effect-issue-template-no-labels',
-        initial_step: 'plan_followup',
-        max_steps: 3,
-        schemas: {
-          'followup-task': 'followup-task',
-        },
-        steps: [
-          {
-            name: 'plan_followup',
-            persona: 'planner',
-            instruction: 'Plan the next follow-up action.',
-            structured_output: {
-              schema_ref: 'followup-task',
-            },
-            rules: [
-              { when: 'structured.plan_followup.action == "enqueue_new_task"', next: 'enqueue_followup' },
-            ],
-          },
-          {
-            name: 'enqueue_followup',
-            mode: 'system',
-            effects: [
-              {
-                type: 'enqueue_task',
-                mode: 'new',
-                workflow: 'takt-default',
-                task: '{structured:plan_followup.task_markdown}',
-                issue: '{structured:plan_followup.issue}',
-              },
-            ],
-            rules: [
-              { when: 'effect.enqueue_followup.enqueue_task.success == true', next: 'COMPLETE' },
-            ],
-          },
-        ],
-      },
-      projectDir,
-    );
-
-    const state = await new WorkflowEngine(
-      config,
-      projectDir,
-      'Current task body',
-      createSystemEngineOptions(projectDir),
-    ).run();
-    const renderedTask = [
-      '## Summary',
-      'Implement unlabeled follow-up',
-      '',
-      '## Goals',
-      '- Implement the follow-up without labels',
-      '',
-      '## Acceptance Criteria',
-      '- [ ] The follow-up is implemented',
-      '- [ ] Validation passes',
-    ].join('\n');
-
-    expect(state.status).toBe('completed');
-    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, expect.objectContaining({
-      cwd: projectDir,
-      title: 'Implement unlabeled follow-up issue',
-      outputMode: 'silent',
-    }));
-    expect(mockCreateIssueFromTaskResult.mock.calls.at(-1)?.[1]).not.toHaveProperty('labels');
-  });
-
-  it('followup-task の structured output 検証失敗時は task_markdown 経路へフォールバックする', async () => {
+  it('followup-task の structured output が不正な場合は fallback せず abort する', async () => {
     setMockScenario([
       {
         persona: 'planner',
@@ -1061,55 +1066,19 @@ describe('system workflow execution integration', () => {
       systemStepServicesFactory: createDefaultSystemStepServices,
     });
 
-    const state = await engine.run();
-    const stateRecord = state as Record<string, unknown>;
-
-    expect(state.status).toBe('completed');
-    expect((stateRecord.structuredOutputs as Map<string, unknown>).get('plan_fresh_improvement')).toEqual(
-      expect.objectContaining({
-        action: 'enqueue_new_task',
-        title: 'Implement fallback follow-up',
-        task_markdown: [
-          '## Summary',
-          'Implement fallback follow-up',
-          '',
-          '## Goals',
-          '- Implement fallback follow-up',
-          '',
-          '## Acceptance Criteria',
-          '- [ ] Task requirements are captured in task_markdown.',
-          '- [ ] Completion can be verified against the task instruction.',
-        ].join('\n'),
-        issue: {
-          create: true,
-          labels: [],
-        },
-      }),
-    );
-    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith([
-      '## Summary',
-      'Implement fallback follow-up',
-      '',
-      '## Goals',
-      '- Implement fallback follow-up',
-      '',
-      '## Acceptance Criteria',
-      '- [ ] Task requirements are captured in task_markdown.',
-      '- [ ] Completion can be verified against the task instruction.',
-    ].join('\n'), {
-      cwd: projectDir,
-      outputMode: 'silent',
-      gitProvider: expect.objectContaining({
-        closeIssue: expect.any(Function),
-      }),
+    let abortReason = '';
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
     });
-    expect(mockLogInfo).toHaveBeenCalledWith(
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toContain('required');
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+    expect(mockLogInfo).not.toHaveBeenCalledWith(
       'Structured output failed, falling back to task_markdown issue flow',
-      expect.objectContaining({
-        step: 'plan_fresh_improvement',
-        used_structured_output: false,
-        structured_output_failure_reason: 'schema_error',
-      }),
+      expect.anything(),
     );
   });
 
@@ -1190,7 +1159,7 @@ describe('system workflow execution integration', () => {
     );
   });
 
-  it('followup-task の provider error は本文がある場合だけ provider_error として fallback する', async () => {
+  it('followup-task の provider error は本文があっても fallback せず abort する', async () => {
     setMockScenario([
       {
         persona: 'planner',
@@ -1198,6 +1167,14 @@ describe('system workflow execution integration', () => {
         content: '## Implement provider error fallback\nDetails',
         error: 'provider failed after partial response',
         failureCategory: 'provider_error',
+        structuredOutput: createFollowupStructuredOutput({
+          action: 'enqueue_new_task',
+          goals: [],
+          acceptance_criteria: [],
+          issue: {
+            create: true,
+          },
+        }),
       },
     ]);
 
@@ -1242,29 +1219,29 @@ describe('system workflow execution integration', () => {
       projectDir,
     );
 
-    const state = await new WorkflowEngine(
+    let abortReason = '';
+    const engine = new WorkflowEngine(
       config,
       projectDir,
       'Current task body',
       createSystemEngineOptions(projectDir),
-    ).run();
-
-    expect(state.status).toBe('completed');
-    const renderedTask = renderExpectedFallbackTask('Implement provider error fallback');
-    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, expect.objectContaining({
-      cwd: projectDir,
-      outputMode: 'silent',
-    }));
-    expect(mockSaveTaskFile).toHaveBeenCalledWith(projectDir, renderedTask, {
-      workflow: 'takt-default',
-      issue: 586,
+    );
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
     });
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toContain('provider failed after partial response');
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
     expect(mockLogInfo).toHaveBeenCalledWith(
-      'Structured output failed, falling back to task_markdown issue flow',
+      'Structured output failed',
       expect.objectContaining({
         step: 'plan_fresh_improvement',
         used_structured_output: false,
         structured_output_failure_reason: 'provider_error',
+        error: 'provider failed after partial response',
       }),
     );
   });
@@ -1282,7 +1259,7 @@ describe('system workflow execution integration', () => {
       failureCategory: 'part_timeout' as const,
       error: 'part timeout',
     },
-  ])('followup-task の $name は本文がある場合だけ timeout として fallback する', async (input) => {
+  ])('followup-task の $name は本文があっても fallback せず abort する', async (input) => {
     setMockScenario([
       {
         persona: 'planner',
@@ -1334,29 +1311,29 @@ describe('system workflow execution integration', () => {
       projectDir,
     );
 
-    const state = await new WorkflowEngine(
+    let abortReason = '';
+    const engine = new WorkflowEngine(
       config,
       projectDir,
       'Current task body',
       createSystemEngineOptions(projectDir),
-    ).run();
-
-    expect(state.status).toBe('completed');
-    const renderedTask = renderExpectedFallbackTask(input.contentTitle);
-    expect(mockCreateIssueFromTaskResult).toHaveBeenCalledWith(renderedTask, expect.objectContaining({
-      cwd: projectDir,
-      outputMode: 'silent',
-    }));
-    expect(mockSaveTaskFile).toHaveBeenCalledWith(projectDir, renderedTask, {
-      workflow: 'takt-default',
-      issue: 586,
+    );
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
     });
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toContain(input.error);
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
     expect(mockLogInfo).toHaveBeenCalledWith(
-      'Structured output failed, falling back to task_markdown issue flow',
+      'Structured output failed',
       expect.objectContaining({
         step: 'plan_fresh_improvement',
         used_structured_output: false,
         structured_output_failure_reason: 'timeout',
+        error: input.error,
       }),
     );
   });
@@ -2336,15 +2313,17 @@ describe('system workflow execution integration', () => {
       '- [ ] The issue flow remains non-interactive',
     ].join('\n'), {
       workflow: 'takt-default',
+      issue: 586,
       worktree: true,
       baseBranch: 'improve',
       autoPr: true,
-      draftPr: true,
+      draftPr: false,
       managedPr: true,
     });
   });
 
-  it('builtin auto-improvement-loop の plan_from_issue は wait_before_next_scan を明示 action として受け付ける', async () => {
+  it('builtin auto-improvement-loop の plan_from_issue は wait_before_next_scan から本番遷移で route_context に戻る', async () => {
+    const startedSteps: string[] = [];
     setMockScenario([
       {
         persona: 'supervisor',
@@ -2364,18 +2343,28 @@ describe('system workflow execution integration', () => {
       },
     ]);
 
-    const config = loadBuiltinAutoImprovementLoopForIssueExecution(projectDir);
-    const state = await new WorkflowEngine(
+    const config = loadBuiltinAutoImprovementLoopWithProductionWaitTransition(projectDir);
+    const engine = new WorkflowEngine(
       config,
       projectDir,
       'Current task body',
       createSystemEngineOptions(projectDir),
-    ).run();
+    );
+    engine.on('step:start', (step) => {
+      startedSteps.push(step.name);
+    });
+    const state = await engine.run();
     const routeContext = ((state as Record<string, unknown>).systemContexts as Map<string, unknown>).get('route_context');
     const stepNames = Array.from(state.stepOutputs.keys());
 
-    expect(state.status).toBe('completed');
+    expect(state.status).toBe('aborted');
     expect(stepNames).toEqual(['route_context', 'plan_from_issue', 'wait_before_next_scan']);
+    expect(startedSteps).toEqual([
+      'route_context',
+      'plan_from_issue',
+      'wait_before_next_scan',
+      'route_context',
+    ]);
     expect(routeContext).toEqual(expect.objectContaining({
       prs: [],
       tracked_issues: [],
@@ -2711,6 +2700,122 @@ describe('system workflow execution integration', () => {
     expect(mockSaveTaskFile).not.toHaveBeenCalled();
   });
 
+  it('builtin auto-improvement-loop は空配列の enqueue_new_task を明示的失敗にする', async () => {
+    let abortReason = '';
+    setMockScenario([
+      {
+        persona: 'supervisor',
+        status: 'done',
+        content: 'Plan a fresh improvement without task details.',
+        structuredOutput: createFollowupStructuredOutput({
+          action: 'enqueue_new_task',
+          goals: [],
+          acceptance_criteria: [],
+          issue: {
+            create: true,
+          },
+        }),
+      },
+    ]);
+    mockListOpenIssues.mockReturnValue([]);
+
+    const config = loadBuiltinAutoImprovementLoopForIssueExecution(projectDir);
+    const engine = new WorkflowEngine(
+      config,
+      projectDir,
+      'Current task body',
+      createSystemEngineOptions(projectDir),
+    );
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
+    });
+
+    const state = await engine.run();
+    const stepNames = Array.from(state.stepOutputs.keys());
+
+    expect(state.status).toBe('aborted');
+    expect(stepNames).toEqual(['route_context']);
+    expect(abortReason).toContain('requires at least one goal');
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('builtin auto-improvement-loop は acceptance criteria 1 件の enqueue_new_task を明示的失敗にする', async () => {
+    let abortReason = '';
+    setMockScenario([
+      {
+        persona: 'supervisor',
+        status: 'done',
+        content: 'Plan a fresh improvement with a single acceptance criterion.',
+        structuredOutput: createFollowupStructuredOutput({
+          action: 'enqueue_new_task',
+          goals: ['Improve the sandbox behaviour'],
+          acceptance_criteria: ['Only one criterion'],
+          issue: {
+            create: true,
+          },
+        }),
+      },
+    ]);
+    mockListOpenIssues.mockReturnValue([]);
+
+    const config = loadBuiltinAutoImprovementLoopForIssueExecution(projectDir);
+    const engine = new WorkflowEngine(
+      config,
+      projectDir,
+      'Current task body',
+      createSystemEngineOptions(projectDir),
+    );
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
+    });
+
+    const state = await engine.run();
+    const stepNames = Array.from(state.stepOutputs.keys());
+
+    expect(state.status).toBe('aborted');
+    expect(stepNames).toEqual(['route_context']);
+    expect(abortReason).toContain('requires at least two acceptance criteria');
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
+  });
+
+  it('builtin auto-improvement-loop は要素を含む wait_before_next_scan を空配列の wait に補正する', async () => {
+    setMockScenario([
+      {
+        persona: 'supervisor',
+        status: 'done',
+        content: 'Wait before the next scan.',
+        structuredOutput: createFollowupStructuredOutput({
+          action: 'wait_before_next_scan',
+          goals: ['This must be empty'],
+          acceptance_criteria: ['This must also be empty'],
+        }),
+      },
+    ]);
+    mockListOpenIssues.mockReturnValue([]);
+
+    const config = loadBuiltinAutoImprovementLoopForIssueExecution(projectDir);
+    const engine = new WorkflowEngine(
+      config,
+      projectDir,
+      'Current task body',
+      createSystemEngineOptions(projectDir),
+    );
+
+    const state = await engine.run();
+    const structuredOutput = (state as Record<string, unknown>).structuredOutputs as Map<string, unknown>;
+
+    expect(state.status).toBe('completed');
+    expect(structuredOutput.get('plan_fresh_improvement')).toEqual(expect.objectContaining({
+      action: 'wait_before_next_scan',
+      goals: [],
+      acceptance_criteria: [],
+    }));
+    expect(mockSaveTaskFile).not.toHaveBeenCalled();
+    expect(mockCreateIssueFromTaskResult).not.toHaveBeenCalled();
+  });
+
   it('builtin auto-improvement-loop の plan_fresh_improvement は noop を拒否する', async () => {
     let abortReason = '';
     setMockScenario([
@@ -2843,10 +2948,11 @@ describe('system workflow execution integration', () => {
       '- [ ] The issue flow remains non-interactive',
     ].join('\n'), {
       workflow: 'takt-default',
+      issue: 586,
       worktree: true,
       baseBranch: 'improve',
       autoPr: true,
-      draftPr: true,
+      draftPr: false,
       managedPr: true,
     });
   });

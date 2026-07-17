@@ -13,7 +13,7 @@ const {
   mockResolveConfigValueWithSource,
   mockCreateOutputFns,
   mockInitializeOtelFoundation,
-  mockEnsureWorktreeTaktGitignore,
+  mockEnsureWorktreeTaktRuntimeProtection,
   mockLogWarn,
 } = vi.hoisted(() => ({
   mockWriteFileAtomic: vi.fn(),
@@ -21,7 +21,7 @@ const {
   mockResolveConfigValueWithSource: vi.fn(),
   mockCreateOutputFns: vi.fn(),
   mockInitializeOtelFoundation: vi.fn(),
-  mockEnsureWorktreeTaktGitignore: vi.fn(),
+  mockEnsureWorktreeTaktRuntimeProtection: vi.fn(),
   mockLogWarn: vi.fn(),
 }));
 
@@ -101,7 +101,7 @@ vi.mock('../infra/observability/otelFoundation.js', () => ({
 }));
 
 vi.mock('../infra/task/projectLocalTaktSync.js', () => ({
-  ensureWorktreeTaktGitignore: mockEnsureWorktreeTaktGitignore,
+  ensureWorktreeTaktRuntimeProtection: mockEnsureWorktreeTaktRuntimeProtection,
 }));
 
 vi.mock('../features/analytics/index.js', () => ({
@@ -891,8 +891,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       reportDirName: 'worktree-run',
     });
 
-    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledTimes(1);
-    expect(mockEnsureWorktreeTaktGitignore).toHaveBeenCalledWith(worktreeDir);
+    expect(mockEnsureWorktreeTaktRuntimeProtection).toHaveBeenCalledTimes(1);
+    expect(mockEnsureWorktreeTaktRuntimeProtection).toHaveBeenCalledWith(worktreeDir);
   });
 
   it('Given cwd equals projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is not ensured', async () => {
@@ -904,6 +904,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       reportDirName: 'project-run',
     });
 
-    expect(mockEnsureWorktreeTaktGitignore).not.toHaveBeenCalled();
+    expect(mockEnsureWorktreeTaktRuntimeProtection).not.toHaveBeenCalled();
   });
 });

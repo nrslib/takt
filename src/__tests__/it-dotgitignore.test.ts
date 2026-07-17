@@ -8,11 +8,12 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { getProjectWorkflowsDir, getProjectFacetDir } from '../infra/config/paths.js';
 import { VALID_FACET_TYPES, parseFacetType } from '../features/config/facetTypes.js';
+import { ensureWorktreeTaktRuntimeProtection } from '../infra/task/projectLocalTaktSync.js';
 
 function gitTrackedFiles(cwd: string): string[] {
   const output = execFileSync('git', ['ls-files', '.takt/'], { cwd, encoding: 'utf-8' });
@@ -125,5 +126,39 @@ describe('dotgitignore patterns', () => {
     expect(status).toContain('.takt/.gitignore');
     expect(status).not.toContain('.takt/.runtime/');
     expect(status).not.toContain('.takt/runs/');
+  });
+
+  it('should preserve run logs from git clean after tracked .takt/.gitignore is removed', () => {
+    execFileSync('git', ['add', '.takt/.gitignore'], { cwd: testDir });
+    execFileSync('git', ['commit', '-m', 'Track takt gitignore'], { cwd: testDir });
+    ensureWorktreeTaktRuntimeProtection(testDir);
+
+    const logPath = join(testDir, '.takt', 'runs', 'active-run', 'logs', 'session.jsonl');
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, '{"type":"workflow_start"}\n', 'utf-8');
+
+    execFileSync('git', ['rm', '.takt/.gitignore'], { cwd: testDir });
+    execFileSync('git', ['clean', '-fd'], { cwd: testDir });
+
+    expect(existsSync(join(testDir, '.takt', '.gitignore'))).toBe(false);
+    expect(readFileSync(logPath, 'utf-8')).toBe('{"type":"workflow_start"}\n');
+    const ignoreSource = execFileSync('git', ['check-ignore', '-v', '.takt/runs/active-run/logs/session.jsonl'], {
+      cwd: testDir,
+      encoding: 'utf-8',
+    });
+    expect(ignoreSource).toContain('.git/info/exclude');
+  });
+
+  it('should skip git exclude protection when the worktree has no .git', () => {
+    const noGitDir = join(testDir, 'no-git-worktree');
+    mkdirSync(noGitDir, { recursive: true });
+
+    expect(() => ensureWorktreeTaktRuntimeProtection(noGitDir)).not.toThrow();
+
+    expect(existsSync(join(noGitDir, '.takt', '.gitignore'))).toBe(true);
+    expect(existsSync(join(noGitDir, '.git'))).toBe(false);
+    const parentExclude = join(testDir, '.git', 'info', 'exclude');
+    const parentExcludeContent = existsSync(parentExclude) ? readFileSync(parentExclude, 'utf-8') : '';
+    expect(parentExcludeContent).not.toContain('/.takt/runs/');
   });
 });

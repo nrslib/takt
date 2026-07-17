@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -144,6 +144,32 @@ describe('TaskRunner (tasks.yaml)', () => {
     const task = runner.addTask('Fix login flow', { workflow: 'default' });
     expect(task.name).toContain('fix-login-flow');
     expect(existsSync(join(testDir, '.takt', 'tasks.yaml'))).toBe(true);
+  });
+
+  it('should recover a stale process lock before updating tasks', () => {
+    const store = new TaskStore(testDir);
+    store.ensureDirs();
+    const lockFile = join(testDir, '.takt', 'tasks.yaml.lock');
+    writeFileSync(lockFile, 'stale', 'utf-8');
+    const staleTime = new Date(Date.now() - 60_000);
+    utimesSync(lockFile, staleTime, staleTime);
+
+    const updated = store.update((current) => current);
+
+    expect(updated).toEqual({ tasks: [] });
+    expect(existsSync(lockFile)).toBe(false);
+  });
+
+  it('should release the process lock when an update fails', () => {
+    const store = new TaskStore(testDir);
+    const lockFile = join(testDir, '.takt', 'tasks.yaml.lock');
+
+    expect(() => store.update(() => {
+      throw new Error('mutation failed');
+    })).toThrow('mutation failed');
+
+    expect(existsSync(lockFile)).toBe(false);
+    expect(store.read()).toEqual({ tasks: [] });
   });
 
   it('should clear retry metadata without mutating the source task record', () => {
