@@ -21,8 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `implement` dead ends now route to `plan` (re-planning) instead of ABORT in the `for-local-llm` family (#1009), matching what `write_tests` and `fix` already did. ABORT remains reserved for loop-monitor verdicts, unclear requirements, and review conflicts.
 - Bundled SDKs updated: `@openai/codex-sdk` 0.144.1 and `@anthropic-ai/claude-agent-sdk` 0.3.206 (#1015). The bundled Codex CLI now knows the GPT-5.6 model family (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`), so these can be specified as `model` on the codex provider.
 
+### Removed
+
+- `takt-default-refresh-all` and `takt-default-refresh-fast` were removed. Use `takt-default` or `takt-default-high` instead. Saved tasks or runs that reference either removed workflow must switch workflows before retrying or resuming, or be recreated.
+
 ### Fixed
 
+- `takt_providers.assistant` now applies to instruct and retry dialogue, not only interactive planning (#1011).
 - OpenCode silent-timeout autopsy classifies provider 429s as `rate_limited` (#985, #1010). The OpenCode server retries provider 429s internally without emitting `session.error`, so a rate-limited session looked like a zero-progress stall and the idle watchdog aborted it without engaging the engine's rate-limit backoff. On an idle-timeout abort, TAKT now inspects the session's last assistant message (with a 5-second budget) and returns 429-class errors as `rate_limited`.
 - The Finding Contract dispute route now works with `language: ja`, and index-state findings are prevented (#1012, #1014). The FC instructions were English-only, which starved the ja dispute entry point; prose is now localized while machine-matched tokens (`## Disputed Findings`, field names) stay English. The coder persona's "reviewer findings are absolute — never argue" stance, which suppressed legitimate disputes, was rewritten into an evidence discipline. Git rules now forbid treating index/staging state as evidence, preventing unsatisfiable "commit this file" findings in TAKT-managed runs.
 - Stale findings are covered end to end in the dispute route (#993). Dispute guidance now covers findings that contradict the current code (verify against reality, dispute with fresh file:line evidence), and the review-fix loop judge treats fixes-landed-but-findings-persist as a findings-side deadlock that re-planning plus dispute can break, instead of aborting.

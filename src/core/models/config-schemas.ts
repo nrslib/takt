@@ -8,7 +8,7 @@ import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import {
   AnalyticsConfigSchema,
-  AutoRoutingSchema,
+  ConfigAutoRoutingSchema,
   LanguageSchema,
   LoggingConfigSchema,
   ObservabilityConfigSchema,
@@ -92,7 +92,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   language: LanguageSchema.optional(),
   provider: ProviderReferenceOrAutoSchema.optional(),
   model: z.string().optional(),
-  auto_routing: AutoRoutingSchema.optional(),
+  auto_routing: ConfigAutoRoutingSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   telemetry: TelemetryConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
@@ -120,6 +120,8 @@ const ProjectConfigObjectBaseSchema = z.object({
   task_poll_interval_ms: z.number().int().min(100).max(5000).optional(),
   interactive_preview_steps: z.number().int().min(0).max(10).optional(),
   sync_project_local_takt_on_retry: z.boolean().optional(),
+  auto_requeue_max_attempts: z.number().int().min(0).optional(),
+  ignore_exceed: z.boolean().optional(),
   base_branch: z.string().optional(),
   workflow_overrides: WorkflowOverridesSchema,
   vcs_provider: z.enum(VCS_PROVIDER_TYPES).optional(),

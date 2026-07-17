@@ -47,7 +47,7 @@ const localWorkflows = [
   'dual-for-local-llm',
   'peer-review-for-local-llm',
 ] as const;
-const builtinWorkflowFilesPerLocale = 59;
+const builtinWorkflowFilesPerLocale = 57;
 
 const genericInstructionNames = [
   'review-arch',
@@ -230,17 +230,17 @@ function hasFixedProviderOrModelOnStep(steps: WorkflowStep[]): boolean {
 }
 
 function createProjectWithLanguage(locale: typeof locales[number]): string {
-  const projectDir = mkdtempSync(join(tmpdir(), 'takt-default-enhancement-'));
+  const projectDir = mkdtempSync(join(tmpdir(), 'takt-default-high-'));
   const configDir = join(projectDir, '.takt');
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, 'config.yaml'), `language: ${locale}\n`, 'utf-8');
   return projectDir;
 }
 
-describe('takt-default-enhancement builtin workflow', () => {
+describe('takt-default-high builtin workflow', () => {
   for (const locale of locales) {
     it(`${locale} uses the high-capability direct implementation and six-reviewer design`, () => {
-      const workflow = readYaml<Workflow>(locale, join('workflows', 'takt-default-enhancement.yaml'));
+      const workflow = readYaml<Workflow>(locale, join('workflows', 'takt-default-high.yaml'));
       const steps = workflow.steps ?? [];
       const implement = stepByName(steps, 'implement');
       const fix = stepByName(steps, 'fix');
@@ -248,11 +248,11 @@ describe('takt-default-enhancement builtin workflow', () => {
       const finalGate = stepByName(steps, 'final-gate');
 
       expect(workflow).toMatchObject({
-        name: 'takt-default-enhancement',
+        name: 'takt-default-high',
         max_steps: 200,
         finding_contract: {
-          ledger_path: '.takt/findings/takt-default-enhancement.json',
-          raw_findings_path: '.takt/findings/takt-default-enhancement/raw',
+          ledger_path: '.takt/findings/takt-default-high.json',
+          raw_findings_path: '.takt/findings/takt-default-high/raw',
         },
       });
       expect(implement).toMatchObject({ instruction: 'implement', session: 'compact' });
@@ -416,13 +416,13 @@ describe('takt-default-enhancement builtin workflow', () => {
       expect(peerReview.rules?.map((rule) => rule.next)).toEqual(['COMPLETE', 'plan', 'ABORT']);
     });
 
-    it(`${locale} loads and doctors takt-default-enhancement through the standard validation path`, () => {
+    it(`${locale} loads and doctors takt-default-high through the standard validation path`, () => {
       const projectDir = createProjectWithLanguage(locale);
-      const workflowPath = join(process.cwd(), 'builtins', locale, 'workflows', 'takt-default-enhancement.yaml');
+      const workflowPath = join(process.cwd(), 'builtins', locale, 'workflows', 'takt-default-high.yaml');
 
       try {
         const workflow = loadWorkflowFromFile(workflowPath, projectDir);
-        expect(workflow).toMatchObject({ name: 'takt-default-enhancement', initialStep: 'plan', maxSteps: 200 });
+        expect(workflow).toMatchObject({ name: 'takt-default-high', initialStep: 'plan', maxSteps: 200 });
         expect(() => validateWorkflowConfig(workflow, { projectCwd: projectDir })).not.toThrow();
         expect(inspectWorkflowFile(workflowPath, projectDir).diagnostics).toEqual([]);
       } finally {

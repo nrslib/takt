@@ -368,7 +368,39 @@ describe('callKiro', () => {
     expect(command).toBe('/custom/bin/kiro-cli');
   });
 
-  it('Given model-like options are out of scope, When called, Then does not add model or MCP flags', async () => {
+  it('Given no MCP-related options, When called, Then does not add MCP flags', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      permissionMode: 'full',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args.some((arg) => arg.includes('mcp'))).toBe(false);
+  });
+
+  it('Given a model option, When called, Then adds --model with the given value', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      model: 'some-model',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const modelFlagIndex = args.indexOf('--model');
+    expect(modelFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[modelFlagIndex + 1]).toBe('some-model');
+  });
+
+  it('Given no model option, When called, Then does not add a --model flag', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,
@@ -381,7 +413,6 @@ describe('callKiro', () => {
 
     const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
     expect(args).not.toContain('--model');
-    expect(args.some((arg) => arg.includes('mcp'))).toBe(false);
   });
 
   it('Given prompt starts with a Markdown list marker, When called, Then passes it as safe positional input', async () => {

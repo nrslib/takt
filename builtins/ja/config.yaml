@@ -17,6 +17,8 @@ language: ja         # 表示言語: ja | en
 # base_branch: main                # cloneのベースブランチ（デフォルト: カレントブランチ）
 # concurrency: 1                   # takt run の同時実行タスク数 (1-10)
 # task_poll_interval_ms: 500       # 新規タスク検出のポーリング間隔（ms, 100-5000）
+# auto_requeue_max_attempts: 0     # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数、0で無効）
+# ignore_exceed: false             # takt run / takt watch で --ignore-exceed 相当を適用
 # sync_project_local_takt_on_retry: true # Retry / re-execution 前に root の project-local .takt を同期。保持したい場合は false
 
 # PR / ブランチ

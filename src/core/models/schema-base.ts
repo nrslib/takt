@@ -197,7 +197,7 @@ const AutoRoutingCandidateSchema = z.object({
   provider_options: StepProviderOptionsSchema,
 }).strict();
 
-export const AutoRoutingSchema = z.object({
+const AutoRoutingSchemaBase = z.object({
   strategy: AutoRoutingStrategySchema,
   router: z.object({
     provider: ProviderTypeSchema,
@@ -209,7 +209,12 @@ export const AutoRoutingSchema = z.object({
     steps: z.record(z.string(), z.string().min(1)).optional(),
     personas: z.record(z.string(), z.string().min(1)).optional(),
   }).strict().optional(),
-}).strict().superRefine((config, ctx) => {
+}).strict();
+
+function validateAutoRoutingSchema(
+  config: z.infer<typeof AutoRoutingSchemaBase>,
+  ctx: z.RefinementCtx,
+): void {
   const candidateNames = new Set<string>();
   config.candidates.forEach((candidate, index) => {
     if (candidateNames.has(candidate.name)) {
@@ -242,7 +247,16 @@ export const AutoRoutingSchema = z.object({
       message: `auto_routing strategy "${config.strategy}" requires at least one ${requiredTier} cost_tier candidate`,
     });
   }
-});
+}
+
+export const AutoRoutingSchema = AutoRoutingSchemaBase.superRefine(validateAutoRoutingSchema);
+
+export const ConfigAutoRoutingSchema = AutoRoutingSchemaBase.extend({
+  default_provider: z.object({
+    provider: ProviderTypeSchema,
+    model: z.string().trim().min(1).optional(),
+  }).strict().optional(),
+}).strict().superRefine(validateAutoRoutingSchema);
 
 export const RateLimitFallbackSchema = z.object({
   switch_chain: z.array(z.object({
@@ -325,16 +339,6 @@ const CommandQualityGateInputSchema = z.object({
   timeout_ms: z.number().int().positive().optional(),
 }).strict();
 
-function normalizeCommandQualityGate(gate: z.output<typeof CommandQualityGateInputSchema>) {
-  return {
-    type: gate.type,
-    ...(gate.name !== undefined ? { name: gate.name } : {}),
-    command: gate.command,
-    ...(gate.cwd !== undefined ? { cwd: gate.cwd } : {}),
-    ...(gate.timeout_ms !== undefined ? { timeoutMs: gate.timeout_ms } : {}),
-  };
-}
-
 const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
   if (typeof gate === 'string') {
     return;
@@ -363,7 +367,7 @@ const QualityGateRawSchema = z.unknown().superRefine((gate, ctx) => {
     return gate;
   }
 
-  return normalizeCommandQualityGate(CommandQualityGateInputSchema.parse(gate));
+  return CommandQualityGateInputSchema.parse(gate);
 });
 
 /** Quality gates schema - AI directives and command gates for step completion */

@@ -39,6 +39,13 @@ export interface AutoRoutingConfig {
   };
 }
 
+export interface ConfigAutoRoutingConfig extends AutoRoutingConfig {
+  defaultProvider?: {
+    provider: ProviderType;
+    model?: string;
+  };
+}
+
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
@@ -259,6 +266,10 @@ export interface ProjectConfig {
   interactivePreviewSteps?: number;
   /** Sync project-local .takt resources from root when retry reuses a worktree */
   syncProjectLocalTaktOnRetry?: boolean;
+  /** Maximum automatic requeue attempts for failed tasks */
+  autoRequeueMaxAttempts?: number;
+  /** Continue takt run when a workflow reaches the iteration limit */
+  ignoreExceed?: boolean;
   /** Project-level analytics overrides */
   analytics?: AnalyticsConfig;
   /** Local-only telemetry settings */
@@ -268,7 +279,7 @@ export interface ProjectConfig {
   /** Provider-specific options (overrides global, overridden by workflow/step) */
   providerOptions?: StepProviderOptions;
   /** Automatic provider/model routing configuration. */
-  autoRouting?: AutoRoutingConfig;
+  autoRouting?: ConfigAutoRoutingConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */

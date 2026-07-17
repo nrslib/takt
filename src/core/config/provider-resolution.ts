@@ -1,9 +1,11 @@
 import {
   resolveProviderModelCandidates,
   resolveModelFromCandidates,
+  type ModelProviderCandidate,
   type ProviderModelOutput,
 } from '../provider-resolution.js';
 import type { ProviderType } from '../workflow/types.js';
+import type { ConfigAutoRoutingConfig, ProviderTypeOrAuto } from '../models/config-types.js';
 
 export interface AssistantProviderConfigSource {
   provider?: ProviderType;
@@ -26,8 +28,57 @@ export interface AssistantCliOverrides {
   model?: string;
 }
 
+export interface NonWorkflowProviderConfigSource {
+  provider?: ProviderTypeOrAuto;
+  model?: string;
+  autoRouting?: Pick<ConfigAutoRoutingConfig, 'defaultProvider'>;
+}
+
+export interface NonWorkflowProviderConfig {
+  project: NonWorkflowProviderConfigSource;
+  global: NonWorkflowProviderConfigSource;
+}
+
+const MISSING_AUTO_DEFAULT_PROVIDER_ERROR =
+  'Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.';
+
+function toConcreteModelCandidate(
+  source: NonWorkflowProviderConfigSource,
+): ModelProviderCandidate {
+  if (source.provider === 'auto') {
+    return {};
+  }
+  return { provider: source.provider, model: source.model };
+}
+
+export function resolveNonWorkflowProviderModelFromConfig(
+  config: NonWorkflowProviderConfig,
+): ProviderModelOutput {
+  const provider = config.project.provider ?? config.global.provider;
+  if (provider !== 'auto') {
+    return {
+      provider,
+      model: resolveModelFromCandidates([
+        toConcreteModelCandidate(config.project),
+        toConcreteModelCandidate(config.global),
+      ], provider),
+    };
+  }
+
+  const defaultProvider = config.project.autoRouting?.defaultProvider
+    ?? config.global.autoRouting?.defaultProvider;
+  if (defaultProvider === undefined) {
+    throw new Error(MISSING_AUTO_DEFAULT_PROVIDER_ERROR);
+  }
+
+  return {
+    provider: defaultProvider.provider,
+    model: defaultProvider.model,
+  };
+}
+
 /**
- * Resolve provider/model for assistant interactive mode.
+ * Resolve provider/model for assistant conversations (interactive, instruct, retry).
  * Priority: CLI overrides > local assistant > global assistant > local top-level > global top-level
  */
 export function resolveAssistantProviderModelFromConfig(

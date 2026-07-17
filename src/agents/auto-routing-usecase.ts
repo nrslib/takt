@@ -25,11 +25,19 @@ export interface AutoRoutingAiRouter {
   routeBatch(autoRouting: AutoRoutingConfig, steps: AutoRoutingAiStep[]): Promise<Map<string, AutoRoutingCandidate | undefined>>;
 }
 
-const ROUTING_OUTPUT_SCHEMA = {
+const SINGLE_ROUTING_OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     selected_candidate: { type: 'string' },
+  },
+  required: ['selected_candidate'],
+};
+
+const BATCH_ROUTING_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
     selections: {
       type: 'array',
       items: {
@@ -43,6 +51,7 @@ const ROUTING_OUTPUT_SCHEMA = {
       },
     },
   },
+  required: ['selections'],
 };
 
 const AUTO_ROUTING_AI_TIMEOUT_MS = 30_000;
@@ -92,7 +101,9 @@ function buildRoutingPrompt(
     'Steps:',
     steps.map(formatStep).join('\n\n'),
     '',
-    'Return JSON only. For one step use {"selected_candidate":"name"}. For multiple steps use {"selections":[{"id":"step-id","selected_candidate":"name"}]}.',
+    steps.length === 1
+      ? 'Return JSON only as {"selected_candidate":"name"}.'
+      : 'Return JSON only as {"selections":[{"id":"step-id","selected_candidate":"name"}]}.',
   ].join('\n');
 }
 
@@ -187,6 +198,7 @@ async function runAutoRouterAgent(
   autoRouting: AutoRoutingConfig,
   options: AutoRoutingAiRouterOptions,
   prompt: string,
+  outputSchema: Record<string, unknown>,
 ): Promise<Awaited<ReturnType<typeof runAgent>>> {
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -211,7 +223,7 @@ async function runAutoRouterAgent(
         language: options.language,
         childProcessEnv: options.childProcessEnv,
         onStream: options.onStream,
-        outputSchema: ROUTING_OUTPUT_SCHEMA,
+        outputSchema,
       }),
       timeout,
     ]);
@@ -248,7 +260,10 @@ export function createAutoRoutingAiRouter(options: AutoRoutingAiRouterOptions): 
     }
 
     const prompt = buildRoutingPrompt(options.workflowName, autoRouting, uncachedSteps);
-    const response = await runAutoRouterAgent(autoRouting, options, prompt);
+    const outputSchema = uncachedSteps.length === 1
+      ? SINGLE_ROUTING_OUTPUT_SCHEMA
+      : BATCH_ROUTING_OUTPUT_SCHEMA;
+    const response = await runAutoRouterAgent(autoRouting, options, prompt, outputSchema);
     if (response.status !== 'done') {
       throw new Error('Auto routing AI router returned a non-done status');
     }

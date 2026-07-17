@@ -80,8 +80,16 @@ describe('createAutoRoutingAiRouter', () => {
       permissionMode: 'readonly',
       language: 'ja',
       childProcessEnv: { TAKT_TEST: '1' },
-      outputSchema: expect.objectContaining({ type: 'object' }),
     });
+    expect(options?.outputSchema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        selected_candidate: { type: 'string' },
+      },
+      required: ['selected_candidate'],
+    });
+    expect(prompt).toContain('Return JSON only as {"selected_candidate":"name"}.');
   });
 
   it('Given multiple no-rule steps, When AI returns selections, Then each id maps to the selected candidate', async () => {
@@ -104,6 +112,27 @@ describe('createAutoRoutingAiRouter', () => {
 
     expect(candidates.get('a')?.name).toBe('coding');
     expect(candidates.get('b')?.name).toBe('review');
+    const [, prompt, options] = vi.mocked(runAgent).mock.calls[0] ?? [];
+    expect(options?.outputSchema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        selections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              selected_candidate: { type: 'string' },
+            },
+            required: ['id', 'selected_candidate'],
+          },
+        },
+      },
+      required: ['selections'],
+    });
+    expect(prompt).toContain('Return JSON only as {"selections":[{"id":"step-id","selected_candidate":"name"}]}.');
   });
 
   it('Given AI returns an unknown candidate, When routing, Then the adapter rejects without echoing the raw candidate', async () => {
@@ -399,6 +428,16 @@ describe('createAutoRoutingAiRouter', () => {
     const secondPrompt = vi.mocked(runAgent).mock.calls[1]?.[1];
     expect(secondPrompt).not.toContain('id: a');
     expect(secondPrompt).toContain('id: c');
+    expect(secondPrompt).toContain('Return JSON only as {"selected_candidate":"name"}.');
+    expect(secondPrompt).not.toContain('"selections"');
+    expect(vi.mocked(runAgent).mock.calls[1]?.[2]?.outputSchema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        selected_candidate: { type: 'string' },
+      },
+      required: ['selected_candidate'],
+    });
   });
 
   it('Given AI router does not respond, When timeout elapses, Then the router aborts the request and rejects for default fallback', async () => {

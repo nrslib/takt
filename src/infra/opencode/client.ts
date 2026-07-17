@@ -339,7 +339,7 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
 ];
 type OpencodeClient = Awaited<ReturnType<typeof createOpencode>>['client'];
 type OpenCodeSessionSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient['session']['get']>>['data']>;
-type OpenCodeAbortCause = 'timeout' | 'external' | 'prompt';
+type OpenCodeAbortCause = 'timeout' | 'external' | 'prompt' | 'server';
 
 function toRecoverableToolGuardFailure(
   failure: ToolGuardFailure | undefined,
@@ -368,9 +368,10 @@ interface SharedServer {
   close: () => void;
   model: string;
   apiKey?: string;
-  busy: boolean;
   invalidated: boolean;
-  queue: SharedServerQueueEntry[];
+  invalidationController: AbortController;
+  sessionBusy: Set<string>;
+  sessionQueues: Map<string, SharedServerQueueEntry[]>;
 }
 
 interface SharedServerQueueEntry {
@@ -396,7 +397,14 @@ interface AcquiredOpenCodeClient {
   client: OpencodeClient;
   release: () => void;
   invalidate: (error: Error) => void;
+  invalidationSignal: AbortSignal;
+  acquireSession: (
+    sessionKey: string,
+    abortSignal?: AbortSignal,
+  ) => AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient>;
 }
+
+let nextProvisionalId = 1;
 
 const sharedServers = new Map<string, SharedServerEntry>();
 
@@ -405,19 +413,21 @@ async function acquireClient(
   apiKey: string | undefined,
   childProcessEnv: Readonly<Record<string, string>> | undefined,
   abortSignal?: AbortSignal,
+  sessionId?: string,
 ): Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   const key = buildSharedServerKey(model, apiKey, childProcessEnv);
   const entry = getSharedServerEntry(key);
+  const sessionKey = sessionId ?? '';
 
   if (entry.initPromise) {
     const server = await entry.initPromise;
     throwIfAborted(abortSignal);
-    return acquireSharedServer(server, abortSignal);
+    return acquireSharedServer(server, sessionKey, abortSignal);
   }
 
   if (entry.server) {
-    return acquireSharedServer(entry.server, abortSignal);
+    return acquireSharedServer(entry.server, sessionKey, abortSignal);
   }
 
   entry.initPromise = createSharedServer(key, model, apiKey, childProcessEnv)
@@ -431,7 +441,7 @@ async function acquireClient(
 
   const server = await entry.initPromise;
   throwIfAborted(abortSignal);
-  return acquireSharedServer(server, abortSignal);
+  return acquireSharedServer(server, sessionKey, abortSignal);
 }
 
 function buildSharedServerKey(
@@ -523,32 +533,48 @@ async function createSharedServer(
   };
 
   log.debug('OpenCode server started', { model, port });
-  return { key, client, close: closeServer, model, apiKey, busy: false, invalidated: false, queue: [] };
+  return {
+    key,
+    client,
+    close: closeServer,
+    model,
+    apiKey,
+    invalidated: false,
+    invalidationController: new AbortController(),
+    sessionBusy: new Set(),
+    sessionQueues: new Map(),
+  };
 }
 
 function acquireSharedServer(
   server: SharedServer,
+  sessionKey: string,
   abortSignal?: AbortSignal,
 ): AcquiredOpenCodeClient | Promise<AcquiredOpenCodeClient> {
   throwIfAborted(abortSignal);
   if (server.invalidated) {
-    throw new Error('OpenCode shared server is unavailable');
+    throw sharedServerInvalidationError(server.invalidationController.signal);
   }
-  if (!server.busy) {
-    server.busy = true;
-    return createAcquiredClient(server);
+  if (!server.sessionBusy.has(sessionKey)) {
+    server.sessionBusy.add(sessionKey);
+    return createAcquiredClient(server, sessionKey);
   }
 
   return new Promise((resolve, reject) => {
     const entry: SharedServerQueueEntry = { resolve, reject, signal: abortSignal };
     if (abortSignal) {
       entry.onAbort = () => {
-        removeQueuedClient(server, entry);
+        removeQueuedClient(server, sessionKey, entry);
         reject(new Error(OPENCODE_STREAM_ABORTED_MESSAGE));
       };
       abortSignal.addEventListener('abort', entry.onAbort, { once: true });
     }
-    server.queue.push(entry);
+    let queue = server.sessionQueues.get(sessionKey);
+    if (!queue) {
+      queue = [];
+      server.sessionQueues.set(sessionKey, queue);
+    }
+    queue.push(entry);
   });
 }
 
@@ -558,9 +584,16 @@ export async function getOpenCodeSessionSnapshot(
   directory: string,
   apiKey?: string,
 ): Promise<OpenCodeSessionSnapshot> {
-  const { client, release } = await acquireClient(model, apiKey, undefined);
+  const { client, release, invalidationSignal } = await acquireClient(
+    model,
+    apiKey,
+    undefined,
+    undefined,
+    sessionID,
+  );
   try {
-    const result = await client.session.get({ sessionID, directory });
+    const result = await client.session.get({ sessionID, directory }, { signal: invalidationSignal });
+    throwIfSharedServerInvalidated(invalidationSignal);
     if (!result.data) {
       throw new Error(`OpenCode session not found: ${sessionID}`);
     }
@@ -664,9 +697,16 @@ export async function getOpenCodeSessionMessages(
   directory: string,
   apiKey?: string,
 ): Promise<OpenCodeSessionMessages> {
-  const { client, release } = await acquireClient(model, apiKey, undefined);
+  const { client, release, invalidationSignal } = await acquireClient(
+    model,
+    apiKey,
+    undefined,
+    undefined,
+    sessionID,
+  );
   try {
-    const result = await client.session.messages({ sessionID, directory });
+    const result = await client.session.messages({ sessionID, directory }, { signal: invalidationSignal });
+    throwIfSharedServerInvalidated(invalidationSignal);
     if (!result.data) {
       throw new Error(`OpenCode session messages not found: ${sessionID}`);
     }
@@ -676,23 +716,35 @@ export async function getOpenCodeSessionMessages(
   }
 }
 
-function releaseClient(server: SharedServer): void {
+function releaseClient(server: SharedServer, sessionKey: string): void {
   if (server.invalidated) {
     return;
   }
-  const next = server.queue.shift();
+  const queue = server.sessionQueues.get(sessionKey);
+  const next = queue?.shift();
   if (next) {
     if (next.signal && next.onAbort) {
       next.signal.removeEventListener('abort', next.onAbort);
     }
-    next.resolve(createAcquiredClient(server));
+    next.resolve(createAcquiredClient(server, sessionKey));
     return;
   }
-  server.busy = false;
+  if (queue !== undefined) {
+    server.sessionQueues.delete(sessionKey);
+  }
+  server.sessionBusy.delete(sessionKey);
 }
 
-function removeQueuedClient(server: SharedServer, entry: SharedServerQueueEntry): void {
-  server.queue = server.queue.filter((queued) => queued !== entry);
+function removeQueuedClient(server: SharedServer, sessionKey: string, entry: SharedServerQueueEntry): void {
+  const queue = server.sessionQueues.get(sessionKey);
+  if (queue) {
+    const filtered = queue.filter((queued) => queued !== entry);
+    if (filtered.length === 0) {
+      server.sessionQueues.delete(sessionKey);
+    } else {
+      server.sessionQueues.set(sessionKey, filtered);
+    }
+  }
   if (entry.signal && entry.onAbort) {
     entry.signal.removeEventListener('abort', entry.onAbort);
   }
@@ -727,21 +779,35 @@ function createExternalAbortPromise(
   return { promise, removeListener };
 }
 
-function createReleaseHandle(server: SharedServer): () => void {
+function createReleaseHandle(server: SharedServer, sessionKey: string): () => void {
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    releaseClient(server);
+    releaseClient(server, sessionKey);
   };
 }
 
-function createAcquiredClient(server: SharedServer): AcquiredOpenCodeClient {
+function createAcquiredClient(server: SharedServer, sessionKey: string): AcquiredOpenCodeClient {
   return {
     client: server.client,
-    release: createReleaseHandle(server),
+    release: createReleaseHandle(server, sessionKey),
     invalidate: (error) => invalidateSharedServer(server, error),
+    invalidationSignal: server.invalidationController.signal,
+    acquireSession: (nextSessionKey, abortSignal) => acquireSharedServer(server, nextSessionKey, abortSignal),
   };
+}
+
+function sharedServerInvalidationError(signal: AbortSignal): OpenCodeSharedServerInvalidationError {
+  return signal.reason instanceof OpenCodeSharedServerInvalidationError
+    ? signal.reason
+    : new OpenCodeSharedServerInvalidationError(new Error('OpenCode shared server is unavailable'));
+}
+
+function throwIfSharedServerInvalidated(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw sharedServerInvalidationError(signal);
+  }
 }
 
 function invalidateSharedServer(server: SharedServer, error: Error): void {
@@ -752,15 +818,19 @@ function invalidateSharedServer(server: SharedServer, error: Error): void {
   if (sharedServers.get(server.key)?.server === server) {
     sharedServers.delete(server.key);
   }
-  server.close();
   const queueError = new OpenCodeSharedServerInvalidationError(error);
-  for (const queued of server.queue) {
-    if (queued.signal && queued.onAbort) {
-      queued.signal.removeEventListener('abort', queued.onAbort);
+  server.invalidationController.abort(queueError);
+  server.close();
+  for (const queue of server.sessionQueues.values()) {
+    for (const queued of queue) {
+      if (queued.signal && queued.onAbort) {
+        queued.signal.removeEventListener('abort', queued.onAbort);
+      }
+      queued.reject(queueError);
     }
-    queued.reject(queueError);
   }
-  server.queue = [];
+  server.sessionQueues.clear();
+  server.sessionBusy.clear();
 }
 
 export function resetSharedServer(): void {
@@ -776,6 +846,7 @@ const OPENCODE_SUMMARY_POLL_INTERVAL_MS = 500;
 
 type CompactionDeadline = {
   signal: AbortSignal;
+  abort: (error: Error) => void;
   run: <T>(operation: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   waitForPollInterval: () => Promise<void>;
   cleanup: () => void;
@@ -823,6 +894,7 @@ function createCompactionDeadline(externalAbortSignal: AbortSignal | undefined):
 
   return {
     signal: controller.signal,
+    abort,
     run,
     waitForPollInterval: () => run((signal) => new Promise<void>((resolve, reject) => {
       const pollTimeoutId = setTimeout(() => {
@@ -1215,6 +1287,8 @@ export class OpenCodeClient {
     // 先行の transient エラーで予算を使い切っていても、最終試行の失敗から
     // 救済できるようにする。
     let maxAttempts = OPENCODE_RETRY_MAX_ATTEMPTS;
+    const provisionalKey = `provisional-${nextProvisionalId++}`;
+    const RETRY_ATTEMPT = Symbol('retry-open-code-attempt');
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
       const streamAbortController = new AbortController();
@@ -1225,6 +1299,18 @@ export class OpenCodeClient {
       let release: (() => void) | undefined;
       let opencodeApiClient: OpencodeClient | undefined;
       let sessionLifecycle: OpenCodeSessionLifecycle | undefined;
+      let serverInvalidationError: OpenCodeSharedServerInvalidationError | undefined;
+      let removeServerInvalidationListener: (() => void) | undefined;
+      let pendingResultEmission: {
+        success: boolean;
+        content: string;
+        sessionId: string;
+      } | undefined;
+      let pendingCompletion: {
+        reason: 'normal' | 'timeout' | 'abort' | 'error';
+        detail?: string;
+      } | undefined;
+      let finalizationInvalidationError: OpenCodeSharedServerInvalidationError | undefined;
       const structuredAttemptPlan = planStructuredOutputAttempt(recoveryState, hasInitialSessionId);
       // tool-guard fresh recovery 後の attempt は fresh session を強制する。
       // plan の sessionMode を実態に合わせないと、後段の
@@ -1275,6 +1361,38 @@ export class OpenCodeClient {
         return promptCompletionWait;
       };
 
+      const throwIfServerInvalidated = (): void => {
+        if (serverInvalidationError !== undefined) {
+          throw serverInvalidationError;
+        }
+      };
+
+      const currentServerInvalidationError = (): OpenCodeSharedServerInvalidationError | undefined => (
+        serverInvalidationError
+      );
+
+      const buildServerInvalidationResponse = (
+        invalidationError: OpenCodeSharedServerInvalidationError,
+      ): AgentResponse => {
+        const errorMessage = invalidationError.message;
+        return {
+          persona: agentType,
+          status: 'error',
+          content: errorMessage,
+          error: errorMessage,
+          timestamp: new Date(),
+          sessionId,
+        };
+      };
+
+      const scheduleResultEmission = (
+        success: boolean,
+        content: string,
+        resultSessionId: string,
+      ): void => {
+        pendingResultEmission = { success, content, sessionId: resultSessionId };
+      };
+
       const resetIdleTimeout = (): void => {
         if (idleTimeoutId !== undefined) {
           clearTimeout(idleTimeoutId);
@@ -1301,6 +1419,9 @@ export class OpenCodeClient {
         }
       }
 
+      let attemptResult: AgentResponse | typeof RETRY_ATTEMPT;
+      try {
+        attemptResult = await (async (): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
       try {
         log.debug('Starting OpenCode session', {
           agentType,
@@ -1315,14 +1436,31 @@ export class OpenCodeClient {
         const parsedModel = parseProviderModel(options.model, 'OpenCode model');
         const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
 
-        const acquired = await acquireClient(
+        let acquired = await acquireClient(
           fullModel,
           options.opencodeApiKey,
           options.childProcessEnv,
           options.abortSignal,
+          sessionId ?? provisionalKey,
         );
+        const onServerInvalidated = (): void => {
+          serverInvalidationError = sharedServerInvalidationError(acquired.invalidationSignal);
+          if (!streamAbortController.signal.aborted) {
+            abortCause = 'server';
+            streamAbortController.abort(serverInvalidationError);
+          }
+        };
+        if (acquired.invalidationSignal.aborted) {
+          onServerInvalidated();
+        } else {
+          acquired.invalidationSignal.addEventListener('abort', onServerInvalidated, { once: true });
+          removeServerInvalidationListener = () => {
+            acquired.invalidationSignal.removeEventListener('abort', onServerInvalidated);
+          };
+        }
         opencodeApiClient = acquired.client;
         release = acquired.release;
+        throwIfServerInvalidated();
         if (streamAbortController.signal.aborted) {
           release();
           release = undefined;
@@ -1353,6 +1491,19 @@ export class OpenCodeClient {
           sessionId = sessionResult.data?.id;
           if (!sessionId) {
             throw new Error('Failed to create OpenCode session');
+          }
+          throwIfServerInvalidated();
+
+          if (provisionalKey !== undefined) {
+            const realAcquired = await acquired.acquireSession(
+              sessionId,
+              options.abortSignal,
+            );
+            release!();
+            acquired = realAcquired;
+            opencodeApiClient = realAcquired.client;
+            release = realAcquired.release;
+            throwIfServerInvalidated();
           }
         }
 
@@ -1883,6 +2034,8 @@ export class OpenCodeClient {
           } catch { /* クローズ失敗は結果に影響させない */ }
         }
 
+        throwIfServerInvalidated();
+
         // The idle watchdog and external aborts cancel the stream. If the
         // iterator ends without throwing, the loop falls through with
         // success still true - do not let a timed-out or aborted stream
@@ -1903,6 +2056,7 @@ export class OpenCodeClient {
           streamAbortController.abort();
         }
         await awaitPromptCompletion();
+        throwIfServerInvalidated();
         if (promptError !== undefined) {
           if (success || abortCause === 'prompt') {
             success = false;
@@ -1911,14 +2065,19 @@ export class OpenCodeClient {
             failureMessage = promptError;
           }
         }
-        diag.onCompleted(success ? 'normal' : 'error', success ? undefined : failureMessage);
+        pendingCompletion = {
+          reason: success ? 'normal' : 'error',
+          ...(success ? {} : { detail: failureMessage }),
+        };
 
         if (!success) {
           let message = failureMessage || 'OpenCode execution failed';
           const stopResult = await sessionLifecycle.stopServerSessionOnce();
+          throwIfServerInvalidated();
           if (!stopResult.ok) {
             message = stopResult.error.message;
-            emitResult(options.onStream, false, message, activeSessionId);
+            scheduleResultEmission(false, message, activeSessionId);
+            throwIfServerInvalidated();
             return {
               persona: agentType,
               status: 'error',
@@ -1941,6 +2100,7 @@ export class OpenCodeClient {
               activeSessionId,
               options.cwd,
             );
+            throwIfServerInvalidated();
             if (rateLimitMessage !== undefined) {
               // プロバイダ由来の生エラー文はリクエスト内容やアカウント情報を
               // 含みうるため、分類済みの事実だけを永続化する。
@@ -1951,13 +2111,19 @@ export class OpenCodeClient {
               // 検死で 429 と確定済み。message 文字列に 429 の語が含まれるとは
               // 限らない（statusCode だけで判定した場合）ため再判定はしない。
               const rateLimitedResponse = this.buildRateLimitedResponse(agentType, activeSessionId, rateLimitMessage);
-              emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
+              scheduleResultEmission(
+                false,
+                rateLimitedResponse.error ?? rateLimitedResponse.content,
+                activeSessionId,
+              );
+              throwIfServerInvalidated();
               return rateLimitedResponse;
             }
           }
           if (containsRateLimitError(message)) {
             const rateLimitedResponse = this.buildRateLimitedResponse(agentType, activeSessionId, message);
-            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
+            scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
+            throwIfServerInvalidated();
             return rateLimitedResponse;
           }
           // Failures that point at the native json_schema request itself: a
@@ -1979,7 +2145,8 @@ export class OpenCodeClient {
               message,
             });
             await this.waitForRetryDelay(attempt, options.abortSignal);
-            continue;
+            throwIfServerInvalidated();
+            return RETRY_ATTEMPT;
           }
 
           // A resumed session can carry native StructuredOutput success history
@@ -1999,7 +2166,8 @@ export class OpenCodeClient {
               tool: unavailableLoopToolName,
             });
             await this.waitForRetryDelay(attempt, options.abortSignal);
-            continue;
+            throwIfServerInvalidated();
+            return RETRY_ATTEMPT;
           }
 
           const recoverableToolFailure = toRecoverableToolGuardFailure(toolGuardFailure);
@@ -2028,7 +2196,8 @@ export class OpenCodeClient {
               toolHealth: toolGuard.stats(),
             });
             await this.waitForRetryDelay(attempt, options.abortSignal);
-            continue;
+            throwIfServerInvalidated();
+            return RETRY_ATTEMPT;
           }
 
           if (recoverableToolFailure !== undefined && !toolGuardRecovery.freshSessionUsed) {
@@ -2043,7 +2212,8 @@ export class OpenCodeClient {
               toolHealth: toolGuard.stats(),
             });
             await this.waitForRetryDelay(attempt, options.abortSignal);
-            continue;
+            throwIfServerInvalidated();
+            return RETRY_ATTEMPT;
           }
 
           // ガード発火（absolute_cost_limit / recovery 消費後の再発）は決定的な
@@ -2055,7 +2225,8 @@ export class OpenCodeClient {
           if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
             log.info('Retrying OpenCode call after transient failure', { agentType, attempt, message });
             await this.waitForRetryDelay(attempt, options.abortSignal);
-            continue;
+            throwIfServerInvalidated();
+            return RETRY_ATTEMPT;
           }
 
           if (recoveryState.nativeDegraded || recoveryState.staleSessionRecoveryUsed || toolGuardRecovery.freshSessionUsed) {
@@ -2071,11 +2242,13 @@ export class OpenCodeClient {
             });
           }
 
-          emitResult(options.onStream, false, message, activeSessionId);
           // 観測: 閾値校正の材料として tool health を構造化して残す
           // （debug ログ + AgentResponse.debugInfo）。
           const failureToolHealth = toolGuard.stats();
           log.debug('OpenCode tool health at failure', { agentType, ...failureToolHealth });
+          throwIfServerInvalidated();
+          scheduleResultEmission(false, message, activeSessionId);
+          throwIfServerInvalidated();
           return {
             persona: agentType,
             status: 'error',
@@ -2100,7 +2273,6 @@ export class OpenCodeClient {
         }
 
         const trimmed = content.trim();
-        emitResult(options.onStream, true, trimmed, activeSessionId);
 
         // format 要求時に structured がイベントで捕捉できなかった場合は、
         // 応答全体のJSON object、または従来のfenced JSONを採取する（検証は下流で行う）。
@@ -2123,6 +2295,9 @@ export class OpenCodeClient {
         if (successToolHealth.totalErrors > 0) {
           log.debug('OpenCode tool health at success', { agentType, ...successToolHealth });
         }
+        throwIfServerInvalidated();
+        scheduleResultEmission(true, trimmed, activeSessionId);
+        throwIfServerInvalidated();
         return {
           persona: agentType,
           status: 'done',
@@ -2133,20 +2308,11 @@ export class OpenCodeClient {
           debugInfo: { toolHealth: successToolHealth },
         };
       } catch (error) {
-        if (error instanceof OpenCodeSharedServerInvalidationError) {
-          const errorMessage = error.message;
-          diagRef?.onCompleted('error', errorMessage);
-          if (sessionId) {
-            emitResult(options.onStream, false, errorMessage, sessionId);
-          }
-          return {
-            persona: agentType,
-            status: 'error',
-            content: errorMessage,
-            error: errorMessage,
-            timestamp: new Date(),
-            sessionId,
-          };
+        const invalidationError = currentServerInvalidationError()
+          ?? (error instanceof OpenCodeSharedServerInvalidationError ? error : undefined);
+        if (invalidationError !== undefined) {
+          serverInvalidationError ??= invalidationError;
+          return buildServerInvalidationResponse(invalidationError);
         }
 
         const message = getErrorMessage(error);
@@ -2159,6 +2325,10 @@ export class OpenCodeClient {
           : message;
 
         const stopResult = await sessionLifecycle?.stopServerSessionOnce();
+        const invalidationAfterStop = currentServerInvalidationError();
+        if (invalidationAfterStop !== undefined) {
+          return buildServerInvalidationResponse(invalidationAfterStop);
+        }
         if (stopResult !== undefined && !stopResult.ok) {
           errorMessage = stopResult.error.message;
         }
@@ -2166,26 +2336,42 @@ export class OpenCodeClient {
         if (containsRateLimitError(errorMessage)) {
           const rateLimitedResponse = this.buildRateLimitedResponse(agentType, sessionId, errorMessage);
           if (sessionId) {
-            emitResult(options.onStream, false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
+            scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
+          }
+          const invalidationAfterRateLimitEmit = currentServerInvalidationError();
+          if (invalidationAfterRateLimitEmit !== undefined) {
+            return buildServerInvalidationResponse(invalidationAfterRateLimitEmit);
           }
           return rateLimitedResponse;
         }
 
-        diagRef?.onCompleted(
-          abortCause === 'timeout' ? 'timeout' : streamAbortController.signal.aborted && abortCause !== 'prompt' ? 'abort' : 'error',
-          errorMessage,
-        );
+        pendingCompletion = {
+          reason: abortCause === 'timeout'
+            ? 'timeout'
+            : streamAbortController.signal.aborted && abortCause !== 'prompt'
+              ? 'abort'
+              : 'error',
+          detail: errorMessage,
+        };
 
         const retriable = (stopResult === undefined || stopResult.ok)
           && this.isRetriableError(errorMessage, streamAbortController.signal.aborted, abortCause);
         if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
           log.info('Retrying OpenCode call after transient exception', { agentType, attempt, errorMessage });
           await this.waitForRetryDelay(attempt, options.abortSignal);
-          continue;
+          const invalidationAfterRetryDelay = currentServerInvalidationError();
+          if (invalidationAfterRetryDelay !== undefined) {
+            return buildServerInvalidationResponse(invalidationAfterRetryDelay);
+          }
+          return RETRY_ATTEMPT;
         }
 
         if (sessionId) {
-          emitResult(options.onStream, false, errorMessage, sessionId);
+          scheduleResultEmission(false, errorMessage, sessionId);
+        }
+        const invalidationBeforeErrorReturn = currentServerInvalidationError();
+        if (invalidationBeforeErrorReturn !== undefined) {
+          return buildServerInvalidationResponse(invalidationBeforeErrorReturn);
         }
 
         return {
@@ -2207,13 +2393,50 @@ export class OpenCodeClient {
           streamAbortController.abort();
         }
         await awaitPromptCompletion();
-        const stopResult = await sessionLifecycle?.stopServerSessionOnce();
+        const stopResult = serverInvalidationError === undefined
+          ? await sessionLifecycle?.stopServerSessionOnce()
+          : undefined;
         if (stopResult !== undefined && !stopResult.ok) {
           log.warn('OpenCode server session could not be stopped; shared server invalidated', {
             sessionId,
             error: stopResult.error.message,
           });
         }
+        const invalidationAfterCleanup = currentServerInvalidationError();
+        finalizationInvalidationError = invalidationAfterCleanup;
+      }
+        })();
+
+        // lease を譲渡する前に、最後の invalidation 確認と観測可能な結果を確定する。
+        const finalizationError = currentServerInvalidationError() ?? finalizationInvalidationError;
+        if (finalizationError !== undefined) {
+          attemptResult = buildServerInvalidationResponse(finalizationError);
+          pendingCompletion = { reason: 'error', detail: finalizationError.message };
+          if (attemptResult.sessionId) {
+            scheduleResultEmission(
+              false,
+              attemptResult.error ?? attemptResult.content,
+              attemptResult.sessionId,
+            );
+          }
+        }
+        if (pendingCompletion !== undefined) {
+          diagRef?.onCompleted(pendingCompletion.reason, pendingCompletion.detail);
+        }
+        if (pendingResultEmission !== undefined) {
+          emitResult(
+            options.onStream,
+            pendingResultEmission.success,
+            pendingResultEmission.content,
+            pendingResultEmission.sessionId,
+          );
+        }
+        if (attemptResult === RETRY_ATTEMPT) {
+          continue;
+        }
+        return attemptResult;
+      } finally {
+        removeServerInvalidationListener?.();
         release?.();
       }
     }
@@ -2226,6 +2449,7 @@ export class OpenCodeClient {
     const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
     const deadline = createCompactionDeadline(options.abortSignal);
     let acquired: AcquiredOpenCodeClient | undefined;
+    let removeServerInvalidationListener: (() => void) | undefined;
 
     try {
       const acquiredClient = await deadline.run(() => acquireClient(
@@ -2233,8 +2457,21 @@ export class OpenCodeClient {
         options.opencodeApiKey,
         options.childProcessEnv,
         deadline.signal,
+        options.sessionId,
       ));
       acquired = acquiredClient;
+      const onServerInvalidated = (): void => {
+        deadline.abort(sharedServerInvalidationError(acquiredClient.invalidationSignal));
+      };
+      if (acquiredClient.invalidationSignal.aborted) {
+        onServerInvalidated();
+      } else {
+        acquiredClient.invalidationSignal.addEventListener('abort', onServerInvalidated, { once: true });
+        removeServerInvalidationListener = () => {
+          acquiredClient.invalidationSignal.removeEventListener('abort', onServerInvalidated);
+        };
+      }
+      throwIfSharedServerInvalidated(acquiredClient.invalidationSignal);
       const existingSummaryIds = await collectExistingSummaryIds(
         acquiredClient.client,
         options.sessionId,
@@ -2262,7 +2499,11 @@ export class OpenCodeClient {
         existingSummaryIds,
         deadline,
       );
+      // この確認が compact 成功の線形化点。listener と lease を保持したまま
+      // 成功を確定し、後続の同一セッション操作へ lease を譲渡する。
+      throwIfSharedServerInvalidated(acquiredClient.invalidationSignal);
     } finally {
+      removeServerInvalidationListener?.();
       acquired?.release();
       deadline.cleanup();
     }

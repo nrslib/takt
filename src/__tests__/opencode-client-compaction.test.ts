@@ -192,6 +192,255 @@ describe('OpenCodeClient compactSession', () => {
     await compactRejection;
   });
 
+  it('Given a sibling session invalidates the shared server When compactSession is active Then compaction fails closed', async () => {
+    const abortGate = (() => {
+      let resolve!: (value: { data?: boolean }) => void;
+      const promise = new Promise<{ data?: boolean }>((resolvePromise) => {
+        resolve = resolvePromise;
+      });
+      return { promise, resolve };
+    })();
+    const messages = vi.fn().mockImplementation(
+      (_payload: unknown, requestOptions: SummarizeRequestOptions) => new Promise<never>((_resolve, reject) => {
+        requestOptions.signal?.addEventListener('abort', () => {
+          reject(new Error('SDK messages aborted'));
+        }, { once: true });
+      }),
+    );
+    const promptAsync = vi.fn().mockResolvedValue(undefined);
+    const abort = vi.fn().mockImplementation(() => abortGate.promise);
+    const subscribe = vi.fn().mockResolvedValue({
+      stream: (async function* () {
+        for (const id of ['tool-part-1', 'tool-part-2']) {
+          yield {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id,
+                sessionID: 'session-invalidating-compaction',
+                type: 'tool',
+                callID: id,
+                tool: 'run',
+                state: {
+                  status: 'error',
+                  input: {},
+                  error: "Model tried to call unavailable tool 'run'. Available tools: bash, read.",
+                },
+              },
+            },
+          };
+        }
+      })(),
+    });
+    const serverClose = vi.fn();
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn(),
+          promptAsync,
+          abort,
+          summarize: vi.fn(),
+          messages,
+        },
+        event: { subscribe },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: serverClose },
+    });
+    const client = new OpenCodeClient();
+
+    const compactPromise = client.compactSession({
+      cwd: '/repo',
+      sessionId: 'session-compacting',
+      model: 'opencode/big-pickle',
+    });
+    await vi.waitFor(() => expect(messages).toHaveBeenCalledTimes(1));
+
+    const invalidatingCall = client.call('coder', 'invalidate during compaction', {
+      cwd: '/repo',
+      model: 'opencode/big-pickle',
+      sessionId: 'session-invalidating-compaction',
+    });
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledTimes(1));
+    abortGate.resolve({ data: false });
+
+    await expect(invalidatingCall).resolves.toMatchObject({
+      status: 'error',
+      content: expect.stringContaining('OpenCode server session abort failed'),
+    });
+    await expect(compactPromise).rejects.toThrow('OpenCode server session abort failed');
+    expect(serverClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given final summary polling has resolved When the shared invalidation signal fires before compact returns Then compaction fails closed', async () => {
+    const finalPoll = (() => {
+      let resolve!: (value: { data: unknown[] }) => void;
+      const promise = new Promise<{ data: unknown[] }>((resolvePromise) => {
+        resolve = resolvePromise;
+      });
+      return { promise, resolve };
+    })();
+    let messagesCallCount = 0;
+    const messages = vi.fn().mockImplementation(() => {
+      messagesCallCount += 1;
+      return messagesCallCount === 1
+        ? Promise.resolve({ data: [] })
+        : finalPoll.promise;
+    });
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn(),
+          promptAsync: vi.fn(),
+          summarize: vi.fn().mockResolvedValue({ data: { id: 'session-compacting-final-poll' } }),
+          messages,
+        },
+        event: { subscribe: vi.fn() },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const originalAddEventListener = AbortSignal.prototype.addEventListener;
+    let sharedInvalidationSignal: AbortSignal | undefined;
+    const addEventListenerSpy = vi.spyOn(AbortSignal.prototype, 'addEventListener')
+      .mockImplementation(function (this: AbortSignal, ...args: Parameters<AbortSignal['addEventListener']>) {
+        if (args[0] === 'abort' && sharedInvalidationSignal === undefined) {
+          sharedInvalidationSignal = this;
+        }
+        return originalAddEventListener.call(this, ...args);
+      });
+
+    try {
+      const client = new OpenCodeClient();
+      const compactPromise = client.compactSession({
+        cwd: '/repo',
+        sessionId: 'session-compacting-final-poll',
+        model: 'opencode/big-pickle',
+      });
+      await vi.waitFor(() => expect(messages).toHaveBeenCalledTimes(2));
+      expect(sharedInvalidationSignal).toBeDefined();
+
+      const completedSummary = {
+        info: {
+          id: 'summary-final-poll',
+          role: 'assistant',
+          summary: true,
+          time: { completed: 1 },
+        },
+      };
+      finalPoll.resolve({
+        get data(): unknown[] {
+          Object.defineProperties(sharedInvalidationSignal!, {
+            aborted: { configurable: true, value: true },
+            reason: { configurable: true, value: new Error('server invalidated after final poll') },
+          });
+          sharedInvalidationSignal!.dispatchEvent(new Event('abort'));
+          return [completedSummary];
+        },
+      });
+
+      await expect(compactPromise).rejects.toThrow('OpenCode shared server is unavailable');
+    } finally {
+      addEventListenerSpy.mockRestore();
+    }
+  });
+
+  it('Given a queued successor invalidates after compact completion When compactSession releases its lease Then it does not fail the completed compaction', async () => {
+    const finalPoll = (() => {
+      let resolve!: (value: { data: unknown[] }) => void;
+      const promise = new Promise<{ data: unknown[] }>((resolvePromise) => {
+        resolve = resolvePromise;
+      });
+      return { promise, resolve };
+    })();
+    let messagesCallCount = 0;
+    const messages = vi.fn().mockImplementation(() => {
+      messagesCallCount += 1;
+      return messagesCallCount === 1 ? Promise.resolve({ data: [] }) : finalPoll.promise;
+    });
+    const abortGate = (() => {
+      let resolve!: (value: { data?: boolean }) => void;
+      const promise = new Promise<{ data?: boolean }>((resolvePromise) => {
+        resolve = resolvePromise;
+      });
+      return { promise, resolve };
+    })();
+    const abort = vi.fn().mockImplementation(() => abortGate.promise);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn(),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          summarize: vi.fn().mockResolvedValue({ data: { id: 'session-compact-linearization' } }),
+          messages,
+          abort,
+        },
+        event: {
+          subscribe: vi.fn().mockResolvedValue({
+            stream: (async function* () {
+              for (const id of ['tool-part-1', 'tool-part-2']) {
+                yield {
+                  type: 'message.part.updated',
+                  properties: {
+                    part: {
+                      id,
+                      sessionID: 'session-compact-linearization',
+                      type: 'tool',
+                      callID: id,
+                      tool: 'run',
+                      state: {
+                        status: 'error',
+                        input: {},
+                        error: "Model tried to call unavailable tool 'run'. Available tools: bash, read.",
+                      },
+                    },
+                  },
+                };
+              }
+            })(),
+          }),
+        },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+    const client = new OpenCodeClient();
+    const compactPromise = client.compactSession({
+      cwd: '/repo',
+      sessionId: 'session-compact-linearization',
+      model: 'opencode/big-pickle',
+    });
+    await vi.waitFor(() => expect(messages).toHaveBeenCalledTimes(2));
+
+    const queuedCall = client.call('coder', 'invalidate after compact', {
+      cwd: '/repo',
+      sessionId: 'session-compact-linearization',
+      model: 'opencode/big-pickle',
+    });
+    finalPoll.resolve({
+      data: [{
+        info: {
+          id: 'summary-compact-linearization',
+          role: 'assistant',
+          summary: true,
+          time: { completed: 1 },
+        },
+      }],
+    });
+
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledTimes(1));
+    abortGate.resolve({ data: false });
+
+    await expect(compactPromise).resolves.toBeUndefined();
+    await expect(queuedCall).resolves.toMatchObject({
+      status: 'error',
+      content: expect.stringContaining('OpenCode server session abort failed'),
+    });
+  });
+
   it('Given session summarize throws synchronously When compactSession fails Then it removes the external abort listener', async () => {
     const summarize = vi.fn()
       .mockImplementationOnce(() => {

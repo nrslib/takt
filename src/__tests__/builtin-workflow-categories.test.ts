@@ -34,7 +34,7 @@ describe('builtin workflow categories', () => {
       const workflows = Object.values(parsed.workflow_categories ?? {}).flatMap((node) => collectWorkflows(node));
 
       expect(workflows).toContain('auto-improvement-loop');
-      expect(workflows).toContain('takt-default-enhancement');
+      expect(workflows).toContain('takt-default-high');
     });
   }
 });

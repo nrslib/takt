@@ -7,7 +7,7 @@ import {
   denormalizeProviderOptions,
   denormalizeRateLimitFallback,
   denormalizeTelemetryConfig,
-  denormalizeAutoRoutingConfig,
+  denormalizeConfigAutoRoutingConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -47,7 +47,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (rawTelemetry) {
     raw.telemetry = rawTelemetry;
   }
-  const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
+  const rawAutoRouting = denormalizeConfigAutoRoutingConfig(config.autoRouting);
   if (rawAutoRouting) {
     raw.auto_routing = rawAutoRouting;
   }
@@ -248,6 +248,12 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   if (config.syncProjectLocalTaktOnRetry !== undefined) {
     raw.sync_project_local_takt_on_retry = config.syncProjectLocalTaktOnRetry;
+  }
+  if (config.autoRequeueMaxAttempts !== undefined) {
+    raw.auto_requeue_max_attempts = config.autoRequeueMaxAttempts;
+  }
+  if (config.ignoreExceed !== undefined) {
+    raw.ignore_exceed = config.ignoreExceed;
   }
   return raw;
 }

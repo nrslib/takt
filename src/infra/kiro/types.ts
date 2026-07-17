@@ -5,6 +5,7 @@ export interface KiroCallOptions {
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  model?: string;
   systemPrompt?: string;
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;

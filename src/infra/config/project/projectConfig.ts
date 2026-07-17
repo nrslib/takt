@@ -1,7 +1,6 @@
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { stringify } from 'yaml';
 import { ProjectConfigSchema } from '../../../core/models/index.js';
-import type { QualityGate } from '../../../core/models/workflow-types.js';
 import { copyProjectResourcesToDir } from '../../resources/index.js';
 import type { ProjectConfig } from '../types.js';
 import type { TaktProviderConfigEntry } from '../../../core/models/config-types.js';
@@ -26,8 +25,8 @@ import {
   denormalizeWorkflowOverrides,
   normalizeRuntime,
   normalizeRateLimitFallback,
-  normalizeAutoRoutingConfig,
-  denormalizeAutoRoutingConfig,
+  normalizeConfigAutoRoutingConfig,
+  denormalizeConfigAutoRoutingConfig,
   denormalizeRateLimitFallback,
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
@@ -107,6 +106,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     runtime,
     rate_limit_fallback,
     sync_project_local_takt_on_retry,
+    auto_requeue_max_attempts,
+    ignore_exceed,
     sync_conflict_resolver,
     observability,
   } = parsedConfigResult;
@@ -169,6 +170,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     taskPollIntervalMs: task_poll_interval_ms as number | undefined,
     interactivePreviewSteps: resolveAliasedPreviewCount(parsedConfigResult as Record<string, unknown>),
     syncProjectLocalTaktOnRetry: sync_project_local_takt_on_retry as boolean | undefined,
+    autoRequeueMaxAttempts: auto_requeue_max_attempts as number | undefined,
+    ignoreExceed: ignore_exceed as boolean | undefined,
     allowGitHooks: allow_git_hooks as boolean | undefined,
     allowGitFilters: allow_git_filters as boolean | undefined,
     autoPr: auto_pr as boolean | undefined,
@@ -186,7 +189,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     provider: normalizedProvider.provider,
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
-    autoRouting: normalizeAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
+    autoRouting: normalizeConfigAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -194,12 +197,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
         step_permission_overrides?: Record<string, string>;
       }> | undefined,
     ),
-    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides as {
-      quality_gates?: QualityGate[];
-      quality_gates_edit_only?: boolean;
-      steps?: Record<string, { quality_gates?: QualityGate[] }>;
-      personas?: Record<string, { quality_gates?: QualityGate[] }>;
-    } | undefined),
+    workflowOverrides: normalizeWorkflowOverrides(parsedConfigResult.workflow_overrides),
     runtime: normalizeRuntime(runtime),
     workflowRuntimePrepare: normalizeWorkflowRuntimePreparePolicy(parsedConfigResult.workflow_runtime_prepare),
     workflowCommandGates: normalizeWorkflowCommandGatesPolicy(parsedConfigResult.workflow_command_gates),
@@ -247,7 +245,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     delete savePayload.telemetry;
   }
 
-  const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
+  const rawAutoRouting = denormalizeConfigAutoRoutingConfig(config.autoRouting);
   if (rawAutoRouting) {
     savePayload.auto_routing = rawAutoRouting;
   } else {
@@ -279,7 +277,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.rate_limit_fallback;
   }
-  for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewSteps', 'interactive_preview_steps'], ['syncProjectLocalTaktOnRetry', 'sync_project_local_takt_on_retry'], ['concurrency', 'concurrency']] as const) {
+  for (const [camel, snake] of [['language', 'language'], ['autoPr', 'auto_pr'], ['draftPr', 'draft_pr'], ['allowGitHooks', 'allow_git_hooks'], ['allowGitFilters', 'allow_git_filters'], ['vcsProvider', 'vcs_provider'], ['baseBranch', 'base_branch'], ['branchNameStrategy', 'branch_name_strategy'], ['minimalOutput', 'minimal_output'], ['taskPollIntervalMs', 'task_poll_interval_ms'], ['interactivePreviewSteps', 'interactive_preview_steps'], ['syncProjectLocalTaktOnRetry', 'sync_project_local_takt_on_retry'], ['autoRequeueMaxAttempts', 'auto_requeue_max_attempts'], ['ignoreExceed', 'ignore_exceed'], ['concurrency', 'concurrency']] as const) {
     if (config[camel] !== undefined) savePayload[snake] = config[camel];
   }
   delete savePayload.pipeline;
@@ -325,7 +323,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

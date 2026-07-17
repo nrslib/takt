@@ -18,11 +18,13 @@ import { executeRunTaskAndComplete, type RunTaskExecutionContext } from '../exec
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
 import { ShutdownManager } from '../execute/shutdownManager.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from '../execute/types.js';
+import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
 
-function resolveWatchExecutionOptions(options?: RunAllTasksOptions): {
+function resolveWatchExecutionOptions(cwd: string, options?: RunAllTasksOptions): {
   agentOverrides?: TaskExecutionOptions;
   runContext?: RunTaskExecutionContext;
 } {
+  const resolvedConfig = resolveWorkflowConfigValues(cwd, ['ignoreExceed']);
   const agentOverrides: TaskExecutionOptions | undefined = options
     ? {
         ...(options.provider !== undefined ? { provider: options.provider } : {}),
@@ -35,7 +37,7 @@ function resolveWatchExecutionOptions(options?: RunAllTasksOptions): {
 
   return {
     agentOverrides,
-    runContext: options?.ignoreExceed === true
+    runContext: options?.ignoreExceed === true || resolvedConfig.ignoreExceed === true
       ? { ignoreIterationLimit: true }
       : undefined,
   };
@@ -46,10 +48,10 @@ function resolveWatchExecutionOptions(options?: RunAllTasksOptions): {
  * Runs until Ctrl+C.
  */
 export async function watchTasks(cwd: string, options?: RunAllTasksOptions): Promise<void> {
+  const { agentOverrides, runContext } = resolveWatchExecutionOptions(cwd, options);
   const taskRunner = new TaskRunner(cwd, { onWarning: warn });
   const watcher = new TaskWatcher(cwd);
   const failedInterrupted = taskRunner.failInterruptedRunningTasks();
-  const { agentOverrides, runContext } = resolveWatchExecutionOptions(options);
 
   let taskCount = 0;
   let successCount = 0;

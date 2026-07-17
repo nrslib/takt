@@ -21,8 +21,13 @@
 - `for-local-llm` ファミリーで `implement` の行き詰まりを ABORT ではなく `plan`（再計画）へ流すようにしました (#1009)。`write_tests` と `fix` の既存挙動に揃えたものです。ABORT はループモニターの裁定・要件不明確・レビュー対立に限定されます。
 - 同梱 SDK を更新: `@openai/codex-sdk` 0.144.1 / `@anthropic-ai/claude-agent-sdk` 0.3.206 (#1015)。同梱の Codex CLI が GPT-5.6 モデルファミリー（`gpt-5.6-sol`・`gpt-5.6-terra`・`gpt-5.6-luna`）を認識するようになり、codex プロバイダの `model` に指定できます。
 
+### Removed
+
+- `takt-default-refresh-all` と `takt-default-refresh-fast` を削除しました。代わりに `takt-default` または `takt-default-high` を使用してください。削除済み workflow を参照する保存済み task/run は、再試行または resume の前に workflow を切り替えるか、再作成が必要です。
+
 ### Fixed
 
+- `takt_providers.assistant` が `instruct` / `retry` 対話にも適用されるよう修正（従来はインタラクティブ計画会話のみ）(#1011)。
 - OpenCode の無音タイムアウト時にセッションを検死し、プロバイダの 429 を `rate_limited` として分類 (#985, #1010)。OpenCode サーバはプロバイダの 429 を内部リトライで握り `session.error` を流さないため、レート制限されたセッションが進捗ゼロのストールに見え、無音ウォッチドッグがエンジンのレート制限バックオフへ接続せずに落としていました。無音タイムアウトで abort した場合に限り、セッションの最後の assistant メッセージを（5 秒の上限付きで）照会し、429 系エラーを `rate_limited` として返します。
 - Finding Contract の異議申告が `language: ja` でも機能するようになり、index 状態由来の finding を防止 (#1012, #1014)。FC の指示文が英語固定で ja では異議申告の入口が細かったため、機械照合されるトークン（`## Disputed Findings`・フィールド名）は英語のまま散文をローカライズしました。正当な異議を封じていた coder ペルソナの「レビュワーの指摘は絶対。反論しない」という姿勢を証拠の規律へ書き換えました。git ルールに「index/staging の状態を証拠として扱わない」を追加し、TAKT 管理の実行で充足不能な「このファイルをコミットせよ」finding を防ぎます。
 - 異議申告ルートで陳腐化した finding をエンドツーエンドでカバー (#993)。異議申告ガイダンスが現行コードと矛盾する finding（再修正の前に実態と照合し、新しい file:line 証拠で異議を申告する）をカバーするようになり、review-fix のループ判定は「修正は着地したのに finding が残り続ける」状態を、中断ではなく再計画+異議申告で解ける findings 側のデッドロックとして扱います。

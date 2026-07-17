@@ -833,6 +833,46 @@ steps:
     expect(messages).toContain('Unreachable steps: step1');
   });
 
+  it('reports invalid auto_requeue_max_attempts from resolved project config', () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', 'auto_requeue_max_attempts: -1\n');
+    invalidateAllResolvedConfigCache();
+
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/valid.yaml', `name: valid
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('auto_requeue_max_attempts');
+  });
+
+  it('reports invalid ignore_exceed from resolved project config', () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', 'ignore_exceed: 1\n');
+    invalidateAllResolvedConfigCache();
+
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/valid.yaml', `name: valid
+max_steps: 10
+initial_step: step1
+steps:
+  - name: step1
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const messages = inspectWorkflowFile(filePath, projectDir).diagnostics.map((item) => item.message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('ignore_exceed');
+  });
+
   it('reports unused section entries as warnings', () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/unused.yaml', `name: unused
 max_steps: 10

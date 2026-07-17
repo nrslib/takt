@@ -11,6 +11,8 @@ export interface LoadedConfig
   taskPollIntervalMs: NonNullable<ProjectConfig['taskPollIntervalMs']>;
   interactivePreviewSteps: NonNullable<ProjectConfig['interactivePreviewSteps']>;
   syncProjectLocalTaktOnRetry: NonNullable<ProjectConfig['syncProjectLocalTaktOnRetry']>;
+  autoRequeueMaxAttempts: NonNullable<ProjectConfig['autoRequeueMaxAttempts']>;
+  ignoreExceed: NonNullable<ProjectConfig['ignoreExceed']>;
 }
 
 export type ConfigParameterKey = keyof LoadedConfig;

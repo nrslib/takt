@@ -58,8 +58,6 @@ const FIRST_SUFFIX_WORKFLOWS = [
 
 /** 1次レビューが ai-antipattern-review.md を書く系譜（従来参照のまま）。 */
 const PLAIN_NAME_WORKFLOWS = [
-  'takt-default-refresh-all',
-  'takt-default-refresh-fast',
   'backend',
   'backend-cqrs',
   'backend-maintenance',

@@ -61,6 +61,67 @@ describe('workflowCallResolver module boundary', () => {
     expect(workflowLoader).not.toHaveProperty('validateWorkflowCallRulesAgainstChildReturns');
   });
 
+  it('loads a callable command quality gate with timeout_ms through workflow_call resolution', () => {
+    writeProjectWorkflow('parent.yaml', `name: parent
+initial_step: delegate
+max_steps: 3
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeProjectWorkflow('child.yaml', `name: child
+subworkflow:
+  callable: true
+  visibility: internal
+initial_step: implement
+max_steps: 3
+steps:
+  - name: implement
+    persona: coder
+    edit: true
+    quality_gates:
+      - type: command
+        name: quality-check
+        command: "./.takt/quality-gates/check.sh"
+        timeout_ms: 900000
+    instruction: Implement the feature
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeFileSync(
+      join(projectDir, '.takt', 'config.yaml'),
+      'workflow_command_gates:\n  custom_scripts: true\n',
+      'utf-8',
+    );
+
+    const parentWorkflow = loadProjectWorkflow('parent.yaml');
+    expect(parentWorkflow).not.toBeNull();
+
+    const childWorkflow = workflowCallResolver.resolveWorkflowCallTarget(
+      parentWorkflow!,
+      findWorkflowCallStep(parentWorkflow!, 'delegate'),
+      projectDir,
+      projectDir,
+    );
+
+    expect(childWorkflow).not.toBeNull();
+    expect(childWorkflow!.steps.find((step) => step.name === 'implement')?.qualityGates).toEqual([
+      {
+        type: 'command',
+        name: 'quality-check',
+        command: './.takt/quality-gates/check.sh',
+        timeoutMs: 900000,
+      },
+    ]);
+  });
+
   it('prefers parent workflow metadata over fallback context for nested relative workflow_call resolution', () => {
     const rootWorkflowPath = join(externalDir, 'root.yaml');
     const childWorkflowPath = join(externalDir, 'child', 'child.yaml');

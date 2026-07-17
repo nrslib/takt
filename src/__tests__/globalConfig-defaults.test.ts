@@ -465,6 +465,9 @@ describe('loadGlobalConfig', () => {
         'language: en',
         'provider: auto',
         'auto_routing:',
+        '  default_provider:',
+        '    provider: mock',
+        '    model: global-default-model',
         '  strategy: balanced',
         '  router:',
         '    provider: claude-sdk',
@@ -490,10 +493,13 @@ describe('loadGlobalConfig', () => {
     expect(reloaded.autoRouting).toEqual(loaded.autoRouting);
     const raw = readFileSync(getGlobalConfigPath(), 'utf-8');
     expect(raw).toContain('auto_routing:');
+    expect(raw).toContain('default_provider:');
+    expect(raw).toContain('model: global-default-model');
     expect(raw).toContain('cost_tier: medium');
     expect(raw).toContain('provider_options:');
     expect(raw).toContain('reasoning_effort: high');
     expect(raw).not.toContain('autoRouting:');
+    expect(raw).not.toContain('defaultProvider:');
     expect(raw).not.toContain('costTier:');
     expect(raw).not.toContain('providerOptions:');
   });
@@ -1302,6 +1308,39 @@ describe('loadGlobalConfig', () => {
 
       const reloaded = loadGlobalConfig() as Record<string, unknown>;
       expect(reloaded.syncProjectLocalTaktOnRetry).toBe(false);
+    });
+  });
+
+  describe('run retry global config', () => {
+    it('should load auto_requeue_max_attempts and ignore_exceed from config.yaml', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        ['language: en', 'auto_requeue_max_attempts: 3', 'ignore_exceed: true'].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig() as Record<string, unknown>;
+
+      expect(config.autoRequeueMaxAttempts).toBe(3);
+      expect(config.ignoreExceed).toBe(true);
+    });
+
+    it('should save and reload auto_requeue_max_attempts and ignore_exceed', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig() as Record<string, unknown>;
+      config.autoRequeueMaxAttempts = 3;
+      config.ignoreExceed = true;
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig() as Record<string, unknown>;
+      expect(reloaded.autoRequeueMaxAttempts).toBe(3);
+      expect(reloaded.ignoreExceed).toBe(true);
     });
   });
 

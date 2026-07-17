@@ -15,6 +15,7 @@ const {
   mockSuccess,
   mockWarn,
   mockError,
+  mockResolveWorkflowConfigValues,
 } = vi.hoisted(() => ({
   mockFailInterruptedRunningTasks: vi.fn(),
   mockGetTasksFilePath: vi.fn(),
@@ -29,6 +30,7 @@ const {
   mockSuccess: vi.fn(),
   mockWarn: vi.fn(),
   mockError: vi.fn(),
+  mockResolveWorkflowConfigValues: vi.fn(),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -64,6 +66,10 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string) => key),
 }));
 
+vi.mock('../infra/config/index.js', () => ({
+  resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
+}));
+
 import { watchTasks } from '../features/tasks/watch/index.js';
 
 describe('watchTasks', () => {
@@ -72,6 +78,7 @@ describe('watchTasks', () => {
     mockFailInterruptedRunningTasks.mockReturnValue(0);
     mockGetTasksFilePath.mockReturnValue('/project/.takt/tasks.yaml');
     mockExecuteRunTaskAndComplete.mockResolvedValue(true);
+    mockResolveWorkflowConfigValues.mockReturnValue({ ignoreExceed: false });
 
     mockWatch.mockImplementation(async (onTask: (task: TaskInfo) => Promise<void>) => {
       await onTask({
@@ -110,22 +117,50 @@ describe('watchTasks', () => {
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
   });
 
+  it('config 解決が失敗した場合は task 状態変更と watch 開始を行わない', async () => {
+    mockResolveWorkflowConfigValues.mockImplementation(() => {
+      throw new Error('Invalid config');
+    });
+
+    await expect(watchTasks('/project')).rejects.toThrow('Invalid config');
+
+    expect(mockFailInterruptedRunningTasks).not.toHaveBeenCalled();
+    expect(mockWatch).not.toHaveBeenCalled();
+    expect(mockExecuteRunTaskAndComplete).not.toHaveBeenCalled();
+  });
+
+  it('config 由来の ignoreExceed を runContext に変換する', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({ ignoreExceed: true });
+
+    await watchTasks('/project');
+
+    expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith('/project', ['ignoreExceed']);
+    expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      '/project',
+      undefined,
+      undefined,
+      { ignoreIterationLimit: true },
+    );
+  });
+
   it('ignoreExceed を runContext に変換しつつ agentOverrides を維持する', async () => {
     await watchTasks('/project', {
-      provider: 'openai',
+      provider: 'codex',
       providerSource: 'cli',
       model: 'gpt-5',
       modelSource: 'cli',
       autoStrategy: 'balanced',
       ignoreExceed: true,
-    } as never);
+    });
 
     expect(mockExecuteRunTaskAndComplete).toHaveBeenCalledWith(
       expect.any(Object),
       expect.any(Object),
       '/project',
       {
-        provider: 'openai',
+        provider: 'codex',
         providerSource: 'cli',
         model: 'gpt-5',
         modelSource: 'cli',

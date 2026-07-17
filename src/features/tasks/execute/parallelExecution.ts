@@ -11,7 +11,7 @@
  * for an active task to complete.
  */
 
-import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
+import type { AutoRequeueSkipReason, TaskRunner, TaskInfo } from '../../../infra/task/index.js';
 import { info, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { EXIT_SIGINT } from '../../../shared/exitCodes.js';
@@ -31,6 +31,7 @@ export interface WorkerPoolResult {
 
 interface RunWorkerOptions {
   ignoreIterationLimit?: boolean;
+  autoRequeueMaxAttempts?: number;
 }
 
 type RaceResult =
@@ -171,7 +172,7 @@ export async function runWithWorkerPool(
           executedTaskNames.push(task.name);
           if (settled.result) {
             successCount++;
-          } else {
+          } else if (abortController.signal.aborted || !tryAutoRequeueFailedTask(taskRunner, task, runOptions)) {
             failCount++;
           }
         }
@@ -196,6 +197,53 @@ export async function runWithWorkerPool(
   }
 
   return { success: successCount, fail: failCount, executedTaskNames };
+}
+
+export function attemptAutoRequeueTask(
+  taskRunner: TaskRunner,
+  taskName: string,
+  maxAttempts: number,
+): boolean {
+  if (maxAttempts <= 0) {
+    return false;
+  }
+  const result = taskRunner.autoRequeueFailedTask(taskName, { maxAttempts });
+  if (result.requeued) {
+    info(`Task "${taskName}" auto-requeued (${result.attempt}/${result.maxAttempts})`);
+    return true;
+  }
+  info(
+    `Task "${taskName}" was not auto-requeued: ${formatAutoRequeueSkipReason(result.reason)} `
+    + `(${result.attempt}/${result.maxAttempts})`,
+  );
+  return false;
+}
+
+function tryAutoRequeueFailedTask(
+  taskRunner: TaskRunner,
+  task: TaskInfo,
+  runOptions: RunWorkerOptions | undefined,
+): boolean {
+  const maxAttempts = runOptions?.autoRequeueMaxAttempts;
+  if (maxAttempts === undefined) {
+    return false;
+  }
+  return attemptAutoRequeueTask(taskRunner, task.name, maxAttempts);
+}
+
+function formatAutoRequeueSkipReason(reason: AutoRequeueSkipReason): string {
+  switch (reason) {
+    case 'disabled':
+      return 'auto requeue is disabled';
+    case 'task_not_failed':
+      return 'task is not failed';
+    case 'max_attempts_reached':
+      return 'max attempts reached';
+    case 'missing_failed_step':
+      return 'failed step is missing';
+    case 'missing_failure_detail':
+      return 'failure detail is missing';
+  }
 }
 
 function fillSlots(
@@ -235,7 +283,7 @@ function fillSlots(
       taskPrefix: isParallel ? taskPrefix : undefined,
       taskColorIndex: isParallel ? colorIndex : undefined,
       taskDisplayLabel: isParallel ? taskDisplayLabel : undefined,
-    }, runOptions);
+    }, runOptions?.ignoreIterationLimit === true ? { ignoreIterationLimit: true } : undefined);
     active.set(promise, task);
   }
 }

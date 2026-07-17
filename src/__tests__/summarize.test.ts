@@ -10,6 +10,7 @@ vi.mock('../infra/providers/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(),
+  resolveNonWorkflowProviderModel: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -22,11 +23,15 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
-import { resolveConfigValues } from '../infra/config/index.js';
+import {
+  resolveConfigValues,
+  resolveNonWorkflowProviderModel,
+} from '../infra/config/index.js';
 import { summarizeTaskName } from '../infra/task/summarize.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockResolveConfigValues = vi.mocked(resolveConfigValues);
+const mockResolveNonWorkflowProviderModel = vi.mocked(resolveNonWorkflowProviderModel);
 
 const mockProviderCall = vi.fn();
 const mockGetRuntimeInstructions = vi.fn(() => null);
@@ -45,6 +50,10 @@ beforeEach(() => {
     provider: 'claude',
     model: undefined,
     branchNameStrategy: 'ai',
+  });
+  mockResolveNonWorkflowProviderModel.mockReturnValue({
+    provider: 'claude',
+    model: undefined,
   });
 });
 
@@ -168,9 +177,11 @@ describe('summarizeTaskName', () => {
   it('should use provider from config.yaml', async () => {
     // Given: config has codex provider with branchNameStrategy: 'ai'
     mockResolveConfigValues.mockReturnValue({
+      branchNameStrategy: 'ai',
+    });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
       provider: 'codex',
       model: 'gpt-4',
-      branchNameStrategy: 'ai',
     });
     mockProviderCall.mockResolvedValue({
       persona: 'summarizer',
@@ -189,6 +200,54 @@ describe('summarizeTaskName', () => {
       expect.objectContaining({
         model: 'gpt-4',
       })
+    );
+  });
+
+  it('should use the concrete default provider and model for auto AI summarization', async () => {
+    mockResolveConfigValues.mockReturnValue({
+      provider: 'auto',
+      branchNameStrategy: 'ai',
+    });
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'mock',
+      model: 'default-summary-model',
+    });
+    mockProviderCall.mockResolvedValue({
+      persona: 'summarizer',
+      status: 'done',
+      content: 'auto-default-slug',
+      timestamp: new Date(),
+    });
+
+    const result = await summarizeTaskName('test auto provider', { cwd: '/project' });
+
+    expect(result).toBe('auto-default-slug');
+    expect(mockResolveNonWorkflowProviderModel).toHaveBeenCalledWith('/project');
+    expect(mockGetProvider).toHaveBeenCalledWith('mock');
+    expect(mockGetProvider).not.toHaveBeenCalledWith('auto');
+    expect(mockProviderCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ model: 'default-summary-model' }),
+    );
+  });
+
+  it('should leave model undefined when the selected default provider omits it', async () => {
+    mockResolveNonWorkflowProviderModel.mockReturnValue({
+      provider: 'mock',
+      model: undefined,
+    });
+    mockProviderCall.mockResolvedValue({
+      persona: 'summarizer',
+      status: 'done',
+      content: 'provider-default-model',
+      timestamp: new Date(),
+    });
+
+    await summarizeTaskName('test provider default model', { cwd: '/project' });
+
+    expect(mockProviderCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ model: undefined }),
     );
   });
 
@@ -240,6 +299,7 @@ describe('summarizeTaskName', () => {
 
     // Then: should not call provider, should return romaji
     expect(mockProviderCall).not.toHaveBeenCalled();
+    expect(mockResolveNonWorkflowProviderModel).not.toHaveBeenCalled();
     expect(result).toMatch(/^[a-z0-9-]+$/);
     expect(result.length).toBeLessThanOrEqual(30);
   });

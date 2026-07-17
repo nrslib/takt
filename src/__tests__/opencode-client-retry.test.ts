@@ -100,7 +100,14 @@ function installOpenCodeMock() {
     server: { close: vi.fn() },
   });
 
-  return { sessionCreate, promptAsync, subscribe };
+  return {
+    sessionCreate,
+    promptAsync,
+    subscribe,
+    setActiveSessionId: (sessionId: string) => {
+      activeSessionId = sessionId;
+    },
+  };
 }
 
 describe('OpenCodeClient retry', () => {
@@ -197,36 +204,51 @@ describe('OpenCodeClient retry', () => {
               delta: 'timeout retry succeeded',
             },
           },
-          { type: 'session.idle', properties: { sessionID: 'session-1' } },
+          { type: 'session.idle', properties: { sessionID: 'session-timeout-retry-2' } },
         ],
       },
     ];
 
-    const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
+    const { sessionCreate, promptAsync, subscribe, setActiveSessionId } = installOpenCodeMock();
+    sessionCreate
+      .mockReset()
+      .mockImplementationOnce(() => {
+        setActiveSessionId('session-timeout-retry-1');
+        return Promise.resolve({ data: { id: 'session-timeout-retry-1' } });
+      })
+      .mockImplementationOnce(() => {
+        setActiveSessionId('session-timeout-retry-2');
+        return Promise.resolve({ data: { id: 'session-timeout-retry-2' } });
+      });
     const client = new OpenCodeClient();
     const resultPromise = client.call('coder', 'prompt', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
     });
 
+    await vi.waitFor(() => {
+      expect(sessionCreate).toHaveBeenCalledTimes(1);
+      expect(promptAsync).toHaveBeenCalledTimes(1);
+    });
     await vi.advanceTimersByTimeAsync(OPENCODE_STREAM_IDLE_TIMEOUT_MS - 1);
     expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(sessionCreate).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(249);
-    expect(sessionCreate).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
     const result = await resultPromise;
 
+    expect(result.status, JSON.stringify(result)).toBe('done');
     expect(sessionCreate).toHaveBeenCalledTimes(2);
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(subscribe).toHaveBeenCalledTimes(2);
-    expect(result.status).toBe('done');
     expect(result.content).toBe('timeout retry succeeded');
+    expect(promptAsync.mock.calls[0][0].sessionID).toBe('session-timeout-retry-1');
+    expect(promptAsync.mock.calls[1][0].sessionID).toBe('session-timeout-retry-2');
+    expect(promptAsync.mock.calls[0][0].sessionID).not.toBe(promptAsync.mock.calls[1][0].sessionID);
   });
 
   it('ストリームの idle timeout は 2 回 retry 後に停止する', async () => {
@@ -240,6 +262,11 @@ describe('OpenCodeClient retry', () => {
     }));
 
     const { sessionCreate, promptAsync, subscribe } = installOpenCodeMock();
+    sessionCreate
+      .mockReset()
+      .mockResolvedValueOnce({ data: { id: 'session-fail-1' } })
+      .mockResolvedValueOnce({ data: { id: 'session-fail-2' } })
+      .mockResolvedValueOnce({ data: { id: 'session-fail-3' } });
     const client = new OpenCodeClient();
     const resultPromise = client.call('coder', 'prompt', {
       cwd: '/tmp',
@@ -260,6 +287,11 @@ describe('OpenCodeClient retry', () => {
     expect(sessionCreate).toHaveBeenCalledTimes(3);
     expect(promptAsync).toHaveBeenCalledTimes(3);
     expect(subscribe).toHaveBeenCalledTimes(3);
+    expect(promptAsync.mock.calls[0][0].sessionID).toBe('session-fail-1');
+    expect(promptAsync.mock.calls[1][0].sessionID).toBe('session-fail-2');
+    expect(promptAsync.mock.calls[2][0].sessionID).toBe('session-fail-3');
+    expect(promptAsync.mock.calls[0][0].sessionID).not.toBe(promptAsync.mock.calls[1][0].sessionID);
+    expect(promptAsync.mock.calls[1][0].sessionID).not.toBe(promptAsync.mock.calls[2][0].sessionID);
     expect(result.status).toBe('error');
     expect(result.content).toBe('OpenCode stream timed out after 10 minutes of inactivity');
   });

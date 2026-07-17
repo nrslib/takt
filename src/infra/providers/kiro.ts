@@ -19,9 +19,6 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
   if (options.outputSchema) {
     log.info('Kiro provider does not support outputSchema; ignoring');
   }
-  if (options.model) {
-    log.info('Kiro provider does not support model CLI flag; ignoring');
-  }
   if (options.imageAttachments && options.imageAttachments.length > 0) {
     log.info('Kiro provider does not support imageAttachments; ignoring');
   }
@@ -30,6 +27,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    model: options.model,
     systemPrompt,
     permissionMode: options.permissionMode,
     onStream: options.onStream,

@@ -67,13 +67,11 @@ workflow_categories:
   🎵 TAKT Development:
     workflows:
       - takt-default
-      - takt-default-refresh-all
-      - takt-default-refresh-fast
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
       - takt-default-for-local-llm
-      - takt-default-enhancement
+      - takt-default-high
   🖥️ Local LLM:
     workflows:
       - takt-default-for-local-llm

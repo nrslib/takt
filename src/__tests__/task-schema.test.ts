@@ -500,6 +500,30 @@ describe('TaskRecordSchema', () => {
     })).not.toThrow();
   });
 
+  it('should accept and serialize auto_requeue_count when present', () => {
+    const parsed = TaskRecordSchema.parse({
+      ...makeFailedRecord(),
+      auto_requeue_count: 2,
+    }) as Record<string, unknown>;
+    const serialized = serializeTaskRecord(parsed as never);
+
+    expect(parsed.auto_requeue_count).toBe(2);
+    expect(serialized).toMatchObject({
+      auto_requeue_count: 2,
+    });
+  });
+
+  it('should reject invalid auto_requeue_count values', () => {
+    expect(() => TaskRecordSchema.parse({
+      ...makeFailedRecord(),
+      auto_requeue_count: -1,
+    })).toThrow();
+    expect(() => TaskRecordSchema.parse({
+      ...makeFailedRecord(),
+      auto_requeue_count: 1.5,
+    })).toThrow();
+  });
+
   it('should accept positive safe integer task id fields', () => {
     expect(() => TaskRecordSchema.parse({
       ...makePendingRecord(),

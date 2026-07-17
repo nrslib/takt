@@ -7,7 +7,7 @@ import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService } from './taskDeletionService.js';
 import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
 import type { WorkflowResumePoint } from '../../core/models/index.js';
-import { TaskRetryService } from './taskRetryService.js';
+import { TaskRetryService, type AutoRequeueResult } from './taskRetryService.js';
 
 export type { TaskInfo, TaskResult, TaskListItem };
 
@@ -115,6 +115,10 @@ export class TaskRunner {
 
   requeueFailedTask(taskRef: string, startStep?: string, retryNote?: string): string {
     return this.retry.requeueFailedTask(taskRef, startStep, retryNote);
+  }
+
+  autoRequeueFailedTask(taskRef: string, options: { maxAttempts: number }): AutoRequeueResult {
+    return this.retry.autoRequeueFailedTask(taskRef, options);
   }
 
   requeueTask(

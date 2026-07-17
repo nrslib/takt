@@ -1,5 +1,8 @@
-import { resolveConfigValues } from '../../infra/config/index.js';
-import { getProvider, type ProviderType } from '../../infra/providers/index.js';
+import {
+  resolveConfigValues,
+  resolveNonWorkflowProviderModel,
+} from '../../infra/config/index.js';
+import { getProvider } from '../../infra/providers/index.js';
 import {
   resolveAssistantProviderModelFromConfig,
   type AssistantCliOverrides,
@@ -12,17 +15,15 @@ export function initializeSession(
   personaName: string,
   assistantCliOverrides?: AssistantCliOverrides,
 ): SessionContext {
-  const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
-  const lang = globalConfig.language === 'ja' ? 'ja' : 'en';
-  const resolvedProviderModel = personaName === 'interactive'
+  const { language } = resolveConfigValues(cwd, ['language']);
+  const lang = language === 'ja' ? 'ja' : 'en';
+  const usesAssistantProvider = ['interactive', 'instruct', 'retry'].includes(personaName);
+  const resolvedProviderModel = usesAssistantProvider
     ? resolveAssistantProviderModelFromConfig(
       resolveAssistantConfigLayers(cwd),
       assistantCliOverrides,
     )
-    : {
-      provider: globalConfig.provider as ProviderType | undefined,
-      model: globalConfig.model as string | undefined,
-    };
+    : resolveNonWorkflowProviderModel(cwd);
   const { provider: resolvedProvider, model } = resolvedProviderModel;
   if (!resolvedProvider) {
     throw new Error('Provider is not configured.');
