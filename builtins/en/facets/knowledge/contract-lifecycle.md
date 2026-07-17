@@ -23,6 +23,18 @@ Equivalent entry and resolution paths must not silently apply different contract
 | A retry, replay, import, or derived path changes a contract's meaning without a specification | REJECT |
 | Equivalent paths intentionally differ and the original requirement or specification defines the distinction | OK |
 
+## Entry-Specific Paths and Resource Ownership
+
+Requirements have distinct paths for each public entry and execution mode, defined by their producers, validators, and consumers. Resource lifetime follows ownership, ownership transfer, and the last consumer; durable artifacts needed for investigation or resumption differ from temporary resources.
+
+| Criterion | Verdict |
+|-----------|---------|
+| A CLI, API, pipeline, retry, or other mode differs in any producer, validator, or consumer | Treat it as a separate path. Satisfying one path does not prove another |
+| A path is excluded without evidence that it is unreachable or unaffected by the contract | REJECT |
+| A resource is released before its last consumer while ownership or ownership transfer is unclear | REJECT |
+| A durable artifact needed for investigation or resumption is removed as though it were temporary | REJECT |
+| Success, failure, interruption, and retry preserve a lifetime contract based on ownership and the last consumer | OK |
+
 ## Resolution Against the Original Contract
 
 Resolving a finding requires rechecking the original acceptance criteria and all paths of that defect class.

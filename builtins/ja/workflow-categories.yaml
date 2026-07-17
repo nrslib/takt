@@ -73,6 +73,7 @@ workflow_categories:
       - review-takt-default
       - review-fix-takt-default
       - takt-default-for-local-llm
+      - takt-default-enhancement
   🖥️ ローカルLLM:
     workflows:
       - takt-default-for-local-llm

@@ -200,7 +200,7 @@ steps:
       - ai-antipattern
     provider_options:
       extends: review-readonly
-    instruction: ai-antipattern-review
+    instruction: ai-antipattern-review-for-local-llm
     rules:
       - condition: AI特有の問題なし
         next: reviewers
@@ -209,7 +209,7 @@ steps:
     output_contracts:
       report:
         - name: ai-antipattern-review-1st.md
-          format: ai-antipattern-review
+          format: ai-antipattern-review-finding-contract
 
   - name: ai-antipattern-fix
     tags:
@@ -258,7 +258,7 @@ steps:
     tags:
       - review
     edit: false
-    persona: architecture-reviewer
+    persona: architecture-reviewer-for-local-llm
     policy: review
     provider_options:
       extends: review-files
@@ -277,13 +277,13 @@ steps:
         tags:
           - review
         edit: false
-        session: compact
-        persona: architecture-reviewer
+        session: refresh
+        persona: architecture-reviewer-for-local-llm
         policy:
           - review
         knowledge:
           - architecture
-        instruction: review-arch
+        instruction: review-arch-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -297,13 +297,13 @@ steps:
         tags:
           - review
         edit: false
-        session: compact
+        session: refresh
         persona: ai-antipattern-reviewer
         policy:
           - review
           - ai-antipattern
         pass_previous_response: false
-        instruction: ai-antipattern-review
+        instruction: ai-antipattern-review-for-local-llm
         rules:
           - condition: AI特有の問題なし
           - condition: AI特有の問題あり
@@ -316,13 +316,13 @@ steps:
         tags:
           - review
         edit: false
-        session: compact
+        session: refresh
         persona: coding-reviewer
         policy:
           - review
           - coding
         pass_previous_response: false
-        instruction: review-coding
+        instruction: review-coding-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -335,14 +335,14 @@ steps:
         tags:
           - review
         edit: false
-        session: compact
+        session: refresh
         persona: implementation-semantics-reviewer
         policy:
           - review
         knowledge:
           - implementation-semantics
         pass_previous_response: false
-        instruction: review-implementation-semantics
+        instruction: review-implementation-semantics-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -355,14 +355,14 @@ steps:
         tags:
           - review
         edit: false
-        session: compact
+        session: refresh
         persona: contract-lifecycle-reviewer
         policy:
           - review
         knowledge:
           - contract-lifecycle
         pass_previous_response: false
-        instruction: contract-lifecycle-review
+        instruction: contract-lifecycle-review-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -375,14 +375,14 @@ steps:
         tags:
           - review
         edit: false
-        session: compact
+        session: refresh
         persona: robustness-reviewer
         policy:
           - review
         knowledge:
           - robustness
         pass_previous_response: false
-        instruction: robustness-review
+        instruction: robustness-review-for-local-llm
         rules:
           - condition: approved
           - condition: needs_fix
@@ -466,7 +466,7 @@ steps:
         provider_options:
           extends: review-readonly
         pass_previous_response: false
-        instruction: supervise
+        instruction: supervise-finding-contract
         rules:
           - condition: approved
           - condition: needs_fix
@@ -474,9 +474,9 @@ steps:
         output_contracts:
           report:
             - name: supervisor-validation.md
-              format: supervisor-validation
-            - name: summary.md
-              format: summary
+              format: supervisor-validation-finding-contract
+            - name: supervisor-gate-summary.md
+              format: supervisor-gate-summary-finding-contract
               use_judge: false
     rules:
       # review-integrity ゲート（codex 対策#4 / 検証ブロッカー#1）: 未昇格の

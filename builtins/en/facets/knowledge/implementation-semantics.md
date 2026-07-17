@@ -112,3 +112,13 @@ When a store or read model returns references to its internal state as-is, calle
 | The collection is copied but the stored objects themselves are shared (shallow copy only) | REJECT |
 | Mutating an obtained reference rewrites the persisted state | REJECT |
 | Internal state is protected via defensive copies, freezing, or read-only views | OK |
+
+## Identifier Namespace Collisions
+
+Generated IDs, tokens, and keys must not collide with either existing input namespaces or downstream syntax. Having a unique source of sequence numbers is different from having a collision-free identifier.
+
+| Criterion | Verdict |
+|-----------|---------|
+| A generated value can collide with existing input, reserved words, delimiter syntax, or downstream persistence, display, or lookup interpretation | REJECT |
+| The sequence source is unique but downstream code cannot distinguish the identifier from another value | REJECT |
+| A namespace distinguishable from both existing input and downstream syntax is proven | OK |

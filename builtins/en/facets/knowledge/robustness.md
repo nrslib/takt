@@ -33,3 +33,15 @@ Partial success is a contract only when callers can distinguish it and the speci
 | Some effects persist but the result reports all-or-nothing success | REJECT |
 | Partial completion is visible but callers lack the information needed to continue or compensate | REJECT |
 | The specification defines partial completion and its result, retry, and compensation semantics | OK |
+
+## Input Bounds and Observable Partial Results
+
+An external-input hard cap applies before input-proportional buffering, decoding, parsing, expansion, or writing, or while streaming. Partial success or skips become observable outcomes only when callers or users can identify failed items, whether continuation is possible, and the partial result.
+
+| Criterion | Verdict |
+|-----------|---------|
+| A size check occurs only after the full input is acquired, allowing input-proportional memory use | REJECT |
+| A hard cap is enforced before input-proportional processing or while streaming | OK |
+| The limit relies only on metadata or an upstream guarantee that no primary contract can prove | REJECT |
+| Skips or partial failures appear successful overall or do not identify the failed items | REJECT |
+| Callers or users can observe failed items, whether continuation is possible, and the partial result | OK |

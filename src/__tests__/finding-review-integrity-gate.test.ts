@@ -14,10 +14,14 @@
  *      NEEDS_ADJUDICATION）が、有限回だけ再レビューしてから人手裁定へ収束する。
  * を検証する。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { ingestFindingContractResultsMock } = vi.hoisted(() => ({
+  ingestFindingContractResultsMock: vi.fn(),
+}));
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -27,11 +31,26 @@ vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn((provider: string) => ({ supportsStructuredOutput: provider !== 'cursor' })),
 }));
 
+vi.mock('../core/workflow/findings/snapshot.js', () => ({
+  computeReviewScopeSnapshotId: vi.fn(() => 'test-review-snapshot'),
+}));
+
 vi.mock('../core/workflow/phase-runner.js', () => ({
   needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/findings/contract-intake.js')>();
+  return {
+    ...actual,
+    ingestFindingContractResults: async (...args: Parameters<typeof actual.ingestFindingContractResults>) => {
+      ingestFindingContractResultsMock();
+      return actual.ingestFindingContractResults(...args);
+    },
+  };
+});
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import type { WorkflowConfig } from '../core/models/index.js';
@@ -271,5 +290,53 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(ledger.reviewerAnomalies).toHaveLength(1);
     expect(ledger.reviewerAnomalies?.[0]?.promotedFindingId).toBeUndefined();
     expect(ledger.reviewerAnomalies?.[0]?.occurrences).toBeGreaterThanOrEqual(1);
+  });
+
+  it('final-gate supervisor は2つのFinding Contract報告を出しても、ステップごとに1回だけ取り込み、raw findingを重複保存しない', async () => {
+    mockReviewerEmitsHallucination();
+    const config: WorkflowConfig = {
+      name: 'supervisor-two-reports',
+      maxSteps: 4,
+      initialStep: 'supervise',
+      provider: 'claude',
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [
+        makeStep({
+          name: 'supervise',
+          persona: 'supervisor',
+          instruction: 'Supervise the final gate.',
+          outputContracts: [
+            { name: 'supervisor-validation.md', format: 'validation', formatRef: 'supervisor-validation-finding-contract' },
+            { name: 'supervisor-gate-summary.md', format: 'summary', formatRef: 'supervisor-gate-summary-finding-contract' },
+          ],
+          rules: [makeRule('approved', 'COMPLETE')],
+        }),
+      ],
+    };
+
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+      detectRuleIndex: () => 0,
+    });
+    await engine.run();
+
+    expect(ingestFindingContractResultsMock).toHaveBeenCalledOnce();
+    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
+      options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
+    ));
+    expect(reviewerCalls).toHaveLength(1);
+
+    const rawFindingsDir = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw');
+    const rawFindingFiles = readdirSync(rawFindingsDir);
+    expect(rawFindingFiles).toHaveLength(1);
+    const rawFindings = JSON.parse(readFileSync(join(rawFindingsDir, rawFindingFiles[0]), 'utf-8')) as Array<{ rawFindingId: string }>;
+    expect(rawFindings).toHaveLength(1);
+    expect(new Set(rawFindings.map((finding) => finding.rawFindingId)).size).toBe(rawFindings.length);
   });
 });
