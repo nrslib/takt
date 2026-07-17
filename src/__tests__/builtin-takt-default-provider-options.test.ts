@@ -286,7 +286,10 @@ describe('builtin takt-default provider_options refs', () => {
       ]);
       for (const monitor of workflow.loop_monitors ?? []) {
         expect(monitor.threshold).toBe(5);
-        expect(monitor.judge?.rules?.at(-1)?.next).toBe('ABORT');
+        expect(monitor.judge?.rules?.map((rule) => rule.next)).toEqual([
+          'reviewers',
+          'ABORT',
+        ]);
       }
     });
 
