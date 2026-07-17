@@ -33,13 +33,11 @@ loop_monitors:
     threshold: 5
     judge:
       persona: supervisor
-      instruction: loop-monitor-peer-review-fix
+      instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: 検証可能な前進（以前のopen findingが1件以上解消し、停滞・同一familyの移動・未変更領域の後出しがない）
+        - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 証拠不足（履歴の欠落・破損・矛盾により解消または因果関係を検証できない）
-          next: reviewers
-        - condition: 非生産的（以前のopen findingが1件も解消しない、または停滞・同一familyの移動・未変更領域の後出しがある）
+        - condition: 非生産的（同じ指摘が繰り返される）
           next: ABORT
   - cycle:
       - reviewers
@@ -48,13 +46,11 @@ loop_monitors:
     threshold: 5
     judge:
       persona: supervisor
-      instruction: loop-monitor-peer-review-fix
+      instruction: loop-monitor-reviewers-fix
       rules:
-        - condition: 検証可能な前進（以前のopen findingが1件以上解消し、停滞・同一familyの移動・未変更領域の後出しがない）
+        - condition: 健全（指摘数が減少、修正が反映されている）
           next: reviewers
-        - condition: 証拠不足（履歴の欠落・破損・矛盾により解消または因果関係を検証できない）
-          next: reviewers
-        - condition: 非生産的（以前のopen findingが1件も解消しない、または停滞・同一familyの移動・未変更領域の後出しがある）
+        - condition: 非生産的（同じ指摘が繰り返される）
           next: ABORT
 steps:
   - name: reviewers

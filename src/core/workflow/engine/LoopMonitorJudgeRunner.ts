@@ -36,18 +36,7 @@ export class LoopMonitorJudgeRunner {
     fallbackNextStep: string,
   ): Promise<string> {
     const resolvedRuntime = this.resolveJudgeRuntime(monitor, triggeringStep, triggeringRuntime);
-    const windowEndIteration = this.deps.state.iteration;
-    const windowStartIteration = Math.max(
-      1,
-      windowEndIteration - (cycleCount * monitor.cycle.length) + 1,
-    );
-    const judgeStep = this.createJudgeStep(
-      monitor,
-      cycleCount,
-      windowStartIteration,
-      windowEndIteration,
-      resolvedRuntime.providerInfo,
-    );
+    const judgeStep = this.createJudgeStep(monitor, cycleCount, resolvedRuntime.providerInfo);
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
       cycleCount,
@@ -108,15 +97,10 @@ export class LoopMonitorJudgeRunner {
   private createJudgeStep(
     monitor: LoopMonitorConfig,
     cycleCount: number,
-    windowStartIteration: number,
-    windowEndIteration: number,
     providerInfo: StepProviderInfo | undefined,
   ): WorkflowStep {
     const instruction = (monitor.judge.instruction ?? this.buildDefaultInstruction(monitor, cycleCount))
-      .replace(/\{cycle_count\}/g, String(cycleCount))
-      .replace(/\{cycle_steps\}/g, monitor.cycle.join(' → '))
-      .replace(/\{window_start_iteration\}/g, String(windowStartIteration))
-      .replace(/\{window_end_iteration\}/g, String(windowEndIteration));
+      .replace(/\{cycle_count\}/g, String(cycleCount));
     const defaultProviderOptions = this.buildDefaultProviderOptions(providerInfo?.provider);
 
     return {

@@ -12,7 +12,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -128,17 +127,14 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       const config = buildConfigWithLoopMonitor(2, {
         judge: {
           persona: 'supervisor',
-          instruction: 'The loop repeated {cycle_count} times in [{cycle_steps}] during {window_start_iteration}-{window_end_iteration}. Reports: {report_dir}',
+          instruction: 'The loop repeated {cycle_count} times.',
           rules: [
             { condition: 'Healthy', next: 'ai_review' },
             { condition: 'Unproductive', next: 'reviewers' },
           ],
         },
       });
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        reportDirName: 'loop-monitor-report-dir',
-      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         // implement
@@ -178,13 +174,8 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(cycleDetectedFn).toHaveBeenCalledOnce();
       expect(cycleDetectedFn.mock.calls[0][1]).toBe(2); // cycleCount
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
-      expect(judgeCall?.[1]).toContain('The loop repeated 2 times in [ai_review → ai_fix] during 2-5.');
-      expect(judgeCall?.[1]).toContain(`Reports: ${join(tmpDir, '.takt/runs/loop-monitor-report-dir/reports')}`);
+      expect(judgeCall?.[1]).toContain('The loop repeated 2 times.');
       expect(judgeCall?.[1]).not.toContain('{cycle_count}');
-      expect(judgeCall?.[1]).not.toContain('{cycle_steps}');
-      expect(judgeCall?.[1]).not.toContain('{window_start_iteration}');
-      expect(judgeCall?.[1]).not.toContain('{window_end_iteration}');
-      expect(judgeCall?.[1]).not.toContain('{report_dir}');
       // 7 iterations: implement + ai_review + ai_fix + ai_review + ai_fix + judge + reviewers
       expect(state.iteration).toBe(7);
     });

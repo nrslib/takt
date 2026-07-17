@@ -24,7 +24,6 @@ interface BuiltinWorkflowRaw {
     cycle?: string[];
     threshold?: number;
     judge?: {
-      instruction?: string;
       rules?: Array<{ condition?: string; next?: string }>;
     };
   }>;
@@ -77,6 +76,7 @@ const PEER_REVIEW_OUTPUT_CONTRACTS = [
   ...PEER_REVIEW_PARALLEL_OUTPUT_CONTRACTS,
   'merge-readiness-review',
 ] as const;
+
 function workflowDir(locale: 'en' | 'ja'): string {
   return join(process.cwd(), 'builtins', locale, 'workflows');
 }
@@ -277,7 +277,7 @@ describe('builtin takt-default provider_options refs', () => {
       expect(normalized.findingContract).toBeUndefined();
     });
 
-    it(`${locale} peer-review should continue without evidence and abort unproductive fix loops`, () => {
+    it(`${locale} peer-review should abort both unproductive fix loops`, () => {
       const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
 
       expect(workflow.loop_monitors?.map((monitor) => monitor.cycle)).toEqual([
@@ -286,12 +286,7 @@ describe('builtin takt-default provider_options refs', () => {
       ]);
       for (const monitor of workflow.loop_monitors ?? []) {
         expect(monitor.threshold).toBe(5);
-        expect(monitor.judge?.instruction).toBe('loop-monitor-peer-review-fix');
-        expect(monitor.judge?.rules?.map((rule) => rule.next)).toEqual([
-          'reviewers',
-          'reviewers',
-          'ABORT',
-        ]);
+        expect(monitor.judge?.rules?.at(-1)?.next).toBe('ABORT');
       }
     });
 
