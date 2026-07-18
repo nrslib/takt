@@ -109,7 +109,6 @@ Verifying that the full test suite passes is not the reviewer's responsibility. 
 | Reproduced your own finding by operating on or executing the target code | OK (required for findings) |
 | Verified the main changed behaviors with targeted execution or tests | OK (recommended) |
 | Referenced the fixing step's execution records (build, changed-scope tests) | OK (no re-run needed) |
-| Re-running the full suite yourself and spending review time on it | Unnecessary (switch to targeted execution) |
 | Closing an individual finding based solely on full-suite passage | REJECT |
 | A behavioral claim not reproduced or verified by execution | REJECT |
 
