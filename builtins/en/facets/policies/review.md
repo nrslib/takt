@@ -102,18 +102,18 @@ Checks that only inspect configuration values, logs, snapshots, or the last obse
 
 ### Division of Verification Responsibility
 
-Verifying that the full test suite passes is not the reviewer's responsibility. The fixing step's quality gates cover the build, static checks, and tests for the changed scope; the final gate immediately before merge covers the full suite. Reviewers do not re-run the full suite and instead spend that time reproducing findings and running risk-based targeted checks.
+Verifying that the full test suite passes is not the reviewer's responsibility. The fixing step's quality gates cover verification of the changed scope (whatever gates are imposed on it, such as the build, static checks, and changed-scope tests); the final gate immediately before merge covers the full suite. Reviewers do not re-run the full suite and instead spend that time reproducing findings and running risk-based targeted checks.
 
 | Evidence | Judgment |
 |----------|----------|
 | Reproduced your own behavioral finding by operating on or executing the target code | OK (required for behavioral findings) |
 | Verified a statically determinable finding (types, contracts, specs, non-executable assets) by reading and cross-checking the relevant sources | OK |
 | Verified the main changed behaviors with targeted execution or tests | OK (recommended) |
-| Referenced the fixing step's execution records (build, changed-scope tests) | OK (no re-run needed) |
+| Referenced the execution records of all quality gates imposed on the fixing step | OK (no re-run needed) |
 | Closing an individual finding based solely on full-suite passage | REJECT |
 | A behavioral claim not reproduced or verified by execution | REJECT |
 
-If the fixing step's execution records lack evidence of the build or changed-scope tests, report that fact as a finding. Full-suite evidence is the final gate's responsibility, so do not demand it from the fixing step.
+If the fixing step's execution records lack evidence for any of its imposed quality gates, report that fact as a finding. Full-suite evidence is the final gate's responsibility, so do not demand it from the fixing step.
 
 Exception: when suite execution is imposed on your own step as a quality gate (the final-gate role), follow the gate's instructions and run it. This section governs reviewers without such gates not spending time on the full suite; it does not exempt an imposed gate.
 
