@@ -199,8 +199,13 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain(`Invalid facet type: ${safeFacetType}`);
-    expect(result.stderr).not.toContain(facetType);
+    const errorLine = result.stderr
+      .split('\n')
+      .find((line) => line.includes('Invalid facet type:'));
+    expect(errorLine).toContain(`Invalid facet type: ${safeFacetType}`);
+    // The observed error line must not leak raw control characters (C0/DEL/C1)
+    // eslint-disable-next-line no-control-regex
+    expect(errorLine).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
   });
 
   it('should eject individual facet to global ~/.takt/ with --global', () => {
