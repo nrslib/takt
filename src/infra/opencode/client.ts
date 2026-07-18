@@ -141,6 +141,15 @@ interface AcquiredOpenCodeClient {
 let nextProvisionalId = 1;
 
 const sharedServers = new Map<string, SharedServerEntry>();
+let exitCleanupRegistered = false;
+
+function registerSharedServerExitCleanup(): void {
+  if (exitCleanupRegistered) {
+    return;
+  }
+  process.once('exit', resetSharedServer);
+  exitCleanupRegistered = true;
+}
 
 async function acquireClient(
   model: string,
@@ -167,6 +176,7 @@ async function acquireClient(
   entry.initPromise = createSharedServer(model, apiKey, childProcessEnv)
     .then((server) => {
       entry.server = server;
+      registerSharedServerExitCleanup();
       return server;
     })
     .finally(() => {

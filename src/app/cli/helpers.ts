@@ -5,9 +5,9 @@
  */
 
 import type { Command } from 'commander';
-import type { TaskExecutionOptions } from '../../features/tasks/index.js';
+import type { TaskExecutionOptions } from '../../features/tasks/execute/types.js';
 import type { AutoRoutingStrategy, ProviderTypeOrAuto } from '../../core/models/config-types.js';
-import { isIssueReference } from '../../infra/git/index.js';
+import { isIssueReference } from '../../infra/git/format.js';
 
 const REMOVED_ROOT_COMMANDS = new Set(['switch']);
 const AUTO_ROUTING_STRATEGIES = new Set(['cost', 'balanced', 'performance']);

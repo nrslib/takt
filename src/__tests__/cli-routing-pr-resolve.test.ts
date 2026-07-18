@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+let mockPipelineMode = false;
+
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
   success: vi.fn(),
@@ -113,10 +115,12 @@ vi.mock('../app/cli/program.js', () => {
   };
   return {
     program: chainable,
-    resolvedCwd: '/test/cwd',
-    pipelineMode: false,
   };
 });
+
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: mockPipelineMode })),
+}));
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),
@@ -175,6 +179,7 @@ function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: st
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPipelineMode = false;
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
   }
@@ -559,34 +564,22 @@ describe('PR resolution in routing', () => {
 
   describe('--pr in pipeline mode', () => {
     it('should pass prNumber to executePipeline', async () => {
-      // Given: override pipelineMode
-      const programModule = await import('../app/cli/program.js');
-      const originalPipelineMode = programModule.pipelineMode;
-      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
-
+      mockPipelineMode = true;
       mockOpts.pr = 456;
       mockOpts.workflow = 'default';
       mockExecutePipeline.mockResolvedValue(0);
 
-      // When
       await executeDefaultAction();
 
-      // Then
       expect(mockExecutePipeline).toHaveBeenCalledWith(
         expect.objectContaining({
           prNumber: 456,
         }),
       );
-
-      // Cleanup
-      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
 
     it('should pass --workflow to executePipeline as workflow', async () => {
-      const programModule = await import('../app/cli/program.js');
-      const originalPipelineMode = programModule.pipelineMode;
-      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
-
+      mockPipelineMode = true;
       mockOpts.workflow = 'migration-workflow';
       mockExecutePipeline.mockResolvedValue(0);
 
@@ -597,15 +590,10 @@ describe('PR resolution in routing', () => {
           workflow: 'migration-workflow',
         }),
       );
-
-      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
 
     it('should exit with error when workflow is omitted in pipeline mode', async () => {
-      const programModule = await import('../app/cli/program.js');
-      const originalPipelineMode = programModule.pipelineMode;
-      Object.defineProperty(programModule, 'pipelineMode', { value: true, writable: true });
-
+      mockPipelineMode = true;
       mockOpts.pr = 456;
       const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
         throw new Error('process.exit called');
@@ -617,8 +605,6 @@ describe('PR resolution in routing', () => {
       expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('--workflow'));
       expect(mockExecutePipeline).not.toHaveBeenCalled();
       mockExit.mockRestore();
-
-      Object.defineProperty(programModule, 'pipelineMode', { value: originalPipelineMode, writable: true });
     });
   });
 

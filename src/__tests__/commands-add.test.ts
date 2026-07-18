@@ -4,6 +4,10 @@ const mockOpts: Record<string, unknown> = {};
 const mockAddTask = vi.fn();
 const mockLogError = vi.fn();
 const mockProcessExit = vi.fn();
+const mockDeploySkillCodex = vi.fn();
+const mockGetRoutingTelemetryStatus = vi.fn(() => ({ localRecordingEnabled: true }));
+const mockEnableRoutingTelemetry = vi.fn(() => ({ localRecordingEnabled: true }));
+const mockDisableRoutingTelemetry = vi.fn(() => ({ localRecordingEnabled: false }));
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   const commandActions = new Map<string, (...args: unknown[]) => void>();
@@ -51,20 +55,10 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
 
 vi.mock('../app/cli/program.js', () => ({
   program: rootCommand,
-  resolvedCwd: '/test/cwd',
-  pipelineMode: false,
 }));
 
-vi.mock('../infra/config/index.js', () => ({
-  clearPersonaSessions: vi.fn(),
-  disableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: false })),
-  enableRoutingTelemetry: vi.fn(() => ({ localRecordingEnabled: true })),
-  getRoutingTelemetryStatus: vi.fn(() => ({ localRecordingEnabled: true })),
-  resolveConfigValue: vi.fn(),
-}));
-
-vi.mock('../infra/config/paths.js', () => ({
-  getGlobalConfigDir: vi.fn(() => '/tmp/takt'),
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: false })),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -73,59 +67,21 @@ vi.mock('../shared/ui/index.js', () => ({
   error: (...args: unknown[]) => mockLogError(...args),
 }));
 
-vi.mock('../features/tasks/index.js', () => ({
-  runAllTasks: vi.fn(),
+vi.mock('../features/tasks/add/index.js', () => ({
   addTask: (...args: unknown[]) => mockAddTask(...args),
-  watchTasks: vi.fn(),
-  listTasks: vi.fn(),
 }));
 
-vi.mock('../features/config/index.js', () => ({
-  ejectBuiltin: vi.fn(),
-  ejectFacet: vi.fn(),
-  parseFacetType: vi.fn(),
-  VALID_FACET_TYPES: ['personas', 'policies', 'knowledge', 'instructions', 'output-contracts'],
-  resetCategoriesToDefault: vi.fn(),
-  resetConfigToDefault: vi.fn(),
-  deploySkill: vi.fn(),
-  deploySkillCodex: vi.fn(),
+vi.mock('../features/config/deploySkillCodex.js', () => ({
+  deploySkillCodex: (...args: unknown[]) => mockDeploySkillCodex(...args),
 }));
 
-vi.mock('../features/prompt/index.js', () => ({
-  previewPrompts: vi.fn(),
-}));
-
-vi.mock('../features/catalog/index.js', () => ({
-  showCatalog: vi.fn(),
-}));
-
-vi.mock('../features/workflowAuthoring/index.js', () => ({
-  initWorkflowCommand: vi.fn(),
-  doctorWorkflowCommand: vi.fn(),
-}));
-
-vi.mock('../features/analytics/index.js', () => ({
-  computeReviewMetrics: vi.fn(),
-  formatReviewMetrics: vi.fn(),
-  parseSinceDuration: vi.fn(),
-  purgeOldEvents: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/add.js', () => ({
-  repertoireAddCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/remove.js', () => ({
-  repertoireRemoveCommand: vi.fn(),
-}));
-
-vi.mock('../commands/repertoire/list.js', () => ({
-  repertoireListCommand: vi.fn(),
+vi.mock('../infra/config/global/globalConfigAccessors.js', () => ({
+  getRoutingTelemetryStatus: (...args: unknown[]) => mockGetRoutingTelemetryStatus(...args),
+  enableRoutingTelemetry: (...args: unknown[]) => mockEnableRoutingTelemetry(...args),
+  disableRoutingTelemetry: (...args: unknown[]) => mockDisableRoutingTelemetry(...args),
 }));
 
 import '../app/cli/commands.js';
-const configFeatures = await import('../features/config/index.js');
-const infraConfig = await import('../infra/config/index.js');
 const sharedUi = await import('../shared/ui/index.js');
 
 describe('CLI add command', () => {
@@ -133,6 +89,10 @@ describe('CLI add command', () => {
     mockAddTask.mockClear();
     mockLogError.mockClear();
     mockProcessExit.mockClear();
+    mockDeploySkillCodex.mockClear();
+    mockGetRoutingTelemetryStatus.mockClear();
+    mockEnableRoutingTelemetry.mockClear();
+    mockDisableRoutingTelemetry.mockClear();
     vi.mocked(sharedUi.info).mockClear();
     vi.mocked(sharedUi.success).mockClear();
     for (const key of Object.keys(mockOpts)) {
@@ -198,8 +158,7 @@ describe('CLI add command', () => {
     expect(exportCodexAction).toBeTypeOf('function');
 
     await exportCodexAction?.();
-    const deploySkillCodex = (configFeatures as Record<string, unknown>).deploySkillCodex;
-    expect(deploySkillCodex).toHaveBeenCalledTimes(1);
+    expect(mockDeploySkillCodex).toHaveBeenCalledTimes(1);
   });
 
   it('should describe prompt workflow argument as defaulting to "default"', () => {
@@ -221,7 +180,7 @@ describe('CLI add command', () => {
     expect(ejectCommand?.argument).toHaveBeenNthCalledWith(
       1,
       '[typeOrName]',
-      'Workflow name, or facet type (personas, policies, knowledge, instructions, output-contracts)',
+      'Workflow name, or facet type (persona, policy, knowledge, instruction, output-contract)',
     );
   });
 
@@ -253,9 +212,9 @@ describe('CLI add command', () => {
     await enableAction?.();
     await disableAction?.();
 
-    expect(infraConfig.getRoutingTelemetryStatus).toHaveBeenCalledWith('/test/cwd');
-    expect(infraConfig.enableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
-    expect(infraConfig.disableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
+    expect(mockGetRoutingTelemetryStatus).toHaveBeenCalledWith('/test/cwd');
+    expect(mockEnableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
+    expect(mockDisableRoutingTelemetry).toHaveBeenCalledWith('/test/cwd');
     const messages = [
       ...vi.mocked(sharedUi.info).mock.calls.map((call) => String(call[0])),
       ...vi.mocked(sharedUi.success).mock.calls.map((call) => String(call[0])),
