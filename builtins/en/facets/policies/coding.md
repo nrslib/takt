@@ -420,6 +420,8 @@ When changing contracts that other code or users depend on — types, interfaces
 ## State Management
 
 - Confine state to where it is used
+- Do not directly mutate values owned by callers, shared state, or values exposed externally
+- A function or test may mutate a local accumulator collection that it creates internally and never exposes
 - Children do not modify state directly (notify parents via events)
 - State flow is unidirectional
 - Do not keep derived values that can be computed from canonical state as independent state
@@ -632,7 +634,7 @@ Verification approach:
 - **Unused code** - Do not write "just in case" code
 - **Unfinished code** - Do not leave TODO/FIXME without an issue number, external blocker, and removal condition; do not leave stubs or commented-out old code
 - **any type** - Do not break type safety
-- **Direct mutation of objects/arrays** - Create new instances with spread operators
+- **Direct mutation of objects/arrays outside local ownership** - Do not mutate caller-owned, shared, or externally exposed values; create new values instead
 - **console.log** - Do not leave in production code
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited

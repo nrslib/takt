@@ -30,6 +30,7 @@ import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js
 import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
+import { recordDelegatedAgentUsage } from './delegated-agent-usage.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -128,47 +129,77 @@ export class TeamLeaderRunner {
       throw new Error('structuredCaller is required for team leader execution');
     }
     const leaderStartedAt = Date.now();
-    const parts = await runWithPhaseSpan(
-      {
-        enabled: this.deps.observabilityEnabled,
-        runId: this.deps.observabilityRunId,
-        workflowName: this.deps.getWorkflowName(),
-        step: leaderStep,
-        iteration: parentIteration,
-        phase: 1,
-        phaseName: 'execute',
-        instruction,
-        phaseExecutionId,
-        workflowStack: this.deps.getCurrentWorkflowStack?.(),
-        sanitizeText: this.deps.sanitizeObservabilityText,
-        providerInfo: leaderProviderInfo,
-        getPromptParts: () => resolvedPromptParts,
-      },
-      () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxTotalParts, {
-        cwd: this.deps.getCwd(),
-        persona: leaderStep.persona,
-        personaPath: leaderStep.personaPath,
-        model: leaderModel,
-        provider: leaderProvider,
-        resolvedModel: leaderModel,
-        resolvedProvider: leaderProvider,
-        language: this.deps.engineOptions.language,
-        inspectTools,
-        mcpServers: leaderMcpServers,
-        workflowMeta: leaderWorkflowMeta,
-        childProcessEnv: this.deps.engineOptions.childProcessEnv,
-        onStream: this.deps.engineOptions.onStream,
-        onPromptResolved: (promptParts) => {
-          if (didEmitPhaseStart) return;
-          resolvedPromptParts = promptParts;
-          this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, parentIteration);
-          didEmitPhaseStart = true;
+    let parts: PartDefinition[];
+    let leaderProviderUsage: AgentResponse['providerUsage'];
+    let didRecordLeaderUsage = false;
+    try {
+      const decomposition = await runWithPhaseSpan(
+        {
+          enabled: this.deps.observabilityEnabled,
+          runId: this.deps.observabilityRunId,
+          workflowName: this.deps.getWorkflowName(),
+          step: leaderStep,
+          iteration: parentIteration,
+          phase: 1,
+          phaseName: 'execute',
+          instruction,
+          phaseExecutionId,
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          sanitizeText: this.deps.sanitizeObservabilityText,
+          providerInfo: leaderProviderInfo,
+          getPromptParts: () => resolvedPromptParts,
         },
-      }), (result) => ({
-        status: 'done',
-        content: JSON.stringify({ parts: result }, null, 2),
-      }),
-    );
+        () => structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxTotalParts, {
+          cwd: this.deps.getCwd(),
+          persona: leaderStep.persona,
+          personaPath: leaderStep.personaPath,
+          model: leaderModel,
+          provider: leaderProvider,
+          resolvedModel: leaderModel,
+          resolvedProvider: leaderProvider,
+          language: this.deps.engineOptions.language,
+          inspectTools,
+          mcpServers: leaderMcpServers,
+          workflowMeta: leaderWorkflowMeta,
+          childProcessEnv: this.deps.engineOptions.childProcessEnv,
+          abortSignal: leaderBaseOptions.abortSignal,
+          onStream: leaderBaseOptions.onStream,
+          onAgentResponse: (response) => {
+            didRecordLeaderUsage = true;
+            this.recordUsage(
+              leaderStep.name,
+              leaderProviderInfo,
+              response.status === 'done',
+              response.providerUsage,
+            );
+          },
+          onAgentError: () => {
+            didRecordLeaderUsage = true;
+            this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+          },
+          onPromptResolved: (promptParts) => {
+            if (didEmitPhaseStart) return;
+            resolvedPromptParts = promptParts;
+            this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, parentIteration);
+            didEmitPhaseStart = true;
+          },
+        }), (result) => ({
+          status: 'done',
+          content: JSON.stringify({ parts: result.parts }, null, 2),
+        }),
+      );
+      parts = decomposition.parts;
+      leaderProviderUsage = decomposition.providerUsage;
+      if (!didRecordLeaderUsage) {
+        didRecordLeaderUsage = true;
+        this.recordUsage(leaderStep.name, leaderProviderInfo, true, leaderProviderUsage);
+      }
+    } catch (error) {
+      if (!didRecordLeaderUsage) {
+        this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+      }
+      throw error;
+    }
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
     }
@@ -177,6 +208,7 @@ export class TeamLeaderRunner {
       status: 'done',
       content: JSON.stringify({ parts }, null, 2),
       timestamp: new Date(),
+      ...(leaderProviderUsage !== undefined ? { providerUsage: leaderProviderUsage } : {}),
     };
     this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, phaseExecutionId, parentIteration);
     this.emitLeaderRoutingDecisionEvent(
@@ -216,6 +248,7 @@ export class TeamLeaderRunner {
       maxConcurrency: teamLeaderConfig.maxConcurrency,
       refillThreshold: teamLeaderConfig.refillThreshold,
       maxTotalParts: teamLeaderConfig.maxTotalParts,
+      abortSignal: leaderBaseOptions.abortSignal,
       onPartQueued: (part) => {
         parallelLogger?.addSubStep(part.id);
       },
@@ -260,6 +293,7 @@ export class TeamLeaderRunner {
         unfinishedScheduledPartCount,
       }) => {
         emitTeamLeaderProgressHint(this.deps.engineOptions, 'feedback');
+        let didRecordFeedbackUsage = false;
         try {
           const moreParts = await structuredCaller.requestMoreParts(
             instruction,
@@ -285,12 +319,36 @@ export class TeamLeaderRunner {
               mcpServers: leaderMcpServers,
               workflowMeta: leaderWorkflowMeta,
               childProcessEnv: this.deps.engineOptions.childProcessEnv,
-              onStream: this.deps.engineOptions.onStream,
+              abortSignal: leaderBaseOptions.abortSignal,
+              onStream: leaderBaseOptions.onStream,
+              onAgentResponse: (response) => {
+                didRecordFeedbackUsage = true;
+                this.recordUsage(
+                  leaderStep.name,
+                  leaderProviderInfo,
+                  response.status === 'done',
+                  response.providerUsage,
+                );
+              },
+              onAgentError: () => {
+                didRecordFeedbackUsage = true;
+                this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+              },
             },
           );
+          if (!didRecordFeedbackUsage) {
+            didRecordFeedbackUsage = true;
+            this.recordUsage(leaderStep.name, leaderProviderInfo, true, moreParts.providerUsage);
+          }
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
           return moreParts;
         } catch (error) {
+          if (!didRecordFeedbackUsage) {
+            this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+          }
+          if (leaderBaseOptions.abortSignal?.aborted) {
+            throw error;
+          }
           if (isPlanningBudgetError(error)) {
             throw error;
           }
@@ -395,7 +453,10 @@ export class TeamLeaderRunner {
       stepIteration,
       aggregatedResponse,
       updatePersonaSession,
-      runtime,
+      leaderRuntime,
+      (providerInfo, success, usage) => {
+        this.recordUsage(step.name, providerInfo, success, usage);
+      },
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
@@ -434,6 +495,7 @@ export class TeamLeaderRunner {
       currentProviderInfo,
       routeWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeStep,
       logger: log,
+      abortSignal: this.deps.engineOptions.abortSignal,
     });
     if (!autoRuntime) {
       return runtime;
@@ -475,10 +537,34 @@ export class TeamLeaderRunner {
       },
       runtime,
     );
+    if (result.providerInfo) {
+      this.recordUsage(
+        `${step.name}.${part.id}`,
+        result.providerInfo,
+        result.response.status === 'done',
+        result.response.providerUsage,
+      );
+    }
     return {
       ...result,
       durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
     };
+  }
+
+  private recordUsage(
+    step: string,
+    providerInfo: StepProviderInfo,
+    success: boolean,
+    usage?: AgentResponse['providerUsage'],
+  ): void {
+    recordDelegatedAgentUsage(
+      this.deps.engineOptions,
+      step,
+      'team_leader',
+      providerInfo,
+      success,
+      usage,
+    );
   }
 
   private emitPartRoutingDecisionEvents(
@@ -581,6 +667,7 @@ export class TeamLeaderRunner {
       }),
       routeBatchWithAi: this.deps.engineOptions.autoRoutingAiRouter?.routeBatch,
       logger: log,
+      abortSignal: this.deps.engineOptions.abortSignal,
     });
 
     for (const [partId, providerInfo] of routed.entries()) {

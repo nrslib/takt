@@ -1,14 +1,22 @@
 import type { AgentResponse } from '../../core/models/index.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage, stripAnsi } from '../../shared/utils/index.js';
 import { execKiro, type KiroExecError } from './process.js';
 import type { KiroCallOptions } from './types.js';
 
 export type { KiroCallOptions } from './types.js';
 
+const log = createLogger('kiro-client');
+
 const KIRO_ABORTED_MESSAGE = 'Kiro execution aborted';
 const KIRO_ERROR_DETAIL_MAX_LENGTH = 400;
 const KIRO_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 const KIRO_AGENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+// Matches only a leading prompt-echo marker (absolute start of the cleaned
+// output), so a Markdown blockquote ("> ") later in the body is left intact.
+const KIRO_LEADING_PROMPT_PATTERN = /^\s*> /;
+// UUID emitted by `kiro-cli chat --list-sessions` for each listed session.
+// No `g` flag: RegExp#exec always returns the first (most recent) match.
+const KIRO_SESSION_UUID_PATTERN = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 
 function buildPrompt(prompt: string, systemPrompt?: string): string {
   if (!systemPrompt) {
@@ -156,11 +164,69 @@ function classifyExecutionError(error: KiroExecError, options: KiroCallOptions):
   return redactDetail(getErrorMessage(error), options.kiroApiKey);
 }
 
+// Shared cleanup used both for `AgentResponse.content` and for the raw
+// streams parsed by `parseLatestSessionId` below (DRY: single place that
+// strips ANSI escapes and the CLI's leading `> ` prompt-echo marker).
+function cleanKiroOutput(raw: string): string {
+  return stripAnsi(raw).replace(KIRO_LEADING_PROMPT_PATTERN, '').trim();
+}
+
+// Extracts the most recent session UUID from `kiro-cli chat --list-sessions`
+// output. That command writes its listing to stderr; stdout is checked as a
+// fallback in case the CLI's stream choice differs across versions.
+function parseLatestSessionId(stdout: string, stderr: string): string | undefined {
+  const stderrMatch = KIRO_SESSION_UUID_PATTERN.exec(cleanKiroOutput(stderr));
+  if (stderrMatch) {
+    return stderrMatch[0];
+  }
+
+  const stdoutMatch = KIRO_SESSION_UUID_PATTERN.exec(cleanKiroOutput(stdout));
+  return stdoutMatch?.[0];
+}
+
+const KIRO_LIST_SESSIONS_TIMEOUT_MS = 10_000;
+
+// Runs only for a brand-new session (no `options.sessionId` yet): the main
+// turn already succeeded, so a failure here (non-zero exit, ENOENT, no UUID
+// found) must not turn the overall result into an error — it just leaves the
+// session ID unresolved for this turn.
+async function resolveLatestSessionId(options: KiroCallOptions): Promise<string | undefined> {
+  if (options.abortSignal?.aborted) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KIRO_LIST_SESSIONS_TIMEOUT_MS);
+  timer.unref?.();
+
+  // Propagate parent abort to the list-sessions controller.
+  const parentAbortHandler = (): void => controller.abort();
+  options.abortSignal?.addEventListener('abort', parentAbortHandler, { once: true });
+
+  try {
+    const listOptions: KiroCallOptions = {
+      ...options,
+      abortSignal: controller.signal,
+    };
+    const { stdout, stderr } = await execKiro(['chat', '--list-sessions'], listOptions);
+    return parseLatestSessionId(stdout, stderr);
+  } catch (rawError) {
+    log.debug('kiro-cli --list-sessions failed; session ID unresolved for this turn', {
+      error: getErrorMessage(rawError),
+    });
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+    options.abortSignal?.removeEventListener('abort', parentAbortHandler);
+  }
+}
+
 function emitResult(
   options: KiroCallOptions,
   result: string,
   success: boolean,
-  error?: string,
+  error: string | undefined,
+  sessionId: string | undefined,
 ): void {
   options.onStream?.({
     type: 'result',
@@ -168,7 +234,7 @@ function emitResult(
       result,
       success,
       error,
-      sessionId: options.sessionId ?? '',
+      sessionId: sessionId ?? '',
     },
   });
 }
@@ -184,10 +250,10 @@ export class KiroClient {
     try {
       const args = buildArgs(effectiveOptions, promptText);
       const { stdout } = await execKiro(args, effectiveOptions);
-      const content = stdout.trim();
+      const content = cleanKiroOutput(stdout);
       if (!content) {
         const message = 'kiro-cli returned empty output';
-        emitResult(options, '', false, message);
+        emitResult(options, '', false, message, options.sessionId);
         return {
           persona: agentType,
           status: 'error',
@@ -198,20 +264,25 @@ export class KiroClient {
         };
       }
 
+      // First turn (no session yet): resolve the real session ID now so the
+      // caller can resume with `--resume-id` on the next turn. Resume turns
+      // already know their session ID, so skip the extra process spawn.
+      const resolvedSessionId = options.sessionId ?? await resolveLatestSessionId(effectiveOptions);
+
       options.onStream?.({ type: 'text', data: { text: content } });
-      emitResult(options, content, true);
+      emitResult(options, content, true, undefined, resolvedSessionId);
 
       return {
         persona: agentType,
         status: 'done',
         content,
         timestamp: new Date(),
-        sessionId: options.sessionId,
+        sessionId: resolvedSessionId,
       };
     } catch (rawError) {
       const error = rawError as KiroExecError;
       const message = classifyExecutionError(error, effectiveOptions);
-      emitResult(options, '', false, message);
+      emitResult(options, '', false, message, options.sessionId);
       return {
         persona: agentType,
         status: 'error',

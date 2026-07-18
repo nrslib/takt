@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkflowConfig, WorkflowRule } from '../core/models/index.js';
+import type { AutoRoutingConfig } from '../core/models/config-types.js';
+import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowRule } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 
 function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
@@ -19,6 +20,19 @@ function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       },
     ],
+    ...overrides,
+  };
+}
+
+function createPlanAgent(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
+  return {
+    name: 'plan',
+    persona: 'planner',
+    personaDisplayName: 'planner',
+    edit: false,
+    instruction: '{task}',
+    passPreviousResponse: true,
+    rules: [{ condition: 'done', next: 'COMPLETE' }],
     ...overrides,
   };
 }
@@ -63,6 +77,30 @@ function createFindingContractParallelWorkflow(
   });
 }
 
+function createValidatorAutoRouting(rules?: AutoRoutingConfig['rules']): AutoRoutingConfig {
+  return {
+    strategy: 'balanced',
+    router: { provider: 'claude-sdk', model: 'haiku' },
+    candidates: [
+      {
+        name: 'claude',
+        description: 'Claude candidate',
+        provider: 'claude-sdk',
+        model: 'sonnet',
+        costTier: 'medium',
+      },
+      {
+        name: 'codex',
+        description: 'Codex candidate',
+        provider: 'codex',
+        model: 'gpt-5-codex',
+        costTier: 'medium',
+      },
+    ],
+    ...(rules !== undefined ? { rules } : {}),
+  };
+}
+
 describe('validateWorkflowConfig', () => {
   it('accepts canonical workflow transitions', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
@@ -73,6 +111,86 @@ describe('validateWorkflowConfig', () => {
       projectCwd: process.cwd(),
       provider: 'opencode',
     })).toThrow(/provider 'opencode' requires model/);
+  });
+
+  it('fails fast when a static auto-routing rule combines a codex provider with an explicit Claude model', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({ model: 'sonnet' })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createValidatorAutoRouting({ steps: { plan: 'codex' } }),
+    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('fails fast when any dynamic auto-routing candidate is incompatible with an explicit model', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({ model: 'sonnet' })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createValidatorAutoRouting(),
+    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('fails fast for incompatible auto-routing on a parallel sub-step', () => {
+    const workflow = createWorkflow({
+      steps: [{
+        name: 'plan',
+        persona: 'planner',
+        personaDisplayName: 'planner',
+        edit: false,
+        instruction: '{task}',
+        passPreviousResponse: true,
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+        parallel: [createPlanAgent({ name: 'review', model: 'sonnet' })],
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createValidatorAutoRouting({ steps: { review: 'codex' } }),
+    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('fails fast for incompatible auto-routing on the finding manager', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+          model: 'sonnet',
+        },
+      },
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createValidatorAutoRouting({ steps: { 'findings-manager': 'codex' } }),
+    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
+  });
+
+  it('fails fast when a loop judge overrides an auto-routed codex step with a Claude model', () => {
+    const workflow = createWorkflow({
+      loopMonitors: [{
+        cycle: ['plan'],
+        threshold: 1,
+        judge: {
+          model: 'sonnet',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      autoRouting: createValidatorAutoRouting({ steps: { plan: 'codex' } }),
+    })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
 
   it('fails fast when a loop monitor judge points to an unknown step', () => {

@@ -48,6 +48,16 @@ import {
 let isolatedGlobalConfigDir: string;
 let originalTaktConfigDirForFile: string | undefined;
 
+function disableBuiltinWorkflowsForFixtureTests(): void {
+  writeFileSync(
+    join(isolatedGlobalConfigDir, 'config.yaml'),
+    'language: en\nenable_builtin_workflows: false\n',
+    'utf-8',
+  );
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+}
+
 beforeEach(() => {
   originalTaktConfigDirForFile = process.env.TAKT_CONFIG_DIR;
   isolatedGlobalConfigDir = join(tmpdir(), `takt-config-test-global-${randomUUID()}`);
@@ -314,6 +324,7 @@ describe('loadAllWorkflows', () => {
   let testDir: string;
 
   beforeEach(() => {
+    disableBuiltinWorkflowsForFixtureTests();
     testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
     mkdirSync(testDir, { recursive: true });
   });
@@ -708,12 +719,23 @@ describe('loadWorkflow workflow_overrides.personas integration', () => {
   });
 });
 
-describe('listWorkflows (builtin fallback)', () => {
+describe('listWorkflows', () => {
   let testDir: string;
 
   beforeEach(() => {
+    disableBuiltinWorkflowsForFixtureTests();
     testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
+    const workflowsDir = join(testDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    const workflow = [
+      'name: test-workflow',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    instruction: "{task}"',
+    ].join('\n');
+    writeFileSync(join(workflowsDir, 'zeta.yaml'), workflow, 'utf-8');
+    writeFileSync(join(workflowsDir, 'alpha.yaml'), workflow, 'utf-8');
   });
 
   afterEach(() => {
@@ -722,36 +744,16 @@ describe('listWorkflows (builtin fallback)', () => {
     }
   });
 
-  it('should include builtin workflows', () => {
+  it('should include project workflows', () => {
     const workflows = listWorkflows(testDir);
-    expect(workflows).toContain('default');
-    expect(workflows).toContain('audit-e2e');
+    expect(workflows).toContain('alpha');
+    expect(workflows).toContain('zeta');
   });
 
   it('should return sorted list', () => {
     const workflows = listWorkflows(testDir);
     const sorted = [...workflows].sort();
     expect(workflows).toEqual(sorted);
-  });
-});
-
-describe('loadAllWorkflows (builtin fallback)', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should include builtin workflows in the map', () => {
-    const workflows = loadAllWorkflows(testDir);
-    expect(workflows.has('default')).toBe(true);
   });
 });
 

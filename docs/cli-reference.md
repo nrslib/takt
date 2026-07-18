@@ -20,6 +20,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
 | `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock) |
+| `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
 | `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
 
@@ -495,7 +496,7 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 
 ### takt telemetry
 
-Manage local routing event recording used by auto-routing (`provider: auto`). Decisions are written locally to `.takt/events/` as NDJSON; TAKT does not upload them.
+Manage local routing event recording used when effective `auto_routing` is configured. Decisions are written locally to `.takt/events/` as NDJSON; TAKT does not upload them.
 
 ```bash
 # Show local routing event recording status

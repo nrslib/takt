@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -79,9 +79,7 @@ function createBridgeHarness(options?: {
     onRoutingDecision: vi.fn(),
   };
   const usageEventLogger = {
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
-    logUsage: vi.fn(),
+    logUsageFor: vi.fn(),
   };
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
@@ -98,10 +96,6 @@ function createBridgeHarness(options?: {
     prefixWriter: prefixWriter as never,
     displayRef: { current: null },
     handlerRef: { current: null },
-    providerEventLogger: {
-      setStep: vi.fn(),
-      setProvider: vi.fn(),
-    } as never,
     usageEventLogger: usageEventLogger as never,
     analyticsEmitter: analyticsEmitter as never,
     sessionLogger: {
@@ -136,7 +130,15 @@ function createBridgeHarness(options?: {
     reportDirectory: '/tmp/project/run/reports',
   });
 
-  return { bridge, engine, out, runMetaManager, resumePoint, analyticsEmitter, usageEventLogger };
+  return {
+    bridge,
+    engine,
+    out,
+    runMetaManager,
+    resumePoint,
+    analyticsEmitter,
+    usageEventLogger,
+  };
 }
 
 describe('bindWorkflowExecutionEvents', () => {
@@ -222,7 +224,8 @@ describe('bindWorkflowExecutionEvents', () => {
   });
 
   it('finding ledger analytics の書き込み失敗後も workflow complete を処理する', () => {
-    const analyticsPath = join(tmpdir(), `takt-test-ledger-analytics-failure-${Date.now()}`);
+    const analyticsRoot = mkdtempSync(join(tmpdir(), 'takt-test-ledger-analytics-failure-'));
+    const analyticsPath = join(analyticsRoot, 'not-a-directory');
     writeFileSync(analyticsPath, 'not a directory', 'utf-8');
     initAnalyticsWriter(true, analyticsPath);
     try {
@@ -259,7 +262,7 @@ describe('bindWorkflowExecutionEvents', () => {
       expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 3);
     } finally {
       resetAnalyticsWriter();
-      rmSync(analyticsPath, { force: true });
+      rmSync(analyticsRoot, { recursive: true, force: true });
     }
   });
 
@@ -326,8 +329,93 @@ describe('bindWorkflowExecutionEvents', () => {
     });
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
-    expect(usageEventLogger.setProvider).toHaveBeenCalledWith('cursor', '(default)');
     expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'cursor', '(default)', 'parent');
+  });
+
+  it('workflow_call 親子の完了順が入れ子でも開始時の usage context を保持する', () => {
+    const { engine, usageEventLogger } = createBridgeHarness();
+    const parentStep = {
+      name: 'call-child',
+      kind: 'workflow_call',
+      call: 'child',
+      personaDisplayName: 'Child workflow',
+      instruction: '',
+      rules: [],
+    } as WorkflowStep;
+    const childStep = {
+      name: 'child-implement',
+      personaDisplayName: 'Child coder',
+      instruction: '',
+      rules: [],
+    } as WorkflowStep;
+    const usage = { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false };
+
+    engine.emit('step:start', parentStep, 1, 'call child', {
+      provider: 'codex',
+      model: 'parent-model',
+    });
+    engine.emit('step:start', childStep, 1, 'implement', {
+      provider: 'claude',
+      model: 'child-model',
+    });
+    engine.emit('step:complete', childStep, {
+      persona: 'child-implement',
+      status: 'done',
+      content: 'child done',
+      timestamp: new Date(),
+      providerUsage: usage,
+    }, 'implement');
+    engine.emit('step:complete', parentStep, {
+      persona: 'call-child',
+      status: 'done',
+      content: 'parent done',
+      timestamp: new Date(),
+      providerUsage: usage,
+    }, 'call child');
+
+    expect(usageEventLogger.logUsageFor.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          provider: 'claude',
+          providerModel: 'child-model',
+          step: 'child-implement',
+          stepType: 'normal',
+        }),
+        expect.objectContaining({ success: true, usage }),
+      ],
+      [
+        expect.objectContaining({
+          provider: 'codex',
+          providerModel: 'parent-model',
+          step: 'call-child',
+          stepType: 'workflow_call',
+        }),
+        expect.objectContaining({ success: true, usage }),
+      ],
+    ]);
+  });
+
+  it.each([
+    ['parallel', { parallel: { steps: [] } }],
+    ['team_leader', { teamLeader: { maxConcurrency: 1, maxTotalParts: 1, refillThreshold: 0, timeoutMs: 1000 } }],
+  ])('%s parent の集約レスポンスを usage として記録しない', (_stepType, delegatedConfig) => {
+    const { engine, usageEventLogger } = createBridgeHarness();
+    const step = {
+      name: 'review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+      ...delegatedConfig,
+    } as WorkflowStep;
+    const response = {
+      persona: 'review',
+      status: 'done',
+      content: 'aggregated',
+      timestamp: new Date(),
+    } as const;
+
+    engine.emit('step:complete', step, response, 'instruction');
+
+    expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
   });
 
   it('loop monitor judge model が明示省略された場合は usage に default として記録する', () => {
@@ -348,7 +436,6 @@ describe('bindWorkflowExecutionEvents', () => {
     });
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
-    expect(usageEventLogger.setProvider).toHaveBeenCalledWith('codex', '(default)');
     expect(analyticsEmitter.updateProviderInfo).toHaveBeenCalledWith(1, 'codex', '(default)', 'parent');
   });
 

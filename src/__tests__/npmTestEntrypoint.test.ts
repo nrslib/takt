@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasIntegrationTestTarget,
+  runNpmTest,
   selectNpmTestRuns,
 } from '../../scripts/run-npm-test.mjs';
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: () => resolvePromise!(),
+  };
+}
 
 describe('npm test entrypoint routing', () => {
   it('should run the unit suite as shards when no test target is provided', () => {
@@ -12,6 +24,42 @@ describe('npm test entrypoint routing', () => {
       { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=3/4', '--maxWorkers=1'] },
       { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=4/4', '--maxWorkers=1'] },
     ]);
+  });
+
+  it('should wait for each unit shard before starting the next shard', async () => {
+    const runs = selectNpmTestRuns([]);
+    const firstRunStarted = deferred();
+    const releaseFirstRun = deferred();
+    let started: string[][] = [];
+    const runCommand = async (npmArgs: string[]): Promise<{ code: number; signal: null }> => {
+      started = [...started, npmArgs];
+      if (started.length === 1) {
+        firstRunStarted.resolve();
+        await releaseFirstRun.promise;
+      }
+      return { code: 0, signal: null };
+    };
+
+    const execution = runNpmTest([], runCommand);
+    await firstRunStarted.promise;
+
+    expect(started).toEqual([runs[0]!.npmArgs]);
+
+    releaseFirstRun.resolve();
+    await execution;
+    expect(started).toEqual(runs.map((run) => run.npmArgs));
+  });
+
+  it('should return the failing shard exit code from the unit suite entrypoint', async () => {
+    const failureCode = 17;
+    const runCommand = async (npmArgs: string[]): Promise<{ code: number; signal: null }> => ({
+      code: npmArgs.includes('--shard=2/4') ? failureCode : 0,
+      signal: null,
+    });
+
+    const code = await runNpmTest([], runCommand);
+
+    expect(code).toBe(failureCode);
   });
 
   it('should route targeted integration tests to the IT runner', () => {

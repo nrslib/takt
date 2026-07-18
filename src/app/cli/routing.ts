@@ -24,7 +24,6 @@ import {
 } from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
-import { toConcreteProvider } from '../../core/workflow/provider-resolution.js';
 import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { program } from './program.js';
 import { getCliExecutionContext } from './initialization.js';
@@ -187,7 +186,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
     : undefined;
   let result: InteractiveModeResult;
-  const assistantOverrideProvider = toConcreteProvider(agentOverrides?.provider);
+  const assistantOverrideProvider = agentOverrides?.provider;
 
   switch (selectedMode) {
     case 'assistant': {

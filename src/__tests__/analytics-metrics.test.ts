@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -21,8 +21,7 @@ describe('analytics metrics', () => {
   let eventsDir: string;
 
   beforeEach(() => {
-    eventsDir = join(tmpdir(), `takt-test-analytics-metrics-${Date.now()}`);
-    mkdirSync(eventsDir, { recursive: true });
+    eventsDir = mkdtempSync(join(tmpdir(), 'takt-test-analytics-metrics-'));
   });
 
   afterEach(() => {

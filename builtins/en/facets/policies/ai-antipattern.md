@@ -96,9 +96,11 @@ AI tends to implement data retrieval via callbacks and external variable capture
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
-| Assign to external variable in callback | `let result; await f(x => { result = x })` | REJECT |
-| Get value via event handler | `emitter.on('data', d => { captured = d })` to synchronously get value | REJECT |
-| Build state across multiple callbacks | `forEach(item => { externalMap.set(...) })` to construct result | REJECT |
+| Assign to external variable in callback | `let result; await f(x => { result = x })` when a return value can express the same contract | REJECT |
+| Get value via event handler | `emitter.on('data', d => { captured = d })` to synchronously get a value when a direct API can express the same contract | REJECT |
+| Build state across multiple callbacks | `forEach(item => { externalMap.set(...) })` when a returned collection can express the same contract | REJECT |
+| Record callback or event observations in test-local state | Store emitted payloads or call order in a collection created and owned by the test | OK |
+| Sequence mock responses in test-local state | Advance responses or errors across repeated calls to verify retry or transition behavior | OK |
 
 ```typescript
 // REJECT - Capturing external variable via callback
@@ -115,8 +117,9 @@ return selectedMode;
 
 Verification approach:
 1. Find places where callback functions assign to variables in the outer scope
-2. Check if the value can be returned as a function return value
-3. If possible, flag for rewriting to the return-value pattern
+2. Determine whether the callback or event is part of the contract, or whether the state is only a test-local observation or mock sequence
+3. Check whether a return value or direct API can express the same contract
+4. Only when it can, flag for rewriting to the return-value pattern
 
 ## Inappropriate Response to Review Findings
 

@@ -3,7 +3,7 @@ import {
   USAGE_MISSING_REASONS,
   type UsageMissingReason,
 } from './contracts.js';
-import { buildUsageEventPayload } from './providerEvent.js';
+import { buildUsageEventPayload } from './usageEvent.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import { isProviderType, type ProviderType } from '../../shared/types/provider.js';
 

@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
+import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import {
   listWorkflows,
   listWorkflowEntries,
@@ -35,6 +37,21 @@ steps:
 function createWorkflow(dir: string, name: string, content?: string): void {
   writeFileSync(join(dir, `${name}.yaml`), content ?? SAMPLE_WORKFLOW);
 }
+
+beforeEach(() => {
+  const configDir = process.env.TAKT_CONFIG_DIR;
+  if (!configDir) {
+    throw new Error('TAKT_CONFIG_DIR is required for workflow category tests');
+  }
+  writeFileSync(join(configDir, 'config.yaml'), 'enable_builtin_workflows: false\n', 'utf-8');
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+});
+
+afterEach(() => {
+  invalidateGlobalConfigCache();
+  invalidateAllResolvedConfigCache();
+});
 
 describe('workflow categories - directory scanning', () => {
   let tempDir: string;

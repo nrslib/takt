@@ -387,6 +387,31 @@ describe('agent-usecases', () => {
     }));
   });
 
+  it('judgeStatus Stage 3 の provider rejection でも error stage を通知する', async () => {
+    const onJudgeStage = vi.fn();
+    vi.mocked(runAgent)
+      .mockResolvedValueOnce(doneResponse('no match'))
+      .mockResolvedValueOnce(doneResponse('no tag'))
+      .mockRejectedValueOnce(new Error('stage 3 rejected'));
+
+    await expect(judgeStatus('structured', 'tag', [
+      { condition: 'a', next: 'one' },
+      { condition: 'b', next: 'two' },
+    ], {
+      ...judgeOptions,
+      onJudgeStage,
+    } as typeof judgeOptions & { onJudgeStage: (entry: JudgeStageLog) => void }))
+      .rejects.toThrow('stage 3 rejected');
+
+    expect(onJudgeStage).toHaveBeenCalledTimes(3);
+    expect(onJudgeStage).toHaveBeenLastCalledWith(expect.objectContaining({
+      stage: 3,
+      method: 'ai_judge',
+      status: 'error',
+      response: 'stage 3 rejected',
+    }));
+  });
+
   // --- decomposeTask ---
 
   it('decomposeTask は構造化出力 parts を返す', async () => {
@@ -398,7 +423,7 @@ describe('agent-usecases', () => {
 
     const result = await decomposeTask('instruction', 3, { cwd: '/repo', persona: 'team-leader' });
 
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
     ]);
     expect(parseParts).not.toHaveBeenCalled();
@@ -440,7 +465,7 @@ describe('agent-usecases', () => {
     const result = await decomposeTask('instruction', 2, { cwd: '/repo' });
 
     expect(parseParts).toHaveBeenCalledWith('```json [] ```', 2);
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'p1', title: 'Part 1', instruction: 'fallback' },
     ]);
   });
@@ -477,6 +502,36 @@ describe('agent-usecases', () => {
       expect.any(String),
       expect.objectContaining({ onPromptResolved }),
     );
+  });
+
+  it('decomposeTask は AbortSignal と provider usage を呼び出し境界へ伝搬する', async () => {
+    const providerUsage = {
+      inputTokens: 7,
+      outputTokens: 3,
+      totalTokens: 10,
+      usageMissing: false,
+    };
+    const response = doneResponse('x', {
+      parts: [{ id: 'p1', title: 'Part 1', instruction: 'Do 1' }],
+    });
+    response.providerUsage = providerUsage;
+    vi.mocked(runAgent).mockResolvedValue(response);
+    const abortController = new AbortController();
+    const onAgentResponse = vi.fn();
+
+    const result = await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      abortSignal: abortController.signal,
+      onAgentResponse,
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.any(String),
+      expect.objectContaining({ abortSignal: abortController.signal }),
+    );
+    expect(onAgentResponse).toHaveBeenCalledWith(response);
+    expect(result.providerUsage).toEqual(providerUsage);
   });
 
   it('decomposeTask は workflowMeta を runAgent に伝搬する', async () => {
@@ -624,6 +679,44 @@ describe('agent-usecases', () => {
       1,
       { cwd: '/repo', persona: 'team-leader' },
     )).rejects.toThrow('Team leader feedback failed: timeout');
+  });
+
+  it('requestMoreParts は AbortSignal と provider usage を呼び出し境界へ伝搬する', async () => {
+    const providerUsage = {
+      inputTokens: 4,
+      outputTokens: 2,
+      totalTokens: 6,
+      usageMissing: false,
+    };
+    const response = doneResponse('x', {
+      done: true,
+      reasoning: 'enough',
+      parts: [],
+    });
+    response.providerUsage = providerUsage;
+    vi.mocked(runAgent).mockResolvedValue(response);
+    const abortController = new AbortController();
+    const onAgentResponse = vi.fn();
+
+    const result = await requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      1,
+      {
+        cwd: '/repo',
+        abortSignal: abortController.signal,
+        onAgentResponse,
+      },
+    );
+
+    expect(runAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.any(String),
+      expect.objectContaining({ abortSignal: abortController.signal }),
+    );
+    expect(onAgentResponse).toHaveBeenCalledWith(response);
+    expect(result.providerUsage).toEqual(providerUsage);
   });
 
   it('requestMoreParts は workflowMeta を runAgent に伝搬する', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveAgentProviderModel,
   resolveStepProviderModel,
+  resolveWorkflowCallProviderModel,
 } from '../core/workflow/provider-resolution.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../core/workflow/provider-resolution.js';
 import {
@@ -40,6 +41,155 @@ describe('resolveProviderModelCandidates', () => {
 });
 
 describe('resolveStepProviderModel', () => {
+  it.each([
+    {
+      label: 'provider only',
+      providerSource: 'env' as const,
+      modelSource: 'project' as const,
+      expected: {
+        provider: 'mock',
+        providerSource: 'env',
+        model: 'step-model',
+        modelSource: 'step',
+      },
+    },
+    {
+      label: 'model only',
+      providerSource: 'project' as const,
+      modelSource: 'env' as const,
+      expected: {
+        provider: 'codex',
+        providerSource: 'step',
+        model: 'env-model',
+        modelSource: 'env',
+      },
+    },
+    {
+      label: 'provider and model',
+      providerSource: 'env' as const,
+      modelSource: 'env' as const,
+      expected: {
+        provider: 'mock',
+        providerSource: 'env',
+        model: 'env-model',
+        modelSource: 'env',
+      },
+    },
+  ])('should keep environment $label above step, routing, persona, and auto routing', ({
+    providerSource,
+    modelSource,
+    expected,
+  }) => {
+    const result = resolveStepProviderModel({
+      step: {
+        name: 'implement',
+        provider: 'codex',
+        model: 'step-model',
+        personaDisplayName: 'coder',
+        tags: ['coding'],
+      },
+      provider: 'mock',
+      providerSource,
+      model: 'env-model',
+      modelSource,
+      providerRouting: {
+        steps: { implement: { provider: 'claude', model: 'routing-model' } },
+      },
+      personaProviders: {
+        coder: { provider: 'opencode', model: 'persona-model' },
+      },
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+      },
+    });
+
+    expect(result).toEqual(expected);
+  });
+
+  it.each([
+    { layer: 'CLI', source: 'env', provider: 'mock' },
+    { layer: 'step', source: 'step', provider: 'codex' },
+    { layer: 'workflow_call', source: 'workflow_call', provider: 'claude' },
+    { layer: 'provider routing', source: 'provider_routing.steps', provider: 'opencode' },
+    { layer: 'persona', source: 'persona_providers', provider: 'cursor' },
+  ] as const)('should preserve the project model for a provider-only $layer override with auto routing', ({
+    layer,
+    source,
+    provider,
+  }) => {
+    const result = resolveStepProviderModel({
+      step: {
+        name: 'implement',
+        provider: layer === 'step' ? provider : undefined,
+        model: undefined,
+        personaDisplayName: 'coder',
+      },
+      provider: layer === 'CLI' || layer === 'workflow_call' ? provider : 'claude',
+      providerSource: layer === 'CLI' ? 'env' : layer === 'workflow_call' ? 'workflow_call' : 'project',
+      model: 'project-model',
+      modelSource: 'project',
+      providerRouting: layer === 'provider routing'
+        ? { steps: { implement: { provider } } }
+        : undefined,
+      personaProviders: layer === 'persona' ? { coder: { provider } } : undefined,
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+      },
+    });
+
+    expect(result).toEqual({
+      provider,
+      providerSource: source,
+      model: 'project-model',
+      modelSource: 'project',
+    });
+  });
+
+  it.each([
+    { layer: 'CLI', source: 'env', model: 'cli-model' },
+    { layer: 'step', source: 'step', model: 'step-model' },
+    { layer: 'workflow_call', source: 'workflow_call', model: 'call-model' },
+    { layer: 'provider routing', source: 'provider_routing.steps', model: 'routing-model' },
+    { layer: 'persona', source: 'persona_providers', model: 'persona-model' },
+  ] as const)('should preserve a model-only $layer override for the auto-selected provider', ({
+    layer,
+    source,
+    model,
+  }) => {
+    const result = resolveStepProviderModel({
+      step: {
+        name: 'implement',
+        provider: undefined,
+        model: layer === 'step' ? model : undefined,
+        personaDisplayName: 'coder',
+      },
+      provider: 'claude',
+      providerSource: 'project',
+      model: layer === 'CLI' || layer === 'workflow_call' ? model : 'project-model',
+      modelSource: layer === 'CLI' ? 'env' : layer === 'workflow_call' ? 'workflow_call' : 'project',
+      providerRouting: layer === 'provider routing'
+        ? { steps: { implement: { model } } }
+        : undefined,
+      personaProviders: layer === 'persona' ? { coder: { model } } : undefined,
+      autoRouting: {
+        strategy: 'cost',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [],
+      },
+    });
+
+    expect(result).toEqual({
+      provider: undefined,
+      providerSource: undefined,
+      model,
+      modelSource: source,
+    });
+  });
+
   it('should not inherit a persona model when the finding manager provider is direct', () => {
     const step = buildFindingManagerStep({
       contract: {
@@ -171,6 +321,98 @@ describe('resolveStepProviderModel', () => {
     expect(result.provider).toBe('cursor');
   });
 
+  it('should prefer workflow fallback over resolved project input', () => {
+    const result = resolveStepProviderModel({
+      step: {
+        provider: 'codex',
+        providerSpecified: false,
+        model: 'workflow-model',
+        modelSpecified: false,
+        personaDisplayName: 'coder',
+      },
+      provider: 'mock',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'workflow',
+      model: 'workflow-model',
+      modelSource: 'workflow',
+    });
+  });
+
+});
+
+describe('resolveWorkflowCallProviderModel', () => {
+  it('should prefer workflow fallback over resolved project input', () => {
+    const result = resolveWorkflowCallProviderModel({
+      workflow: { provider: 'codex', model: 'workflow-model' },
+      provider: 'mock',
+      providerSource: 'project',
+      model: 'project-model',
+      modelSource: 'project',
+    });
+
+    expect(result).toEqual({
+      provider: 'codex',
+      providerSource: 'workflow',
+      model: 'workflow-model',
+      modelSource: 'workflow',
+    });
+  });
+
+  it.each([
+    {
+      label: 'provider only',
+      providerSource: 'env' as const,
+      modelSource: 'project' as const,
+      expected: {
+        provider: 'mock',
+        providerSource: 'env',
+        model: 'child-model',
+        modelSource: 'workflow',
+      },
+    },
+    {
+      label: 'model only',
+      providerSource: 'project' as const,
+      modelSource: 'env' as const,
+      expected: {
+        provider: 'codex',
+        providerSource: 'workflow',
+        model: 'env-model',
+        modelSource: 'env',
+      },
+    },
+    {
+      label: 'provider and model',
+      providerSource: 'env' as const,
+      modelSource: 'env' as const,
+      expected: {
+        provider: 'mock',
+        providerSource: 'env',
+        model: 'env-model',
+        modelSource: 'env',
+      },
+    },
+  ])('should keep environment $label above child workflow values', ({
+    providerSource,
+    modelSource,
+    expected,
+  }) => {
+    const result = resolveWorkflowCallProviderModel({
+      workflow: { provider: 'codex', model: 'child-model' },
+      provider: 'mock',
+      providerSource,
+      model: 'env-model',
+      modelSource,
+    });
+
+    expect(result).toEqual(expected);
+  });
 });
 
 describe('resolveAgentProviderModel', () => {
@@ -959,14 +1201,17 @@ describe('resolveAssistantScopedProviderModelFromConfig', () => {
 
 describe('resolveNonWorkflowProviderModelFromConfig', () => {
   it('should preserve the effective concrete top-level provider and model', () => {
-    const result = resolveNonWorkflowProviderModelFromConfig({
-      project: {
-        provider: 'codex',
-        model: 'project-model',
-        autoRouting: {
-          defaultProvider: { provider: 'claude', model: 'unused-default-model' },
-        },
+    const project = {
+      provider: 'codex',
+      model: 'project-model',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'claude', model: 'unused-router-model' },
+        candidates: [],
       },
+    } satisfies ProjectConfig;
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project,
       global: {
         provider: 'mock',
         model: 'global-model',
@@ -990,44 +1235,54 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
     expect(result).toEqual({ provider: 'codex', model: undefined });
   });
 
-  it('should use the project default provider and its model as one atomic pair', () => {
-    const result = resolveNonWorkflowProviderModelFromConfig({
-      project: {
-        provider: 'auto',
-        autoRouting: {
-          defaultProvider: { provider: 'codex' },
-        },
+  it('should use the project concrete provider and model instead of auto-routing router or candidates', () => {
+    const project = {
+      provider: 'codex',
+      model: 'project-model',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'claude', model: 'router-model' },
+        candidates: [{
+          name: 'coding',
+          description: 'Implementation',
+          provider: 'mock',
+          model: 'candidate-model',
+          costTier: 'medium',
+        }],
       },
+    } satisfies ProjectConfig;
+    const result = resolveNonWorkflowProviderModelFromConfig({
+      project,
       global: {
-        provider: 'auto',
-        autoRouting: {
-          defaultProvider: { provider: 'claude', model: 'global-default-model' },
-        },
+        provider: 'mock',
+        model: 'global-model',
       },
     });
 
-    expect(result).toEqual({ provider: 'codex', model: undefined });
+    expect(result).toEqual({ provider: 'codex', model: 'project-model' });
   });
 
-  it('should use the global default provider when the project default is absent', () => {
+  it('should use the global concrete pair when project provider is absent even if auto_routing exists', () => {
+    const project = {
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'project-router-model' },
+        candidates: [],
+      },
+    } satisfies ProjectConfig;
     const result = resolveNonWorkflowProviderModelFromConfig({
-      project: { provider: 'auto' },
+      project,
       global: {
-        autoRouting: {
-          defaultProvider: { provider: 'mock', model: 'global-default-model' },
-        },
+        provider: 'mock',
+        model: 'global-model',
       },
     });
 
-    expect(result).toEqual({ provider: 'mock', model: 'global-default-model' });
+    expect(result).toEqual({ provider: 'mock', model: 'global-model' });
   });
 
-  it('should fail before provider lookup when auto has no default provider', () => {
-    const project: ProjectConfig = {
-      provider: 'auto',
-      taktProviders: {
-        assistant: { provider: 'claude', model: 'assistant-model' },
-      },
+  it('should not use router or candidate as a non-workflow fallback when top-level provider is absent', () => {
+    const project = {
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'codex', model: 'router-model' },
@@ -1041,13 +1296,12 @@ describe('resolveNonWorkflowProviderModelFromConfig', () => {
           },
         ],
       },
-    };
-
-    expect(() => resolveNonWorkflowProviderModelFromConfig({
+    } satisfies ProjectConfig;
+    const result = resolveNonWorkflowProviderModelFromConfig({
       project,
       global: {},
-    })).toThrow(
-      'Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.',
-    );
+    });
+
+    expect(result).toEqual({ provider: undefined, model: undefined });
   });
 });

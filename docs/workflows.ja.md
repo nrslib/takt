@@ -209,7 +209,7 @@ finding_contract:
     model: gpt-5.5
 ```
 
-指定した値は Finding Manager の step レベル `provider` / `model` として扱われます。`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力 provider/model より優先されます。両方とも未指定の場合、manager は通常の workflow step provider/model 解決を維持します。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
+指定した値は Finding Manager の step レベル `provider` / `model` として扱われます。CLI と環境変数の明示 override は、これらより高い優先順位を維持します。manager の値は `provider_routing`、deprecated の `persona_providers.findings-manager`、effective auto routing、workflow/project/global fallback より優先されます。両方とも未指定の場合、manager は通常の workflow step provider/model 解決を維持します。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
 
 ### Finding Contract parallel の retry 失敗ルーティング
 
@@ -344,7 +344,7 @@ steps:
           network_access: true
 ```
 
-エントリは宣言順に評価され、**最後にマッチしたものが採用**されます。promotion は provider / model / provider_options 解決の **最優先ソース**（step レベルの `provider` / `model` よりも上）です。
+エントリは宣言順に評価され、**最後にマッチしたものが採用**されます。promotion は step レベルの `provider` / `model` / `provider_options` より優先されますが、明示的な CLI・環境変数による provider / model override の方が上位です。
 
 promotion は並列サブ step ではサポートされません。
 

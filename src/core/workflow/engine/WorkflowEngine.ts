@@ -26,6 +26,7 @@ import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowR
 import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
+import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
 import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
@@ -116,10 +117,16 @@ export class WorkflowEngine extends EventEmitter {
       runId: runPaths.slug,
       language: options.language,
       childProcessEnv: options.childProcessEnv,
+      abortSignal: options.abortSignal,
       onStream: options.onStream,
+      onProviderStream: options.onProviderStream,
     });
+    const inheritedAutoRouting = resolveEffectiveAutoRouting(config, options.autoRouting);
+    if (options.autoStrategyOverride !== undefined && inheritedAutoRouting !== undefined) {
+      options.onEffectiveAutoRoutingReached?.();
+    }
     const effectiveAutoRouting = applyAutoRoutingStrategyOverride(
-      config.autoRouting ?? options.autoRouting,
+      inheritedAutoRouting,
       options.autoStrategyOverride,
     );
     this.config = config;

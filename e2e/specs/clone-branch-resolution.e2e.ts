@@ -4,7 +4,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
-import { createTestRepo, isGitHubE2EAvailable, type TestRepo } from '../helpers/test-repo';
+import { createOfflineTestRepo, createTestRepo, isGitHubE2EAvailable, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -71,7 +71,7 @@ describe('E2E: Clone branch resolution (mock)', () => {
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
-    testRepo = createTestRepo({ skipBranch: true });
+    testRepo = createOfflineTestRepo({ skipBranch: true });
   });
 
   afterEach(() => {
@@ -135,7 +135,7 @@ describe('E2E: Clone branch resolution (mock)', () => {
   }, 240_000);
 });
 
-const canUseGitHub = isGitHubE2EAvailable();
+const canUseGitHub = process.env.TAKT_E2E_PROVIDER !== 'mock' && isGitHubE2EAvailable();
 
 /**
  * E2E: Clone branch resolution with real GitHub PR.

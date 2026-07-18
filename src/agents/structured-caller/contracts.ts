@@ -1,6 +1,6 @@
-import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
+import type { WorkflowRule } from '../../core/models/types.js';
 import type { JudgeStatusOptions, JudgeStatusResult, EvaluateConditionOptions } from '../judge-status-usecase.js';
-import type { DecomposeTaskOptions, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
+import type { DecomposeTaskOptions, DecomposeTaskResponse, MorePartsOptions, MorePartsResponse } from '../decompose-task-usecase.js';
 
 export interface StructuredCaller {
   judgeStatus(
@@ -20,7 +20,7 @@ export interface StructuredCaller {
     instruction: string,
     maxTotalParts: number,
     options: DecomposeTaskOptions,
-  ): Promise<PartDefinition[]>;
+  ): Promise<DecomposeTaskResponse>;
 
   requestMoreParts(
     originalInstruction: string,

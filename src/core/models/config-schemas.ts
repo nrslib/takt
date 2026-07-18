@@ -8,7 +8,7 @@ import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import {
   AnalyticsConfigSchema,
-  ConfigAutoRoutingSchema,
+  AutoRoutingSchema,
   LanguageSchema,
   LoggingConfigSchema,
   ObservabilityConfigSchema,
@@ -17,7 +17,7 @@ import {
   PersonaProviderReferenceSchema,
   PipelineConfigSchema,
   ProviderPermissionProfilesSchema,
-  ProviderReferenceOrAutoSchema,
+  ProviderReferenceSchema,
   QualityGatesSchema,
   RateLimitFallbackSchema,
   RuntimeConfigSchema,
@@ -90,9 +90,9 @@ export const WorkflowCategoryOverlaySchema = z.object({
 /** Project config schema */
 const ProjectConfigObjectBaseSchema = z.object({
   language: LanguageSchema.optional(),
-  provider: ProviderReferenceOrAutoSchema.optional(),
+  provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
-  auto_routing: ConfigAutoRoutingSchema.optional(),
+  auto_routing: AutoRoutingSchema.optional(),
   analytics: AnalyticsConfigSchema.optional(),
   telemetry: TelemetryConfigSchema.optional(),
   observability: ObservabilityConfigSchema.optional(),
@@ -180,6 +180,6 @@ export const GlobalConfigSchema = ProjectConfigObjectBaseSchema
   .omit({ submodules: true, with_submodules: true, assistant: true })
   .merge(GlobalOnlyConfigSchema)
   .extend({
-    provider: ProviderReferenceOrAutoSchema.optional().default('claude'),
+    provider: ProviderReferenceSchema.optional().default('claude'),
   })
   .strict();

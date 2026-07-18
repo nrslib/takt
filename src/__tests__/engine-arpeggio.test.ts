@@ -183,6 +183,51 @@ describe('ArpeggioRunner integration', () => {
     expect(readFileSync(join(previousDir, 'latest.md'), 'utf-8')).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
   });
 
+  it('Given effective auto_routing on an arpeggio step, When batches run, Then every batch uses the selected concrete candidate', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const config = buildArpeggioWorkflowConfig(
+      createArpeggioConfig(csvPath, templatePath),
+      tmpDir,
+    );
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Processed Alice' }),
+      makeResponse({ content: 'Processed Bob' }),
+      makeResponse({ content: 'Processed Charlie' }),
+    );
+    vi.mocked(detectMatchedRule).mockResolvedValueOnce({
+      index: 0,
+      method: 'phase1_tag',
+    });
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      ...createEngineOptions(tmpDir),
+      provider: 'claude',
+      model: 'top-level-model',
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'mock', model: 'router-model' },
+        candidates: [{
+          name: 'batch',
+          description: 'Arpeggio batch processing',
+          provider: 'mock',
+          model: 'candidate-model',
+          costTier: 'medium',
+        }],
+        rules: { steps: { process: 'batch' } },
+      },
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls.map((call) => call[2])).toEqual([
+      expect.objectContaining({ resolvedProvider: 'mock', resolvedModel: 'candidate-model' }),
+      expect.objectContaining({ resolvedProvider: 'mock', resolvedModel: 'candidate-model' }),
+      expect.objectContaining({ resolvedProvider: 'mock', resolvedModel: 'candidate-model' }),
+    ]);
+  });
+
   it('should handle batch_size > 1', async () => {
     const tmpDir = createTestTmpDir();
     const csvPath = join(tmpDir, 'data.csv');

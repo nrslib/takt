@@ -5,6 +5,7 @@
  */
 
 import type { WorkflowStep, Language, WorkflowResumePointEntry } from '../models/types.js';
+import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
@@ -60,6 +61,11 @@ export interface BasePhaseRunnerContext {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
+  ) => void;
+  onProviderAttempt?: (
+    providerInfo: StepProviderInfo,
+    success: boolean,
+    usage: ProviderUsageSnapshot | undefined,
   ) => void;
 }
 

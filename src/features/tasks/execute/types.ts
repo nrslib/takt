@@ -8,11 +8,11 @@ import type {
   AutoRoutingStrategy,
   PersonaProviderEntry,
   ProviderRoutingConfig,
-  ProviderTypeOrAuto,
 } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
 import type { McpServerConfig, WorkflowResumePoint } from '../../../core/models/index.js';
+import type { ProviderType } from '../../../shared/types/provider.js';
 import type {
   AskUserQuestionHandler,
   StepProviderInfo,
@@ -159,7 +159,7 @@ export interface WorkflowExecutionOptions {
   initialIterationOverride?: number;
   /** Language for instruction metadata */
   language?: Language;
-  provider?: ProviderTypeOrAuto;
+  provider?: ProviderType;
   /** Source layer of `provider`. */
   providerSource?: ProviderResolutionSource;
   model?: string;
@@ -214,7 +214,7 @@ export interface WorkflowExecutionOptions {
 }
 
 export interface TaskExecutionOptions {
-  provider?: ProviderTypeOrAuto;
+  provider?: ProviderType;
   /** Source layer of `provider` (defaults to 'cli' when set via --provider). */
   providerSource?: ProviderResolutionSource;
   model?: string;
@@ -318,7 +318,7 @@ export interface PipelineExecutionOptions {
   skipGit?: boolean;
   /** Working directory */
   cwd: string;
-  provider?: ProviderTypeOrAuto;
+  provider?: ProviderType;
   model?: string;
   /** Strategy override for automatic provider/model routing. */
   autoStrategy?: AutoRoutingStrategy;

@@ -8,7 +8,6 @@ export * from './entrypoint.js';
 export * from './error.js';
 export * from './notification.js';
 export * from './pathBoundary.js';
-export * from './providerEventLogger.js';
 export * from './reportDir.js';
 export * from './runId.js';
 export * from './slackWebhook.js';

@@ -135,6 +135,38 @@ describe('createAutoRoutingAiRouter', () => {
     expect(prompt).toContain('Return JSON only as {"selections":[{"id":"step-id","selected_candidate":"name"}]}.');
   });
 
+  it('Given batch step names contain commas, When provider streaming is emitted, Then exact step IDs remain distinct', async () => {
+    const onProviderStream = vi.fn();
+    const streamEvent = { type: 'text', data: { text: 'routing' } } as const;
+    vi.mocked(runAgent).mockImplementation(async (_persona, _task, options) => {
+      options?.onStream?.(streamEvent);
+      return {
+        persona: 'auto-router',
+        status: 'done',
+        content: '{"selections":[{"id":"a,b","selected_candidate":"coding"},{"id":"a","selected_candidate":"review"}]}',
+        timestamp: new Date('2026-01-01T00:00:00.000Z'),
+      };
+    });
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-batch-context',
+      onProviderStream,
+    });
+
+    await router.routeBatch(createAutoRoutingConfig(), [
+      { id: 'a,b', name: 'review,a', instruction: 'Review A' },
+      { id: 'a', name: 'review', instruction: 'Review B' },
+    ]);
+
+    expect(onProviderStream).toHaveBeenCalledOnce();
+    expect(onProviderStream).toHaveBeenCalledWith({
+      provider: 'claude-sdk',
+      providerModel: 'claude-haiku-4-5-20251001',
+      step: 'auto-router',
+    }, streamEvent);
+  });
+
   it('Given AI returns an unknown candidate, When routing, Then the adapter rejects without echoing the raw candidate', async () => {
     const rawCandidate = 'Authorization: Bearer sk-test';
     vi.mocked(runAgent).mockResolvedValue({
@@ -442,15 +474,15 @@ describe('createAutoRoutingAiRouter', () => {
 
   it('Given AI router does not respond, When timeout elapses, Then the router aborts the request and rejects for default fallback', async () => {
     vi.useFakeTimers();
-    vi.mocked(runAgent).mockImplementation((_persona, _task, options) => new Promise((_resolve, reject) => {
-      options?.abortSignal?.addEventListener('abort', () => {
-        reject(new Error('aborted'));
-      });
-    }));
+    const onStream = vi.fn();
+    const onProviderStream = vi.fn();
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
     const router = createAutoRoutingAiRouter({
       cwd: '/repo',
       workflowName: 'parent',
       runId: 'run-timeout',
+      onStream,
+      onProviderStream,
     });
 
     const routing = expect(router.routeStep(createAutoRoutingConfig(), {
@@ -462,5 +494,68 @@ describe('createAutoRoutingAiRouter', () => {
     await routing;
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.abortSignal?.aborted).toBe(true);
+    vi.mocked(runAgent).mock.calls[0]?.[2]?.onStream?.({
+      type: 'text',
+      data: { text: 'late timeout event' },
+    });
+    expect(onProviderStream).not.toHaveBeenCalled();
+    expect(onStream).not.toHaveBeenCalled();
+  });
+
+  it.each(['single', 'batch'] as const)(
+    'Given parent cancellation during %s routing, When the signal aborts, Then the router rejects with the parent reason',
+    async (mode) => {
+      const abortController = new AbortController();
+      const onStream = vi.fn();
+      const onProviderStream = vi.fn();
+      vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
+      const router = createAutoRoutingAiRouter({
+        cwd: '/repo',
+        workflowName: 'parent',
+        runId: `run-parent-abort-${mode}`,
+        abortSignal: abortController.signal,
+        onStream,
+        onProviderStream,
+      });
+      const routing = mode === 'single'
+        ? router.routeStep(createAutoRoutingConfig(), { name: 'implement', instruction: 'Implement API' })
+        : router.routeBatch(createAutoRoutingConfig(), [
+            { id: 'a', name: 'implement', instruction: 'Implement API' },
+            { id: 'b', name: 'review', instruction: 'Review API' },
+          ]);
+      const reason = new Error(`parent aborted ${mode}`);
+
+      abortController.abort(reason);
+
+      await expect(routing).rejects.toBe(reason);
+      const routerSignal = vi.mocked(runAgent).mock.calls[0]?.[2]?.abortSignal;
+      expect(routerSignal).not.toBe(abortController.signal);
+      expect(routerSignal?.aborted).toBe(true);
+      expect(routerSignal?.reason).toBe(reason);
+      vi.mocked(runAgent).mock.calls[0]?.[2]?.onStream?.({
+        type: 'text',
+        data: { text: `late ${mode} event` },
+      });
+      expect(onProviderStream).not.toHaveBeenCalled();
+      expect(onStream).not.toHaveBeenCalled();
+    },
+  );
+
+  it('Given the parent signal is already aborted, When routing is requested, Then no router provider call starts', async () => {
+    const abortController = new AbortController();
+    const reason = new Error('already aborted');
+    abortController.abort(reason);
+    const router = createAutoRoutingAiRouter({
+      cwd: '/repo',
+      workflowName: 'parent',
+      runId: 'run-already-aborted',
+      abortSignal: abortController.signal,
+    });
+
+    await expect(router.routeStep(createAutoRoutingConfig(), {
+      name: 'implement',
+      instruction: 'Implement API',
+    })).rejects.toBe(reason);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 });

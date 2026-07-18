@@ -1086,14 +1086,14 @@ describe('workflow step tags', () => {
     });
   });
 
-  it('Given workflow_config provider is auto and provider_routing defines provider, When resolving step, Then routing is above auto fallback', () => {
+  it('Given workflow_config has a concrete fallback and provider_routing defines provider, When resolving step, Then routing is above the fallback', () => {
     const workflowPath = join(tempDir, 'provider-routing-workflow-config-auto.yaml');
     writeFileSync(workflowPath, [
       'name: provider-routing-workflow-config-auto',
       'initial_step: implement',
       'max_steps: 1',
       'workflow_config:',
-      '  provider: auto',
+      '  provider: mock',
       '  model: workflow-model',
       'steps:',
       '  - name: implement',
@@ -1107,12 +1107,12 @@ describe('workflow step tags', () => {
     const step = workflow.steps[0];
 
     expect(step).toMatchObject({
-      provider: 'auto',
+      provider: 'mock',
       providerSpecified: false,
     });
     expect(resolveStepProviderModel({
       step,
-      provider: 'auto',
+      provider: 'mock',
       providerSource: 'project',
       model: 'workflow-model',
       modelSource: 'project',
@@ -1195,14 +1195,14 @@ describe('workflow step tags', () => {
     });
   });
 
-  it('Given parallel sub-step inherits workflow_config auto fallback, When resolving sub-step, Then routing remains above auto fallback', () => {
+  it('Given parallel sub-step inherits a concrete workflow fallback, When resolving sub-step, Then routing remains above the fallback', () => {
     const workflowPath = join(tempDir, 'provider-routing-parallel-workflow-config-auto.yaml');
     writeFileSync(workflowPath, [
       'name: provider-routing-parallel-workflow-config-auto',
       'initial_step: implement',
       'max_steps: 1',
       'workflow_config:',
-      '  provider: auto',
+      '  provider: mock',
       '  model: workflow-model',
       'steps:',
       '  - name: implement',
@@ -1222,7 +1222,7 @@ describe('workflow step tags', () => {
     }
 
     expect(subStep).toMatchObject({
-      provider: 'auto',
+      provider: 'mock',
       providerSpecified: false,
       model: 'workflow-model',
       modelSpecified: false,

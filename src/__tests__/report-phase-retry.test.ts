@@ -162,6 +162,9 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('02-coder.md');
     const ctx = createContext(reportDir, 'Implemented feature X');
+    ctx.onProviderAttempt = vi.fn();
+    const failedUsage = { inputTokens: 3, outputTokens: 1, totalTokens: 4, usageMissing: false };
+    const successfulUsage = { inputTokens: 5, outputTokens: 2, totalTokens: 7, usageMissing: false };
     queueRunAgentResponses([
       {
         persona: 'coder',
@@ -169,6 +172,7 @@ describe('runReportPhase retry with new session', () => {
         content: '   ',
         timestamp: new Date('2026-02-11T00:00:00Z'),
         sessionId: 'session-resume-2',
+        providerUsage: failedUsage,
       },
       {
         persona: 'coder',
@@ -176,6 +180,7 @@ describe('runReportPhase retry with new session', () => {
         content: '# Report\nRecovered output',
         timestamp: new Date('2026-02-11T00:00:01Z'),
         sessionId: 'session-fresh-1',
+        providerUsage: successfulUsage,
       },
     ]);
     const runAgentMock = vi.mocked(runAgent);
@@ -187,6 +192,18 @@ describe('runReportPhase retry with new session', () => {
     const reportPath = join(reportDir, '02-coder.md');
     expect(readFileSync(reportPath, 'utf-8')).toBe('# Report\nRecovered output');
     expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ provider: 'opencode' }),
+      false,
+      failedUsage,
+    );
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ provider: 'opencode' }),
+      true,
+      successfulUsage,
+    );
 
     const secondCallOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(secondCallOptions.sessionId).toBeUndefined();

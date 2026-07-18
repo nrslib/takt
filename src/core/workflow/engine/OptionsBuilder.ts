@@ -26,7 +26,7 @@ import {
   providerSupportsMaxTurns,
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
-import type { ProviderType } from '../../../shared/types/provider.js';
+import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -82,24 +82,6 @@ export class OptionsBuilder {
     ) => FindingContractInstructionContext | undefined,
   ) {}
 
-  private resolveEngineProviderModel(): StepProviderInfo {
-    if (this.engineOptions.provider === 'auto') {
-      return {
-        provider: undefined,
-        providerSource: undefined,
-        model: undefined,
-        modelSource: undefined,
-      };
-    }
-
-    return {
-      provider: this.engineOptions.provider,
-      providerSource: this.engineOptions.providerSource,
-      model: this.engineOptions.model,
-      modelSource: this.engineOptions.modelSource,
-    };
-  }
-
   resolveStepProviderModel(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
     if (runtime?.providerInfo) {
       const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
@@ -113,27 +95,48 @@ export class OptionsBuilder {
       };
     }
 
-    const engineProviderInfo = this.resolveEngineProviderModel();
     const resolved = resolveStepProviderModel({
       step,
-      provider: engineProviderInfo.provider,
-      providerSource: engineProviderInfo.providerSource,
-      model: engineProviderInfo.model,
-      modelSource: engineProviderInfo.modelSource,
+      provider: this.engineOptions.provider,
+      providerSource: this.engineOptions.providerSource,
+      model: this.engineOptions.model,
+      modelSource: this.engineOptions.modelSource,
+      autoRouting: this.engineOptions.autoRouting,
       providerRouting: this.engineOptions.providerRouting,
       personaProviders: this.engineOptions.personaProviders,
     });
-    const provider = resolved.provider ?? engineProviderInfo.provider;
-    const modelWasResolved = resolved.modelSource !== undefined;
-    const providerOptions = this.resolveMergedProviderOptions(step, provider, runtime);
+    const providerOptions = this.resolveMergedProviderOptions(step, resolved.provider, runtime);
     const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step);
     return {
-      provider,
-      providerSource: resolved.providerSource ?? engineProviderInfo.providerSource,
-      model: modelWasResolved ? resolved.model : resolved.model ?? engineProviderInfo.model,
-      modelSource: modelWasResolved ? resolved.modelSource : resolved.modelSource ?? engineProviderInfo.modelSource,
+      provider: resolved.provider,
+      providerSource: resolved.providerSource,
+      model: resolved.model,
+      modelSource: resolved.modelSource,
       providerOptions,
       providerOptionsSources,
+    };
+  }
+
+  buildProviderStream(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+    providerModel: string | undefined,
+    output: StreamCallback | undefined,
+  ): StreamCallback | undefined {
+    const onProviderStream = this.engineOptions.onProviderStream;
+    if (!onProviderStream) {
+      return output;
+    }
+    if (!provider) {
+      throw new Error(`Step "${step.name}" has no resolved provider for provider event logging`);
+    }
+    return (event): void => {
+      onProviderStream({
+        step: step.name,
+        provider,
+        providerModel: providerModel ?? '(default)',
+      }, event);
+      output?.(event);
     };
   }
 
@@ -271,7 +274,7 @@ export class OptionsBuilder {
       providerOptions,
       resolvedProviderOptions: providerOptions,
       language: this.getLanguage(),
-      onStream: this.engineOptions.onStream,
+      onStream: this.buildProviderStream(step, resolvedProvider, resolvedModel, this.engineOptions.onStream),
       onPermissionRequest: this.engineOptions.onPermissionRequest,
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
       bypassPermissions: this.engineOptions.bypassPermissions,
@@ -473,6 +476,7 @@ export class OptionsBuilder {
 
   /** Build context for Phase 2/3 execution */
   buildPhaseRunnerContext(
+    step: WorkflowStep,
     state: WorkflowState,
     lastResponse: string | undefined,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
@@ -505,7 +509,9 @@ export class OptionsBuilder {
     ) => void,
     iteration?: number,
     runtime?: RuntimeStepResolution,
+    onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'],
   ): ReportPhaseRunnerContext & StatusJudgmentPhaseContext {
+    const stepProvider = this.resolveStepProviderModel(step, runtime);
     return {
       cwd: this.getCwd(),
       reportDir: join(this.getCwd(), this.getReportDir()),
@@ -518,7 +524,12 @@ export class OptionsBuilder {
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
-      onStream: this.engineOptions.onStream,
+      onStream: this.buildProviderStream(
+        step,
+        stepProvider.provider,
+        stepProvider.model,
+        this.engineOptions.onStream,
+      ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
       buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
@@ -534,6 +545,7 @@ export class OptionsBuilder {
       onPhaseStart,
       onPhaseComplete,
       onJudgeStage,
+      onProviderAttempt,
       iteration,
     };
   }

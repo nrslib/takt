@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { chmodSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
@@ -9,22 +8,21 @@ import {
   updateIsolatedConfig,
   type IsolatedEnv,
 } from '../helpers/isolated-env';
-import { createTestRepo, isGitHubE2EAvailable, type TestRepo } from '../helpers/test-repo';
+import { createOfflineTestRepo, type TestRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const requiresGitHub = isGitHubE2EAvailable();
+const ISSUE_NUMBER = '42';
 
 // E2E更新時は docs/testing/e2e.md も更新すること
 describe('E2E: Add task from GitHub issue (takt add)', () => {
   let isolatedEnv: IsolatedEnv;
   let testRepo: TestRepo;
-  let issueNumber: string;
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
-    testRepo = createTestRepo();
+    testRepo = createOfflineTestRepo();
 
     // Use mock provider to stabilize summarizer
     updateIsolatedConfig(isolatedEnv.taktDir, {
@@ -32,30 +30,29 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
       model: 'mock-model',
     });
 
-    const createOutput = execFileSync(
-      'gh',
-      [
-        'issue', 'create',
-        '--title', 'E2E Add Issue',
-        '--body', 'Add task via issue for E2E',
-        '--repo', testRepo.repoName,
-      ],
-      { encoding: 'utf-8' },
-    );
-
-    const match = createOutput.match(/\/issues\/(\d+)/);
-    if (!match?.[1]) {
-      throw new Error(`Failed to extract issue number from: ${createOutput}`);
-    }
-    issueNumber = match[1];
+    const fakeBinDir = join(isolatedEnv.taktDir, 'fake-bin');
+    const ghPath = join(fakeBinDir, 'gh');
+    mkdirSync(fakeBinDir, { recursive: true });
+    writeFileSync(ghPath, `#!/bin/sh
+if [ "$#" -eq 2 ] && [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  exit 0
+fi
+if [ "$#" -eq 5 ] \
+  && [ "$1" = "issue" ] \
+  && [ "$2" = "view" ] \
+  && [ "$3" = "${ISSUE_NUMBER}" ] \
+  && [ "$4" = "--json" ] \
+  && [ "$5" = "number,title,body,labels,comments" ]; then
+  printf '%s\n' '{"number":42,"title":"E2E Add Issue","body":"Add task via issue for E2E","labels":[],"comments":[]}'
+  exit 0
+fi
+exit 1
+`);
+    chmodSync(ghPath, 0o755);
+    isolatedEnv.env.PATH = `${fakeBinDir}:${isolatedEnv.env.PATH ?? ''}`;
   });
 
   afterEach(() => {
-    try {
-      execFileSync('gh', ['issue', 'close', issueNumber, '--repo', testRepo.repoName], { stdio: 'pipe' });
-    } catch {
-      // ignore
-    }
     try {
       testRepo.cleanup();
     } catch {
@@ -68,11 +65,11 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
     }
   });
 
-  it.skipIf(!requiresGitHub)('should create a task file from issue reference', () => {
+  it('should create a task file from issue reference', () => {
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/add-task.json');
 
     const result = runTakt({
-      args: ['--workflow', 'default', 'add', `#${issueNumber}`],
+      args: ['--workflow', 'default', 'add', `#${ISSUE_NUMBER}`],
       cwd: testRepo.path,
       env: {
         ...isolatedEnv.env,
@@ -88,7 +85,7 @@ describe('E2E: Add task from GitHub issue (takt add)', () => {
     const content = readFileSync(tasksFile, 'utf-8');
     const parsed = parseYaml(content) as { tasks?: Array<{ issue?: number; task_dir?: string }> };
     expect(parsed.tasks?.length).toBe(1);
-    expect(parsed.tasks?.[0]?.issue).toBe(Number(issueNumber));
+    expect(parsed.tasks?.[0]?.issue).toBe(Number(ISSUE_NUMBER));
     expect(parsed.tasks?.[0]?.task_dir).toBeTypeOf('string');
     const orderPath = join(testRepo.path, String(parsed.tasks?.[0]?.task_dir), 'order.md');
     expect(existsSync(orderPath)).toBe(true);

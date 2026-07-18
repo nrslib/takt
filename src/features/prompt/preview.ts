@@ -7,6 +7,7 @@
 
 import {
   loadWorkflowByIdentifier,
+  resolveConfigValueWithSource,
   resolveWorkflowConfigValue,
   resolveWorkflowConfigValues,
 } from '../../infra/config/index.js';
@@ -18,10 +19,13 @@ import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
 } from '../../core/workflow/provider-resolution.js';
+import { resolveRuleBasedAutoRoutingProviderInfo } from '../../core/workflow/auto-routing/resolver.js';
+import { resolveEffectiveAutoRouting } from '../../core/workflow/auto-routing/effective-auto-routing.js';
 import { buildFindingManagerStep } from '../../core/workflow/findings/manager-step.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
 import type { Language } from '../../core/models/types.js';
+import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
 import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
@@ -42,36 +46,71 @@ function formatConfiguredValue(value: string | undefined): string {
   return value === undefined ? 'not configured' : sanitizeTerminalText(value);
 }
 
-function resolvePreviewProviderResolution(cwd: string): ProviderModelResolutionContext {
-  return resolveWorkflowConfigValues(
+type PreviewProviderResolution = ProviderModelResolutionContext & {
+  providerSource: ProviderResolutionSource;
+  modelSource: ProviderResolutionSource;
+};
+
+function resolvePreviewProviderResolution(
+  cwd: string,
+  config: WorkflowConfig,
+): PreviewProviderResolution {
+  const resolution = resolveWorkflowConfigValues(
     cwd,
-    ['provider', 'model', 'personaProviders', 'providerRouting'],
+    ['autoRouting', 'personaProviders', 'providerRouting'],
   );
+  const provider = resolveConfigValueWithSource(cwd, 'provider', { workflowContext: config });
+  const model = resolveConfigValueWithSource(cwd, 'model', { workflowContext: config });
+  return {
+    ...resolution,
+    provider: provider.value,
+    providerSource: provider.source,
+    model: model.value,
+    modelSource: model.source,
+    autoRouting: resolveEffectiveAutoRouting(config, resolution.autoRouting),
+  };
 }
 
 function resolveFindingManagerProviderModel(
   config: WorkflowConfig,
-  resolution: ProviderModelResolutionContext,
+  resolution: PreviewProviderResolution,
 ): ReturnType<typeof resolveStepProviderModel> | undefined {
   if (!config.findingContract) {
     return undefined;
   }
-  return resolveStepProviderModel({
-    step: buildFindingManagerStep({
-      contract: config.findingContract,
-      workflowProvider: config.provider,
-      workflowModel: config.model,
-    }),
+  const step = buildFindingManagerStep({
+    contract: config.findingContract,
+    workflowProvider: config.provider,
+    workflowModel: config.model,
+  });
+  const currentProviderInfo = resolveStepProviderModel({
+    step,
     provider: resolution.provider,
+    providerSource: resolution.providerSource,
     model: resolution.model,
+    modelSource: resolution.modelSource,
+    autoRouting: resolution.autoRouting,
     personaProviders: resolution.personaProviders,
     providerRouting: resolution.providerRouting,
   });
+  if (resolution.autoRouting === undefined) {
+    return currentProviderInfo;
+  }
+  return resolveRuleBasedAutoRoutingProviderInfo({
+    autoRouting: resolution.autoRouting,
+    step: {
+      name: step.name,
+      tags: step.tags,
+      personaKey: step.providerRoutingPersonaKey,
+      instruction: step.instruction,
+    },
+    currentProviderInfo,
+  }) ?? currentProviderInfo;
 }
 
 function printFindingContractMetadata(
   config: WorkflowConfig,
-  resolution: ProviderModelResolutionContext,
+  resolution: PreviewProviderResolution,
 ): void {
   const manager = config.findingContract?.manager;
   if (!manager) {
@@ -155,7 +194,7 @@ export async function previewPrompts(cwd: string, workflowIdentifier?: string): 
   }
 
   const language = resolveWorkflowConfigValue(cwd, 'language') as Language;
-  const providerResolution = resolvePreviewProviderResolution(cwd);
+  const providerResolution = resolvePreviewProviderResolution(cwd, config);
   const safeWorkflowName = sanitizeTerminalText(config.name);
 
   header(`Workflow Prompt Preview: ${safeWorkflowName}`);

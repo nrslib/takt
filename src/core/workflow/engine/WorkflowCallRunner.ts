@@ -8,13 +8,17 @@ import type {
   WorkflowState,
 } from '../../models/types.js';
 import type { RunPaths } from '../run/run-paths.js';
-import { resolveWorkflowCallProviderModel, toConcreteProvider } from '../provider-resolution.js';
+import {
+  applyProviderModelOverride,
+  resolveWorkflowCallProviderModel,
+} from '../provider-resolution.js';
 import {
   getResumePointWorkflowReference,
   getWorkflowReference,
 } from '../workflow-reference.js';
 import type {
   RuntimeStepResolution,
+  StepProviderInfo,
   StepRunResult,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
@@ -29,18 +33,6 @@ import {
   type WorkflowCallIsolatedStateSync,
   type WorkflowCallSessionUpdates,
 } from './WorkflowCallExecutor.js';
-
-function workflowCallOverrideModel(
-  overrides: WorkflowCallStep['overrides'],
-  inheritedModel: string | undefined,
-): string | undefined {
-  if (overrides?.model !== undefined) {
-    return overrides.model;
-  }
-  return overrides?.provider === undefined || overrides.provider === 'auto'
-    ? inheritedModel
-    : undefined;
-}
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
@@ -74,15 +66,19 @@ export class WorkflowCallRunner {
 
   private resolveParentWorkflowProviderContext(): {
     provider: WorkflowEngineOptions['provider'];
+    providerSource: WorkflowEngineOptions['providerSource'];
     model: string | undefined;
+    modelSource: WorkflowEngineOptions['modelSource'];
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
     const options = this.deps.getOptions();
     const parentConfig = this.deps.getConfig();
     const providerInfo = resolveWorkflowCallProviderModel({
       workflow: parentConfig,
-      provider: this.deps.getOptions().provider,
-      model: this.deps.getOptions().model,
+      provider: options.provider,
+      providerSource: options.providerSource,
+      model: options.model,
+      modelSource: options.modelSource,
     });
     const providerOptions = resolveEffectiveProviderOptions(
       options.providerOptionsSource,
@@ -93,7 +89,9 @@ export class WorkflowCallRunner {
 
     return {
       provider: providerInfo.provider,
+      providerSource: providerInfo.providerSource,
       model: providerInfo.model,
+      modelSource: providerInfo.modelSource,
       providerOptions,
     };
   }
@@ -101,36 +99,48 @@ export class WorkflowCallRunner {
   private resolveChildProviderModel(
     step: WorkflowCallStep,
     childWorkflow: WorkflowConfig,
-  ): { provider: WorkflowEngineOptions['provider']; model: string | undefined } {
+  ): StepProviderInfo {
     const parentProviderInfo = this.resolveParentWorkflowProviderContext();
     const childProviderInfo = resolveWorkflowCallProviderModel({
       workflow: childWorkflow,
       provider: parentProviderInfo.provider,
+      providerSource: parentProviderInfo.providerSource,
       model: parentProviderInfo.model,
+      modelSource: parentProviderInfo.modelSource,
     });
     if (!step.overrides) {
       return {
         provider: childProviderInfo.provider,
+        providerSource: childProviderInfo.providerSource,
         model: childProviderInfo.model,
+        modelSource: childProviderInfo.modelSource,
       };
     }
 
-    return {
-      provider: step.overrides.provider ?? childProviderInfo.provider,
-      model: workflowCallOverrideModel(step.overrides, childProviderInfo.model),
-    };
+    return applyProviderModelOverride(childProviderInfo, {
+      provider: step.overrides.provider,
+      providerSpecified: step.overrides.provider !== undefined,
+      model: step.overrides.model,
+      modelSpecified: step.overrides.model !== undefined,
+      source: 'workflow_call',
+    });
   }
 
   resolveRuntime(step: WorkflowCallStep): RuntimeStepResolution {
     const parentProviderInfo = this.resolveParentWorkflowProviderContext();
-    const workflowCallProviderModel = {
-      provider: step.overrides?.provider ?? parentProviderInfo.provider,
-      model: workflowCallOverrideModel(step.overrides, parentProviderInfo.model),
-    };
+    const workflowCallProviderModel = applyProviderModelOverride(parentProviderInfo, {
+      provider: step.overrides?.provider,
+      providerSpecified: step.overrides?.provider !== undefined,
+      model: step.overrides?.model,
+      modelSpecified: step.overrides?.model !== undefined,
+      source: 'workflow_call',
+    });
     return {
       providerInfo: {
-        provider: toConcreteProvider(workflowCallProviderModel.provider),
+        provider: workflowCallProviderModel.provider,
+        providerSource: workflowCallProviderModel.providerSource,
         model: workflowCallProviderModel.model,
+        modelSource: workflowCallProviderModel.modelSource,
       },
     };
   }

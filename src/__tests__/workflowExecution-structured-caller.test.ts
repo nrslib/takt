@@ -16,6 +16,7 @@ const {
   mockEnsureCurrentTmpDirExists,
   mockGetProvider,
   mockRunAgent,
+  mockResolveConfigValueWithSource,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
@@ -75,6 +76,7 @@ const {
     mockEnsureCurrentTmpDirExists: vi.fn(() => getTmpdir()),
     mockGetProvider: vi.fn(),
     mockRunAgent: vi.fn(),
+    mockResolveConfigValueWithSource: vi.fn(),
   };
 });
 
@@ -118,6 +120,11 @@ vi.mock('../infra/config/index.js', async (importOriginal) => ({
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),
+}));
+
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveConfigValueWithSource: mockResolveConfigValueWithSource,
 }));
 
 vi.mock('../shared/context.js', () => ({
@@ -172,22 +179,18 @@ vi.mock('../shared/utils/index.js', () => ({
   playWarningSound: vi.fn(),
 }));
 
-vi.mock('../shared/utils/providerEventLogger.js', () => ({
+vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn().mockReturnValue({
     filepath: '/tmp/provider-events.jsonl',
-    wrapCallback: vi.fn((callback) => callback),
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
+    logEvent: vi.fn(),
   }),
   isProviderEventsEnabled: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock('../shared/utils/usageEventLogger.js', () => ({
+vi.mock('../core/logging/usageEventLogger.js', () => ({
   createUsageEventLogger: vi.fn().mockReturnValue({
     filepath: '/tmp/usage-events.jsonl',
-    setStep: vi.fn(),
-    setProvider: vi.fn(),
-    logUsage: vi.fn(),
+    logUsageFor: vi.fn(),
   }),
   isUsageEventsEnabled: vi.fn().mockReturnValue(false),
 }));
@@ -242,6 +245,12 @@ function getInjectedStructuredCaller(): StructuredCaller {
   return structuredCaller as StructuredCaller;
 }
 
+function mockResolvedProviderModel(provider: string, model: string | undefined): void {
+  mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
+    ? { value: provider, source: 'global' }
+    : { value: model, source: model === undefined ? 'default' : 'global' });
+}
+
 describe('executeWorkflow structuredCaller injection', () => {
   const originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   let cleanupDirs: string[];
@@ -249,6 +258,7 @@ describe('executeWorkflow structuredCaller injection', () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetProvider.mockReturnValue({ supportsStructuredOutput: false });
+  mockResolvedProviderModel('cursor', undefined);
   MockWorkflowEngine.nextRunImpl = undefined;
   cleanupDirs = [];
 });
@@ -280,6 +290,7 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('cursor', undefined);
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
     });
@@ -329,6 +340,7 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('claude', undefined);
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -383,6 +395,7 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('cursor', undefined);
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -450,6 +463,7 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('claude', 'sonnet');
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -506,6 +520,7 @@ beforeEach(() => {
       analytics: undefined,
       observability: disabledObservability,
     });
+    mockResolvedProviderModel('cursor', 'cursor-fast');
 
     await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -874,11 +889,18 @@ steps:
     expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBe('mock');
   });
 
-  it('should not pass ignored autoStrategy override through to WorkflowEngine', async () => {
+  it('should pass effective auto_routing and its strategy override separately to WorkflowEngine', async () => {
     const autoRouting = {
       strategy: 'cost',
       router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
       candidates: [
+        {
+          name: 'reasoning',
+          description: 'Reasoning',
+          provider: 'claude-sdk',
+          model: 'claude-opus-4-20250514',
+          costTier: 'high',
+        },
         {
           name: 'coding',
           description: 'Implementation',
@@ -899,13 +921,13 @@ steps:
     });
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(autoRouting);
-    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBeUndefined();
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBe('performance');
   });
 
-  it('should pass applied autoStrategy override through to WorkflowEngine', async () => {
+  it('should delegate autoStrategy override application to WorkflowEngine', async () => {
     const config = {
       ...makeConfig(),
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: {
         strategy: 'cost',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
@@ -935,7 +957,7 @@ steps:
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.autoStrategyOverride).toBe('performance');
     expect(MockWorkflowEngine.lastInstance.receivedOptions.autoRouting).toEqual(expect.objectContaining({
-      strategy: 'performance',
+      strategy: 'cost',
     }));
   });
 
@@ -1079,7 +1101,7 @@ steps:
       { cwd: '/tmp/project', resolvedProvider: 'cursor', resolvedModel: 'cursor-fast', persona: 'team-leader' },
     );
 
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'part-1', title: 'API', instruction: 'Implement API' },
     ]);
     const [, prompt, runOptions] = mockRunAgent.mock.calls[0] ?? [];
@@ -1130,7 +1152,7 @@ steps:
       { cwd: '/tmp/project', resolvedProvider: 'claude', resolvedModel: 'sonnet', persona: 'team-leader' },
     );
 
-    expect(result).toEqual([
+    expect(result.parts).toEqual([
       { id: 'part-1', title: 'API', instruction: 'Implement API' },
     ]);
     const [, , runOptions] = mockRunAgent.mock.calls[0] ?? [];

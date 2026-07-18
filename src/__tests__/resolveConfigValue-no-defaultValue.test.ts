@@ -69,6 +69,81 @@ describe('config resolution defaults and project-local priority', () => {
   describe('project-local priority', () => {
     it.each([
       {
+        label: 'provider only',
+        envProvider: 'mock',
+        envModel: undefined,
+        expectedProvider: { value: 'mock', source: 'env' },
+        expectedModel: { value: 'project-model', source: 'project' },
+      },
+      {
+        label: 'model only',
+        envProvider: undefined,
+        envModel: 'env-model',
+        expectedProvider: { value: 'codex', source: 'project' },
+        expectedModel: { value: 'env-model', source: 'env' },
+      },
+      {
+        label: 'provider and model',
+        envProvider: 'mock',
+        envModel: 'env-model',
+        expectedProvider: { value: 'mock', source: 'env' },
+        expectedModel: { value: 'env-model', source: 'env' },
+      },
+    ])('should preserve environment source for $label loaded through project config', ({
+      envProvider,
+      envModel,
+      expectedProvider,
+      expectedModel,
+    }) => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.yaml'), [
+        'provider: codex',
+        'model: project-model',
+      ].join('\n'), 'utf-8');
+      if (envProvider !== undefined) process.env['TAKT_PROVIDER'] = envProvider;
+      if (envModel !== undefined) process.env['TAKT_MODEL'] = envModel;
+      invalidateAllResolvedConfigCache();
+
+      expect(resolveConfigValueWithSource(projectDir, 'provider')).toEqual(expectedProvider);
+      expect(resolveConfigValueWithSource(projectDir, 'model')).toEqual(expectedModel);
+    });
+
+    it.each([
+      { key: 'provider' as const, workflowValue: 'mock', projectValue: 'codex' },
+      { key: 'model' as const, workflowValue: 'workflow-model', projectValue: 'project-model' },
+    ])('should resolve project $key before workflow config', ({ key, workflowValue, projectValue }) => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.yaml'), `${key}: ${projectValue}\n`, 'utf-8');
+
+      expect(resolveConfigValueWithSource(projectDir, key, {
+        workflowContext: { [key]: workflowValue },
+      })).toEqual({ value: projectValue, source: 'project' });
+    });
+
+    it.each([
+      { key: 'provider' as const, envName: 'TAKT_PROVIDER', envValue: 'mock', workflowValue: 'codex' },
+      { key: 'model' as const, envName: 'TAKT_MODEL', envValue: 'env-model', workflowValue: 'workflow-model' },
+    ])('should resolve environment $key before workflow config', ({
+      key,
+      envName,
+      envValue,
+      workflowValue,
+    }) => {
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, 'config.yaml'), `${key}: project-value\n`, 'utf-8');
+      process.env[envName] = envValue;
+      invalidateAllResolvedConfigCache();
+
+      expect(resolveConfigValueWithSource(projectDir, key, {
+        workflowContext: { [key]: workflowValue },
+      })).toEqual({ value: envValue, source: 'env' });
+    });
+
+    it.each([
+      {
         key: 'minimalOutput',
         projectYaml: 'minimal_output: true\n',
         expected: true,
@@ -145,6 +220,88 @@ describe('config resolution defaults and project-local priority', () => {
           provider: 'opencode',
           model: 'opencode/project-model',
         },
+      });
+    });
+
+    it('Given project and global auto_routing, When resolving effective config, Then the project block wins as a whole', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'auto_routing:',
+          '  strategy: cost',
+          '  router:',
+          '    provider: codex',
+          '    model: gpt-5-global-router',
+          '  candidates:',
+          '    - name: global-low',
+          '      description: Global low cost candidate',
+          '      provider: codex',
+          '      model: gpt-5-global-low',
+          '      cost_tier: low',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const configDir = getProjectConfigDir(projectDir);
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'config.yaml'),
+        [
+          'auto_routing:',
+          '  strategy: balanced',
+          '  router:',
+          '    provider: codex',
+          '    model: gpt-5-project-router',
+          '  candidates:',
+          '    - name: project-medium',
+          '      description: Project balanced candidate',
+          '      provider: codex',
+          '      model: gpt-5-project-medium',
+          '      cost_tier: medium',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const result = resolveConfigValueWithSource(projectDir, 'autoRouting' as ConfigParameterKey);
+
+      expect(result.source).toBe('project');
+      expect(result.value).toMatchObject({
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'gpt-5-project-router' },
+        candidates: [{ name: 'project-medium', model: 'gpt-5-project-medium' }],
+      });
+    });
+
+    it('Given only global auto_routing, When resolving effective config, Then the global block is used', () => {
+      writeFileSync(
+        globalConfigPath,
+        [
+          'language: en',
+          'auto_routing:',
+          '  strategy: cost',
+          '  router:',
+          '    provider: codex',
+          '    model: gpt-5-global-router',
+          '  candidates:',
+          '    - name: global-low',
+          '      description: Global low cost candidate',
+          '      provider: codex',
+          '      model: gpt-5-global-low',
+          '      cost_tier: low',
+        ].join('\n'),
+        'utf-8',
+      );
+      invalidateGlobalConfigCache();
+
+      const result = resolveConfigValueWithSource(projectDir, 'autoRouting' as ConfigParameterKey);
+
+      expect(result.source).toBe('global');
+      expect(result.value).toMatchObject({
+        strategy: 'cost',
+        router: { provider: 'codex', model: 'gpt-5-global-router' },
+        candidates: [{ name: 'global-low', model: 'gpt-5-global-low' }],
       });
     });
 

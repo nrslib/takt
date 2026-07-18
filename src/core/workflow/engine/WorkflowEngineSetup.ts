@@ -20,7 +20,6 @@ import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
-import { toConcreteProvider } from '../provider-resolution.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
@@ -285,7 +284,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       const providerInfo = optionsBuilder.resolveStepProviderModel(step);
       return {
         cwd: params.getCwd(),
-          provider: toConcreteProvider(step.provider) ?? toConcreteProvider(params.options.provider),
+          provider: step.provider ?? params.options.provider,
           resolvedProvider: providerInfo.provider,
           resolvedModel: providerInfo.model,
           childProcessEnv: params.options.childProcessEnv,

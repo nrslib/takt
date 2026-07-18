@@ -34,7 +34,7 @@ import {
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
 
 function buildParallelOnlyConfig(): WorkflowConfig {
   return {
@@ -103,24 +103,57 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
 
   it('should retry a sub-step once with a fresh session when the provider errors', async () => {
     const config = buildParallelOnlyConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const delegatedAgentUsage = vi.fn();
+    const providerStream = vi.fn();
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'retry-model',
+      onDelegatedAgentUsage: delegatedAgentUsage,
+      onProviderStream: providerStream,
+    });
 
     const mock = vi.mocked(runAgent);
-    const sessionIds: Array<string | undefined> = [];
-    let archCalls = 0;
+    const archAttemptsAtRetryStart = vi.fn();
+    const nextArchResponse = vi.fn<(persona: Parameters<typeof runAgent>[0]) => AgentResponse>()
+      .mockImplementationOnce((persona) => makeResponse({
+        persona,
+        status: 'error',
+        content: '',
+        error: 'assistant message cycle budget exceeded',
+        providerUsage: {
+          inputTokens: 7,
+          outputTokens: 3,
+          totalTokens: 10,
+          usageMissing: false,
+        },
+      }))
+      .mockImplementationOnce((persona) => {
+        archAttemptsAtRetryStart(delegatedAgentUsage.mock.calls.filter(([context]) => (
+          context.step === 'arch-review'
+        )).length);
+        return makeResponse({
+          persona,
+          content: 'approved',
+          providerUsage: {
+            inputTokens: 11,
+            outputTokens: 5,
+            totalTokens: 16,
+            usageMissing: false,
+          },
+        });
+      });
     mock.mockImplementation(async (persona, task, options) => {
       options?.onPromptResolved?.({
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: task,
       });
+      options?.onStream?.({
+        type: 'init',
+        data: { model: options.resolvedModel ?? '(default)', sessionId: `session-${String(persona)}` },
+      });
       if (String(persona).includes('arch-review')) {
-        archCalls += 1;
-        sessionIds.push(options?.sessionId);
-        if (archCalls === 1) {
-          // 1回目はプロバイダ障害（劣化ループをガードがエラー化した形）
-          return makeResponse({ persona, status: 'error', content: '', error: 'assistant message cycle budget exceeded' });
-        }
-        return makeResponse({ persona, content: 'approved' });
+        return nextArchResponse(persona);
       }
       return makeResponse({ persona: String(persona), content: 'approved' });
     });
@@ -133,12 +166,45 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     ]);
 
     const state = await engine.run();
+    const archRunCalls = mock.mock.calls.filter(([persona]) => String(persona).includes('arch-review'));
 
     // 1席の一過性エラーで走行が落ちず、再試行で完走する
     expect(state.status).toBe('completed');
-    expect(archCalls).toBe(2);
+    expect(nextArchResponse).toHaveBeenCalledTimes(2);
+    expect(archRunCalls).toHaveLength(2);
     // 再試行は resume を切った新しいセッションで行われる
-    expect(sessionIds[1]).toBeUndefined();
+    expect(archRunCalls[1]?.[2]?.sessionId).toBeUndefined();
+    expect(archAttemptsAtRetryStart).toHaveBeenCalledWith(1);
+    expect(delegatedAgentUsage.mock.calls
+      .filter(([context]) => context.step === 'arch-review')
+      .map(([context, result]) => ({
+        ...context,
+        success: result.success,
+        totalTokens: result.usage?.totalTokens,
+      }))).toEqual([
+      {
+        step: 'arch-review',
+        stepType: 'parallel',
+        provider: 'mock',
+        providerModel: 'retry-model',
+        success: false,
+        totalTokens: 10,
+      },
+      {
+        step: 'arch-review',
+        stepType: 'parallel',
+        provider: 'mock',
+        providerModel: 'retry-model',
+        success: true,
+        totalTokens: 16,
+      },
+    ]);
+    expect(providerStream.mock.calls
+      .map(([context]) => context)
+      .filter((event) => event.step === 'arch-review')).toEqual([
+      { step: 'arch-review', provider: 'mock', providerModel: 'retry-model' },
+      { step: 'arch-review', provider: 'mock', providerModel: 'retry-model' },
+    ]);
   });
 
   it('should abort with parent error when one sub-step rejects and another approves', async () => {

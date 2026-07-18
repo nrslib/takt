@@ -26,6 +26,9 @@ import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import { createUsageEventLogger, type UsageEventLoggerConfig } from '../core/logging/usageEventLogger.js';
+import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
+import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
 
 function createTestTmpDir(): string {
   const dir = join(tmpdir(), `takt-engine-structured-${randomUUID()}`);
@@ -1006,7 +1009,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     const routingEvents: unknown[][] = [];
     const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
-      provider: 'auto' as never,
+      provider: 'mock',
       autoRouting: createStructuredCorrectionAutoRoutingConfig(),
       reportDirName: 'test-report-dir',
       detectRuleIndex: () => -1,
@@ -1114,7 +1117,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     const routingEvents: unknown[][] = [];
     const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
-      provider: 'auto' as never,
+      provider: 'mock',
       autoRouting: createStructuredCorrectionAutoRoutingConfig(),
       reportDirName: 'test-report-dir',
       detectRuleIndex: () => -1,
@@ -1496,6 +1499,11 @@ describe('WorkflowEngine structured caller defaults', () => {
       },
       expectedReason: 'requires structured_output for provider "claude": $.newFindings is required',
     },
+    {
+      name: 'agent rejection',
+      managerResponse: new Error('manager rejected'),
+      expectedReason: 'manager rejected',
+    },
   ])('findings manager が $name を返した場合は ledger 更新と親 rule 評価に進まない', async ({ managerResponse, expectedReason }) => {
     const initialLedger = {
       version: 1,
@@ -1563,7 +1571,16 @@ describe('WorkflowEngine structured caller defaults', () => {
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
       })
-      .mockResolvedValueOnce(managerResponse);
+      .mockImplementationOnce(async (_persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: instruction,
+        });
+        if (managerResponse instanceof Error) {
+          throw managerResponse;
+        }
+        return managerResponse;
+      });
 
     const config: WorkflowConfig = {
       name: 'finding-manager-failure-test',
@@ -1610,11 +1627,25 @@ describe('WorkflowEngine structured caller defaults', () => {
         }),
       ],
     };
+    const usageLogger = createUsageEventLogger({
+      logsDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'logs'),
+      sessionId: `manager-failure-${managerResponse instanceof Error ? 'rejection' : managerResponse.status}`,
+      runId: 'manager-failure-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
     const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
+      model: 'claude-manager-model',
       reportDirName: 'test-report-dir',
       detectRuleIndex: () => -1,
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
     });
     engine.on('findings:ledger', ledgerUpdated);
     const abortReasons: string[] = [];
@@ -1631,10 +1662,27 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(result.stepOutputs.has('fix')).toBe(false);
     expect(ledgerUpdated).not.toHaveBeenCalled();
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    expect(usageRecords.filter((record) => record.step === 'findings-manager')).toEqual([
+      expect.objectContaining({
+        step_type: 'parallel',
+        provider: 'claude',
+        provider_model: 'claude-manager-model',
+        success: false,
+      }),
+    ]);
+    expect(usageRecords).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: 'reviewers' }),
+    ]));
   });
 
   it('semantic invalid な findings manager output は ledger 更新前に retry し valid output なら継続する', async () => {
     const ledgerUpdated = vi.fn();
+    const stepStarted = vi.fn();
+    const stepCompleted = vi.fn();
     let firstManagerRawId = '';
     vi.mocked(runAgent)
       .mockImplementationOnce(async (_persona, instruction, options) => {
@@ -1679,6 +1727,12 @@ describe('WorkflowEngine structured caller defaults', () => {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
+          providerUsage: {
+            inputTokens: 11,
+            outputTokens: 7,
+            totalTokens: 18,
+            usageMissing: false,
+          },
           structuredOutput: {
             matches: [],
             newFindings: [
@@ -1717,6 +1771,12 @@ describe('WorkflowEngine structured caller defaults', () => {
           persona: 'findings-manager',
           status: 'done',
           content: 'manager output',
+          providerUsage: {
+            inputTokens: 13,
+            outputTokens: 9,
+            totalTokens: 22,
+            usageMissing: false,
+          },
           structuredOutput: {
             matches: [],
             newFindings: [
@@ -1786,13 +1846,29 @@ describe('WorkflowEngine structured caller defaults', () => {
         }),
       ],
     };
+    const usageLogger = createUsageEventLogger({
+      logsDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'logs'),
+      sessionId: 'manager-semantic-retry',
+      runId: 'manager-semantic-retry-run',
+      enabled: true,
+    } satisfies UsageEventLoggerConfig);
     const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
+      model: 'claude-manager-model',
       reportDirName: 'test-report-dir',
       detectRuleIndex: () => -1,
+      onDelegatedAgentUsage: (context, result) => usageLogger.logUsageFor(context, {
+        success: result.success,
+        usage: result.usage ?? {
+          usageMissing: true,
+          reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+        },
+      }),
     });
     engine.on('findings:ledger', ledgerUpdated);
+    engine.on('step:start', stepStarted);
+    engine.on('step:complete', stepCompleted);
 
     const result = await engine.run();
 
@@ -1841,6 +1917,31 @@ describe('WorkflowEngine structured caller defaults', () => {
     });
     expect(ledgerUpdated).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+    expect(stepStarted.mock.calls.map(([step]) => step.name)).toEqual(['reviewers', 'fix']);
+    expect(stepCompleted.mock.calls.map(([step]) => step.name)).toEqual(['reviewers', 'fix']);
+    const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as UsageEventLogRecord);
+    expect(usageRecords.filter((record) => record.step === 'findings-manager')).toEqual([
+      expect.objectContaining({
+        step_type: 'parallel',
+        provider: 'claude',
+        provider_model: 'claude-manager-model',
+        success: true,
+        usage: expect.objectContaining({ total_tokens: 18 }),
+      }),
+      expect.objectContaining({
+        step_type: 'parallel',
+        provider: 'claude',
+        provider_model: 'claude-manager-model',
+        success: true,
+        usage: expect.objectContaining({ total_tokens: 22 }),
+      }),
+    ]);
+    expect(usageRecords).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: 'reviewers' }),
+    ]));
   });
 
   it('retry 後も semantic invalid なら ledger 非更新で制御失敗を返す', async () => {
@@ -2525,13 +2626,24 @@ describe('WorkflowEngine structured caller defaults', () => {
   });
 
   it('finding_contract の parallel reviewer は旧 findings キーを raw findings として扱わない', async () => {
+    const providerStream = vi.fn();
+    const delegatedAgentUsage = vi.fn();
+    const displayStream = vi.fn();
     // Phase 1 と是正コールの両方で、旧 findings キーの不正出力を返す
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
+      const reviewerCall = vi.mocked(runAgent).mock.calls.length;
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      options?.onStream?.({
+        type: 'init',
+        data: { model: options.resolvedModel ?? '(default)', sessionId: `reviewer-${reviewerCall}` },
+      });
       return {
         persona: 'architecture-reviewer',
         status: 'done',
         content: 'Architecture issue found.',
+        providerUsage: reviewerCall === 1
+          ? { inputTokens: 11, outputTokens: 7, totalTokens: 18, usageMissing: false }
+          : { inputTokens: 13, outputTokens: 9, totalTokens: 22, usageMissing: false },
         structuredOutput: {
           findings: [],
         },
@@ -2579,8 +2691,12 @@ describe('WorkflowEngine structured caller defaults', () => {
     const result = await new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
+      model: 'claude-review-model',
       reportDirName: 'test-report-dir',
       detectRuleIndex: () => -1,
+      onStream: displayStream,
+      onProviderStream: providerStream,
+      onDelegatedAgentUsage: delegatedAgentUsage,
     }).run();
 
     expect(result.status).toBe('aborted');
@@ -2592,6 +2708,46 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(existsSync(join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw', 'test-report-dir.reviewers.json'))).toBe(false);
     // Phase 1 + 是正コールの2回
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    expect(delegatedAgentUsage.mock.calls.map(([context, usageResult]) => ({
+      ...context,
+      success: usageResult.success,
+      totalTokens: usageResult.usage?.totalTokens,
+    }))).toEqual([
+      {
+        step: 'architecture-review',
+        stepType: 'parallel',
+        provider: 'claude',
+        providerModel: 'claude-review-model',
+        success: true,
+        totalTokens: 18,
+      },
+      {
+        step: 'architecture-review',
+        stepType: 'parallel',
+        provider: 'claude',
+        providerModel: 'claude-review-model',
+        success: true,
+        totalTokens: 22,
+      },
+    ]);
+    expect(providerStream.mock.calls.map(([context, event]) => ({
+      ...context,
+      eventType: event.type,
+    }))).toEqual([
+      {
+        step: 'architecture-review',
+        provider: 'claude',
+        providerModel: 'claude-review-model',
+        eventType: 'init',
+      },
+      {
+        step: 'architecture-review',
+        provider: 'claude',
+        providerModel: 'claude-review-model',
+        eventType: 'init',
+      },
+    ]);
+    expect(displayStream).toHaveBeenCalledOnce();
   });
 
   it('finding_contract の通常 reviewer step には raw findings schema を注入しない', async () => {

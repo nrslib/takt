@@ -21,6 +21,7 @@ import {
   pickNestedOtelExporterOptionEnv,
 } from '../../../shared/telemetry/index.js';
 import type { GitProvider } from '../../../infra/git/index.js';
+import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -197,7 +198,19 @@ async function executeWorkflowInternal(
     const childProcessEnv = resolveNestedChildProcessEnv(bootstrap.observability, process.env);
     engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
       abortSignal: runAbortController.signal,
-      onStream: bootstrap.providerEventLogger.wrapCallback(handleProviderStream),
+      onStream: handleProviderStream,
+      onProviderStream: (context, event) => {
+        bootstrap.providerEventLogger.logEvent(context, event);
+      },
+      onDelegatedAgentUsage: (context, result) => {
+        bootstrap.usageEventLogger.logUsageFor(context, {
+          success: result.success,
+          usage: result.usage ?? {
+            usageMissing: true,
+            reason: USAGE_MISSING_REASONS.NOT_AVAILABLE,
+          },
+        });
+      },
       onUserInput,
       initialSessions: bootstrap.savedSessions,
       onSessionUpdate: bootstrap.sessionUpdateHandler,
@@ -219,6 +232,7 @@ async function executeWorkflowInternal(
       providerOptions: options.providerOptions,
       autoRouting: bootstrap.effectiveWorkflowConfig.autoRouting,
       autoStrategyOverride: bootstrap.autoStrategyOverride,
+      onEffectiveAutoRoutingReached: bootstrap.onEffectiveAutoRoutingReached,
       providerOptionsSource: options.providerOptionsSource,
       providerOptionsOriginResolver: options.providerOptionsOriginResolver,
       personaProviders: options.personaProviders,
@@ -257,7 +271,6 @@ async function executeWorkflowInternal(
       prefixWriter: bootstrap.prefixWriter,
       displayRef: bootstrap.displayRef,
       handlerRef: bootstrap.handlerRef,
-      providerEventLogger: bootstrap.providerEventLogger,
       usageEventLogger: bootstrap.usageEventLogger,
       analyticsEmitter: bootstrap.analyticsEmitter,
       sessionLogger: bootstrap.sessionLogger,
@@ -342,6 +355,7 @@ async function executeWorkflowInternal(
     }
     throw error;
   } finally {
+    bootstrap.warnIfAutoStrategyUnused();
     bootstrap.prefixWriter?.flush();
     abortHandler.cleanup();
     try {

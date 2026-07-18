@@ -20,6 +20,7 @@
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
 | `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock） |
+| `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
 | `--config <path>` | グローバル設定ファイルのパス（デフォルト: `~/.takt/config.yaml`） |
 
@@ -494,7 +495,7 @@ takt repertoire remove @{owner}/{repo}
 
 ### takt telemetry
 
-オートルーティング（`provider: auto`）が使うローカルのルーティングイベント記録を管理します。決定は `.takt/events/` に NDJSON としてローカル書き込みされ、TAKT がアップロードすることはありません。
+effective `auto_routing` が設定されているときに使うローカルのルーティングイベント記録を管理します。決定は `.takt/events/` に NDJSON としてローカル書き込みされ、TAKT がアップロードすることはありません。
 
 ```bash
 # ローカルのルーティングイベント記録の状態を表示

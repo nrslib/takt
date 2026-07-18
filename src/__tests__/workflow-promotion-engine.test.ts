@@ -187,6 +187,79 @@ describe('WorkflowEngine promotion', () => {
     });
   });
 
+  it('Given effective auto_routing and an at-based promotion, When the step reaches its threshold, Then promotion wins over the candidate', async () => {
+    const implement = withPromotion(makeStep('implement', {
+      rules: [makeRule('done', 'review')],
+    }), [
+      {
+        at: 2,
+        provider: 'claude',
+        model: 'opus',
+      },
+    ]);
+    const review = makeStep('review', {
+      rules: [
+        makeRule('needs_fix', 'implement'),
+        makeRule('approved', 'COMPLETE'),
+      ],
+    });
+    const config: WorkflowConfig = {
+      name: 'promotion-over-auto-routing',
+      steps: [implement, review],
+      initialStep: 'implement',
+      maxSteps: 4,
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'codex', model: 'router-model' },
+        candidates: [{
+          name: 'workflow-candidate',
+          description: 'Workflow execution',
+          provider: 'codex',
+          model: 'candidate-model',
+          costTier: 'medium',
+        }],
+        rules: {
+          steps: {
+            implement: 'workflow-candidate',
+            review: 'workflow-candidate',
+          },
+        },
+      },
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'implement', content: 'done' }),
+      makeResponse({ persona: 'review', content: 'needs_fix' }),
+      makeResponse({ persona: 'implement', content: 'done' }),
+      makeResponse({ persona: 'review', content: 'approved' }),
+    ]);
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 0, method: 'phase1_tag' },
+      { index: 1, method: 'phase1_tag' },
+    ]);
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'mock/top-level-model',
+      structuredCaller: makeStructuredCaller(vi.fn()),
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: 'codex',
+      resolvedModel: 'candidate-model',
+    });
+    expect(vi.mocked(runAgent).mock.calls[2]?.[2]).toMatchObject({
+      resolvedProvider: 'claude',
+      resolvedModel: 'opus',
+    });
+  });
+
   it('evaluates condition-based promotion with the previous step output before running the promoted step', async () => {
     const evaluateCondition = vi.fn().mockImplementation(async (
       _content: string,
@@ -335,6 +408,117 @@ describe('WorkflowEngine promotion', () => {
     expect(state.status).toBe('completed');
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedProvider).toBe('claude');
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedModel).toBeUndefined();
+  });
+
+  it('validates a provider-only promotion with the same CLI priority used at runtime', () => {
+    const implement = withPromotion(makeStep('implement', {
+      provider: 'opencode',
+      model: 'opencode/zai-coding-plan/glm-5.1',
+      rules: [makeRule('done', 'COMPLETE')],
+    }), [{
+      at: 1,
+      provider: 'opencode',
+      providerSpecified: true,
+    }]);
+    const config: WorkflowConfig = {
+      name: 'promotion-cli-validation-priority',
+      steps: [implement],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+
+    expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'codex',
+      providerSource: 'cli',
+      model: 'gpt-5',
+      modelSource: 'cli',
+    })).not.toThrow();
+  });
+
+  it.each([
+    {
+      name: 'provider only',
+      provider: 'codex' as const,
+      providerSource: 'cli' as const,
+      model: 'codex/top-level-model',
+      modelSource: 'project' as const,
+      expected: {
+        provider: 'codex',
+        providerSource: 'cli',
+        model: 'claude/promotion-model',
+        modelSource: 'promotion',
+      },
+    },
+    {
+      name: 'model only',
+      provider: 'mock' as const,
+      providerSource: 'project' as const,
+      model: 'codex/cli-model',
+      modelSource: 'cli' as const,
+      expected: {
+        provider: 'claude',
+        providerSource: 'promotion',
+        model: 'codex/cli-model',
+        modelSource: 'cli',
+      },
+    },
+    {
+      name: 'provider and model',
+      provider: 'codex' as const,
+      providerSource: 'cli' as const,
+      model: 'codex/cli-model',
+      modelSource: 'cli' as const,
+      expected: {
+        provider: 'codex',
+        providerSource: 'cli',
+        model: 'codex/cli-model',
+        modelSource: 'cli',
+      },
+    },
+  ])('preserves CLI $name over promotion', async ({
+    provider,
+    providerSource,
+    model,
+    modelSource,
+    expected,
+  }) => {
+    const implement = withPromotion(makeStep('implement', {
+      provider: 'opencode',
+      model: 'opencode/step-model',
+      rules: [makeRule('done', 'COMPLETE')],
+    }), [{
+      at: 1,
+      provider: 'claude',
+      model: 'claude/promotion-model',
+    }]);
+    const config: WorkflowConfig = {
+      name: 'promotion-cli-priority',
+      steps: [implement],
+      initialStep: 'implement',
+      maxSteps: 1,
+    };
+    mockRunAgentSequence([makeResponse({ persona: 'implement', content: 'done' })]);
+    mockDetectMatchedRuleSequence([{ index: 0, method: 'phase1_tag' }]);
+    const startFn = vi.fn();
+
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider,
+      providerSource,
+      model,
+      modelSource,
+    });
+    engine.on('step:start', startFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: expected.provider,
+      resolvedModel: expected.model,
+    });
+    expect(startFn.mock.calls[0]?.[3]).toMatchObject(expected);
   });
 
   it('forwards promoted provider info to report and status judgment phases', async () => {

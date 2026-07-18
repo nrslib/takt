@@ -7,9 +7,13 @@ import {
   USAGE_EVENTS_LOG_FILE_SUFFIX,
   USAGE_MISSING_REASONS,
 } from '../core/logging/contracts.js';
-import { buildUsageEventRecord } from '../core/logging/providerEvent.js';
+import { buildUsageEventRecord } from '../core/logging/usageEvent.js';
 import { createProviderEventLogger, isProviderEventsEnabled } from '../core/logging/providerEventLogger.js';
-import { createUsageEventLogger, isUsageEventsEnabled } from '../core/logging/usageEventLogger.js';
+import {
+  createUsageEventLogger,
+  isUsageEventsEnabled,
+  type UsageEventLoggerConfig,
+} from '../core/logging/usageEventLogger.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 
 describe('logging contracts', () => {
@@ -29,20 +33,14 @@ describe('logging contracts', () => {
       logsDir: tempDir,
       sessionId: 'session-a',
       runId: 'run-a',
-      provider: 'claude',
-      step: 'plan',
       enabled: false,
     });
     const usageLogger = createUsageEventLogger({
       logsDir: tempDir,
       sessionId: 'session-b',
       runId: 'run-b',
-      provider: 'codex',
-      providerModel: 'gpt-5-codex',
-      step: 'implement',
-      stepType: 'normal',
       enabled: false,
-    });
+    } satisfies UsageEventLoggerConfig);
 
     expect(providerLogger.filepath.endsWith(PROVIDER_EVENTS_LOG_FILE_SUFFIX)).toBe(true);
     expect(usageLogger.filepath.endsWith(USAGE_EVENTS_LOG_FILE_SUFFIX)).toBe(true);

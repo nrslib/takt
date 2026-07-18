@@ -7,7 +7,7 @@ import {
   denormalizeProviderOptions,
   denormalizeRateLimitFallback,
   denormalizeTelemetryConfig,
-  denormalizeConfigAutoRoutingConfig,
+  denormalizeAutoRoutingConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -47,7 +47,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (rawTelemetry) {
     raw.telemetry = rawTelemetry;
   }
-  const rawAutoRouting = denormalizeConfigAutoRoutingConfig(config.autoRouting);
+  const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
   if (rawAutoRouting) {
     raw.auto_routing = rawAutoRouting;
   }

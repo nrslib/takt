@@ -5,8 +5,9 @@
  * and sets up the preAction hook for initialization.
  */
 
-import { Command, Option } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import { packageVersion } from '../../shared/package-info.js';
+import { PROVIDER_TYPES, type ProviderType } from '../../shared/types/provider.js';
 import { runUpdateCheck } from './updateCheck.js';
 
 const cliVersion = packageVersion;
@@ -17,6 +18,19 @@ export const program = new Command();
 program.exitOverride();
 
 let updateCheckStarted = false;
+
+function parseProviderOption(value: string): ProviderType {
+  const provider = PROVIDER_TYPES.find((candidate) => candidate === value);
+  if (provider !== undefined) {
+    return provider;
+  }
+  if (value === 'auto') {
+    throw new InvalidArgumentError(
+      'provider: auto has been removed; set --provider to a concrete provider and configure auto_routing separately.',
+    );
+  }
+  throw new InvalidArgumentError(`Allowed choices are ${PROVIDER_TYPES.join(', ')}.`);
+}
 
 program
   .name('takt')
@@ -32,10 +46,10 @@ program
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')
-  .option(
+  .addOption(new Option(
     '--provider <name>',
-    'Override agent provider (auto|claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)',
-  )
+    `Override agent provider (${PROVIDER_TYPES.join('|')})`,
+  ).choices([...PROVIDER_TYPES]).argParser(parseProviderOption))
   .addOption(new Option('--auto-strategy <strategy>', 'Auto routing strategy (cost|balanced|performance)')
     .choices(['cost', 'balanced', 'performance']))
   .option('--model <name>', 'Override agent model')

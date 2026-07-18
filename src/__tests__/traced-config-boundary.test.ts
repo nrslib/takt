@@ -62,24 +62,22 @@ describe('traced config boundaries', () => {
     expect(getGlobalTracedSchema().ignore_exceed?.sources?.env).toBe(true);
   });
 
-  it('global/project traced schema tracks every default provider boundary without env overrides', () => {
-    const paths = [
-      'auto_routing.default_provider',
-      'auto_routing.default_provider.provider',
-      'auto_routing.default_provider.model',
-    ];
+  it('global/project traced schema tracks auto_routing but contains no removed default provider boundary', () => {
+    expect(getProjectTracedSchema().auto_routing?.sources).toMatchObject({
+      local: true,
+      env: false,
+      cli: false,
+    });
+    expect(getGlobalTracedSchema().auto_routing?.sources).toMatchObject({
+      global: true,
+      env: false,
+      cli: false,
+    });
 
-    for (const path of paths) {
-      expect(getProjectTracedSchema()[path]?.sources).toMatchObject({
-        local: true,
-        env: false,
-        cli: false,
-      });
-      expect(getGlobalTracedSchema()[path]?.sources).toMatchObject({
-        global: true,
-        env: false,
-        cli: false,
-      });
+    for (const schema of [getProjectTracedSchema(), getGlobalTracedSchema()]) {
+      expect(schema['auto_routing.default_provider']).toBeUndefined();
+      expect(schema['auto_routing.default_provider.provider']).toBeUndefined();
+      expect(schema['auto_routing.default_provider.model']).toBeUndefined();
     }
   });
 
