@@ -7,31 +7,31 @@ workflow_overrides:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Identify the specific test files covering the code you changed and run them individually (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Exception: if you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), run the affected test group instead. Never run the full suite. All must pass"
         - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Identify the specific test files covering the code you changed and run them individually (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Exception: if you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), run the affected test group instead. Never run the full suite. All must pass"
         - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     ai_fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Identify the specific test files covering the code you changed and run them individually (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Exception: if you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), run the affected test group instead. Never run the full suite. All must pass"
         - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     ai-antipattern-fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Identify the specific test files covering the code you changed and run them individually (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Exception: if you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), run the affected test group instead. Never run the full suite. All must pass"
         - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     fix_supervisor:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Identify the specific test files covering the code you changed and run them individually (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Exception: if you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup), run the affected test group instead. Never run the full suite. All must pass"
         - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     merge-readiness-review:
       quality_gates:
