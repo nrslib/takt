@@ -20,7 +20,7 @@ Options:
   --auto-pr                                 Create PR after successful execution
   --draft                                   Create PR as draft (requires --auto-pr or auto_pr config)
   --repo <owner/repo>                       Repository (defaults to current)
-  --provider <name>                         Override agent provider (auto|claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock)
+  --provider <name>                         Override agent provider (claude|claude-sdk|claude-terminal|codex|opencode|cursor|copilot|kiro|mock) (choices: "claude", "claude-sdk", "claude-terminal", "codex", "opencode", "cursor", "copilot", "kiro", "mock")
   --auto-strategy <strategy>                Auto routing strategy (cost|balanced|performance) (choices: "cost", "balanced", "performance")
   --model <name>                            Override agent model
   -t, --task <string>                       Task content (as alternative to issue reference)
