@@ -47,6 +47,11 @@ async function notifyPendingUpdate(currentVersion: string): Promise<void> {
   checkForUpdates();
 }
 
+function logUpdateCheckFailure(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`takt: update check skipped (${sanitizeTerminalText(message)})`);
+}
+
 /**
  * Refresh the update cache in a silent detached worker for future runs.
  * The worker never writes to the terminal (stdio is always ignored), so it
@@ -59,9 +64,7 @@ export function startUpdateCheckWorker(): void {
   });
   // Update check is best-effort: without this listener a spawn failure is
   // emitted as an unhandled 'error' event and would crash the CLI itself.
-  worker.on('error', (error: Error) => {
-    console.error(`takt: update check skipped (${sanitizeTerminalText(error.message)})`);
-  });
+  worker.on('error', logUpdateCheckFailure);
   worker.unref();
 }
 
@@ -70,8 +73,18 @@ export function startUpdateCheckWorker(): void {
  * (preserving the pre-worker notification contract), then refresh the cache
  * in the background. The notification must consume the cache before the
  * worker starts so the two never race for the same cache entry.
+ * Every step is best-effort: an update-check failure must never take down
+ * the CLI itself.
  */
 export async function runUpdateCheck(currentVersion: string): Promise<void> {
-  await notifyPendingUpdate(currentVersion);
-  startUpdateCheckWorker();
+  try {
+    await notifyPendingUpdate(currentVersion);
+  } catch (error) {
+    logUpdateCheckFailure(error);
+  }
+  try {
+    startUpdateCheckWorker();
+  } catch (error) {
+    logUpdateCheckFailure(error);
+  }
 }

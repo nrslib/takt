@@ -35,10 +35,12 @@ describe('CLI update check', () => {
   const originalArgv = [...process.argv];
   const originalIsTTY = process.stdout.isTTY;
   const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  const originalNoUpdateNotifier = process.env.NO_UPDATE_NOTIFIER;
   let configHome: string;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.NO_UPDATE_NOTIFIER;
     mockSpawn.mockImplementation(() => createWorkerDouble());
     configHome = mkdtempSync(join(tmpdir(), 'takt-update-check-'));
     process.env.XDG_CONFIG_HOME = configHome;
@@ -51,6 +53,11 @@ describe('CLI update check', () => {
       delete process.env.XDG_CONFIG_HOME;
     } else {
       process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    }
+    if (originalNoUpdateNotifier === undefined) {
+      delete process.env.NO_UPDATE_NOTIFIER;
+    } else {
+      process.env.NO_UPDATE_NOTIFIER = originalNoUpdateNotifier;
     }
     Object.defineProperty(process.stdout, 'isTTY', {
       configurable: true,
@@ -139,6 +146,24 @@ describe('CLI update check', () => {
     await runUpdateCheck('1.0.0');
 
     expect(mockCheckForUpdates).not.toHaveBeenCalled();
+  });
+
+  it('should log a warning and still start the worker when the notification throws', async () => {
+    process.argv = ['node', 'takt', 'list'];
+    writeUpdateCache(configHome, '99.0.0');
+    mockCheckForUpdates.mockImplementation(() => {
+      throw new Error('corrupt update cache');
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { runUpdateCheck } = await import('../app/cli/updateCheck.js');
+
+    await expect(runUpdateCheck('1.0.0')).resolves.toBeUndefined();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('update check skipped (corrupt update cache)'),
+    );
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockUnref).toHaveBeenCalledTimes(1);
   });
 
   it('should log a sanitized warning and keep the CLI alive when the worker fails to spawn', async () => {

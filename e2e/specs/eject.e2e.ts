@@ -188,6 +188,21 @@ describe('E2E: Eject builtin workflows (takt eject)', () => {
     expect(result.stdout).not.toContain('Invalid facet type:');
   });
 
+  it.each([
+    ['newline', 'bad\nname', 'bad\\nname'],
+    ['C1 CSI', 'bad\u009B31mname', 'bad\\x9b31mname'],
+  ])('should sanitize invalid facet type containing %s on stderr', (_label, facetType, safeFacetType) => {
+    const result = runTakt({
+      args: ['eject', facetType, 'coder'],
+      cwd: repo.path,
+      env: isolatedEnv.env,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(`Invalid facet type: ${safeFacetType}`);
+    expect(result.stderr).not.toContain(facetType);
+  });
+
   it('should eject individual facet to global ~/.takt/ with --global', () => {
     const result = runTakt({
       args: ['eject', 'persona', 'coder', '--global'],
