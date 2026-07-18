@@ -7,34 +7,34 @@ workflow_overrides:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     ai_fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     ai-antipattern-fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     fix_supervisor:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the test files (unit and integration) covering the code you changed and run them. All must pass"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
+    merge-readiness-review:
+      quality_gates:
+        - "Run `npm test` and verify unit tests pass. On failure, quote the failing output in your report and return needs_fix"
+        - "Run `npm run test:it` and verify integration tests pass. On failure, quote the failing output in your report and return needs_fix"
+        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass. On failure, quote the failing output in your report and return needs_fix"
