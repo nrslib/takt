@@ -7,34 +7,39 @@ workflow_overrides:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
+        - "Do not run the full suite or whole test groups, with two exceptions: (1) you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup) - run the affected group(s); (2) you are fixing a failure reported from a failed quality gate or final-gate run - re-run that exact failing command to reproduce and verify"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
+        - "Do not run the full suite or whole test groups, with two exceptions: (1) you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup) - run the affected group(s); (2) you are fixing a failure reported from a failed quality gate or final-gate run - re-run that exact failing command to reproduce and verify"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     ai_fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
+        - "Do not run the full suite or whole test groups, with two exceptions: (1) you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup) - run the affected group(s); (2) you are fixing a failure reported from a failed quality gate or final-gate run - re-run that exact failing command to reproduce and verify"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     ai-antipattern-fix:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
+        - "Do not run the full suite or whole test groups, with two exceptions: (1) you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup) - run the affected group(s); (2) you are fixing a failure reported from a failed quality gate or final-gate run - re-run that exact failing command to reproduce and verify"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
     fix_supervisor:
       quality_gates:
         - "Run `npm run build` and verify the build succeeds"
         - "Run `npm run lint` and verify lint passes"
-        - "Run `npm test` and verify unit tests pass"
-        - "Run `npm run test:it` and verify integration tests pass"
-        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass"
+        - "Identify the specific test files covering the code you changed and run them as whole files (e.g. `npm test -- src/__tests__/<name>.test.ts`; integration test files work the same way). Do not filter to individual test cases. If no covering test files exist, state that explicitly in your report. All must pass"
+        - "Do not run the full suite or whole test groups, with two exceptions: (1) you changed test infrastructure itself (vitest configs, test runner scripts, shared fixtures/setup) - run the affected group(s); (2) you are fixing a failure reported from a failed quality gate or final-gate run - re-run that exact failing command to reproduce and verify"
+        - "Run `npm run test:e2e:smoke` and verify the smoke E2E passes"
+    merge-readiness-review:
+      quality_gates:
+        - "Run `npm test` and verify unit tests pass. On failure, quote the failing output in your report and return needs_fix"
+        - "Run `npm run test:it` and verify integration tests pass. On failure, quote the failing output in your report and return needs_fix"
+        - "Run `npm run test:e2e:mock` and verify full mock E2E tests pass. On failure, quote the failing output in your report and return needs_fix"

@@ -101,6 +101,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -117,6 +118,8 @@ import {
 } from '../core/workflow/run/resume-report-snapshot.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { writeReportFile } from '../core/workflow/report-writer.js';
+
+const TEST_TMPDIR = realpathSync(tmpdir());
 
 function sha256(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
@@ -135,7 +138,7 @@ describe('inheritResumeReportSnapshot', () => {
     fsControl.beforeDirectoryPublication = undefined;
     fsControl.beforeReaddirPath = undefined;
     fsControl.beforeReaddir = undefined;
-    cwd = mkdtempSync(join(tmpdir(), 'takt-resume-snapshot-'));
+    cwd = mkdtempSync(join(TEST_TMPDIR, 'takt-resume-snapshot-'));
   });
 
   afterEach(() => {

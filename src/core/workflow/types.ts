@@ -19,7 +19,6 @@ import type {
   AutoRoutingStrategy,
   PersonaProviderEntry,
   ProviderRoutingConfig,
-  ProviderTypeOrAuto,
   ResolvedObservabilityConfig,
 } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
@@ -33,7 +32,7 @@ import type { ProviderOptionsOriginResolver, ProviderOptionsSource, ProviderReso
 import type { FindingContractConfig, FindingLedger } from '../models/finding-types.js';
 import type { FindingLedgerStore } from './findings/store.js';
 
-import type { ProviderType, StreamCallback } from '../../shared/types/provider.js';
+import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 export type {
   ProviderType,
   StreamEvent,
@@ -106,6 +105,21 @@ export interface StepProviderInfo {
     strategy: AutoRoutingStrategy;
     candidateCount: number;
   };
+}
+
+export interface ProviderStreamContext {
+  readonly step: string;
+  readonly provider: ProviderType;
+  readonly providerModel: string;
+}
+
+export interface DelegatedAgentUsageContext extends ProviderStreamContext {
+  readonly stepType: 'parallel' | 'team_leader';
+}
+
+export interface DelegatedAgentUsageResult {
+  readonly success: boolean;
+  readonly usage?: ProviderUsageSnapshot;
 }
 
 export interface StepRunResult {
@@ -283,6 +297,11 @@ export interface WorkflowEngineOptions {
   abortSignal?: AbortSignal;
   /** Callback for streaming real-time output */
   onStream?: StreamCallback;
+  onProviderStream?: (context: ProviderStreamContext, event: StreamEvent) => void;
+  onDelegatedAgentUsage?: (
+    context: DelegatedAgentUsageContext,
+    result: DelegatedAgentUsageResult,
+  ) => void;
   /** Callback for requesting user input when an agent is blocked */
   onUserInput?: (request: UserInputRequest) => Promise<string | null>;
   /** Initial agent sessions to restore (agent name -> session ID) */
@@ -315,7 +334,7 @@ export interface WorkflowEngineOptions {
   childProcessEnv?: Readonly<Record<string, string>>;
   /** Language for instruction metadata. Defaults to 'en'. */
   language?: Language;
-  provider?: ProviderTypeOrAuto;
+  provider?: ProviderType;
   providerSource?: ProviderResolutionSource;
   model?: string;
   modelSource?: ProviderResolutionSource;
@@ -329,6 +348,7 @@ export interface WorkflowEngineOptions {
   autoRouting?: AutoRoutingConfig;
   /** Run-scoped strategy override for automatic provider/model routing. */
   autoStrategyOverride?: AutoRoutingStrategy;
+  onEffectiveAutoRoutingReached?: () => void;
   /** Run-scoped AI router for automatic provider/model routing. */
   autoRoutingAiRouter?: AutoRoutingAiRouter;
   /** Source layer for resolved provider options */

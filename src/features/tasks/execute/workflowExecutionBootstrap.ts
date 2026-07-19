@@ -17,7 +17,6 @@ import {
 } from '../../../infra/config/index.js';
 import {
   resolveConfigValueWithSource,
-  type ConfigValueSource,
 } from '../../../infra/config/resolveConfigValue.js';
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import {
@@ -30,13 +29,14 @@ import { isQuietMode } from '../../../shared/context.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { createLogger, generateReportDir, getDebugPromptsLogFile, isValidReportDirName, preventSleep } from '../../../shared/utils/index.js';
-import { createProviderEventLogger, isProviderEventsEnabled } from '../../../shared/utils/providerEventLogger.js';
+import { createProviderEventLogger, isProviderEventsEnabled } from '../../../core/logging/providerEventLogger.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import { createUsageEventLogger, isUsageEventsEnabled } from '../../../shared/utils/usageEventLogger.js';
+import { createUsageEventLogger, isUsageEventsEnabled } from '../../../core/logging/usageEventLogger.js';
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
 import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
-import { applyAutoRoutingStrategyOverride } from '../../../core/workflow/auto-routing/resolver.js';
-import { workflowUsesAutoProvider } from '../../../core/workflow/auto-routing/workflow-auto-provider.js';
+import {
+  resolveEffectiveAutoRouting,
+} from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { initAnalyticsWriter } from '../../analytics/index.js';
 import { ensureWorktreeTaktGitignore } from '../../../infra/task/projectLocalTaktSync.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
@@ -79,6 +79,8 @@ export interface WorkflowExecutionBootstrap {
   configuredModelSource: ProviderResolutionSource;
   effectiveWorkflowConfig: WorkflowConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
+  onEffectiveAutoRoutingReached: () => void;
+  warnIfAutoStrategyUnused: () => void;
   providerEventLogger: ReturnType<typeof createProviderEventLogger>;
   usageEventLogger: ReturnType<typeof createUsageEventLogger>;
   observability: ResolvedObservabilityConfig;
@@ -88,6 +90,18 @@ export interface WorkflowExecutionBootstrap {
   savedSessions: Record<string, string>;
   sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
   writeTraceReportOnce: ReturnType<typeof createTraceReportWriter>;
+}
+
+class AutoRoutingReachTracker {
+  private reached = false;
+
+  markReached(): void {
+    this.reached = true;
+  }
+
+  hasReached(): boolean {
+    return this.reached;
+  }
 }
 
 export async function createWorkflowExecutionBootstrap(
@@ -165,11 +179,9 @@ export async function createWorkflowExecutionBootstrap(
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
     'notificationSoundEvents',
-    'provider',
     'rateLimitFallback',
     'runtime',
     'preventSleep',
-    'model',
     'logging',
     'analytics',
     'telemetry',
@@ -222,43 +234,43 @@ export async function createWorkflowExecutionBootstrap(
   const shouldNotifyRateLimit = shouldNotify;
   const shouldNotifyWorkflowComplete = shouldNotify && globalConfig.notificationSoundEvents?.workflowComplete !== false;
   const shouldNotifyWorkflowAbort = shouldNotify && globalConfig.notificationSoundEvents?.workflowAbort !== false;
-  const currentProvider = options.provider ?? workflowConfig.provider ?? globalConfig.provider;
+  const resolvedProvider = options.provider !== undefined
+    ? {
+        value: options.provider,
+        source: options.providerSource ?? 'cli' as ProviderResolutionSource,
+      }
+    : resolveConfigValueWithSource(projectCwd, 'provider', {
+        workflowContext: { provider: workflowConfig.provider },
+      });
+  const currentProvider = resolvedProvider.value;
   if (!currentProvider) {
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
-  const autoStrategyApplies = workflowUsesAutoProvider({
-    workflowConfig,
-    effectiveProvider: currentProvider,
-    cliProvider: options.provider,
-    projectCwd,
-    lookupCwd: cwd,
-    workflowCallResolver: options.workflowCallResolver,
-  });
-  if (options.autoStrategy !== undefined && !autoStrategyApplies) {
-    log.warn('--auto-strategy is ignored unless the effective provider is auto');
-  }
-  const currentProviderSource = resolveProviderFieldSource(
-    projectCwd,
-    'provider',
-    options.provider,
-    options.providerSource,
-    workflowConfig.provider,
-  );
-
-  const configuredModel = options.model ?? globalConfig.model;
-  const configuredModelSource = resolveProviderFieldSource(
-    projectCwd,
-    'model',
-    options.model,
-    options.modelSource,
-  );
-  const resolvedAutoRouting = autoStrategyApplies
-    ? applyAutoRoutingStrategyOverride(workflowConfig.autoRouting ?? globalConfig.autoRouting, options.autoStrategy)
-    : workflowConfig.autoRouting ?? globalConfig.autoRouting;
-  const autoStrategyOverride = autoStrategyApplies ? options.autoStrategy : undefined;
+  const currentProviderSource = resolvedProvider.source;
+  const resolvedModel = options.model !== undefined
+    ? {
+        value: options.model,
+        source: options.modelSource ?? 'cli' as ProviderResolutionSource,
+      }
+    : resolveConfigValueWithSource(projectCwd, 'model', {
+        workflowContext: { model: workflowConfig.model },
+      });
+  const configuredModel = resolvedModel.value;
+  const configuredModelSource = resolvedModel.source;
+  const autoRoutingReachTracker = new AutoRoutingReachTracker();
+  const onEffectiveAutoRoutingReached = (): void => {
+    autoRoutingReachTracker.markReached();
+  };
+  const warnIfAutoStrategyUnused = (): void => {
+    if (options.autoStrategy !== undefined && !autoRoutingReachTracker.hasReached()) {
+      log.warn('--auto-strategy was ignored because execution did not reach a workflow with effective auto_routing');
+    }
+  };
+  const inheritedAutoRouting = resolveEffectiveAutoRouting(workflowConfig, globalConfig.autoRouting);
+  const autoStrategyOverride = options.autoStrategy;
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
-    autoRouting: resolvedAutoRouting,
+    autoRouting: inheritedAutoRouting,
     rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
     ...(options.maxStepsOverride !== undefined ? { maxSteps: options.maxStepsOverride } : {}),
@@ -267,18 +279,12 @@ export async function createWorkflowExecutionBootstrap(
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
     runId: runSlug,
-    provider: currentProvider,
-    step: options.startStep ?? workflowConfig.initialStep,
     enabled: isProviderEventsEnabled(globalConfig),
   });
   const usageEventLogger = createUsageEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
     runId: runSlug,
-    provider: currentProvider,
-    providerModel: configuredModel ?? '(default)',
-    step: options.startStep ?? workflowConfig.initialStep,
-    stepType: 'normal',
     enabled: isUsageEventsEnabled(globalConfig),
   });
 
@@ -386,6 +392,8 @@ export async function createWorkflowExecutionBootstrap(
     configuredModelSource,
     effectiveWorkflowConfig,
     autoStrategyOverride,
+    onEffectiveAutoRoutingReached,
+    warnIfAutoStrategyUnused,
     providerEventLogger,
     usageEventLogger,
     observability: globalConfig.observability,
@@ -396,46 +404,6 @@ export async function createWorkflowExecutionBootstrap(
     sessionUpdateHandler,
     writeTraceReportOnce,
   };
-}
-
-function mapConfigSourceToResolutionSource(source: ConfigValueSource): ProviderResolutionSource {
-  switch (source) {
-    case 'project':
-      return 'project';
-    case 'global':
-      return 'global';
-    case 'default':
-      return 'default';
-    default:
-      // 'env' does not occur for provider/model in bootstrap context.
-      return 'default';
-  }
-}
-
-function resolveProviderFieldSource(
-  projectCwd: string,
-  key: 'provider' | 'model',
-  cliValue: string | undefined,
-  cliSource: ProviderResolutionSource | undefined,
-  workflowValue?: string,
-): ProviderResolutionSource {
-  if (cliValue !== undefined) {
-    return cliSource ?? 'cli';
-  }
-  if (workflowValue !== undefined) {
-    return 'workflow';
-  }
-  try {
-    const resolved = resolveConfigValueWithSource(projectCwd, key);
-    if (resolved.value !== undefined) {
-      return mapConfigSourceToResolutionSource(resolved.source);
-    }
-  } catch {
-    // Config resolution may fail in test contexts where paths are synthetic;
-    // fall back to 'global' as a reasonable default since the value itself
-    // was loaded successfully via resolveWorkflowConfigValues.
-  }
-  return 'global';
 }
 
 export { detectStepType, isQuietMode };

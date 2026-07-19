@@ -1,5 +1,4 @@
 import type { ProviderType } from '../../infra/providers/index.js';
-import { toConcreteProvider } from '../../core/workflow/provider-resolution.js';
 import type { TaskExecutionOptions } from '../tasks/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
 import { execLabel, type ExecLanguage } from './labels.js';
@@ -74,7 +73,7 @@ function applyProviderOverride<T extends { provider?: ProviderType; model?: stri
   defaults: ExecProviderModelDefaults,
   errorPath: string,
 ): T {
-  const provider = toConcreteProvider(overrides?.provider) ?? config.provider;
+  const provider = overrides?.provider ?? config.provider;
   const model = provider === undefined
     ? overrides?.model ?? config.model
     : resolveModelAfterProviderOverride(config.provider, provider, config.model, overrides?.model);

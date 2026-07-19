@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -13,6 +13,7 @@ import { initDebugLogger, resetDebugLogger } from '../shared/utils/debug.js';
 
 const SOURCE_STDIO_ENTRYPOINT_RUNNER = 'src/__tests__/helpers/acp-source-stdio-entrypoint.ts';
 const CHILD_TERMINATION_TIMEOUT_MS = 1_000;
+const TEST_TMPDIR = realpathSync(tmpdir());
 
 function writeSmokeProject(projectDir: string): string {
   mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
@@ -172,7 +173,7 @@ describe('ACP package entrypoint', () => {
     const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as {
       version: string;
     };
-    debugLogDir = join(tmpdir(), `takt-acp-hook-${Date.now()}`);
+    debugLogDir = join(TEST_TMPDIR, `takt-acp-hook-${Date.now()}`);
     const debugLogPath = join(debugLogDir, 'debug.log');
     initDebugLogger({ enabled: true, logFile: debugLogPath }, '/repo');
     const updates: string[] = [];
@@ -660,7 +661,7 @@ describe('ACP package entrypoint', () => {
   });
 
   it('should execute a real workflow API run through the SDK stream transport', async () => {
-    const projectDir = join(tmpdir(), `takt-acp-entrypoint-${Date.now()}`);
+    const projectDir = join(TEST_TMPDIR, `takt-acp-entrypoint-${Date.now()}`);
     try {
       mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
       mkdirSync(join(projectDir, '.takt', 'agents'), { recursive: true });
@@ -734,7 +735,7 @@ steps:
   });
 
   it('should serve initialize, session/new, and session/prompt from the source stdio entrypoint', async () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-acp-stdio-'));
+    const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-acp-stdio-'));
     const scenarioPath = writeSmokeProject(projectDir);
     const child = spawnSourceStdioEntrypoint(scenarioPath);
     const stderrChunks: Buffer[] = [];

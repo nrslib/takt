@@ -78,14 +78,6 @@ const DEFAULT_RULE: ResolutionRule<ConfigParameterKey> = {
 };
 
 const RESOLUTION_REGISTRY: Partial<{ [K in ConfigParameterKey]: ResolutionRule<K> }> = {
-  provider: {
-    layers: ['local', 'workflow', 'global'],
-    workflowValue: (workflowContext) => workflowContext?.provider,
-  },
-  model: {
-    layers: ['local', 'workflow', 'global'],
-    workflowValue: (workflowContext) => workflowContext?.model,
-  },
   providerOptions: {
     layers: ['local', 'workflow', 'global'],
     workflowValue: (workflowContext) => workflowContext?.providerOptions,
@@ -159,6 +151,60 @@ function getGlobalLayerValue<K extends ConfigParameterKey>(
   return global[key as keyof typeof global] as LoadedConfig[K] | undefined;
 }
 
+function getProviderModelSource(
+  trace: TracedConfigState,
+  key: 'provider' | 'model',
+  fallback: 'project' | 'global',
+): ConfigValueSource {
+  const origin = trace.getOrigin(key);
+  if (origin === 'env' || origin === 'cli') {
+    return 'env';
+  }
+  if (origin === 'local') {
+    return 'project';
+  }
+  if (origin === 'global') {
+    return 'global';
+  }
+  return fallback;
+}
+
+function resolveProviderModelConfigValue(
+  projectDir: string,
+  key: 'provider' | 'model',
+  project: ReturnType<typeof loadProjectConfigCached>,
+  global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
+  workflowContext: WorkflowContext | undefined,
+): ResolvedConfigValue<'provider' | 'model'> {
+  const projectValue = getLocalLayerValue(project, key);
+  const projectSource = getProviderModelSource(
+    loadProjectConfigTraceState(projectDir),
+    key,
+    'project',
+  );
+  if (projectValue !== undefined && projectSource === 'env') {
+    return { value: projectValue, source: projectSource };
+  }
+
+  const globalValue = getGlobalLayerValue(global, key);
+  const globalSource = getProviderModelSource(loadGlobalConfigTraceState(), key, 'global');
+  if (globalValue !== undefined && globalSource === 'env') {
+    return { value: globalValue, source: globalSource };
+  }
+
+  if (projectValue !== undefined) {
+    return { value: projectValue, source: projectSource };
+  }
+  const workflowValue = workflowContext?.[key];
+  if (workflowValue !== undefined) {
+    return { value: workflowValue, source: 'workflow' };
+  }
+  if (globalValue !== undefined) {
+    return { value: globalValue, source: globalSource };
+  }
+  return { value: undefined, source: 'default' };
+}
+
 function resolveByRegistry<K extends ConfigParameterKey>(
   projectDir: string,
   key: K,
@@ -166,6 +212,15 @@ function resolveByRegistry<K extends ConfigParameterKey>(
   global: ReturnType<typeof globalConfigModule.loadGlobalConfig>,
   options: ResolveConfigOptions | undefined,
 ): ResolvedConfigValue<K> {
+  if (key === 'provider' || key === 'model') {
+    return resolveProviderModelConfigValue(
+      projectDir,
+      key,
+      project,
+      global,
+      options?.workflowContext,
+    ) as ResolvedConfigValue<K>;
+  }
   const rule = (RESOLUTION_REGISTRY[key] ?? DEFAULT_RULE) as ResolutionRule<K>;
   if (rule.mergeMode === 'analytics') {
     return {

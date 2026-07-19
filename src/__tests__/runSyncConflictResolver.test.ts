@@ -98,11 +98,9 @@ describe('runSyncConflictResolver', () => {
     });
   });
 
-  it('does not reuse interactive assistant config when auto has no default provider', async () => {
+  it('propagates a non-workflow provider resolution failure without using assistant config', async () => {
     mockResolveNonWorkflowProviderModel.mockImplementation(() => {
-      throw new Error(
-        'Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.',
-      );
+      throw new Error('concrete provider resolution failed');
     });
 
     await expect(
@@ -111,8 +109,6 @@ describe('runSyncConflictResolver', () => {
         cwd: '/repo/worktree',
         originalInstruction: 'Resolve conflicts',
       }),
-    ).rejects.toThrow(
-      'Configuration error: auto_routing.default_provider is required when provider is auto for operations without workflow step context.',
-    );
+    ).rejects.toThrow('concrete provider resolution failed');
   });
 });

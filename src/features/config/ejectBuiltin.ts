@@ -24,35 +24,16 @@ import {
 } from '../../infra/config/index.js';
 import { header, success, info, warn, error, blankLine } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { VALID_FACET_TYPES } from './facetTypes.js';
 
 export interface EjectOptions {
   global?: boolean;
   projectDir: string;
 }
 
-/** Singular CLI facet type names mapped to directory (plural) FacetType */
-const FACET_TYPE_MAP: Record<string, FacetType> = {
-  persona: 'personas',
-  policy: 'policies',
-  knowledge: 'knowledge',
-  instruction: 'instructions',
-  'output-contract': 'output-contracts',
-};
-
-/** Valid singular facet type names for CLI */
-export const VALID_FACET_TYPES = Object.keys(FACET_TYPE_MAP);
-
 function resolveEjectPath(baseDir: string, name: string, extension: '.yaml' | '.md'): string | undefined {
   const candidatePath = resolve(baseDir, `${name}${extension}`);
   return isPathSafe(baseDir, candidatePath) ? candidatePath : undefined;
-}
-
-/**
- * Parse singular CLI facet type to plural directory FacetType.
- * Returns undefined if the input is not a valid facet type.
- */
-export function parseFacetType(singular: string): FacetType | undefined {
-  return FACET_TYPE_MAP[singular];
 }
 
 /**
@@ -126,7 +107,7 @@ export async function ejectFacet(
   }
 
   if (!existsSync(srcPath)) {
-    error(`Builtin ${facetType}/${name}.md not found`);
+    error(`Builtin ${facetType}/${safeName}.md not found`);
     info(`Available ${facetType}:`);
     listAvailableFacets(builtinDir);
     return;
@@ -143,7 +124,7 @@ export async function ejectFacet(
   }
   const safeDestPath = sanitizeTerminalText(destPath);
 
-  info(`Ejecting ${facetType}/${name} to ${targetLabel}`);
+  info(`Ejecting ${facetType}/${safeName} to ${targetLabel}`);
   blankLine();
 
   if (existsSync(destPath)) {

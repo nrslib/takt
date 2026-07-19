@@ -9,6 +9,8 @@ import {
 } from './test-classification.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 
+const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
+const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
 const VITEST_OPTIONS_WITH_REQUIRED_VALUE = new Set([
   '-c',
   '-r',
@@ -61,7 +63,9 @@ const VITEST_OPTIONAL_BOOLEAN_OPTIONS = new Set([
 
 export function selectNpmTestRuns(args) {
   if (args.length === 0) {
-    return [{ npmArgs: ['run', 'test:unit:parallel'] }];
+    return UNIT_SHARDS.map((shard) => ({
+      npmArgs: ['run', 'test:unit:parallel', '--', `--shard=${shard}`, ...NO_ARG_UNIT_RUN_OPTIONS],
+    }));
   }
 
   const targets = splitTestTargets(args);
@@ -227,11 +231,12 @@ async function runNpmCommand(npmArgs) {
 
 export async function runNpmTest(args, runCommand = runNpmCommand) {
   const runs = selectNpmTestRuns(args);
-  const results = [];
-  for (const run of runs) {
-    const result = await runCommand(run.npmArgs);
-    results.push({ run, result });
-  }
+  const results = args.length === 0
+    ? await runNpmTestCommandsSequentially(runs, runCommand)
+    : await Promise.all(runs.map(async (run) => {
+        const result = await runCommand(run.npmArgs);
+        return { run, result };
+      }));
 
   const failed = results.filter(({ result }) => result.code !== 0);
   for (const { run, result } of failed) {
@@ -240,6 +245,15 @@ export async function runNpmTest(args, runCommand = runNpmCommand) {
   }
 
   return failed[0]?.result.code ?? 0;
+}
+
+async function runNpmTestCommandsSequentially(runs, runCommand) {
+  const results = [];
+  for (const run of runs) {
+    const result = await runCommand(run.npmArgs);
+    results.push({ run, result });
+  }
+  return results;
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

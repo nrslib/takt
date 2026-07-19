@@ -12,7 +12,6 @@ import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, Workflo
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
 
-export type ProviderTypeOrAuto = ProviderType | 'auto';
 export type CostTier = 'high' | 'medium' | 'low';
 export type AutoRoutingStrategy = 'cost' | 'balanced' | 'performance';
 
@@ -36,13 +35,6 @@ export interface AutoRoutingConfig {
     tags?: Record<string, string>;
     steps?: Record<string, string>;
     personas?: Record<string, string>;
-  };
-}
-
-export interface ConfigAutoRoutingConfig extends AutoRoutingConfig {
-  defaultProvider?: {
-    provider: ProviderType;
-    model?: string;
   };
 }
 
@@ -225,7 +217,7 @@ export interface ProjectConfig {
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
-  provider?: ProviderTypeOrAuto;
+  provider?: ProviderType;
   /** Model selection for agent runtime */
   model?: string;
   /** Allow git hooks during TAKT-managed auto-commit */
@@ -279,7 +271,7 @@ export interface ProjectConfig {
   /** Provider-specific options (overrides global, overridden by workflow/step) */
   providerOptions?: StepProviderOptions;
   /** Automatic provider/model routing configuration. */
-  autoRouting?: ConfigAutoRoutingConfig;
+  autoRouting?: AutoRoutingConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */

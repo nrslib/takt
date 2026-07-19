@@ -105,12 +105,10 @@ export type {
 // Configuration types (global and project)
 export type {
   PersonaProviderEntry,
-  ProviderTypeOrAuto,
   CostTier,
   AutoRoutingStrategy,
   AutoRoutingCandidate,
   AutoRoutingConfig,
-  ConfigAutoRoutingConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   CustomAgentConfig,

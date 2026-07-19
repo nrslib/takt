@@ -15,7 +15,7 @@ const SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX = new RegExp(
   'gi',
 );
 const SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX = new RegExp(
-  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*["']?)([^"'[,\s}\]]+)(["']?)`,
+  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*["']?)([^"'[{,\s}\]]+)(["']?)`,
   'gi',
 );
 const SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX = new RegExp(

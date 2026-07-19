@@ -295,7 +295,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     const raw = {
       name: 'auto-routing-external-base-url',
       workflow_config: {
-        provider: 'auto',
+        provider: 'mock',
       },
       auto_routing: {
         strategy: 'cost',
@@ -340,7 +340,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
     const raw = {
       name: 'auto-routing-loopback-base-url',
       workflow_config: {
-        provider: 'auto',
+        provider: 'mock',
       },
       auto_routing: {
         strategy: 'cost',

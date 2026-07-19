@@ -16,10 +16,38 @@ describe('CLI --provider option', () => {
     expect(providerOption?.description).toMatch(/claude\|/);
   });
 
-  it('Given auto routing is available, When inspecting provider help text, Then provider auto is listed', () => {
+  it('Given provider selection is concrete-only, When inspecting provider help text, Then provider auto is not listed', () => {
     const providerOption = program.options.find((option) => option.long === '--provider');
 
-    expect(providerOption?.description).toContain('auto');
+    expect(providerOption?.description).not.toMatch(/\bauto\b/);
+  });
+
+  it('Given provider auto on the command line, When parsing CLI options, Then the error explains the concrete-provider migration', async () => {
+    const writeErr = vi.fn();
+    vi.resetModules();
+    const { program: isolatedProgram } = await import('../app/cli/program.js');
+    isolatedProgram.exitOverride();
+    isolatedProgram.configureOutput({ writeErr });
+
+    expect(() => isolatedProgram.parse(['node', 'takt', '--provider', 'auto'], { from: 'node' }))
+      .toThrow(/provider: auto has been removed/i);
+    expect(writeErr.mock.calls.join('\n')).toMatch(/concrete provider.*auto_routing/i);
+
+    isolatedProgram.parse(['node', 'takt', '--provider', 'mock'], { from: 'node' });
+    expect(isolatedProgram.opts().provider).toBe('mock');
+    expect(program.opts().provider).toBeUndefined();
+  });
+
+  it('Given an unknown provider on the command line, When parsing CLI options, Then the error lists the allowed concrete choices', async () => {
+    const writeErr = vi.fn();
+    vi.resetModules();
+    const { program: isolatedProgram } = await import('../app/cli/program.js');
+    isolatedProgram.exitOverride();
+    isolatedProgram.configureOutput({ writeErr });
+
+    expect(() => isolatedProgram.parse(['node', 'takt', '--provider', 'unknown'], { from: 'node' }))
+      .toThrow(/allowed choices/i);
+    expect(writeErr.mock.calls.join('\n')).toMatch(/claude.*codex.*mock/i);
   });
 
   it('Given auto routing is available, When inspecting CLI options, Then --auto-strategy is exposed with supported strategies', () => {

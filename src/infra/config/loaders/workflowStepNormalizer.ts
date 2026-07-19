@@ -125,9 +125,6 @@ function normalizePromotionEntry(
   ) {
     throw new Error('Configuration error: promotion entry requires at least one of "provider", "model", or "provider_options"');
   }
-  if (normalizedProvider.provider === 'auto') {
-    throw new Error('Configuration error: promotion entry provider does not support "auto"');
-  }
   return {
     at: entry.at,
     condition: entry.condition,

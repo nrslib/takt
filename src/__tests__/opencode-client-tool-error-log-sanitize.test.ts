@@ -158,8 +158,6 @@ describe('OpenCodeClient tool call failure logging', () => {
         logsDir,
         sessionId: `provider-error-${eventType}`,
         runId: 'provider-error-run',
-        provider: 'opencode',
-        step: 'review',
         enabled: true,
       });
       const observed = vi.fn();
@@ -167,12 +165,17 @@ describe('OpenCodeClient tool call failure logging', () => {
       const result = await client.call('coder', 'prompt', {
         cwd: '/tmp',
         model: 'opencode/big-pickle',
-        onStream: providerLogger.wrapCallback(observed),
+        onStream: (event) => {
+          providerLogger.logEvent({
+            provider: 'opencode',
+            providerModel: 'big-pickle',
+            step: 'review',
+          }, event);
+          observed(event);
+        },
         opencodeApiKey: apiKeySecret,
         childProcessEnv: { OPENCODE_ACCESS_TOKEN: childEnvSecret },
       });
-      providerLogger.flush();
-
       const evidence = JSON.stringify({
         result,
         debugCalls: debugLogSpy.mock.calls,

@@ -15,10 +15,10 @@ import type {
 import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
-import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
-import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
+import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import type {
+  StepProviderInfo,
   WorkflowAbortKind,
   WorkflowCallChildEngine,
   WorkflowCallResolver,
@@ -57,7 +57,7 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
     return entries;
   }
 
-  const overrideProvider = overrides.provider === 'auto' ? undefined : overrides.provider;
+  const overrideProvider = overrides.provider;
   return Object.fromEntries(
     Object.entries(entries).map(([key, entry]) => {
       const nextEntry: T = {
@@ -141,10 +141,7 @@ interface WorkflowCallExecutorDeps {
 interface ExecuteWorkflowCallRequest {
   step: WorkflowCallStep;
   childWorkflow: WorkflowConfig;
-  childProviderInfo: {
-    provider: WorkflowEngineOptions['provider'];
-    model: string | undefined;
-  };
+  childProviderInfo: StepProviderInfo;
   parentProviderOptions: WorkflowEngineOptions['providerOptions'];
   personaProviders: WorkflowEngineOptions['personaProviders'];
   providerRouting: WorkflowEngineOptions['providerRouting'];
@@ -286,7 +283,9 @@ export class WorkflowCallExecutor {
     // session の同期だけでは親の state.findings は古いまま。親の
     // when(findings.*) ルールが子の取り込み結果を見られるよう、ここで
     // ParallelRunner の manager 実行後と同じ再読込を行う。
-    this.deps.refreshFindingsState();
+    if (this.deps.findingLedgerStore !== undefined) {
+      this.deps.refreshFindingsState();
+    }
   }
 
   async execute(
@@ -298,31 +297,21 @@ export class WorkflowCallExecutor {
     const childResumePoint = this.resolveChildResumePoint(request.step, request.childWorkflow);
     const inheritedSessions = new Map(this.deps.state.personaSessions);
     const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
-    const childAutoStrategyOverride = workflowUsesAutoProvider({
-      workflowConfig: request.childWorkflow,
-      effectiveProvider: request.childProviderInfo.provider,
-      cliProvider: undefined,
-      projectCwd: this.deps.projectCwd,
-      lookupCwd: this.deps.getCwd(),
-      workflowCallResolver: this.deps.resolveWorkflowCall,
-    })
-      ? options.autoStrategyOverride
-      : undefined;
+    const childAutoRouting = resolveEffectiveAutoRouting(request.childWorkflow, options.autoRouting);
     const childOptions: WorkflowEngineOptions = {
       ...options,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
       provider: request.childProviderInfo.provider,
+      providerSource: request.childProviderInfo.providerSource,
       model: request.childProviderInfo.model,
+      modelSource: request.childProviderInfo.modelSource,
       providerOptions: mergeProviderOptions(
         request.parentProviderOptions,
         request.step.overrides?.providerOptions,
       ),
-      autoRouting: applyAutoRoutingStrategyOverride(
-        request.childWorkflow.autoRouting ?? options.autoRouting,
-        childAutoStrategyOverride,
-      ),
-      autoStrategyOverride: childAutoStrategyOverride,
+      autoRouting: childAutoRouting,
+      autoStrategyOverride: options.autoStrategyOverride,
       // Child workflows need router prompts scoped to the child workflow name and run namespace.
       autoRoutingAiRouter: undefined,
       onSessionUpdate: executeOptions.syncParentState

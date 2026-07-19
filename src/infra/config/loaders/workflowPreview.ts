@@ -5,6 +5,9 @@ import {
   type ProviderModelResolutionContext,
 } from '../../../core/workflow/provider-resolution.js';
 import type { StepProviderInfo } from '../../../core/workflow/types.js';
+import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
+import { resolveRuleBasedAutoRoutingProviderInfo } from '../../../core/workflow/auto-routing/resolver.js';
+import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { buildFindingManagerStep } from '../../../core/workflow/findings/manager-step.js';
 import { resolveFindingContractIntakeStep } from '../../../core/workflow/findings/contract-intake.js';
 import {
@@ -15,10 +18,11 @@ import {
 import { createTeamLeaderPlanningStep } from '../../../core/workflow/engine/team-leader-common.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
-import { resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
+import { resolveConfigValueWithSource, resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
 import {
   resolveEffectiveProviderOptions,
   resolveDirectStepProviderOptions,
+  mergeProviderOptions,
   mergeStepProviderOptionsLayers,
 } from '../providerOptions.js';
 import { loadPersonaPromptFromPath } from './agentLoader.js';
@@ -47,6 +51,8 @@ export interface FirstStepInfo {
 }
 
 interface PreviewProviderResolution extends ProviderModelResolutionContext {
+  providerSource: ProviderResolutionSource;
+  modelSource: ProviderResolutionSource;
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
@@ -89,13 +95,29 @@ function resolvePreviewProviderInfo(
   step: WorkflowStep,
   resolution: PreviewProviderResolution,
 ): StepProviderInfo {
-  return resolveStepProviderModel({
+  const currentProviderInfo = resolveStepProviderModel({
     step,
     provider: resolution.provider,
+    providerSource: resolution.providerSource,
     model: resolution.model,
+    modelSource: resolution.modelSource,
+    autoRouting: resolution.autoRouting,
     providerRouting: resolution.providerRouting,
     personaProviders: resolution.personaProviders,
   });
+  if (resolution.autoRouting === undefined) {
+    return currentProviderInfo;
+  }
+  return resolveRuleBasedAutoRoutingProviderInfo({
+    autoRouting: resolution.autoRouting,
+    step: {
+      name: step.name,
+      tags: step.tags,
+      personaKey: step.providerRoutingPersonaKey,
+      instruction: step.instruction,
+    },
+    currentProviderInfo,
+  }) ?? currentProviderInfo;
 }
 
 function buildFindingManagerPreview(
@@ -174,13 +196,24 @@ function buildStepPreview(
   };
 }
 
-function resolvePreviewProviderResolution(projectCwd: string): PreviewProviderResolution {
+function resolvePreviewProviderResolution(
+  projectCwd: string,
+  workflow: WorkflowConfig,
+): PreviewProviderResolution {
   const {
-    provider,
-    model,
+    autoRouting,
     personaProviders,
     providerRouting,
-  } = resolveWorkflowConfigValues(projectCwd, ['provider', 'model', 'personaProviders', 'providerRouting']);
+  } = resolveWorkflowConfigValues(
+    projectCwd,
+    ['autoRouting', 'personaProviders', 'providerRouting'],
+  );
+  const provider = resolveConfigValueWithSource(projectCwd, 'provider', {
+    workflowContext: workflow,
+  });
+  const model = resolveConfigValueWithSource(projectCwd, 'model', {
+    workflowContext: workflow,
+  });
   const {
     value: providerOptions,
     source: providerOptionsSource,
@@ -188,8 +221,11 @@ function resolvePreviewProviderResolution(projectCwd: string): PreviewProviderRe
   } = resolveProviderOptionsWithTrace(projectCwd);
 
   return {
-    provider,
-    model,
+    provider: provider.value,
+    providerSource: provider.source,
+    model: model.value,
+    modelSource: model.source,
+    autoRouting: resolveEffectiveAutoRouting(workflow, autoRouting),
     personaProviders,
     providerRouting,
     providerOptions,
@@ -202,23 +238,26 @@ function resolvePreviewAllowedTools(
   step: WorkflowStep,
   resolution: PreviewProviderResolution,
 ): string[] {
+  const providerInfo = resolvePreviewProviderInfo(step, resolution);
+  const stepProviderOptions = mergeProviderOptions(
+    providerInfo.providerOptions,
+    resolveDirectStepProviderOptions(step),
+  );
   const mergedProviderOptions = resolveEffectiveProviderOptions(
     resolution.providerOptionsSource,
     resolution.providerOptionsOriginResolver,
     resolution.providerOptions,
-    resolveDirectStepProviderOptions(step),
+    stepProviderOptions,
     mergeStepProviderOptionsLayers(step, {
       providerRouting: resolution.providerRouting,
       personaProviders: resolution.personaProviders,
     }),
   );
-  const resolvedProvider = resolveStepProviderModel({
-    step,
-    provider: resolution.provider,
-    model: resolution.model,
-    providerRouting: resolution.providerRouting,
-    personaProviders: resolution.personaProviders,
-  }).provider;
+  const resolvedProvider = providerInfo.provider;
+
+  if (resolvedProvider === undefined) {
+    return [];
+  }
 
   assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
     stepName: step.name,
@@ -293,7 +332,7 @@ export function getWorkflowDescription(
   if (!workflow) {
     return { name: identifier, description: '', workflowStructure: '', stepPreviews: [] };
   }
-  const resolution = resolvePreviewProviderResolution(projectCwd);
+  const resolution = resolvePreviewProviderResolution(projectCwd, workflow);
   return {
     name: workflow.name,
     description: workflow.description ?? '',

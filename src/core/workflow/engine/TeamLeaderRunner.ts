@@ -31,6 +31,7 @@ import { isPlanningBudgetError } from './team-leader-budget-errors.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 import { resolveAutoRoutingBatch, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 import { InstructionBuildTransaction } from './instruction-build-transaction.js';
+import { recordDelegatedAgentUsage } from './delegated-agent-usage.js';
 
 const log = createLogger('team-leader-runner');
 
@@ -134,7 +135,7 @@ export class TeamLeaderRunner {
       throw new Error('structuredCaller is required for team leader execution');
     }
     const leaderStartedAt = Date.now();
-    const parts = await runWithPhaseSpan(
+    const decomposition = await runWithPhaseSpan(
       {
         enabled: this.deps.observabilityEnabled,
         runId: this.deps.observabilityRunId,
@@ -166,7 +167,19 @@ export class TeamLeaderRunner {
           mcpServers: leaderMcpServers,
           workflowMeta: leaderWorkflowMeta,
           childProcessEnv: this.deps.engineOptions.childProcessEnv,
-          onStream: this.deps.engineOptions.onStream,
+          abortSignal: leaderBaseOptions.abortSignal,
+          onStream: leaderBaseOptions.onStream,
+          onAgentResponse: (response) => {
+            this.recordUsage(
+              leaderStep.name,
+              leaderProviderInfo,
+              response.status === 'done',
+              response.providerUsage,
+            );
+          },
+          onAgentError: () => {
+            this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+          },
           onPromptResolved: (promptParts) => {
             if (didEmitPhaseStart) return;
             resolvedPromptParts = promptParts;
@@ -176,9 +189,10 @@ export class TeamLeaderRunner {
         },
       ), (result) => ({
         status: 'done',
-        content: JSON.stringify({ parts: result }, null, 2),
+        content: JSON.stringify({ parts: result.parts }, null, 2),
       }),
     );
+    const parts = decomposition.parts;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
     }
@@ -293,7 +307,19 @@ export class TeamLeaderRunner {
               mcpServers: leaderMcpServers,
               workflowMeta: leaderWorkflowMeta,
               childProcessEnv: this.deps.engineOptions.childProcessEnv,
-              onStream: this.deps.engineOptions.onStream,
+              abortSignal: leaderBaseOptions.abortSignal,
+              onStream: leaderBaseOptions.onStream,
+              onAgentResponse: (response) => {
+                this.recordUsage(
+                  leaderStep.name,
+                  leaderProviderInfo,
+                  response.status === 'done',
+                  response.providerUsage,
+                );
+              },
+              onAgentError: () => {
+                this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+              },
             },
           );
           await this.addPartAutoRouting(routedProviderInfoByPart, step, moreParts.parts, runtime);
@@ -408,7 +434,10 @@ export class TeamLeaderRunner {
       stepIteration,
       aggregatedResponse,
       updatePersonaSession,
-      runtime,
+      leaderRuntime,
+      (providerInfo, success, usage) => {
+        this.recordUsage(step.name, providerInfo, success, usage);
+      },
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
@@ -511,10 +540,34 @@ export class TeamLeaderRunner {
       },
       runtime,
     );
+    if (result.providerInfo) {
+      this.recordUsage(
+        `${step.name}.${part.id}`,
+        result.providerInfo,
+        result.response.status === 'done',
+        result.response.providerUsage,
+      );
+    }
     return {
       ...result,
       durationMs: Math.max(0, result.response.timestamp.getTime() - startedAt),
     };
+  }
+
+  private recordUsage(
+    step: string,
+    providerInfo: StepProviderInfo,
+    success: boolean,
+    usage?: AgentResponse['providerUsage'],
+  ): void {
+    recordDelegatedAgentUsage(
+      this.deps.engineOptions,
+      step,
+      'team_leader',
+      providerInfo,
+      success,
+      usage,
+    );
   }
 
   private emitPartRoutingDecisionEvents(

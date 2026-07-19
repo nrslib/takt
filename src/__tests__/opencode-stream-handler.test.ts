@@ -30,6 +30,16 @@ import { createProviderEventLogger } from '../core/logging/providerEventLogger.j
 import type { StreamCallback } from '../core/workflow/types.js';
 import { sanitizeSensitiveTextWithKnownValues } from '../shared/utils/sensitiveText.js';
 
+function buildProviderEventCallback(
+  logger: ReturnType<typeof createProviderEventLogger>,
+): StreamCallback {
+  return (event) => logger.logEvent({
+    provider: 'opencode',
+    providerModel: 'big-pickle',
+    step: 'review',
+  }, event);
+}
+
 describe('createStreamTrackingState', () => {
   it('should create fresh state with empty collections', () => {
     const state = createStreamTrackingState();
@@ -149,11 +159,9 @@ describe('emitToolResult', () => {
         logsDir,
         sessionId: 'session-1',
         runId: 'run-1',
-        provider: 'opencode',
-        step: 'review',
         enabled: true,
       });
-      const onStream = logger.wrapCallback();
+      const onStream = buildProviderEventCallback(logger);
       const input = {
         Authorization: 'Bearer opaque-auth-value',
         'Proxy-Authorization': 'Basic opaque-proxy-value',
@@ -191,8 +199,6 @@ describe('emitToolResult', () => {
         logsDir,
         sessionId: 'session-output',
         runId: 'run-output',
-        provider: 'opencode',
-        step: 'review',
         enabled: true,
       });
       const outputOnlySecrets = {
@@ -201,7 +207,7 @@ describe('emitToolResult', () => {
         sessionId: 'output-only-session-secret',
       };
 
-      emitToolResult(logger.wrapCallback(), JSON.stringify(outputOnlySecrets), true, {}, 'tool-output');
+      emitToolResult(buildProviderEventCallback(logger), JSON.stringify(outputOnlySecrets), true, {}, 'tool-output');
 
       const jsonl = readFileSync(logger.filepath, 'utf-8');
       expect(jsonl).toContain('[REDACTED]');
@@ -220,13 +226,11 @@ describe('emitToolResult', () => {
         logsDir,
         sessionId: 'session-assignment',
         runId: 'run-assignment',
-        provider: 'opencode',
-        step: 'review',
         enabled: true,
       });
 
       emitToolResult(
-        logger.wrapCallback(),
+        buildProviderEventCallback(logger),
         'Authorization=opaque-authorization; Cookie=opaque-cookie',
         true,
         {},
@@ -550,12 +554,10 @@ describe('handlePartUpdated', () => {
           logsDir,
           sessionId: `session-${status}`,
           runId: `run-${status}`,
-          provider: 'opencode',
-          step: 'review',
           enabled: true,
         });
         const state = createStreamTrackingState();
-        const callback = logger.wrapCallback();
+        const callback = buildProviderEventCallback(logger);
         handlePartUpdated({
           id: 'tool-part',
           sessionID: 'session-1',
@@ -576,8 +578,6 @@ describe('handlePartUpdated', () => {
           tool: 'remote',
           state: terminalState,
         }, undefined, callback, state);
-        logger.flush();
-
         const jsonl = readFileSync(logger.filepath, 'utf-8');
         expect(jsonl).not.toContain(secret);
         expect(jsonl).toContain('[REDACTED]');

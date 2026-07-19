@@ -64,6 +64,8 @@ const mockSelectOptionWithDefault = vi.mocked(selectOptionWithDefault);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
 const attachmentSessionDirs = new Set<string>();
+const originalTmpDir = process.env.TMPDIR;
+const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
 
 // ── Stdin helpers (same pattern as interactive.test.ts) ──
 
@@ -181,6 +183,7 @@ import type { FirstStepInfo } from '../infra/config/loaders/workflowResolver.js'
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.TMPDIR = TEST_TMPDIR;
   mockSelectOptionWithDefault.mockResolvedValue('assistant');
   mockSelectOption.mockResolvedValue('execute');
 });
@@ -191,6 +194,11 @@ afterEach(() => {
     fs.rmSync(sessionDir, { recursive: true, force: true });
   }
   attachmentSessionDirs.clear();
+  if (originalTmpDir === undefined) {
+    delete process.env.TMPDIR;
+  } else {
+    process.env.TMPDIR = originalTmpDir;
+  }
 });
 
 function createOscImagePaste(): string {

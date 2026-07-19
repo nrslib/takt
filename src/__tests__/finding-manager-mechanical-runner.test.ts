@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
@@ -19,7 +19,8 @@ const executeAgentMock = vi.mocked(executeAgent);
 // raw admission validation（manager-runner.ts の cwd 引数）が実 fs を見るため、
 // このテストファイルが使う location（src/a.ts:10/11, src/b.ts:5/20, src/c.ts:1,
 // src/dup.ts:10）に対応する実ファイルを1つの共有 fixture ディレクトリへ用意する。
-const FIXTURE_CWD = mkdtempSync(join(tmpdir(), 'takt-findings-runner-fixtures-'));
+const TEST_TMPDIR = realpathSync(tmpdir());
+const FIXTURE_CWD = mkdtempSync(join(TEST_TMPDIR, 'takt-findings-runner-fixtures-'));
 function writeFixtureFile(relativePath: string, lineCount: number): void {
   const fullPath = join(FIXTURE_CWD, relativePath);
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -595,8 +596,8 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
   });
 
   it('Given two concurrent callers each reporting a distinct new issue When both resolve their LLM call around the same time Then neither new finding is lost', async () => {
-    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-findings-race-project-'));
-    const reportDir = mkdtempSync(join(tmpdir(), 'takt-findings-race-report-'));
+    const projectCwd = mkdtempSync(join(TEST_TMPDIR, 'takt-findings-race-project-'));
+    const reportDir = mkdtempSync(join(TEST_TMPDIR, 'takt-findings-race-report-'));
     cleanupDirs.add(projectCwd);
     cleanupDirs.add(reportDir);
     // raw admission validation は projectCwd を cwd として使うため、この
@@ -742,8 +743,8 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     // （decision-assembly.ts の openFindingKeyIndex。鍵は path+title+description の
     // 完全一致 — path+title だけのリダイレクトは manager の new 判断を意味判断
     // なしで覆す禁止マージだった: codex ブロッカー B3）。
-    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-findings-race-dup-project-'));
-    const reportDir = mkdtempSync(join(tmpdir(), 'takt-findings-race-dup-report-'));
+    const projectCwd = mkdtempSync(join(TEST_TMPDIR, 'takt-findings-race-dup-project-'));
+    const reportDir = mkdtempSync(join(TEST_TMPDIR, 'takt-findings-race-dup-report-'));
     cleanupDirs.add(projectCwd);
     cleanupDirs.add(reportDir);
     mkdirSync(join(projectCwd, 'src'), { recursive: true });

@@ -1,4 +1,4 @@
-import type { WorkflowRule, PartDefinition } from '../../core/models/types.js';
+import type { WorkflowRule } from '../../core/models/types.js';
 import {
   judgeStatus,
   evaluateCondition,
@@ -10,6 +10,7 @@ import {
   decomposeTask,
   requestMoreParts,
   type DecomposeTaskOptions,
+  type DecomposeTaskResponse,
   type MorePartsOptions,
   type MorePartsResponse,
 } from '../decompose-task-usecase.js';
@@ -46,7 +47,7 @@ export class DefaultStructuredCaller implements StructuredCaller {
     instruction: string,
     maxTotalParts: number,
     options: DecomposeTaskOptions,
-  ): Promise<PartDefinition[]> {
+  ): Promise<DecomposeTaskResponse> {
     return decomposeTask(instruction, maxTotalParts, options);
   }
 

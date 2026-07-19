@@ -1,12 +1,26 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSpawn } = vi.hoisted(() => ({
+const { mockSpawn, debugSpy } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
+  debugSpy: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
   spawn: mockSpawn,
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: vi.fn(() => ({
+    debug: debugSpy,
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    trace: vi.fn(),
+    enter: vi.fn(),
+    exit: vi.fn(),
+  })),
 }));
 
 import { callKiro } from '../infra/kiro/client.js';
@@ -106,6 +120,42 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
     const child = createMockChildProcess();
 
     queueMicrotask(() => {
+      if (scenario.stdout) {
+        child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
+      }
+      if (scenario.stderr) {
+        child.stderr.emit('data', Buffer.from(scenario.stderr, 'utf-8'));
+      }
+
+      if (scenario.error) {
+        const error = Object.assign(new Error(scenario.error.message), scenario.error);
+        child.emit('error', error);
+        return;
+      }
+
+      child.emit('close', scenario.code ?? 0, scenario.signal ?? null);
+    });
+
+    return child;
+  });
+}
+
+function mockSpawnSequence(scenarios: SpawnScenario[]): void {
+  let callIndex = 0;
+  mockSpawn.mockImplementation((_cmd: string, _args: string[], _options: object) => {
+    const scenario = scenarios[callIndex];
+    callIndex += 1;
+    const child = createMockChildProcess();
+
+    queueMicrotask(() => {
+      if (!scenario) {
+        const error = Object.assign(new Error(`Unexpected spawn call #${callIndex} (only ${scenarios.length} scenarios defined)`), {
+          code: 'ERR_TEST_UNEXPECTED_SPAWN',
+        });
+        child.emit('error', error);
+        return;
+      }
+
       if (scenario.stdout) {
         child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
       }
@@ -881,5 +931,288 @@ describe('callKiro', () => {
     expect(childProcess?.kill).toHaveBeenCalledWith('SIGTERM');
     await vi.advanceTimersByTimeAsync(1_000);
     expect(childProcess?.kill).not.toHaveBeenCalledWith('SIGKILL');
+  });
+});
+
+// Covers GitHub issue #781: real session ID resolution on the first turn and
+// output cleanup (ANSI escapes + leading "> " prompt marker) so multi-turn
+// context and response content survive a real kiro-cli 2.5.1 invocation.
+describe('callKiro session ID resolution (issue #781)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.KIRO_API_KEY;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreEnv();
+  });
+
+  const uuid = '123e4567-e89b-12d3-a456-426614174000';
+
+  it('Given no session ID, When the main call succeeds, Then resolves the real session by invoking chat --list-sessions and returns its UUID', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { stderr: `${uuid}  updated just now`, code: 0 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Implementation complete.');
+    expect(result.sessionId).toBe(uuid);
+
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    const [, firstArgs] = mockSpawn.mock.calls[0] as [string, string[]];
+    const [, secondArgs, secondOptions] = mockSpawn.mock.calls[1] as [
+      string,
+      string[],
+      { cwd?: string },
+    ];
+    expect(firstArgs).toEqual(['chat', '--no-interactive', 'implement feature']);
+    expect(secondArgs).toEqual(['chat', '--list-sessions']);
+    expect(secondOptions.cwd).toBe('/repo');
+  });
+
+  it('Given an existing session ID (resume turn), When called, Then does not invoke --list-sessions and returns the same session ID', async () => {
+    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+
+    const result = await callKiro('coder', 'continue', {
+      cwd: '/repo',
+      sessionId: 'sess-prev',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe('sess-prev');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given no session ID, When --list-sessions fails after the main call already succeeded, Then still returns success with an undefined session ID', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { code: 1 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Implementation complete.');
+    expect(result.sessionId).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('Given no session ID, When --list-sessions fails after the main call already succeeded, Then records the failure via log.debug instead of swallowing it silently', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { code: 1 },
+    ]);
+
+    await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      'kiro-cli --list-sessions failed; session ID unresolved for this turn',
+      expect.objectContaining({ error: expect.any(String) }),
+    );
+  });
+
+  it('Given no session ID and an abort signal already aborted after the main call succeeds, When resolving the session ID, Then skips --list-sessions and returns an undefined session ID', async () => {
+    const controller = new AbortController();
+
+    mockSpawn.mockImplementation(() => {
+      const child = createMockChildProcess();
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from('Implementation complete.', 'utf-8'));
+        child.emit('close', 0, null);
+        // Abort after the main call's close event resolves but before the
+        // `await execKiro` continuation (which calls resolveLatestSessionId)
+        // runs on the next microtask tick.
+        controller.abort();
+      });
+      return child;
+    });
+
+    const result = await callKiro('coder', 'implement feature', {
+      cwd: '/repo',
+      abortSignal: controller.signal,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Implementation complete.');
+    expect(result.sessionId).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given no session ID, When --list-sessions output has no UUID in either stream, Then still returns success with an undefined session ID', async () => {
+    mockSpawnSequence([
+      { stdout: 'done', code: 0 },
+      { stderr: 'no sessions found', code: 0 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBeUndefined();
+  });
+
+  it('Given no session ID and a resolvable UUID, When onStream is provided, Then the result event carries the resolved session ID', async () => {
+    mockSpawnSequence([
+      { stdout: 'stream content', code: 0 },
+      { stderr: uuid, code: 0 },
+    ]);
+
+    const onStream = vi.fn();
+    await callKiro('coder', 'implement', { cwd: '/repo', onStream });
+
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({ sessionId: uuid, success: true }),
+    });
+  });
+
+  it('Given no session ID and stdout that cleans to empty, When command succeeds, Then returns the empty-output error without attempting session resolution', async () => {
+    mockSpawnWithScenario({
+      stdout: '\x1b[32m> \x1b[0m',
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toBe('kiro-cli returned empty output');
+    expect(result.sessionId).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given no session ID, When the main call fails, Then does not attempt session resolution and reports the original error', async () => {
+    mockSpawnWithScenario({
+      error: { code: 'ENOENT', message: 'spawn kiro-cli ENOENT' },
+    });
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('kiro-cli binary not found');
+    expect(result.sessionId).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  const otherUuid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+  it('Given ANSI escapes wrapping the UUID in --list-sessions stderr, When resolving the session ID, Then strips them before extracting', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { stderr: `\x1b[36m${uuid}\x1b[0m  updated just now`, code: 0 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe(uuid);
+  });
+
+  it('Given no UUID in --list-sessions stderr but one in stdout, When resolving the session ID, Then falls back to stdout', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { stdout: `${uuid}  updated just now`, stderr: 'no sessions listed', code: 0 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe(uuid);
+  });
+
+  it('Given UUIDs in both --list-sessions stdout and stderr, When resolving the session ID, Then prefers the stderr UUID', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { stdout: `${otherUuid}  updated 1m ago`, stderr: `${uuid}  updated 2m ago`, code: 0 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe(uuid);
+  });
+
+  it('Given multiple UUIDs in --list-sessions stderr, When resolving the session ID, Then returns the first one (most recent session listed first)', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { stderr: `${uuid}  updated just now\n${otherUuid}  updated 1h ago`, code: 0 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe(uuid);
+  });
+
+  it('Given --list-sessions stderr text that merely resembles a UUID (wrong segment lengths), When resolving the session ID, Then does not match it and returns undefined', async () => {
+    mockSpawnSequence([
+      { stdout: 'Implementation complete.', code: 0 },
+      { stderr: '1234-5678-9012-3456', code: 0 },
+    ]);
+
+    const result = await callKiro('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBeUndefined();
+  });
+});
+
+describe('callKiro output cleanup (issue #781)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.KIRO_API_KEY;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreEnv();
+  });
+
+  it('Given stdout with ANSI escapes and a leading prompt marker, When resuming a session, Then returns cleaned content and skips session resolution', async () => {
+    mockSpawnWithScenario({
+      stdout: '\x1b[32m> \x1b[0mImplementation complete.\x1b[0m',
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'continue', {
+      cwd: '/repo',
+      sessionId: 'sess-prev',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Implementation complete.');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('Given stdout with a Markdown blockquote in the body, When called, Then only strips the leading prompt marker and keeps body "> " intact', async () => {
+    mockSpawnWithScenario({
+      stdout: '> Summary\n> This quoted line should remain',
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'continue', {
+      cwd: '/repo',
+      sessionId: 'sess-prev',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Summary\n> This quoted line should remain');
+  });
+
+  it('Given stdout with surrounding blank lines, a leading prompt marker, and trailing whitespace, When called, Then trims the result after marker removal', async () => {
+    mockSpawnWithScenario({
+      stdout: '\n\n  > Implementation complete.  \n\n',
+      code: 0,
+    });
+
+    const result = await callKiro('coder', 'continue', {
+      cwd: '/repo',
+      sessionId: 'sess-prev',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Implementation complete.');
   });
 });

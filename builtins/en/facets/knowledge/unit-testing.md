@@ -79,6 +79,27 @@ Unit tests should verify that the public contract behaves as expected, not only 
 | Only configuration values or the last internal state are checked | REJECT |
 | Main boundary conditions require an external environment to reproduce | Consider a deterministic test with a fake or stub |
 
+## Verification Layers for Natural-Language Assets
+
+Prompt and instruction strings are input data; prose presence and semantic correctness are different claims. `toContain`, snapshots, and full-string equality prove only that a particular string was stored or generated, not that a model will make the intended classification or judgment.
+
+| Target | Appropriate Method |
+|--------|--------------------|
+| Facet references, schemas, rules, and transition targets | Structural tests through the parser or loader |
+| Values whose exact string is an external compatibility contract | Exact-equality tests |
+| Classification or judgment expressed in natural language | Model evaluations with representative examples and counterexamples |
+| Decisions that can be defined deterministically | Unit tests after extracting the decision from prose into code |
+
+```typescript
+// Bad - treating prose presence as a semantic guarantee
+expect(instruction).toContain('open findings are not decreasing')
+
+// Good - verifying a machine-processed transition structure
+expect(monitor.rules.map((rule) => rule.next)).toEqual(['reviewers', 'ABORT'])
+```
+
+Before adding a test that pins natural-language prose, ask whether its failure represents a user-visible contract violation. If it detects only wording changes, do not add it.
+
 ## Test Fixture Design
 
 Manage test data with factory functions.

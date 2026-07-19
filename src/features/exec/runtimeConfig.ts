@@ -1,6 +1,5 @@
 import { resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
-import { toConcreteProvider } from '../../core/workflow/provider-resolution.js';
 import { assertResolvedExecConfig } from './configValidation.js';
 import type {
   ExecActorConfig,
@@ -18,7 +17,7 @@ export interface ExecProviderModelDefaults {
 
 export function resolveConfiguredExecProviderModel(cwd: string): ExecProviderModelDefaults {
   const config = resolveWorkflowConfigValues(cwd, ['provider', 'model']);
-  const provider = toConcreteProvider(config.provider);
+  const provider = config.provider;
   if (provider === undefined) {
     return {};
   }

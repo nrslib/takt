@@ -47,7 +47,7 @@ const localWorkflows = [
   'dual-for-local-llm',
   'peer-review-for-local-llm',
 ] as const;
-const builtinWorkflowFilesPerLocale = 57;
+const builtinWorkflowFilesPerLocale = 58;
 
 const genericInstructionNames = [
   'review-arch',
@@ -65,10 +65,10 @@ const approvedContentHashes: Record<typeof locales[number], {
 }> = {
   ja: {
     genericInstructions: {
-      'review-arch': '1e6a4e11e3eb3ef57d0b23b5dbac2ef2ac206605ee921086869c577b15800f08',
-      'ai-antipattern-review': '53b3a24a7dc6e425d9fe2ca67b8a32ea21db89a60930ecaf5ca1d60115e7725d',
-      'review-coding': '640c06c524f809e882695e3001191777b4e41bf0c1221bdb124d12a1fa6daab6',
-      'review-implementation-semantics': 'eecf6c664de800cdacdf427997c9793a22590b6d8560306eadc37c0eb36e7fcb',
+      'review-arch': '960bd48b417d3301a8be8199d0ace3a24979d15c539f72b2b9733e5961ebfe05',
+      'ai-antipattern-review': '932d90634a8f8a81d298e47ed44f31b67335aeaef70c72ef5cefe1a07c86b5cf',
+      'review-coding': 'd69f9237752a7e701444b0a9d20245c4e45056f5df5ffedb3957b0a76d8af75b',
+      'review-implementation-semantics': '8f01a25fdf1f486e8cecc2e6b886c6f12372a080d2cc2d2d279014cc85bdaa65',
       'contract-lifecycle-review': '4af1eb2aa808d6ea5a42a9e15d70fa5f41919215ae36054918a668c4dc59d7cb',
       'robustness-review': '45e5af49cdfa3f972d1a9b8e237786d5c0267132fde9c67c857a48f58469cced',
     },
@@ -77,10 +77,10 @@ const approvedContentHashes: Record<typeof locales[number], {
   },
   en: {
     genericInstructions: {
-      'review-arch': 'cbe1e998c4676dd37cbfb37360b8efe4b881a6f97be93ef928fde2fd3d7fe592',
-      'ai-antipattern-review': '469b7c411e41fac55a124daac308a5d00abf82ba19e2c11c32d4d52c31939f49',
-      'review-coding': '638bac840b58168531c004e55d4704e431aa8ee594ca8fce06f0857d2bf99bbf',
-      'review-implementation-semantics': '405eab5f5b2766d0b9fdc6d4bffbe880dc7e0d8bb907045c655bfb6321eeb59a',
+      'review-arch': 'e4792be717e3f9a8f23ef41503f14f15c78d188b96f04032937ce13af1e5c969',
+      'ai-antipattern-review': '16964536dd23e09fe06117d74cb883a69cea06befaec633abba9fb5370fa8cca',
+      'review-coding': '13803a3aa8d0204846cb2db6765c4f308cfd564e894fcacf192bdb2af40f02ce',
+      'review-implementation-semantics': '144249776f6603c37abac79121e0ee040ff63795724f7dac667803f2feda1a9c',
       'contract-lifecycle-review': '10c0207be2c4ede356054b35bf26c642fe14f30119c5063234c402299c4c1783',
       'robustness-review': 'be6ddf378b4af0bf3f8945790f68b32f31bb59b908f738381847f82083ba62ee',
     },
@@ -294,6 +294,31 @@ describe('takt-default-high builtin workflow', () => {
       ]);
       expect(finalGate.rules?.map((rule) => rule.next)).toContain('COMPLETE');
       expect(finalGate.rules?.map((rule) => rule.next)).toContain('NEEDS_ADJUDICATION');
+    });
+
+    it(`${locale} provides a Finding Contract review/fix entrypoint for the high-capability design`, () => {
+      const workflow = readYaml<Workflow>(locale, join('workflows', 'review-fix-takt-default-high.yaml'));
+      const reviewers = stepByName(workflow.steps ?? [], 'reviewers');
+
+      expect(workflow).toMatchObject({
+        name: 'review-fix-takt-default-high',
+        initial_step: 'reviewers',
+        max_steps: 200,
+        finding_contract: {
+          ledger_path: '.takt/findings/review-fix-takt-default-high.json',
+          raw_findings_path: '.takt/findings/review-fix-takt-default-high/raw',
+        },
+      });
+      expect(reviewers.parallel?.map((step) => step.name)).toEqual([
+        'arch-review',
+        'ai-antipattern-review',
+        'coding-review',
+        'implementation-semantics-review',
+        'contract-lifecycle-review',
+        'robustness-review',
+      ]);
+      expect(reviewers.rules?.map((rule) => rule.next)).toContain('fix');
+      expect(reviewers.rules?.map((rule) => rule.next)).toContain('final-gate');
     });
 
     it(`${locale} restricts local facets to the exact workflow and role mapping`, () => {

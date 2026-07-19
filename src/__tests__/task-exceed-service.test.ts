@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { TaskRunner } from '../infra/task/runner.js';
 
@@ -32,18 +33,16 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
 }
 
 describe('TaskRunner - exceedTask', () => {
-  const testDir = `/tmp/takt-exceed-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-exceed-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should transition a running task to exceeded status', () => {
@@ -286,18 +285,16 @@ describe('TaskRunner - exceedTask', () => {
 });
 
 describe('TaskRunner - requeueExceededTask', () => {
-  const testDir = `/tmp/takt-requeue-exceeded-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-requeue-exceeded-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should transition exceeded task to pending', () => {
@@ -438,18 +435,16 @@ describe('TaskRunner - requeueExceededTask', () => {
 });
 
 describe('TaskRunner - deleteTask (exceeded)', () => {
-  const testDir = `/tmp/takt-delete-exceeded-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-delete-exceeded-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should delete an exceeded task', () => {
@@ -474,18 +469,16 @@ describe('TaskRunner - deleteTask (exceeded)', () => {
 });
 
 describe('TaskRunner - listExceededTasks', () => {
-  const testDir = `/tmp/takt-list-exceeded-test-${Date.now()}`;
+  let testDir: string;
   let runner: TaskRunner;
 
   beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
+    testDir = mkdtempSync(join(tmpdir(), 'takt-list-exceeded-test-'));
     runner = new TaskRunner(testDir);
   });
 
   afterEach(() => {
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('should return exceeded tasks as TaskListItems with exceeded kind', () => {

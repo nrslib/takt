@@ -7,6 +7,10 @@ import type { StepProviderInfo } from '../../../core/workflow/types.js';
 import { extractBlockedPrompt } from '../../../core/workflow/engine/transitions.js';
 import { CONFIGURED_PROVIDER_OPTION_VALUE } from '../../../core/workflow/providerOptionsRedaction.js';
 import type { ProviderType, StreamEvent } from '../../../shared/types/provider.js';
+import type {
+  UsageEventLogContext,
+  UsageEventLogger,
+} from '../../../core/logging/usageEventLogger.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js';
@@ -42,14 +46,13 @@ interface WorkflowExecutionEventBridgeDeps {
   };
   task: string;
   projectCwd: string;
-  currentProvider: string;
+  currentProvider: ProviderType;
   configuredModel: string | undefined;
   out: ReturnType<typeof import('./outputFns.js').createOutputFns>;
   prefixWriter: import('../../../shared/ui/TaskPrefixWriter.js').TaskPrefixWriter | undefined;
   displayRef: { current: StreamDisplay | null };
   handlerRef: { current: ReturnType<StreamDisplay['createHandler']> | null };
-  providerEventLogger: ReturnType<typeof import('../../../shared/utils/providerEventLogger.js').createProviderEventLogger>;
-  usageEventLogger: ReturnType<typeof import('../../../shared/utils/usageEventLogger.js').createUsageEventLogger>;
+  usageEventLogger: UsageEventLogger;
   analyticsEmitter: import('./analyticsEmitter.js').AnalyticsEmitter;
   sessionLogger: import('./sessionLogger.js').SessionLogger;
   runMetaManager: import('./runMeta.js').RunMetaManager;
@@ -291,6 +294,7 @@ function emitProviderOptionLines(
 export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
+  const usageContextByStep = new WeakMap<object, UsageEventLogContext>();
   const canReadResumePoint = (): boolean => typeof deps.engine.getResumePoint === 'function';
   const canReadEngineState = (): boolean => typeof deps.engine.getState === 'function';
   const getResumePoint = (): WorkflowExecutionOptions['resumePoint'] => {
@@ -423,10 +427,12 @@ export function bindWorkflowExecutionEvents(
     const stepModel = providerInfo.modelSource !== undefined
       ? providerInfo.model ?? '(default)'
       : providerInfo.model ?? (stepProvider === deps.currentProvider ? deps.configuredModel : undefined) ?? '(default)';
-    deps.providerEventLogger.setStep(step.name);
-    deps.providerEventLogger.setProvider(stepProvider);
-    deps.usageEventLogger.setStep(step.name, detectStepType(step));
-    deps.usageEventLogger.setProvider(stepProvider, stepModel);
+    usageContextByStep.set(step, {
+      provider: stepProvider,
+      providerModel: stepModel,
+      step: step.name,
+      stepType: detectStepType(step),
+    });
     const showSource = isDebugEnabled() || isVerboseConsole();
     const providerSourceSuffix = showSource && providerInfo.providerSource
       ? ` (source: ${providerInfo.providerSource})`
@@ -511,7 +517,15 @@ export function bindWorkflowExecutionEvents(
       eventSinkDispatchState,
     );
 
-    updateUsageForStepCompletion(deps.usageEventLogger, response);
+    const stepType = detectStepType(step);
+    if (stepType !== 'parallel' && stepType !== 'team_leader') {
+      const usageContext = usageContextByStep.get(step);
+      if (!usageContext) {
+        throw new Error(`Usage context is missing for completed step "${step.name}"`);
+      }
+      updateUsageForStepCompletion(deps.usageEventLogger, usageContext, response);
+    }
+    usageContextByStep.delete(step);
     deps.sessionLogger.onStepComplete(step, response, instruction, deps.getCurrentWorkflowStack());
     deps.analyticsEmitter.onStepComplete(step, response);
     state.sessionLog = { ...state.sessionLog, iterations: state.sessionLog.iterations + 1 };

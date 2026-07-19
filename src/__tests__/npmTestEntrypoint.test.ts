@@ -51,7 +51,7 @@ describe('parallel test runner configuration', () => {
   });
 });
 
-describe('npm test sequential execution', () => {
+describe('npm test execution', () => {
   it('should execute npm-cli through Node without a shell', () => {
     expect(resolveNpmInvocation('/opt/node/bin/node', '/opt/node/lib/node_modules/npm/bin/npm-cli.js')).toEqual({
       executable: '/opt/node/bin/node',
@@ -64,7 +64,7 @@ describe('npm test sequential execution', () => {
     expect(() => resolveNpmInvocation('/opt/node/bin/node', 'npm-cli.js')).toThrow(/absolute path/);
   });
 
-  it('should run only the unit gate when no target is provided', async () => {
+  it('should run unit shards sequentially when no target is provided', async () => {
     const events: string[] = [];
     const run = vi.fn(async (npmArgs: string[]) => {
       const script = npmArgs[1]!;
@@ -79,12 +79,18 @@ describe('npm test sequential execution', () => {
     expect(events).toEqual([
       'start:test:unit:parallel',
       'finish:test:unit:parallel',
+      'start:test:unit:parallel',
+      'finish:test:unit:parallel',
+      'start:test:unit:parallel',
+      'finish:test:unit:parallel',
+      'start:test:unit:parallel',
+      'finish:test:unit:parallel',
     ]);
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(4);
     expect(code).toBe(0);
   });
 
-  it('should continue routed gates sequentially and return the first child failure code', async () => {
+  it('should run targeted routed gates concurrently and return the first child failure code', async () => {
     const commands: string[][] = [];
     const events: string[] = [];
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -124,8 +130,8 @@ describe('npm test sequential execution', () => {
     ]);
     expect(events).toEqual([
       'start:test:unit:parallel',
-      'finish:test:unit:parallel',
       'start:test:it:parallel',
+      'finish:test:unit:parallel',
       'finish:test:it:parallel',
     ]);
     expect(error).toHaveBeenCalledWith(
@@ -136,9 +142,12 @@ describe('npm test sequential execution', () => {
 });
 
 describe('npm test entrypoint routing', () => {
-  it('should run only the unit suite when no test target is provided', () => {
+  it('should run the unit suite as sequential shards when no test target is provided', () => {
     expect(selectNpmTestRuns([])).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=1/4', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=2/4', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=3/4', '--maxWorkers=1'] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', '--shard=4/4', '--maxWorkers=1'] },
     ]);
   });
 

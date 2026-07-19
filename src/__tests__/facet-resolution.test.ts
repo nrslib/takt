@@ -30,7 +30,7 @@ import {
   getBuiltinFacetDir,
   type FacetType,
 } from '../infra/config/paths.js';
-import { parseFacetType, VALID_FACET_TYPES } from '../features/config/ejectBuiltin.js';
+import { parseFacetType, VALID_FACET_TYPES } from '../features/config/facetTypes.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('isResourcePath', () => {

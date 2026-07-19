@@ -27,7 +27,7 @@ import { detectMatchedRule } from '../evaluation/index.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { evaluateWhenExpression } from '../evaluation/when-evaluator.js';
 import { resolvePhase3Adoption } from '../evaluation/rule-utils.js';
-import type { StatusJudgmentPhaseResult } from '../phase-runner.js';
+import type { BasePhaseRunnerContext, StatusJudgmentPhaseResult } from '../phase-runner.js';
 import { buildSessionKey } from '../session-key.js';
 import { incrementStepIteration, getPreviousOutput } from './state-manager.js';
 import { createLogger, getErrorMessage, slugify } from '../../../shared/utils/index.js';
@@ -554,6 +554,7 @@ export class StepExecutor {
     response: AgentResponse,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
     runtime?: RuntimeStepResolution,
+    onProviderAttempt?: BasePhaseRunnerContext['onProviderAttempt'],
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -562,6 +563,7 @@ export class StepExecutor {
     }
 
     const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(
+      step,
       state,
       nextResponse.content,
       updatePersonaSession,
@@ -570,6 +572,7 @@ export class StepExecutor {
       this.deps.onJudgeStage,
       state.iteration,
       runtime,
+      onProviderAttempt,
     );
 
     // Phase 2: report output (resume same session, Write only)

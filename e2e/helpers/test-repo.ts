@@ -60,6 +60,9 @@ function getGitHubUser(): string {
 }
 
 function canUseGitHubRepo(): boolean {
+  if (process.env.TAKT_E2E_PROVIDER === 'mock') {
+    return false;
+  }
   try {
     const user = getGitHubUser();
     const repoName = `${user}/takt-testing`;

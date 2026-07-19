@@ -701,11 +701,13 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
   it('should expose configured report fallback options through report phase context', () => {
     // Given
     const step = createStep({ provider: 'opencode', model: 'opencode/qwen3-coder-next' });
+    const onProviderStream = vi.fn();
     const builder = createBuilder(step, {
       reportFallbackProvider: {
         provider: 'codex',
         model: 'gpt-5.1-mini',
       },
+      onProviderStream,
       structuredCaller: {
         judgeStatus: vi.fn(),
       },
@@ -720,7 +722,8 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     };
 
     // When
-    const ctx = builder.buildPhaseRunnerContext(state, 'Phase 1 response', vi.fn());
+    const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
+    ctx.onStream?.({ type: 'text', data: { text: 'Phase 2 response' } });
     const options = ctx.buildFallbackReportOptions(step, {
       cwd: '/project',
       resolvedProvider: 'opencode',
@@ -731,6 +734,20 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     });
 
     // Then
+    expect(ctx.lastResponse).toBe('Phase 1 response');
+    expect(ctx.getSessionId('reviewers:opencode')).toBe('opencode-session');
+    expect(ctx.resolveStepProviderModel(step)).toMatchObject({
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+    });
+    expect(onProviderStream).toHaveBeenCalledWith({
+      step: 'reviewers',
+      provider: 'opencode',
+      providerModel: 'opencode/qwen3-coder-next',
+    }, {
+      type: 'text',
+      data: { text: 'Phase 2 response' },
+    });
     expect(options).toBeDefined();
     if (options === undefined) {
       throw new Error('Expected fallback report options');

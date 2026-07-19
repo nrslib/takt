@@ -185,6 +185,13 @@ vi.mock('../infra/config/index.js', () => ({
   writeFileAtomic: vi.fn(),
 }));
 
+vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveConfigValueWithSource: vi.fn((_cwd, key) => key === 'provider'
+    ? { value: 'claude', source: 'global' }
+    : { value: undefined, source: 'default' }),
+}));
+
 vi.mock('../shared/context.js', () => ({
   isQuietMode: vi.fn().mockReturnValue(true),
 }));

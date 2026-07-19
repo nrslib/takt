@@ -1,13 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
 
+const TEST_TMPDIR = realpathSync(tmpdir());
+
 const {
   mockWriteFileAtomic,
   mockResolveWorkflowConfigValues,
+  mockResolveConfigValueWithSource,
   mockCreateOutputFns,
   mockInitializeOtelFoundation,
   mockEnsureWorktreeTaktGitignore,
@@ -15,6 +18,7 @@ const {
 } = vi.hoisted(() => ({
   mockWriteFileAtomic: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
+  mockResolveConfigValueWithSource: vi.fn(),
   mockCreateOutputFns: vi.fn(),
   mockInitializeOtelFoundation: vi.fn(),
   mockEnsureWorktreeTaktGitignore: vi.fn(),
@@ -32,7 +36,7 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 vi.mock('../infra/config/resolveConfigValue.js', () => ({
-  resolveConfigValueWithSource: vi.fn(() => ({ value: 'mock', source: 'global' })),
+  resolveConfigValueWithSource: mockResolveConfigValueWithSource,
   resolveProviderOptionsWithTrace: vi.fn(() => ({
     value: undefined,
     source: 'default',
@@ -80,15 +84,14 @@ vi.mock('../shared/utils/index.js', () => ({
   preventSleep: vi.fn(),
 }));
 
-vi.mock('../shared/utils/providerEventLogger.js', () => ({
+vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
-    wrapCallback: (handler: unknown) => handler,
-    flush: vi.fn(),
+    logEvent: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));
 
-vi.mock('../shared/utils/usageEventLogger.js', () => ({
+vi.mock('../core/logging/usageEventLogger.js', () => ({
   createUsageEventLogger: vi.fn(() => ({})),
   isUsageEventsEnabled: vi.fn(() => false),
 }));
@@ -177,22 +180,20 @@ function createAutoRoutingConfig(): NonNullable<WorkflowConfig['autoRouting']> {
 const temporaryDirs: string[] = [];
 
 function createTempProject(): string {
-  const projectDir = mkdtempSync(join(tmpdir(), 'takt-direct-resume-'));
+  const projectDir = mkdtempSync(join(TEST_TMPDIR, 'takt-direct-resume-'));
   temporaryDirs.push(projectDir);
   return projectDir;
 }
 
-function hasTasksYamlWrite(): boolean {
-  return mockWriteFileAtomic.mock.calls.some((call) => String(call[0]).endsWith('/.takt/tasks.yaml'));
+function seedResumeSourceRun(projectDir: string): void {
+  mkdirSync(
+    join(projectDir, '.takt', 'runs', '20260524-source-run', 'reports'),
+    { recursive: true },
+  );
 }
 
-function seedSourceRun(projectDir: string, slug: string, files: Record<string, string>): void {
-  const reportsDir = join(projectDir, '.takt/runs', slug, 'reports');
-  mkdirSync(reportsDir, { recursive: true });
-  writeFileSync(join(projectDir, '.takt/runs', slug, 'meta.json'), '{}');
-  for (const [rel, content] of Object.entries(files)) {
-    writeFileSync(join(reportsDir, rel), content);
-  }
+function hasTasksYamlWrite(): boolean {
+  return mockWriteFileAtomic.mock.calls.some((call) => String(call[0]).endsWith('/.takt/tasks.yaml'));
 }
 
 describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
@@ -208,6 +209,20 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     });
     mockInitializeOtelFoundation.mockResolvedValue({ shutdown: vi.fn() });
     mockLogWarn.mockReset();
+    mockResolveConfigValueWithSource.mockReset();
+    mockResolveConfigValueWithSource.mockImplementation((
+      _projectCwd: string,
+      key: 'provider' | 'model',
+      config?: { workflowContext?: { provider?: string; model?: string } },
+    ) => {
+      const workflowValue = config?.workflowContext?.[key];
+      if (workflowValue !== undefined) {
+        return { value: workflowValue, source: 'workflow' };
+      }
+      return key === 'provider'
+        ? { value: 'mock', source: 'global' }
+        : { value: undefined, source: 'default' };
+    });
     mockResolveWorkflowConfigValues.mockReturnValue({
       provider: 'mock',
       model: undefined,
@@ -231,25 +246,25 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     }
   });
 
-  it('Given workflow provider auto and autoStrategy, When bootstrap resolves config, Then strategy override applies without ignored warning', async () => {
+  it('Given workflow auto_routing and a strategy override, When bootstrap resolves config, Then it delegates override application to the engine', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
     }, 'Run auto workflow', '/project', {
       projectCwd: '/project',
       autoStrategy: 'performance',
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
     expect(bootstrap.autoStrategyOverride).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given workflow provider auto and autoStrategy requires a missing tier, When bootstrap resolves config, Then it fails fast', async () => {
-    await expect(createWorkflowExecutionBootstrap({
+  it('Given a strategy override requires a missing tier, When bootstrap resolves config, Then it delegates validation to the engine', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: {
         strategy: 'cost',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
@@ -266,10 +281,13 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     }, 'Run auto workflow', '/project', {
       projectCwd: '/project',
       autoStrategy: 'performance',
-    })).rejects.toThrow(/performance|high|candidate/i);
+    });
+
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
   });
 
-  it('Given workflow-level provider auto and no config provider, When bootstrap resolves provider, Then workflow provider is used', async () => {
+  it('Given a workflow-level concrete provider and no config provider, When bootstrap resolves provider, Then workflow provider is used', async () => {
     mockResolveWorkflowConfigValues.mockReturnValueOnce({
       provider: undefined,
       model: undefined,
@@ -288,45 +306,63 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
-      provider: 'auto',
+      provider: 'claude',
       autoRouting: createAutoRoutingConfig(),
     }, 'Run workflow-level auto provider', '/project', {
       projectCwd: '/project',
     });
 
-    expect(bootstrap.currentProvider).toBe('auto');
+    expect(bootstrap.currentProvider).toBe('claude');
     expect(bootstrap.currentProviderSource).toBe('workflow');
   });
 
-  it('Given no effective auto provider and autoStrategy, When bootstrap resolves config, Then strategy override is ignored with warning', async () => {
+  it('provider と model の value/source を同じ traced resolution から保持する', async () => {
+    mockResolveConfigValueWithSource.mockImplementation((
+      _projectCwd: string,
+      key: 'provider' | 'model',
+    ) => key === 'provider'
+      ? { value: 'codex', source: 'project' }
+      : { value: 'project-model', source: 'project' });
+
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
-      autoRouting: {
-        strategy: 'cost',
-        router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
-        candidates: [
-          {
-            name: 'coding',
-            description: 'Implementation',
-            provider: 'codex',
-            model: 'gpt-5',
-            costTier: 'medium',
-          },
-        ],
-      },
-    }, 'Run concrete workflow', '/project', {
+      provider: 'claude',
+      model: 'workflow-model',
+    }, 'Run traced provider resolution', '/project', {
+      projectCwd: '/project',
+    });
+
+    expect(bootstrap.currentProvider).toBe('codex');
+    expect(bootstrap.currentProviderSource).toBe('project');
+    expect(bootstrap.configuredModel).toBe('project-model');
+    expect(bootstrap.configuredModelSource).toBe('project');
+  });
+
+  it('traced provider resolution の設定エラーを握りつぶさない', async () => {
+    mockResolveConfigValueWithSource.mockImplementation(() => {
+      throw new Error('invalid traced config');
+    });
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Run invalid config', '/project', {
+      projectCwd: '/project',
+    })).rejects.toThrow('invalid traced config');
+  });
+
+  it('Given no effective auto_routing and autoStrategy, When bootstrap resolves config, Then strategy override is ignored with warning', async () => {
+    const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, 'Run concrete workflow', '/project', {
       projectCwd: '/project',
       autoStrategy: 'performance',
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
-    expect(bootstrap.autoStrategyOverride).toBeUndefined();
-    expect(mockLogWarn).toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    bootstrap.warnIfAutoStrategyUnused();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringMatching(/auto_routing/i));
   });
 
-  it('Given CLI provider is concrete and global provider is auto, When bootstrap resolves config, Then autoStrategy is ignored with warning', async () => {
+  it('Given CLI provider is concrete and config-level auto_routing exists, When bootstrap resolves config, Then autoStrategy applies', async () => {
     mockResolveWorkflowConfigValues.mockReturnValueOnce({
-      provider: 'auto',
+      provider: 'mock',
       model: undefined,
       language: 'en',
       notificationSound: false,
@@ -350,19 +386,19 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
     expect(bootstrap.currentProvider).toBe('mock');
     expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
-    expect(bootstrap.autoStrategyOverride).toBeUndefined();
-    expect(mockLogWarn).toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given CLI provider is concrete and workflow-level provider auto is inherited by a step, When bootstrap resolves config, Then autoStrategy is ignored with warning', async () => {
+  it('Given CLI provider and workflow auto_routing coexist, When bootstrap resolves config, Then autoStrategy applies independently of provider', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
       steps: [
         {
           name: 'fix',
-          provider: 'auto',
+          provider: 'mock',
           providerSpecified: false,
           personaDisplayName: 'Fixer',
           instruction: 'Fix',
@@ -377,14 +413,14 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
     expect(bootstrap.currentProvider).toBe('mock');
     expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
-    expect(bootstrap.autoStrategyOverride).toBeUndefined();
-    expect(mockLogWarn).toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given CLI provider is concrete and workflow-level provider auto is inherited by a parallel sub-step, When bootstrap resolves config, Then autoStrategy is ignored with warning', async () => {
+  it('Given a parallel workflow and effective auto_routing, When bootstrap resolves config, Then autoStrategy applies', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
-      provider: 'auto',
+      provider: 'mock',
       initialStep: 'reviewers',
       autoRouting: createAutoRoutingConfig(),
       steps: [
@@ -395,7 +431,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           parallel: [
             {
               name: 'coding-review',
-              provider: 'auto',
+              provider: 'mock',
               providerSpecified: false,
               persona: 'reviewer',
               instruction: 'Review code',
@@ -412,27 +448,27 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
     expect(bootstrap.currentProvider).toBe('mock');
     expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
-    expect(bootstrap.autoStrategyOverride).toBeUndefined();
-    expect(mockLogWarn).toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given a step-level auto provider and autoStrategy, When bootstrap resolves config, Then strategy override applies', async () => {
+  it('Given a concrete step and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       autoRouting: createAutoRoutingConfig(),
       steps: [
-        { name: 'fix', provider: 'auto', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
+        { name: 'fix', provider: 'mock', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
       ],
     }, 'Run step auto workflow', '/project', {
       projectCwd: '/project',
       autoStrategy: 'performance',
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given a parallel sub-step auto provider and autoStrategy, When bootstrap resolves config, Then strategy override applies', async () => {
+  it('Given a concrete parallel sub-step and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       initialStep: 'reviewers',
@@ -443,7 +479,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           personaDisplayName: 'Reviewers',
           instruction: 'Run reviewers',
           parallel: [
-            { name: 'coding-review', provider: 'auto', persona: 'reviewer', instruction: 'Review code' },
+            { name: 'coding-review', provider: 'mock', persona: 'reviewer', instruction: 'Review code' },
           ],
           rules: [],
         },
@@ -453,11 +489,11 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       autoStrategy: 'performance',
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given a workflow_call override auto provider and autoStrategy, When bootstrap resolves config, Then strategy override applies', async () => {
+  it('Given a concrete workflow_call override and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       initialStep: 'call-child',
@@ -467,7 +503,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           name: 'call-child',
           kind: 'workflow_call',
           call: 'child',
-          overrides: { provider: 'auto' },
+          overrides: { provider: 'mock' },
           rules: [],
         },
       ],
@@ -476,21 +512,48 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       autoStrategy: 'performance',
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given only a child workflow uses provider auto and autoStrategy, When bootstrap resolves config, Then it does not warn that the strategy is ignored', async () => {
+  it('Given autoStrategy and an unreachable workflow_call, When bootstrap resolves config, Then it does not resolve the child', async () => {
+    const workflowCallResolver = vi.fn(() => {
+      throw new Error('unreachable child resolver invoked');
+    });
+
+    const bootstrap = await createWorkflowExecutionBootstrap({
+      ...workflowConfig,
+      steps: [
+        ...workflowConfig.steps,
+        {
+          name: 'unreachable-child',
+          kind: 'workflow_call',
+          call: 'child',
+          rules: [],
+        },
+      ],
+    }, 'Run workflow without strategy override', '/project', {
+      projectCwd: '/project',
+      autoStrategy: 'performance',
+      workflowCallResolver,
+    });
+
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(workflowCallResolver).not.toHaveBeenCalled();
+    bootstrap.warnIfAutoStrategyUnused();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringMatching(/auto_routing/i));
+  });
+
+  it('Given a child workflow has auto_routing and autoStrategy, When bootstrap resolves config, Then it does not warn', async () => {
     const childWorkflow: WorkflowConfig = {
       ...workflowConfig,
       name: 'child',
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
     };
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       initialStep: 'call-child',
-      autoRouting: createAutoRoutingConfig(),
       steps: [
         {
           name: 'call-child',
@@ -505,21 +568,21 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       workflowCallResolver: () => childWorkflow,
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given a parallel workflow_call child workflow uses provider auto and autoStrategy, When bootstrap resolves config, Then strategy override applies', async () => {
+  it('Given a parallel workflow_call child has auto_routing and autoStrategy, When bootstrap resolves config, Then strategy override applies', async () => {
     const childWorkflow: WorkflowConfig = {
       ...workflowConfig,
       name: 'child',
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
     };
     const parentWorkflow = {
       ...workflowConfig,
       initialStep: 'reviewers',
-      autoRouting: createAutoRoutingConfig(),
       steps: [
         {
           name: 'reviewers',
@@ -546,22 +609,21 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       workflowCallResolver: () => childWorkflow,
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
     expect(bootstrap.autoStrategyOverride).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given workflow_call concrete provider override and child top-level provider auto, When bootstrap resolves config, Then strategy override is ignored', async () => {
+  it('Given workflow_call concrete provider override and effective auto_routing, When bootstrap resolves config, Then strategy override still applies', async () => {
     const childWorkflow: WorkflowConfig = {
       ...workflowConfig,
       name: 'child',
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
     };
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       initialStep: 'call-child',
-      autoRouting: createAutoRoutingConfig(),
       steps: [
         {
           name: 'call-child',
@@ -577,25 +639,24 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       workflowCallResolver: () => childWorkflow,
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
-    expect(bootstrap.autoStrategyOverride).toBeUndefined();
-    expect(mockLogWarn).toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
+    expect(bootstrap.autoStrategyOverride).toBe('performance');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given workflow_call concrete provider override and child step provider auto, When bootstrap resolves config, Then strategy override applies', async () => {
+  it('Given workflow_call concrete provider override and child auto_routing, When bootstrap resolves config, Then strategy override applies', async () => {
     const childWorkflow: WorkflowConfig = {
       ...workflowConfig,
       name: 'child',
       initialStep: 'child-auto',
       autoRouting: createAutoRoutingConfig(),
       steps: [
-        { name: 'child-auto', provider: 'auto', personaDisplayName: 'Child', instruction: 'Run child auto', rules: [] },
+        { name: 'child-auto', provider: 'mock', personaDisplayName: 'Child', instruction: 'Run child auto', rules: [] },
       ],
     };
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       initialStep: 'call-child',
-      autoRouting: createAutoRoutingConfig(),
       steps: [
         {
           name: 'call-child',
@@ -611,16 +672,15 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       workflowCallResolver: () => childWorkflow,
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
     expect(bootstrap.autoStrategyOverride).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given a same-name child workflow has a different reference and provider auto, When bootstrap checks auto usage, Then strategy override applies', async () => {
+  it('Given a same-name child workflow has a different reference and auto_routing, When bootstrap resolves config, Then strategy override applies', async () => {
     const parentWorkflow = attachWorkflowOpaqueRef({
       ...workflowConfig,
       initialStep: 'call-child',
-      autoRouting: createAutoRoutingConfig(),
       steps: [
         {
           name: 'call-child',
@@ -633,7 +693,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     const childWorkflow = attachWorkflowOpaqueRef({
       ...workflowConfig,
       name: parentWorkflow.name,
-      provider: 'auto',
+      provider: 'mock',
       autoRouting: createAutoRoutingConfig(),
     }, 'project:sha256:child');
 
@@ -643,17 +703,17 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       workflowCallResolver: () => childWorkflow,
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting).toBeUndefined();
     expect(bootstrap.autoStrategyOverride).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
-  it('Given CLI provider override is concrete and a step uses auto, When bootstrap resolves config, Then strategy override applies', async () => {
+  it('Given CLI provider override and effective auto_routing, When bootstrap resolves config, Then it delegates strategy override application', async () => {
     const bootstrap = await createWorkflowExecutionBootstrap({
       ...workflowConfig,
       autoRouting: createAutoRoutingConfig(),
       steps: [
-        { name: 'fix', provider: 'auto', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
+        { name: 'fix', provider: 'mock', personaDisplayName: 'Fixer', instruction: 'Fix', rules: [] },
       ],
     }, 'Run CLI override workflow', '/project', {
       projectCwd: '/project',
@@ -661,8 +721,8 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       autoStrategy: 'performance',
     });
 
-    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('performance');
-    expect(mockLogWarn).not.toHaveBeenCalledWith('--auto-strategy is ignored unless the effective provider is auto');
+    expect(bootstrap.effectiveWorkflowConfig.autoRouting?.strategy).toBe('cost');
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
   it('Given routing telemetry is enabled, When bootstrap initializes analytics, Then project .takt/events is passed for local routing decisions', async () => {
@@ -756,7 +816,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
   it('Given directResume is passed, When bootstrap creates run meta, Then source metadata is persisted in meta.json', async () => {
     const projectDir = createTempProject();
-    seedSourceRun(projectDir, '20260524-source-run', { 'plan.md': 'plan from the aborted run' });
+    seedResumeSourceRun(projectDir);
 
     await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
       projectCwd: projectDir,
@@ -769,79 +829,20 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     });
 
     const metaWrite = mockWriteFileAtomic.mock.calls.find((call) =>
-      call[0] === join(projectDir, '.takt/runs/direct-resume/meta.json')
+      call[0] === join(projectDir, '.takt', 'runs', 'direct-resume', 'meta.json')
     );
     expect(metaWrite).toBeDefined();
     const meta = JSON.parse(String(metaWrite![1])) as {
       source_run_slug?: string;
       resume_mode?: string;
-      resume_artifacts?: string;
     };
     expect(meta.source_run_slug).toBe('20260524-source-run');
     expect(meta.resume_mode).toBe('retry');
-    // meta.json は manifest への参照のみ（一覧と hash の SSOT は manifest 側）。
-    // manifest は reports スナップショットの内側の予約名。
-    expect(meta.resume_artifacts).toBe('.takt/runs/direct-resume/reports/resume-artifacts.json');
-  });
-
-  // resume は新しい run slug を作るため、旧 run の reports/ を継承しないと
-  // {report:X} 参照が必ず壊れる（v3-r4 の resume 境界バグ）。継承は bootstrap
-  // を一元境界とし、requeue / retry / instruct と attachment 有無（reportDirName
-  // 先行生成の有無）で同一処理になることを固定する。
-  it.each([
-    ['requeue', undefined],
-    ['retry', 'attached-run'],
-    ['instruct', undefined],
-  ] as const)('Given directResume (%s, reportDirName=%s), When bootstrap runs, Then the source reports snapshot is inherited', async (resumeMode, reportDirName) => {
-    const projectDir = createTempProject();
-    seedSourceRun(projectDir, 'source-run', {
-      'ai-antipattern-review-1st.md': 'first review from the aborted run',
-      'plan.md': 'plan from the aborted run',
-    });
-
-    await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
-      projectCwd: projectDir,
-      provider: 'mock',
-      // attachment 経路は resume feature 側で slug を先行生成して渡す。
-      // 非 attachment 経路は bootstrap が生成する（generateReportDir モックは
-      // 'generated-run' を返す）。どちらも同じ継承処理を通る。
-      ...(reportDirName ? { reportDirName } : {}),
-      directResume: {
-        sourceRunSlug: 'source-run',
-        resumeMode,
-      },
-    });
-
-    const targetSlug = reportDirName ?? 'generated-run';
-    const targetReports = join(projectDir, '.takt/runs', targetSlug, 'reports');
-    expect(readFileSync(join(targetReports, 'ai-antipattern-review-1st.md'), 'utf-8'))
-      .toBe('first review from the aborted run');
-    expect(readFileSync(join(targetReports, 'plan.md'), 'utf-8')).toBe('plan from the aborted run');
-    const manifest = JSON.parse(readFileSync(
-      join(projectDir, '.takt/runs', targetSlug, 'reports', 'resume-artifacts.json'),
-      'utf-8',
-    )) as { sourceRunSlug: string; files: Array<{ path: string }> };
-    expect(manifest.sourceRunSlug).toBe('source-run');
-    expect(manifest.files.map((f) => f.path).sort()).toEqual(['ai-antipattern-review-1st.md', 'plan.md']);
-  });
-
-  it('Given directResume with a missing source run, When bootstrap runs, Then it fails fast before engine init', async () => {
-    const projectDir = createTempProject();
-
-    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
-      projectCwd: projectDir,
-      provider: 'mock',
-      reportDirName: 'direct-resume',
-      directResume: {
-        sourceRunSlug: 'no-such-run',
-        resumeMode: 'retry',
-      },
-    })).rejects.toThrow(/source run "no-such-run" does not exist/);
   });
 
   it('Given no tasks.yaml exists, When direct resume bootstrap runs, Then tasks.yaml is not created', async () => {
     const projectDir = createTempProject();
-    seedSourceRun(projectDir, '20260524-source-run', {});
+    seedResumeSourceRun(projectDir);
 
     await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
       projectCwd: projectDir,
@@ -859,12 +860,12 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
 
   it('Given tasks.yaml already exists, When direct resume bootstrap runs, Then tasks.yaml remains unchanged', async () => {
     const projectDir = createTempProject();
-    seedSourceRun(projectDir, '20260524-source-run', {});
     const tasksDir = join(projectDir, '.takt');
     const tasksPath = join(tasksDir, 'tasks.yaml');
     const initialTasks = 'tasks:\n  - name: keep-existing\n    status: pending\n';
     mkdirSync(tasksDir, { recursive: true });
     writeFileSync(tasksPath, initialTasks, 'utf-8');
+    seedResumeSourceRun(projectDir);
 
     await createWorkflowExecutionBootstrap(workflowConfig, 'Resume direct run', projectDir, {
       projectCwd: projectDir,

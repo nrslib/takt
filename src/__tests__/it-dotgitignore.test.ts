@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { getProjectWorkflowsDir, getProjectFacetDir } from '../infra/config/paths.js';
-import { VALID_FACET_TYPES, parseFacetType } from '../features/config/ejectBuiltin.js';
+import { VALID_FACET_TYPES, parseFacetType } from '../features/config/facetTypes.js';
 
 function gitTrackedFiles(cwd: string): string[] {
   const output = execFileSync('git', ['ls-files', '.takt/'], { cwd, encoding: 'utf-8' });

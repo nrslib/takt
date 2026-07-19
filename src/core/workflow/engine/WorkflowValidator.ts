@@ -1,3 +1,4 @@
+import type { AutoRoutingConfig } from '../../models/config-types.js';
 import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, WorkflowStep } from '../../models/types.js';
 import {
   SESSION_AGENT_STEP_REQUIRED_MESSAGE,
@@ -5,12 +6,70 @@ import {
 } from '../../models/workflow-session-constraints.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES, FINDING_CONFLICT_ADJUDICATION_STEP, NEEDS_ADJUDICATION_STEP } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
-import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../provider-resolution.js';
+import {
+  applyProviderModelOverride,
+  resolveLoopMonitorJudgeProviderModel,
+  resolveStepProviderModel,
+} from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import { hasUnquotedFindingsReference, isFindingsCondition } from '../evaluation/rule-utils.js';
-import { workflowUsesAutoProvider } from '../auto-routing/workflow-auto-provider.js';
 import { buildFindingManagerStep } from '../findings/manager-step.js';
+import {
+  matchAutoRoutingRules,
+  resolveAutoRoutingCandidateProviderInfo,
+  validateAutoRoutingResolvedProviderModel,
+} from '../auto-routing/resolver.js';
+
+type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
+
+interface ValidationProviderInfo {
+  providerInfo: ResolvedProviderInfo;
+  autoRouted: boolean;
+}
+
+function expandAutoRoutingProviderInfos(
+  step: WorkflowStep,
+  currentProviderInfo: ResolvedProviderInfo,
+  autoRouting: AutoRoutingConfig | undefined,
+): ValidationProviderInfo[] {
+  if (
+    autoRouting === undefined
+    || currentProviderInfo.provider !== undefined
+    || getWorkflowStepKind(step) !== 'agent'
+  ) {
+    return [{ providerInfo: currentProviderInfo, autoRouted: false }];
+  }
+
+  const ruleCandidate = matchAutoRoutingRules(autoRouting, {
+    name: step.name,
+    tags: step.tags,
+    personaKey: step.providerRoutingPersonaKey,
+    instruction: step.instruction,
+  });
+  const candidates = ruleCandidate === undefined ? autoRouting.candidates : [ruleCandidate];
+  const source = ruleCandidate === undefined ? 'auto.ai' : 'auto.rules';
+  return candidates.map((candidate) => ({
+    providerInfo: resolveAutoRoutingCandidateProviderInfo(
+      candidate,
+      source,
+      autoRouting,
+      currentProviderInfo,
+    ),
+    autoRouted: true,
+  }));
+}
+
+function validateResolvedProviderInfo(
+  providerInfo: ResolvedProviderInfo,
+  modelFieldName: string,
+  autoRouted: boolean,
+): void {
+  validateProviderModelRequirements(providerInfo.provider, providerInfo.model, { modelFieldName });
+  if (autoRouted && providerInfo.provider !== undefined) {
+    validateAutoRoutingResolvedProviderModel(providerInfo.provider, providerInfo.model);
+  }
+}
 
 function isFindingsRule(rule: WorkflowRule | LoopMonitorRule): boolean {
   if ('isAiCondition' in rule && rule.isAiCondition === true) {
@@ -145,16 +204,17 @@ export function validateFindingContractManagerProviderModel(config: WorkflowConf
     providerSource: options.providerSource,
     model: options.model,
     modelSource: options.modelSource,
+    autoRouting: options.autoRouting,
     providerRouting: options.providerRouting,
     personaProviders: options.personaProviders,
   });
-  validateProviderModelRequirements(
-    providerInfo.provider,
-    providerInfo.model,
-    {
-      modelFieldName: 'Configuration error: finding_contract.manager.model',
-    },
-  );
+  for (const validationInfo of expandAutoRoutingProviderInfos(managerStep, providerInfo, options.autoRouting)) {
+    validateResolvedProviderInfo(
+      validationInfo.providerInfo,
+      'Configuration error: finding_contract.manager.model',
+      validationInfo.autoRouted,
+    );
+  }
 }
 
 /**
@@ -239,17 +299,23 @@ function validateAgentStepProviderModel(
     providerSource: options.providerSource,
     model: options.model,
     modelSource: options.modelSource,
+    autoRouting: options.autoRouting,
     providerRouting: options.providerRouting,
     personaProviders: options.personaProviders,
   });
-  validateProviderModelRequirements(
-    providerInfo.provider,
-    providerInfo.model,
-    {
-      modelFieldName: `${source}.model`,
-    },
-  );
-  validatePromotionProviderModels(agentStep, providerInfo, source);
+  for (const validationInfo of expandAutoRoutingProviderInfos(agentStep, providerInfo, options.autoRouting)) {
+    validateResolvedProviderInfo(
+      validationInfo.providerInfo,
+      `${source}.model`,
+      validationInfo.autoRouted,
+    );
+    validatePromotionProviderModels(
+      agentStep,
+      validationInfo.providerInfo,
+      source,
+      validationInfo.autoRouted,
+    );
+  }
 }
 
 function validateSessionEntrypoint(step: WorkflowStep, source: string): void {
@@ -275,22 +341,22 @@ function validateSessionEntrypoint(step: WorkflowStep, source: string): void {
 
 function validatePromotionProviderModels(
   step: AgentWorkflowStep,
-  baseProviderInfo: ReturnType<typeof resolveStepProviderModel>,
+  baseProviderInfo: ResolvedProviderInfo,
   source: string,
+  autoRouted: boolean,
 ): void {
   for (const [index, promotion] of (step.promotion ?? []).entries()) {
-    const provider = promotion.provider ?? baseProviderInfo.provider;
-    const model = promotion.model !== undefined
-      ? promotion.model
-      : promotion.providerSpecified
-        ? undefined
-        : baseProviderInfo.model;
-    validateProviderModelRequirements(
-      provider,
-      model,
-      {
-        modelFieldName: `${source}.promotion[${index}].model`,
-      },
+    const promotedProviderInfo = applyProviderModelOverride(baseProviderInfo, {
+      provider: promotion.provider,
+      providerSpecified: promotion.providerSpecified === true || promotion.provider !== undefined,
+      model: promotion.model,
+      modelSpecified: promotion.model !== undefined,
+      source: 'promotion',
+    });
+    validateResolvedProviderInfo(
+      promotedProviderInfo,
+      `${source}.promotion[${index}].model`,
+      autoRouted,
     );
   }
 }
@@ -318,20 +384,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
-  }
-  const workflowProvider = options.provider ?? config.provider;
-  if (
-    workflowUsesAutoProvider({
-      workflowConfig: config,
-      effectiveProvider: workflowProvider,
-      cliProvider: options.provider,
-      projectCwd: options.projectCwd,
-      lookupCwd: options.projectCwd,
-      workflowCallResolver: options.workflowCallResolver,
-    })
-    && options.autoRouting === undefined
-  ) {
-    throw new Error('Configuration error: provider: auto requires auto_routing configuration');
   }
   // 子ワークフローが自前の finding_contract を持たず、workflow_call の親から
   // 継承しているだけのケースも「Finding Contract 有効」として扱う。継承した
@@ -451,7 +503,10 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     const triggeringProviderInfo = resolveStepProviderModel({
       step: triggeringStep,
       provider: options.provider,
+      providerSource: options.providerSource,
       model: options.model,
+      modelSource: options.modelSource,
+      autoRouting: options.autoRouting,
       providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
@@ -469,21 +524,27 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
         providerRoutingPersonaKey: 'loop-judge',
       },
       provider: options.provider,
+      providerSource: options.providerSource,
       model: options.model,
+      modelSource: options.modelSource,
       providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
-    const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
-      judge: monitor.judge,
-      judgeProviderInfo: judgeStepProviderInfo,
+    for (const validationInfo of expandAutoRoutingProviderInfos(
+      triggeringStep,
       triggeringProviderInfo,
-    });
-    validateProviderModelRequirements(
-      judgeProviderInfo.provider,
-      judgeProviderInfo.model,
-      {
-        modelFieldName: 'Configuration error: loop_monitors.judge.model',
-      },
-    );
+      options.autoRouting,
+    )) {
+      const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
+        judge: monitor.judge,
+        judgeProviderInfo: judgeStepProviderInfo,
+        triggeringProviderInfo: validationInfo.providerInfo,
+      });
+      validateResolvedProviderInfo(
+        judgeProviderInfo,
+        'Configuration error: loop_monitors.judge.model',
+        validationInfo.autoRouted,
+      );
+    }
   }
 }

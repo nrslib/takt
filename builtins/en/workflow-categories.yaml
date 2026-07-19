@@ -57,6 +57,7 @@ workflow_categories:
       - review-fix-backend-cqrs
       - review-takt-default
       - review-fix-takt-default
+      - review-fix-takt-default-high
       - audit-unit
       - audit-e2e
       - audit-security
@@ -70,6 +71,7 @@ workflow_categories:
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default
+      - review-fix-takt-default-high
       - takt-default-for-local-llm
       - takt-default-high
   🖥️ Local LLM:

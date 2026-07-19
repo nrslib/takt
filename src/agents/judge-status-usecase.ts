@@ -1,4 +1,4 @@
-import type { WorkflowRule, RuleMatchMethod, Language } from '../core/models/types.js';
+import type { AgentResponse, WorkflowRule, RuleMatchMethod, Language } from '../core/models/types.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import { runAgent, type RunAgentOptions, type StreamCallback } from './runner.js';
@@ -11,6 +11,7 @@ import {
   StructuredOutputValueValidationError,
   validateStructuredOutputAgainstSchema,
 } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { getErrorMessage } from '../shared/utils/index.js';
 
 export interface JudgeStatusOptions {
   cwd: string;
@@ -58,17 +59,29 @@ export async function runTagJudgeStage(
   runOptions: TagJudgeRunOptions,
   onJudgeStage?: JudgeStatusOptions['onJudgeStage'],
 ): Promise<JudgeStatusResult | undefined> {
-  const tagResponse = await runAgent('conductor', tagInstruction, {
-    cwd: runOptions.cwd,
-    provider: runOptions.provider,
-    resolvedProvider: runOptions.resolvedProvider,
-    resolvedModel: runOptions.resolvedModel,
-    ...buildMaxTurnsOption(runOptions.provider, runOptions.resolvedProvider, 3),
-    permissionMode: 'readonly',
-    language: runOptions.language,
-    onStream: runOptions.onStream,
-    childProcessEnv: runOptions.childProcessEnv,
-  });
+  let tagResponse: AgentResponse;
+  try {
+    tagResponse = await runAgent('conductor', tagInstruction, {
+      cwd: runOptions.cwd,
+      provider: runOptions.provider,
+      resolvedProvider: runOptions.resolvedProvider,
+      resolvedModel: runOptions.resolvedModel,
+      ...buildMaxTurnsOption(runOptions.provider, runOptions.resolvedProvider, 3),
+      permissionMode: 'readonly',
+      language: runOptions.language,
+      onStream: runOptions.onStream,
+      childProcessEnv: runOptions.childProcessEnv,
+    });
+  } catch (error) {
+    onJudgeStage?.({
+      stage: 2,
+      method: 'phase3_tag',
+      status: 'error',
+      instruction: tagInstruction,
+      response: getErrorMessage(error),
+    });
+    throw error;
+  }
 
   onJudgeStage?.({
     stage: 2,
@@ -272,14 +285,26 @@ export async function judgeStatus(
   if (conditions.length > 0) {
     const stage3 = createJudgeStageRecorder();
     const normalizedConditions = conditions.map((c, pos) => ({ index: pos, text: c.text }));
-    const fallbackPosition = await evaluateCondition(structuredInstruction, normalizedConditions, {
-      cwd: options.cwd,
-      provider: options.provider,
-      resolvedProvider: options.resolvedProvider,
-      resolvedModel: options.resolvedModel,
-      childProcessEnv: options.childProcessEnv,
-      onJudgeResponse: stage3.capture,
-    });
+    let fallbackPosition: number;
+    try {
+      fallbackPosition = await evaluateCondition(structuredInstruction, normalizedConditions, {
+        cwd: options.cwd,
+        provider: options.provider,
+        resolvedProvider: options.resolvedProvider,
+        resolvedModel: options.resolvedModel,
+        childProcessEnv: options.childProcessEnv,
+        onJudgeResponse: stage3.capture,
+      });
+    } catch (error) {
+      options.onJudgeStage?.({
+        stage: 3,
+        method: 'ai_judge',
+        status: 'error',
+        instruction: structuredInstruction,
+        response: getErrorMessage(error),
+      });
+      throw error;
+    }
 
     options.onJudgeStage?.(stage3.stage({
       stage: 3,

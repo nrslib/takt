@@ -115,10 +115,12 @@ vi.mock('../app/cli/program.js', () => {
   };
   return {
     program: chainable,
-    resolvedCwd: '/test/cwd',
-    pipelineMode: false,
   };
 });
+
+vi.mock('../app/cli/initialization.js', () => ({
+  getCliExecutionContext: vi.fn(() => ({ cwd: '/test/cwd', pipelineMode: false })),
+}));
 
 vi.mock('../app/cli/helpers.js', () => ({
   resolveAgentOverrides: (...args: unknown[]) => mockResolveAgentOverrides(...args),

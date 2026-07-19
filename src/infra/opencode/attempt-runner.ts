@@ -416,6 +416,14 @@ export function resetSharedServer(): void {
   resetSharedServerPool();
 }
 
+let sharedServerExitCleanupRegistered = false;
+
+function registerSharedServerExitCleanup(): void {
+  if (sharedServerExitCleanupRegistered) return;
+  process.once('exit', resetSharedServer);
+  sharedServerExitCleanupRegistered = true;
+}
+
 /** 要約は本文量に比例して伸びるため、対話 RPC より長く待つ。 */
 async function withTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
@@ -865,6 +873,7 @@ export class OpenCodeAttemptRunner {
       options.abortSignal,
       sessionId ?? provisionalKey,
     );
+    registerSharedServerExitCleanup();
     const onServerInvalidated = (): void => {
       serverInvalidationError = sharedServerInvalidationError(acquired.invalidationSignal);
       if (!streamAbortController.signal.aborted) {

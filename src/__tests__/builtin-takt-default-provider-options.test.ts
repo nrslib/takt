@@ -31,6 +31,13 @@ interface WorkflowStepRaw {
 
 interface BuiltinWorkflowRaw {
   finding_contract?: unknown;
+  loop_monitors?: Array<{
+    cycle?: string[];
+    threshold?: number;
+    judge?: {
+      rules?: Array<{ condition?: string; next?: string }>;
+    };
+  }>;
   workflow_config?: {
     provider_options?: unknown;
   };
@@ -407,6 +414,22 @@ describe('builtin takt-default provider_options refs', () => {
 
       expect(workflow.finding_contract).toBeUndefined();
       expect(normalized.findingContract).toBeUndefined();
+    });
+
+    it(`${locale} peer-review should abort both unproductive fix loops`, () => {
+      const workflow = loadBuiltinWorkflow(locale, 'peer-review.yaml');
+
+      expect(workflow.loop_monitors?.map((monitor) => monitor.cycle)).toEqual([
+        ['reviewers', 'fix'],
+        ['reviewers', 'final-gate', 'fix'],
+      ]);
+      for (const monitor of workflow.loop_monitors ?? []) {
+        expect(monitor.threshold).toBe(5);
+        expect(monitor.judge?.rules?.map((rule) => rule.next)).toEqual([
+          'reviewers',
+          'ABORT',
+        ]);
+      }
     });
 
     it(`${locale} takt-default-for-local-llm should enable Finding Contract`, () => {

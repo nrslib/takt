@@ -12,6 +12,22 @@ import {
   repairPrivateDirectory,
   writePrivateFile,
 } from './private-file.js';
+import { normalizeLogMetadata, normalizeLogValue, truncateLogText } from './logMetadata.js';
+import { sanitizeSensitiveText } from './sensitiveText.js';
+
+const MAX_DEBUG_DATA_LENGTH = 50_000;
+
+function serializeDebugData(data: unknown): string {
+  if (typeof data === 'string') {
+    return normalizeLogMetadata(data);
+  }
+  const serialized = JSON.stringify(data, normalizeLogValue, 2);
+  if (serialized === undefined) {
+    throw new Error('Debug data is not serializable');
+  }
+  return truncateLogText(sanitizeSensitiveText(serialized), MAX_DEBUG_DATA_LENGTH);
+}
+
 /** Debug configuration (duplicated from core/models to avoid shared → core dependency) */
 interface DebugConfig {
   enabled: boolean;
@@ -149,12 +165,11 @@ export class DebugLogger {
     const timestamp = new Date().toISOString();
     const prefix = `[${timestamp}] [${level.toUpperCase()}] [${component}]`;
 
-    let logLine = `${prefix} ${message}`;
+    let logLine = `${prefix} ${normalizeLogMetadata(message)}`;
 
     if (data !== undefined) {
       try {
-        const dataStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-        logLine += `\n${dataStr}`;
+        logLine += `\n${serializeDebugData(data)}`;
       } catch {
         logLine += `\n[Unable to serialize data]`;
       }
@@ -166,7 +181,7 @@ export class DebugLogger {
   /** Format a compact console log line */
   private static formatConsoleMessage(level: string, component: string, message: string): string {
     const timestamp = new Date().toISOString().slice(11, 23);
-    return `[${timestamp}] [${level}] [${component}] ${message}`;
+    return `[${timestamp}] [${level}] [${component}] ${normalizeLogMetadata(message)}`;
   }
 
   /** Write a log entry to verbose console (stderr) and/or file */

@@ -174,6 +174,61 @@ describe('KiroProvider integration', () => {
     expect(args.at(-1)).toBe('plan the feature');
   });
 
+  it('Given no session ID, When provider agent calls the real client and succeeds, Then resolves the session ID via a second --list-sessions spawn (issue #781)', async () => {
+    const kiroCliPath = join(testDir, 'kiro-cli');
+    writeFileSync(kiroCliPath, '#!/bin/sh\necho kiro\n', 'utf-8');
+    chmodSync(kiroCliPath, 0o755);
+    writeFileSync(
+      join(taktDir, 'config.yaml'),
+      [
+        'language: en',
+        'provider: kiro',
+        `kiro_cli_path: ${kiroCliPath}`,
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const uuid = '123e4567-e89b-12d3-a456-426614174000';
+    mockSpawn
+      .mockImplementationOnce(() => {
+        const child = createMockChildProcess();
+        queueMicrotask(() => {
+          child.stdout.emit('data', Buffer.from('turn one result', 'utf-8'));
+          child.emit('close', 0, null);
+        });
+        return child;
+      })
+      .mockImplementationOnce(() => {
+        const child = createMockChildProcess();
+        queueMicrotask(() => {
+          child.stderr.emit('data', Buffer.from(`${uuid}  updated just now`, 'utf-8'));
+          child.emit('close', 0, null);
+        });
+        return child;
+      });
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement feature', {
+      cwd: testDir,
+      permissionMode: 'edit',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('turn one result');
+    expect(result.sessionId).toBe(uuid);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    const [, secondArgs, secondOptions] = mockSpawn.mock.calls[1] as [
+      string,
+      string[],
+      { cwd?: string },
+    ];
+    expect(secondArgs).toEqual(['chat', '--list-sessions']);
+    expect(secondOptions.cwd).toBe(testDir);
+  });
+
   it('Given no providerOptions, When provider agent calls real client, Then spawn args have no --agent flag', async () => {
     writeFileSync(
       join(taktDir, 'config.yaml'),

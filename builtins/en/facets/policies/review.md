@@ -2,6 +2,10 @@
 
 Define the shared judgment criteria and behavioral principles for all reviewers.
 
+## Premise
+
+This review is a defensive quality and security audit performed, on request, against a codebase provided as the review target. All reproduction and verification of vulnerabilities or defects is performed as self-tests within the target repository; applying techniques against third-party systems or developing attack tooling is not part of the purpose.
+
 ## Principles
 
 | Principle | Criteria |
@@ -59,7 +63,7 @@ REJECT without exception if any of the following apply.
 - Fallback value abuse (`?? 'unknown'`)
 - Explanatory comments (What/How comments)
 - Unused code ("just in case" code)
-- Direct mutation of objects/arrays
+- Direct mutation of caller-owned, shared, or externally exposed objects/arrays
 - Swallowed errors (empty catch blocks)
 - TODO/FIXME without an issue number, external blocker, and removal condition
 - Essentially identical logic duplicated (DRY violation)
@@ -111,6 +115,23 @@ Checks that only inspect configuration values, logs, snapshots, or the last obse
 | Only external-environment E2E exists, with no reproducible verification of the main boundary | Warning or REJECT |
 | Behavior is approved from configuration values, logs, or snapshots only | REJECT |
 
+### Division of Verification Responsibility
+
+Verifying that the full test suite passes is not the reviewer's responsibility. The fixing step's quality gates cover verification of the changed scope (whatever gates are imposed on it, such as the build, static checks, and changed-scope tests); the final gate immediately before merge covers the full suite. Reviewers do not re-run the full suite and instead spend that time reproducing findings and running risk-based targeted checks.
+
+| Evidence | Judgment |
+|----------|----------|
+| Reproduced your own behavioral finding by operating on or executing the target code | OK (required for behavioral findings) |
+| Verified a statically determinable finding (types, contracts, specs, non-executable assets) by reading and cross-checking the relevant sources | OK |
+| Verified the main changed behaviors with targeted execution or tests | OK (recommended) |
+| Referenced the execution records of all quality gates imposed on the fixing step | OK (no re-run needed) |
+| Closing an individual finding based solely on full-suite passage | REJECT |
+| A behavioral claim not reproduced or verified by execution | REJECT |
+
+If the fixing step's execution records lack evidence for any of its imposed quality gates, report that fact as a finding. Full-suite evidence is the final gate's responsibility, so do not demand it from the fixing step.
+
+Exception: when suite execution is imposed on your own step as a quality gate (the final-gate role), follow the gate's instructions and run it. This section governs reviewers without such gates not spending time on the full suite; it does not exempt an imposed gate.
+
 ## Fact-Checking
 
 Always verify facts before raising an issue.
@@ -138,6 +159,8 @@ If tool output is unreadable, re-read using a reliable method before making any 
 ## Writing Specific Feedback
 
 Every issue raised must include the following.
+
+When one new problem is found, search the review scope for all locations that may share the same `family_tag` before finalizing the report, and report them in the same review. Do not report one location at a time and reveal another location from the same family only after the first is fixed.
 
 When the same kind of problem appears in multiple locations, report one representative finding and list the other locations inline as `also: src/store.ts:L232, src/projection.ts:L243`. Do not spend rows enumerating the same kind of issue; use the remaining attention to hunt different kinds of problems. Do not merge, however, in these cases:
 
@@ -297,9 +320,12 @@ Common procedure that every reviewer must follow. Do not duplicate this in indiv
 
 The review target is the entire cumulative diff from the task's starting point (the base), not just the changes from the most recent iteration.
 
-- In the fix ↔ review loop, recompute the diff from the base every time and evaluate the whole. Do not move the baseline to the latest fix
+- In the fix ↔ review loop, keep recomputing the diff from the base. Do not move the baseline to the latest fix
 - The base is the merge-base with the integration branch, or the starting point recorded in `plan` / `order`. Do not treat only the "changes" section of `Previous Response` as the diff
-- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests, environment-dependent tool-generated diffs — version stamps, re-serialization, order-only rewrites) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile against them every time and confirm their causal link to the request
+- On the first review, evaluate the entire cumulative diff and exhaust all locations in each detected finding family
+- On the second and later reviews, prioritize prior open findings, their fixes, and directly affected paths. Apply every Policy / Knowledge criterion in that scope, but do not restart broad discovery from scratch in untouched areas of the cumulative diff
+- On the second and later reviews, if the focused scope has no blocking finding and the reviewer would return APPROVE, first perform a final review of the entire cumulative diff and reconcile every remaining area and contract
+- Unrequested changes introduced in earlier iterations (unrelated comment deletions, renames, reformatting, contract changes, weakened tests, environment-dependent tool-generated diffs — version stamps, re-serialization, order-only rewrites) remain in the cumulative diff even when they no longer appear in the latest fix report. Reconcile them on the first and final reviews and confirm their causal link to the request
 - Track finding states (new / persists / resolved) on a fixed baseline. Do not narrow the diff scope and conclude "it is no longer in the diff"
 
 ### Referring to Primary Sources
@@ -364,3 +390,5 @@ When a change involves side effects or state changes such as external calls, con
 ## Detecting Circular Arguments
 
 When the same kind of issue keeps recurring, reconsider the approach itself rather than repeating granular fix instructions.
+
+If a finding is resolved and another finding with the same family appears at a different location in the next review, treat that as a failure to exhaust the family in the prior review, not as evidence that the unverified scope is shrinking.

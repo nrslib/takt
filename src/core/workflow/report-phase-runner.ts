@@ -289,6 +289,8 @@ async function runSingleReportAttempt(
   };
 
   let response: AgentResponse;
+  const attemptProviderInfo = resolveReportAttemptProviderInfo(step, options, ctx);
+  let didRecordProviderAttempt = false;
   try {
     response = await runWithPhaseSpan({
       enabled: ctx.observabilityEnabled === true,
@@ -302,14 +304,25 @@ async function runSingleReportAttempt(
       phaseExecutionId,
       workflowStack: ctx.getCurrentWorkflowStack?.(),
       sanitizeText: ctx.sanitizeObservabilityText,
-      providerInfo: resolveReportAttemptProviderInfo(step, options, ctx),
+      providerInfo: attemptProviderInfo,
       getPromptParts: () => resolvedPromptParts,
     }, () => executeAgent(step.persona, instruction, callOptions), (result) =>
       buildReportAttemptSpanOutcome(result, reportToolCallError));
+    ctx.onProviderAttempt?.(
+      attemptProviderInfo,
+      response.status === 'done'
+        && reportToolCallError === undefined
+        && classifyRetryableFailure(response) === undefined,
+      response.providerUsage,
+    );
+    didRecordProviderAttempt = true;
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${step.name}:2`);
     }
   } catch (error) {
+    if (!didRecordProviderAttempt) {
+      ctx.onProviderAttempt?.(attemptProviderInfo, false, undefined);
+    }
     if (error instanceof ReportPhaseToolCallError) {
       ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', error.message, phaseExecutionId, ctx.iteration);
       return { kind: 'retryable_failure', errorMessage: error.message, failureReason: 'tool_call' };
@@ -436,13 +449,13 @@ function resolveReportAttemptProviderInfo(
   step: WorkflowStep,
   options: RunAgentOptions,
   ctx: ReportPhaseRunnerContext,
-): StepProviderInfo | undefined {
+): StepProviderInfo {
   const providerInfo = ctx.resolveStepProviderModel(step);
   const fallbackProviderInfo = ctx.resolveReportFallbackProviderModel();
   if (
     fallbackProviderInfo?.provider !== undefined
     && options.resolvedProvider === fallbackProviderInfo.provider
-    && providerInfo?.provider !== fallbackProviderInfo.provider
+    && providerInfo.provider !== fallbackProviderInfo.provider
   ) {
     return {
       ...fallbackProviderInfo,
@@ -452,8 +465,8 @@ function resolveReportAttemptProviderInfo(
   if (options.resolvedProvider !== undefined || options.resolvedModel !== undefined) {
     return {
       ...providerInfo,
-      provider: options.resolvedProvider ?? providerInfo?.provider,
-      model: options.resolvedModel ?? providerInfo?.model,
+      provider: options.resolvedProvider ?? providerInfo.provider,
+      model: options.resolvedModel ?? providerInfo.model,
     };
   }
 

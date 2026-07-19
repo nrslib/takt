@@ -378,14 +378,21 @@ describe('OpenCodeClient retry', () => {
       enabled: true,
     });
     const client = new OpenCodeClient();
+    const logContext = {
+      provider: 'opencode' as const,
+      providerModel: 'opencode/big-pickle',
+      step: 'implement',
+    };
 
     try {
       const result = await client.call('coder', 'prompt', {
         cwd: '/tmp',
         model: 'opencode/big-pickle',
-        onStream: providerLogger.wrapCallback(onStream),
+        onStream: (event) => {
+          providerLogger.logEvent(logContext, event);
+          onStream(event);
+        },
       });
-      providerLogger.flush();
 
       expect(result.status, JSON.stringify(result)).toBe('done');
       expect(sessionCreate).toHaveBeenCalledTimes(2);

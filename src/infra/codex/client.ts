@@ -41,6 +41,7 @@ const log = createLogger('codex-sdk');
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_STREAM_ABORTED_MESSAGE = 'Codex execution aborted';
 const CODEX_TIMEOUT_MAX_RETRIES = 2;
+const CODEX_REFUSAL_MAX_RETRIES = 2;
 const CODEX_RETRY_MAX_RETRIES = 8;
 const CODEX_RETRY_BASE_DELAY_MS = 1000;
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -60,6 +61,22 @@ const CODEX_RETRYABLE_ERROR_PATTERNS = [
   'at capacity',
   ...CODEX_RECONNECT_ERROR_PATTERNS,
 ];
+// OpenAI の安全フィルタ拒否は「正常終了したターンの本文全体が拒否文」という形で届き、
+// AgentResponse.error に乗らないままルール評価に流れて不一致 abort を起こす。
+// 拒否文を引用しただけの長い応答を誤検出しないよう、本文が短い場合のみ照合する。
+const CODEX_SAFETY_REFUSAL_PATTERNS = [
+  'flagged for possible cybersecurity risk',
+  'trusted access for cyber',
+];
+const CODEX_SAFETY_REFUSAL_MAX_CONTENT_LENGTH = 600;
+
+function isCodexSafetyRefusal(content: string): boolean {
+  if (content.length === 0 || content.length > CODEX_SAFETY_REFUSAL_MAX_CONTENT_LENGTH) {
+    return false;
+  }
+  const lower = content.toLowerCase();
+  return CODEX_SAFETY_REFUSAL_PATTERNS.some((pattern) => lower.includes(pattern));
+}
 
 function toNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
@@ -320,9 +337,10 @@ export class CodexClient {
     }
     let standardRetryCount = 0;
     let timeoutRetryCount = 0;
+    let refusalRetryCount = 0;
 
     while (true) {
-      const attempt = standardRetryCount + timeoutRetryCount + 1;
+      const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
       const codexClientOptions: CodexOptions = {
         env: buildEnvWithNestedObservabilitySnapshot(
           process.env,
@@ -539,6 +557,39 @@ export class CodexClient {
         }
 
         const structuredOutput = parseStructuredOutput(lastAgentMessageText.trim(), !!options.outputSchema);
+        // JSON（または fence）で始まる純粋な structured 応答は、拒否文を引用していても拒否ではない。
+        // 拒否文で始まる応答は、末尾に JSON が続いていてもこの除外に該当しない。
+        // 検出は連結本文のみを対象とする。長い前置きに続く拒否は見逃す可能性があるが、
+        // その場合は従来どおりルール不一致の fail-fast に落ちるだけで、正常応答を
+        // 誤って拒否扱いして枯渇エラーにする誤検出よりも安全側である。
+        const looksLikePureStructuredOutput = structuredOutput !== undefined
+          && (trimmed.startsWith('{') || trimmed.startsWith('```'));
+        const refusalDetected = !looksLikePureStructuredOutput && isCodexSafetyRefusal(trimmed);
+        if (refusalDetected) {
+          if (refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
+            refusalRetryCount += 1;
+            log.info('Retrying Codex call after safety-filter refusal', { agentType, attempt, refusalRetryCount });
+            // 拒否文脈を持ち越さないため、この call がセッションを開始した場合は
+            // 新セッションでやり直す。呼び出し元から渡された既存セッションは
+            // 後続フェーズの継続に必要なので破棄せず、同一セッションで再試行する。
+            threadId = options.sessionId;
+            await this.waitForRetryDelay(refusalRetryCount, options.abortSignal);
+            continue;
+          }
+          const failure = createProviderErrorFailure(
+            `Codex safety filter refused the request after ${CODEX_REFUSAL_MAX_RETRIES + 1} attempts: ${trimmed.slice(0, 200)}`,
+          );
+          const errorResponse = this.buildErrorResponse(agentType, currentThreadId, failure);
+          emitResult(
+            options.onStream,
+            false,
+            errorResponse.error ?? errorResponse.content,
+            currentThreadId,
+            failure.category,
+          );
+          return errorResponse;
+        }
+
         emitResult(options.onStream, true, trimmed, currentThreadId);
 
         const response: AgentResponse = {

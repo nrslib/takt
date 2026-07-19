@@ -7,6 +7,7 @@ export interface TeamLeaderExecutionOptions {
   initialParts: PartDefinition[];
   maxConcurrency: number;
   maxTotalParts?: number;
+  abortSignal?: AbortSignal;
   runPart: (part: PartDefinition, partIndex: number) => Promise<PartResult>;
   requestMoreParts: (
     args: {
@@ -36,6 +37,7 @@ export interface TeamLeaderExecutionResult {
 export async function runTeamLeaderExecution(
   options: TeamLeaderExecutionOptions,
 ): Promise<TeamLeaderExecutionResult> {
+  options.abortSignal?.throwIfAborted();
   const maxTotalParts = options.maxTotalParts ?? DEFAULT_TEAM_LEADER_MAX_TOTAL_PARTS;
   if (options.initialParts.length > maxTotalParts) {
     throw new Error(`Initial team leader parts exceed total part budget: ${options.initialParts.length} > ${maxTotalParts}`);
@@ -50,6 +52,7 @@ export async function runTeamLeaderExecution(
   let nextPartIndex = 0;
   let leaderDone = false;
   const tryPlanMoreParts = async (): Promise<void> => {
+    options.abortSignal?.throwIfAborted();
     if (leaderDone) {
       return;
     }
@@ -66,6 +69,7 @@ export async function runTeamLeaderExecution(
         scheduledIds: [...scheduledIds],
         remainingPartBudget,
       });
+      options.abortSignal?.throwIfAborted();
 
       if (feedback.done) {
         options.onPlanningDone?.({
@@ -105,6 +109,9 @@ export async function runTeamLeaderExecution(
         totalPlanned: plannedParts.length,
       });
     } catch (error) {
+      if (options.abortSignal?.aborted) {
+        throw error;
+      }
       if (isPlanningBudgetError(error)) {
         throw error;
       }
@@ -115,6 +122,7 @@ export async function runTeamLeaderExecution(
 
   while (queue.length > 0 || running.size > 0 || !leaderDone) {
     while (queue.length > 0 && running.size < options.maxConcurrency) {
+      options.abortSignal?.throwIfAborted();
       const part = queue.shift();
       if (!part) {
         break;
@@ -122,6 +130,7 @@ export async function runTeamLeaderExecution(
       const partIndex = nextPartIndex;
       nextPartIndex += 1;
       options.onPartQueued?.(part, partIndex);
+      options.abortSignal?.throwIfAborted();
       const runningPart = options.runPart(part, partIndex).then((result) => ({ partId: part.id, result }));
       running.set(part.id, runningPart);
     }
@@ -131,6 +140,13 @@ export async function runTeamLeaderExecution(
       running.delete(completed.partId);
       partResults.push(completed.result);
       options.onPartCompleted?.(completed.result);
+      if (options.abortSignal?.aborted) {
+        if (queue.length > 0 || running.size > 0) {
+          options.abortSignal.throwIfAborted();
+        }
+        leaderDone = true;
+        continue;
+      }
 
       if (queue.length === 0 && running.size === 0) {
         await tryPlanMoreParts();

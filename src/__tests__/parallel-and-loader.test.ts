@@ -116,7 +116,7 @@ describe('ParallelSubStepRawSchema', () => {
       name: 'delegate-review',
       kind: 'workflow_call',
       call: 'review-workflow',
-      overrides: { provider: 'auto' },
+      overrides: { provider: 'mock' },
       args: {
         review_policy: 'strict-review',
         evidence: ['plan-report', 'draft-report'],
@@ -135,7 +135,7 @@ describe('ParallelSubStepRawSchema', () => {
     const parsed = result.data as Record<string, unknown>;
     expect(parsed.kind).toBe('workflow_call');
     expect(parsed.call).toBe('review-workflow');
-    expect(parsed.overrides).toEqual({ provider: 'auto' });
+    expect(parsed.overrides).toEqual({ provider: 'mock' });
     expect(parsed.args).toEqual({
       review_policy: 'strict-review',
       evidence: ['plan-report', 'draft-report'],
@@ -336,7 +336,7 @@ describe('WorkflowStepRawSchema with parallel', () => {
           name: 'delegate-review',
           kind: 'workflow_call',
           call: 'shared/review',
-          overrides: { provider: 'auto' },
+          overrides: { provider: 'mock' },
           args: {
             review_policy: 'strict-review',
           },
@@ -361,7 +361,7 @@ describe('WorkflowStepRawSchema with parallel', () => {
       name: 'delegate-review',
       kind: 'workflow_call',
       call: 'shared/review',
-      overrides: { provider: 'auto' },
+      overrides: { provider: 'mock' },
     });
   });
 

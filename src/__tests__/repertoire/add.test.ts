@@ -30,8 +30,9 @@ const {
   secureTempDir: '/secure/tmp/takt-import-a1b2c3',
 }));
 
-vi.mock('node:fs', () => ({
-  default: {
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const mocked = {
     mkdtempSync: mockMkdtempSync,
     mkdirSync: mockMkdirSync,
     copyFileSync: mockCopyFileSync,
@@ -39,15 +40,13 @@ vi.mock('node:fs', () => ({
     readFileSync: mockReadFileSync,
     writeFileSync: mockWriteFileSync,
     rmSync: mockRmSync,
-  },
-  mkdtempSync: mockMkdtempSync,
-  mkdirSync: mockMkdirSync,
-  copyFileSync: mockCopyFileSync,
-  existsSync: mockExistsSync,
-  readFileSync: mockReadFileSync,
-  writeFileSync: mockWriteFileSync,
-  rmSync: mockRmSync,
-}));
+  };
+  return {
+    ...actual,
+    default: { ...actual, ...mocked },
+    ...mocked,
+  };
+});
 
 vi.mock('node:child_process', () => ({
   execFileSync: mockExecFileSync,

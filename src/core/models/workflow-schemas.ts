@@ -12,7 +12,6 @@ import {
   OutputContractsFieldSchema,
   PermissionModeSchema,
   ProviderReferenceSchema,
-  ProviderReferenceOrAutoSchema,
   RateLimitFallbackSchema,
   QualityGatesSchema,
   hasProviderOptionsLeaf,
@@ -37,6 +36,7 @@ import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
 import { MAX_TEAM_LEADER_MAX_TOTAL_PARTS } from '../../shared/constants.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
+const WorkflowStepNameSchema = z.string().min(1);
 
 export const WorkflowParamReferenceRawSchema = z.object({
   $param: z.string().min(1),
@@ -65,7 +65,7 @@ function hasProviderOptionsTarget(
 }
 
 const WorkflowProviderOptionsWithExtendsSchema = z.object({
-  provider: ProviderReferenceOrAutoSchema.optional(),
+  provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
   runtime: RuntimeConfigSchema,
@@ -257,7 +257,7 @@ export const TeamLeaderConfigRawSchema = z.object({
 const WorkflowStepKindSchema = z.enum(['agent', 'system', 'workflow_call']);
 
 const WorkflowCallOverridesRawSchema = z.object({
-  provider: ProviderReferenceOrAutoSchema.optional(),
+  provider: ProviderReferenceSchema.optional(),
   model: z.string().optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
 }).strict().superRefine((data, ctx) => {
@@ -281,7 +281,7 @@ const WorkflowCallOverridesRawSchema = z.object({
 });
 
 const AgentParallelSubStepRawSchema = z.object({
-  name: z.string().min(1),
+  name: WorkflowStepNameSchema,
   kind: z.never().optional(),
   call: z.never().optional(),
   args: z.never().optional(),
@@ -296,7 +296,7 @@ const AgentParallelSubStepRawSchema = z.object({
   allow_git_commit: z.boolean().optional(),
   allowed_tools: z.never().optional(),
   mcp_servers: McpServersSchema,
-  provider: ProviderReferenceOrAutoSchema.optional(),
+  provider: ProviderReferenceSchema.optional(),
   model: z.string().nullable().optional(),
   promotion: z.never().optional(),
   permission_mode: z.never().optional(),
@@ -323,7 +323,7 @@ const AgentParallelSubStepRawSchema = z.object({
 });
 
 const WorkflowCallParallelSubStepRawSchema = z.object({
-  name: z.string().min(1),
+  name: WorkflowStepNameSchema,
   kind: z.literal('workflow_call').optional(),
   call: z.string().min(1),
   overrides: WorkflowCallOverridesRawSchema.optional(),
@@ -394,7 +394,7 @@ const WorkflowSubworkflowRawSchema = z.object({
 
 function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: boolean }) {
   return z.object({
-    name: z.string().min(1),
+    name: WorkflowStepNameSchema,
     description: z.string().optional(),
     session_key: z.string().trim().min(1).optional(),
     kind: WorkflowStepKindSchema.optional(),
@@ -411,7 +411,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     allow_git_commit: z.boolean().optional(),
     allowed_tools: z.never().optional(),
     mcp_servers: McpServersSchema,
-    provider: ProviderReferenceOrAutoSchema.optional(),
+    provider: ProviderReferenceSchema.optional(),
     model: z.string().nullable().optional(),
     promotion: z.array(WorkflowPromotionRawSchema).optional(),
     permission_mode: z.never().optional(),

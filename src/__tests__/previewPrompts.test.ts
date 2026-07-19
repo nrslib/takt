@@ -5,6 +5,7 @@ const {
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowConfigValue,
   mockResolveWorkflowConfigValues,
+  mockResolveConfigValueWithSource,
   mockHeader,
   mockInfo,
   mockError,
@@ -16,6 +17,7 @@ const {
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
+  mockResolveConfigValueWithSource: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
   resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
+  resolveConfigValueWithSource: mockResolveConfigValueWithSource,
 }));
 
 vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
@@ -76,11 +79,14 @@ describe('previewPrompts', () => {
       return undefined;
     });
     mockResolveWorkflowConfigValues.mockReturnValue({
-      provider: undefined,
-      model: undefined,
+      autoRouting: undefined,
       personaProviders: undefined,
       providerRouting: undefined,
     });
+    mockResolveConfigValueWithSource.mockImplementation(() => ({
+      value: undefined,
+      source: 'default',
+    }));
     mockLoadWorkflowByIdentifier.mockReturnValue({
       name: 'default',
       maxSteps: 1,
@@ -105,7 +111,7 @@ describe('previewPrompts', () => {
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
     expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith(
       '/project',
-      ['provider', 'model', 'personaProviders', 'providerRouting'],
+      ['autoRouting', 'personaProviders', 'providerRouting'],
     );
   });
 
@@ -279,6 +285,35 @@ describe('previewPrompts', () => {
     expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
   });
 
+  it('環境変数由来の provider/model を finding manager の直接指定より優先する', async () => {
+    mockResolveConfigValueWithSource.mockImplementation((_: string, key: string) => (
+      key === 'provider'
+        ? { value: 'mock', source: 'env' }
+        : { value: 'env-model', source: 'env' }
+    ));
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+          provider: 'codex',
+          model: 'step-model',
+        },
+      },
+      steps: [{ name: 'review', personaDisplayName: 'reviewer', outputContracts: [] }],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: mock');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: env-model');
+  });
+
   it('finding manager の provider 直接指定時は persona model を表示しない', async () => {
     mockResolveWorkflowConfigValues.mockReturnValue({
       provider: undefined,
@@ -317,6 +352,86 @@ describe('previewPrompts', () => {
     await previewPrompts('/project');
 
     expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: not configured');
+  });
+
+  it('finding manager の静的 auto_routing rule を runtime と同じ候補へ解決する', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+        candidates: [{
+          name: 'manager',
+          description: 'Finding manager',
+          provider: 'codex',
+          model: 'gpt-5.5',
+          costTier: 'medium',
+        }],
+        rules: { steps: { 'findings-manager': 'manager' } },
+      },
+      personaProviders: undefined,
+      providerRouting: undefined,
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+        },
+      },
+      steps: [{ name: 'review', personaDisplayName: 'reviewer', outputContracts: [] }],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
+  });
+
+  it('finding manager の auto_routing が動的判定を要する場合は未解決として表示する', async () => {
+    mockResolveWorkflowConfigValues.mockReturnValue({
+      provider: undefined,
+      model: undefined,
+      autoRouting: {
+        strategy: 'balanced',
+        router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
+        candidates: [{
+          name: 'manager',
+          description: 'Finding manager',
+          provider: 'codex',
+          model: 'gpt-5.5',
+          costTier: 'medium',
+        }],
+        rules: {},
+      },
+      personaProviders: undefined,
+      providerRouting: undefined,
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+        },
+      },
+      steps: [{ name: 'review', personaDisplayName: 'reviewer', outputContracts: [] }],
+    });
+
+    await previewPrompts('/project');
+
+    expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: not configured');
     expect(mockInfo).toHaveBeenCalledWith('Finding manager model: not configured');
   });
 });
