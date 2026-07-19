@@ -1,5 +1,5 @@
 name: review-fix-takt-default-high
-description: 高能力モデル向けの Finding Contract 付き TAKT review/fix workflow。6観点の compact 並列レビューから開始し、直接修正、必要時の再計画、fail-closed 最終ゲートで構成する。
+description: 高能力モデル向けの Finding Contract 付き TAKT review/fix workflow。レビュー対象の収集後、計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートを実行する。
 finding_contract:
   ledger_path: .takt/findings/review-fix-takt-default-high.json
   raw_findings_path: .takt/findings/review-fix-takt-default-high/raw
@@ -8,7 +8,7 @@ finding_contract:
     instruction: findings-manager
     output_contract: findings-manager
 max_steps: 200
-initial_step: reviewers
+initial_step: gather
 
 loop_monitors:
   - cycle: [plan, write_tests, implement, reviewers, fix]
@@ -49,6 +49,35 @@ loop_monitors:
           next: NEEDS_ADJUDICATION
 
 steps:
+  - name: gather
+    tags:
+      - plan
+    edit: false
+    persona: planner
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: gather-review
+    output_contracts:
+      report:
+        - name: review-target.md
+          format: review-gather
+    rules:
+      - condition: レビュー対象の情報収集完了
+        next: plan
+      - condition: レビュー対象を特定できない、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
+
   - name: plan
     tags: [plan]
     edit: false

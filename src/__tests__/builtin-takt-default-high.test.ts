@@ -298,17 +298,39 @@ describe('takt-default-high builtin workflow', () => {
 
     it(`${locale} provides a Finding Contract review/fix entrypoint for the high-capability design`, () => {
       const workflow = readYaml<Workflow>(locale, join('workflows', 'review-fix-takt-default-high.yaml'));
-      const reviewers = stepByName(workflow.steps ?? [], 'reviewers');
+      const reviewFixDefault = readYaml<Workflow>(locale, join('workflows', 'review-fix-takt-default.yaml'));
+      const taktDefaultHigh = readYaml<Workflow>(locale, join('workflows', 'takt-default-high.yaml'));
+      const steps = workflow.steps ?? [];
+      const gather = stepByName(steps, 'gather');
+      const reviewers = stepByName(steps, 'reviewers');
 
       expect(workflow).toMatchObject({
         name: 'review-fix-takt-default-high',
-        initial_step: 'reviewers',
+        initial_step: 'gather',
         max_steps: 200,
         finding_contract: {
           ledger_path: '.takt/findings/review-fix-takt-default-high.json',
           raw_findings_path: '.takt/findings/review-fix-takt-default-high/raw',
         },
       });
+      expect(steps.map((step) => step.name)).toEqual([
+        'gather',
+        'plan',
+        'write_tests',
+        'implement',
+        'reviewers',
+        'final-gate',
+        'fix',
+      ]);
+      expect(gather).toMatchObject({
+        name: 'gather',
+        persona: 'planner',
+        instruction: 'gather-review',
+        edit: false,
+      });
+      expect(gather.rules?.map((rule) => rule.next)).toEqual(['plan', 'ABORT']);
+      expect(gather).toEqual(stepByName(reviewFixDefault.steps ?? [], 'gather'));
+      expect(steps.slice(1)).toEqual(taktDefaultHigh.steps);
       expect(reviewers.parallel?.map((step) => step.name)).toEqual([
         'arch-review',
         'ai-antipattern-review',
