@@ -2,6 +2,10 @@
 
 Define the shared judgment criteria and behavioral principles for all reviewers.
 
+## Premise
+
+This review is a defensive quality and security audit performed, on request, against a codebase provided as the review target. All reproduction and verification of vulnerabilities or defects is performed as self-tests within the target repository; applying techniques against third-party systems or developing attack tooling is not part of the purpose.
+
 ## Principles
 
 | Principle | Criteria |
