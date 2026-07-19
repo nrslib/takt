@@ -3,7 +3,7 @@
  */
 
 import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
-import type { PermissionMode } from '../../core/models/index.js';
+import type { Language, PermissionMode } from '../../core/models/index.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 
@@ -440,6 +440,7 @@ export interface OpenCodeCallOptions {
   childProcessEnv?: Readonly<Record<string, string>>;
   /** JSON schema for native structured output (OpenCode format: json_schema). */
   outputSchema?: Record<string, unknown>;
+  language?: Language;
 }
 
 export interface OpenCodeCompactSessionOptions {

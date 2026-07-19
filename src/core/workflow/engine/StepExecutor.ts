@@ -304,7 +304,11 @@ export class StepExecutor {
       return instruction;
     }
 
-    return buildStructuredJsonSchemaInstruction(instruction, step.structuredOutput.schema, 'en');
+    return buildStructuredJsonSchemaInstruction(
+      instruction,
+      step.structuredOutput.schema,
+      this.deps.getLanguage() ?? 'en',
+    );
   }
 
   normalizeStructuredOutput(

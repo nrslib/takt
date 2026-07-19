@@ -63,7 +63,7 @@ export function createReviewerAnomalySpec(input: {
 }
 
 /**
- * 決定的・内容アドレス方式の id（reconciler.ts の formatConflictId と同じ発想:
+ * 決定的・内容アドレス方式の id（conflict-identity.ts の formatConflictId と同じ発想:
  * LLM が id を採番・参照することは無い — reviewer anomaly は product finding と
  * 違い、どの LLM にも id を返させないため、F-XXXX のような密な連番カウンタは
  * 不要）。同じ stableKey は常に同じ id になるため、upsert が id 割当を

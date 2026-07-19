@@ -477,6 +477,83 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
   });
 
+  it('fails fast when a rule routes to finding-conflict-adjudication without findingContract', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({
+        rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in step "plan": next: finding-conflict-adjudication requires finding_contract',
+    );
+  });
+
+  it('fails fast when a parallel sub-step rule routes to finding-conflict-adjudication without findingContract', () => {
+    const workflow = createWorkflow({
+      steps: [createPlanAgent({
+        parallel: [createPlanAgent({
+          name: 'review',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+        })],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid rule in parallel sub-step "review" of step "plan": next: finding-conflict-adjudication requires finding_contract',
+    );
+  });
+
+  it('fails fast when a loop_monitor judge rule routes to finding-conflict-adjudication without findingContract', () => {
+    const workflow = createWorkflow({
+      loopMonitors: [{
+        cycle: ['plan', 'plan'],
+        threshold: 2,
+        judge: {
+          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+        },
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid loop_monitor judge rule: next: finding-conflict-adjudication requires finding_contract',
+    );
+  });
+
+  it('accepts step, parallel sub-step, and loop monitor routes to finding-conflict-adjudication when findingContract is configured', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+        parallel: [createPlanAgent({
+          name: 'review',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+        })],
+      })],
+      loopMonitors: [{
+        cycle: ['plan', 'plan'],
+        threshold: 2,
+        judge: {
+          rules: [{ condition: 'conflicts', next: 'finding-conflict-adjudication' }],
+        },
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
   it('fails fast when finding_contract.manager uses opencode without a model', () => {
     const workflow = createWorkflow({
       findingContract: {
@@ -784,6 +861,23 @@ describe('validateWorkflowConfig', () => {
     );
   });
 
+  it('fails fast when a normal finding-contract producer also declares structuredOutput', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        ledgerPath: '.takt/findings/peer-review.json', rawFindingsPath: '.takt/findings/raw',
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+      },
+      steps: [createPlanAgent({
+        outputContracts: [{ type: 'report', formatRef: 'review-finding-contract' }],
+        structuredOutput: { schemaRef: 'schema', schema: { type: 'object' } },
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Invalid step "plan": cannot combine finding_contract raw findings with structured_output',
+    );
+  });
+
   it('fails fast when workflow_call is configured without workflowCallResolver', () => {
     const workflow = createWorkflow({
       initialStep: 'delegate',
@@ -1068,7 +1162,7 @@ describe('validateWorkflowConfig', () => {
       );
     });
 
-    it('accepts a *-finding-contract report format when the workflow declares its own finding_contract', () => {
+  it('accepts a *-finding-contract report format when the workflow declares its own finding_contract', () => {
       const workflow = createWorkflow({
         findingContract: {
           ledgerPath: '.takt/findings/peer-review.json',
@@ -1095,10 +1189,10 @@ describe('validateWorkflowConfig', () => {
         ],
       });
 
-      expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
-    });
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
 
-    it('accepts a *-finding-contract report format when a finding_contract is inherited from a workflow_call parent', () => {
+  it('accepts a *-finding-contract report format when a finding_contract is inherited from a workflow_call parent', () => {
       const workflow = createWorkflow({
         steps: [
           {

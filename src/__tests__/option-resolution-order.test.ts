@@ -303,6 +303,19 @@ describe('option resolution order', () => {
     );
   });
 
+  it('should pass workflow language through runAgent to provider call options', async () => {
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      provider: 'opencode',
+      language: 'ja',
+    });
+
+    expect(providerCallMock).toHaveBeenLastCalledWith(
+      'task',
+      expect.objectContaining({ language: 'ja' }),
+    );
+  });
+
   it('should merge persona providerOptions into standalone runAgent calls', async () => {
     resolveConfigValueMock.mockReturnValue({
       conductor: {

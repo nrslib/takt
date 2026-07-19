@@ -141,6 +141,7 @@ export class AgentRunner {
       onAskUserQuestion: options.onAskUserQuestion,
       bypassPermissions: options.bypassPermissions,
       outputSchema: options.outputSchema,
+      language: options.language,
       childProcessEnv: options.childProcessEnv,
     };
   }

@@ -9,6 +9,7 @@ import {
 import {
   FindingLifecycleSchema,
   FindingConflictAdjudicationAttemptSchema,
+  FindingObservationSchema,
   FindingManagerDecisionsJsonSchema,
   FindingManagerOutputJsonSchema,
   FindingSeveritySchema,
@@ -19,8 +20,75 @@ import {
   ReviewerRawFindingSchema,
   parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
+import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
 
 describe('finding schemas', () => {
+  it('normalizes RFC 3339 observation timestamps to UTC and rejects invalid values', () => {
+    expect(FindingObservationSchema.parse({
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-06-13T00:15:00+02:00',
+    }).timestamp).toBe('2026-06-12T22:15:00.000Z');
+
+    expect(() => FindingObservationSchema.parse({
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: 'not-a-timestamp',
+    })).toThrow('Expected an RFC 3339 timestamp');
+  });
+
+  it('should normalize lowercase RFC 3339 separators and actual leap seconds without crossing into the next minute', () => {
+    expect(FindingObservationSchema.parse({
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-06-13t00:15:00.123z',
+    }).timestamp).toBe('2026-06-13T00:15:00.123Z');
+    for (const timestamp of [
+      '2016-12-31T23:59:60.500Z',
+      '2017-01-01T00:59:60.500+01:00',
+      '2016-12-31T18:59:60.500-05:00',
+    ]) {
+      expect(FindingObservationSchema.parse({
+        runId: 'run-1',
+        stepName: 'reviewers',
+        timestamp,
+      }).timestamp).toBe('2016-12-31T23:59:60.500Z');
+    }
+    expect(compareRfc3339Timestamps(
+      '2016-12-31T23:59:60.500Z',
+      '2017-01-01T00:00:00.000Z',
+    )).toBeLessThan(0);
+  });
+
+  it('should reject leap seconds outside announced UTC insertion points', () => {
+    for (const timestamp of [
+      '2026-01-01T12:34:60Z',
+      '2016-12-31T23:58:60Z',
+      '2016-12-31T23:59:60+01:00',
+      '2016-12-31T19:59:60-05:00',
+    ]) {
+      expect(() => FindingObservationSchema.parse({
+        runId: 'run-1',
+        stepName: 'reviewers',
+        timestamp,
+      })).toThrow(/Expected (?:an |a valid )?RFC 3339 timestamp/);
+    }
+  });
+
+  it('should reject timestamps that cannot be stored at millisecond precision or normalized within four-digit years', () => {
+    for (const timestamp of [
+      '2026-06-13T00:15:00.0001Z',
+      '9999-12-31T23:59:59-23:59',
+      '0000-01-01T00:00:00+23:59',
+    ]) {
+      expect(() => FindingObservationSchema.parse({
+        runId: 'run-1',
+        stepName: 'reviewers',
+        timestamp,
+      })).toThrow(/Expected (?:an |a valid )?RFC 3339 timestamp/);
+    }
+  });
+
   it('requires an adjudication reservation token', () => {
     const attempt = {
       evidenceHash: 'evidence-hash',

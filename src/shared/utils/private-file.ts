@@ -346,12 +346,35 @@ function executeWithCleanup(action: () => void, cleanup: () => void, aggregateMe
   }
 }
 
+type PublicationGuardResult = boolean | { publish: boolean; content: string | Buffer };
+
+function writeTemporaryPrivateFileContent(
+  temporaryPath: string,
+  temporaryStat: Stats,
+  ancestorIdentities: readonly DirectoryIdentity[],
+  content: string | Buffer,
+  mode: number,
+): void {
+  const descriptor = openTemporaryPrivateFile(temporaryPath, ancestorIdentities);
+  executeWithCleanup(
+    () => {
+      assertOpenedFileIdentity(descriptor, temporaryPath, temporaryStat);
+      assertAncestorIdentities(ancestorIdentities);
+      fchmodSync(descriptor, mode);
+      ftruncateSync(descriptor, 0);
+      writeFileSync(descriptor, content, { encoding: 'utf-8' });
+    },
+    () => closeSync(descriptor),
+    `Private artifact write and descriptor cleanup both failed: ${temporaryPath}`,
+  );
+}
+
 function writePrivateFileAtomically(
   filePath: string,
   content: string | Buffer,
   mode: number,
   rejectExisting: boolean,
-  publicationGuard?: () => boolean,
+  publicationGuard?: () => PublicationGuardResult,
 ): boolean {
   const absolute = resolve(filePath);
   const inspection = inspectPrivateArtifactPath(absolute, 'file');
@@ -385,24 +408,33 @@ function writePrivateFileAtomically(
         mode,
       );
       temporaryStat = createdStat;
-      const descriptor = openTemporaryPrivateFile(temporaryPath, inspection.ancestorIdentities);
-      executeWithCleanup(
-        () => {
-          assertOpenedFileIdentity(descriptor, temporaryPath, createdStat);
-          assertAncestorIdentities(inspection.ancestorIdentities);
-          fchmodSync(descriptor, mode);
-          ftruncateSync(descriptor, 0);
-          writeFileSync(descriptor, content, { encoding: 'utf-8' });
-        },
-        () => closeSync(descriptor),
-        `Private artifact write and descriptor cleanup both failed: ${absolute}`,
+      writeTemporaryPrivateFileContent(
+        temporaryPath,
+        createdStat,
+        inspection.ancestorIdentities,
+        content,
+        mode,
       );
 
       assertAncestorIdentities(inspection.ancestorIdentities);
       assertPublicationTargetIdentity(absolute, inspection.expectedStat);
       assertTemporaryFileIdentity(temporaryPath, createdStat);
-      if (publicationGuard !== undefined && !publicationGuard()) {
-        return;
+      if (publicationGuard !== undefined) {
+        const guardResult = publicationGuard();
+        if (!guardResult || (typeof guardResult === 'object' && !guardResult.publish)) {
+          return;
+        }
+        if (typeof guardResult === 'object') {
+          writeTemporaryPrivateFileContent(
+            temporaryPath,
+            createdStat,
+            inspection.ancestorIdentities,
+            guardResult.content,
+            mode,
+          );
+          assertAncestorIdentities(inspection.ancestorIdentities);
+          assertTemporaryFileIdentity(temporaryPath, createdStat);
+        }
       }
       publishPrivateArtifactAtBoundary(
         dirname(absolute),
@@ -508,7 +540,7 @@ export function writePrivateFileWithModeGuarded(
   filePath: string,
   content: string | Buffer,
   mode: number,
-  publicationGuard: () => boolean,
+  publicationGuard: () => PublicationGuardResult,
 ): boolean {
   return writePrivateFileAtomically(filePath, content, mode, false, publicationGuard);
 }

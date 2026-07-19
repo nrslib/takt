@@ -12,9 +12,10 @@ import {
   resolveStepProviderModel,
 } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
-import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
+import { getWorkflowStepKind, isDelegatedWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import { hasUnquotedFindingsReference, isFindingsCondition } from '../evaluation/rule-utils.js';
 import { buildFindingInterpretationStep, buildFindingManagerStep } from '../findings/manager-step.js';
+import { findingContractFormatRef, hasFindingContractFormat } from '../findings/finding-contract-format.js';
 import {
   matchAutoRoutingRules,
   resolveAutoRoutingCandidateProviderInfo,
@@ -157,11 +158,16 @@ function validateFindingConflictAdjudicationReservedName(config: WorkflowConfig)
   }
 }
 
-function validateFindingContractParallelStructuredOutput(config: WorkflowConfig, findingContractEnabled: boolean): void {
+function validateFindingContractStructuredOutput(config: WorkflowConfig, findingContractEnabled: boolean): void {
   if (!findingContractEnabled) {
     return;
   }
   for (const step of config.steps) {
+    if (step.structuredOutput && hasFindingContractFormat(step)) {
+      throw new Error(
+        `Invalid step "${step.name}": cannot combine finding_contract raw findings with structured_output`,
+      );
+    }
     for (const subStep of step.parallel ?? []) {
       if (subStep.structuredOutput) {
         throw new Error(
@@ -249,10 +255,9 @@ function collectFindingContractFormatViolations(
 ): Array<{ stepName: string; format: string }> {
   const violations: Array<{ stepName: string; format: string }> = [];
   const collectFromStep = (step: WorkflowStep, label: string): void => {
-    for (const contract of step.outputContracts ?? []) {
-      if (contract.formatRef?.endsWith('-finding-contract') === true) {
-        violations.push({ stepName: label, format: contract.formatRef });
-      }
+    const format = findingContractFormatRef(step);
+    if (format !== undefined) {
+      violations.push({ stepName: label, format });
     }
     for (const subStep of step.parallel ?? []) {
       collectFromStep(subStep, `${label}.${subStep.name}`);
@@ -280,6 +285,23 @@ function validateFindingContractOutputFormatRequiresContract(
     `Configuration error: workflow "${config.name}" has no finding_contract (own or inherited via workflow_call), `
     + `but ${detail} which requires a Finding Contract ledger to ingest its raw findings`,
   );
+}
+
+function validateFindingContractDelegatedIntake(config: WorkflowConfig, findingContractEnabled: boolean): void {
+  if (!findingContractEnabled) {
+    return;
+  }
+  for (const step of config.steps) {
+    if (!isDelegatedWorkflowStep(step) || (step.parallel?.length ?? 0) > 0) {
+      continue;
+    }
+    const format = findingContractFormatRef(step);
+    if (format !== undefined) {
+      throw new Error(
+        `Invalid delegated step "${step.name}": format "${format}" cannot be used because finding_contract intake is unavailable`,
+      );
+    }
+  }
 }
 
 /**
@@ -410,12 +432,13 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   // ここでの検証もランタイムと同じ判定基準を使わないと validate 時は素通り
   // したのに実行時に落ちる、という食い違いが生まれる。
   const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
-  validateFindingContractParallelStructuredOutput(config, findingContractEnabled);
+  validateFindingContractStructuredOutput(config, findingContractEnabled);
   validateFindingContractManagerProviderModel(config, options);
   validateFindingConflictAdjudicationReservedName(config);
   validateParallelSubStepNamesUnique(config);
   validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
+  validateFindingContractDelegatedIntake(config, findingContractEnabled);
 
   if (options.startStep) {
     const startStep = config.steps.find((step) => step.name === options.startStep);

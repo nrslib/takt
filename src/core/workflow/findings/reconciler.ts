@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type {
   FindingLedger,
   FindingLedgerConflict,
@@ -11,8 +10,11 @@ import type {
   RawFinding,
 } from './types.js';
 import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
+import { compareRfc3339Timestamps } from '../../models/rfc3339.js';
 import { validateFindingManagerOutput } from './manager-output-validation.js';
 import { computeLineageKey, computeProvisionalStableKey, computeReviewerStableKey } from './raw-canonicalization.js';
+import { countInterpretationEpochs, normalizeProvisionalInterpretationEpochs } from './interpretation-wal.js';
+import { formatConflictId, formatConflictSignature } from './conflict-identity.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -32,8 +34,6 @@ export interface ProvisionalFindingSpec {
   description?: string;
   suggestion?: string;
   reviewers: string[];
-  /** この upsert で消費した自動 manager 解釈 epoch 数（0 または 1）。 */
-  addInterpretationEpochs: number;
 }
 
 interface ReconcileFindingLedgerInput {
@@ -72,16 +72,12 @@ function formatFindingId(nextId: number): string {
   return `F-${String(nextId).padStart(4, '0')}`;
 }
 
-/**
- * conflict の同一性は参照する finding id 集合（無ければ raw finding id 集合）で決まる
- * 決定的なハッシュ。decision-assembly.ts の assembleConflictDecions も同じキーで
- * 「今ラウンド再生成される conflict」を判定するため export する。
- */
-export function formatConflictId(conflict: { findingIds: readonly string[]; rawFindingIds: readonly string[] }): string {
-  const ids = conflict.findingIds.length > 0 ? conflict.findingIds : conflict.rawFindingIds;
-  const signature = [...ids].sort().join('\0');
-  const hash = createHash('sha256').update(signature).digest('hex').slice(0, 12).toUpperCase();
-  return `C-${hash}`;
+function findMatchingConflicts(
+  conflictsById: ReadonlyMap<string, FindingLedgerConflict>,
+  conflict: Pick<FindingLedgerConflict, 'findingIds' | 'rawFindingIds'>,
+): FindingLedgerConflict[] {
+  const signature = formatConflictSignature(conflict);
+  return [...conflictsById.values()].filter((existing) => formatConflictSignature(existing) === signature);
 }
 
 function assertKnownFinding(findingIds: Set<string>, findingId: string): void {
@@ -313,6 +309,36 @@ function withoutConflictResolutionFields(
   };
 }
 
+function mergeConflictHistory(conflicts: readonly FindingLedgerConflict[]): Pick<
+  FindingLedgerConflict,
+  'adjudications' | 'adjudicationAttempts'
+> {
+  const adjudications = conflicts
+    .flatMap((conflict) => conflict.adjudications ?? [])
+    .sort((left, right) => (
+      compareRfc3339Timestamps(left.decidedAt.timestamp, right.decidedAt.timestamp)
+      || left.evidenceHash.localeCompare(right.evidenceHash)
+    ));
+  const adjudicationAttempts = conflicts
+    .flatMap((conflict) => conflict.adjudicationAttempts ?? [])
+    .sort((left, right) => (
+      compareRfc3339Timestamps(left.startedAt.timestamp, right.startedAt.timestamp)
+      || left.evidenceHash.localeCompare(right.evidenceHash)
+      || left.reservationToken.localeCompare(right.reservationToken)
+    ));
+  return {
+    ...(adjudications.length > 0 ? { adjudications } : {}),
+    ...(adjudicationAttempts.length > 0 ? { adjudicationAttempts } : {}),
+  };
+}
+
+function selectConflictSurvivor(conflicts: readonly FindingLedgerConflict[]): FindingLedgerConflict | undefined {
+  return [...conflicts].sort((left, right) => (
+    compareRfc3339Timestamps(left.firstSeen.timestamp, right.firstSeen.timestamp)
+    || left.id.localeCompare(right.id)
+  ))[0];
+}
+
 function reconcileLedgerConflicts(input: {
   previousLedger: FindingLedger;
   managerOutput: FindingManagerOutput;
@@ -350,8 +376,9 @@ function reconcileLedgerConflicts(input: {
       markRawFindingIdsUsed(input.usedRawFindingIds, conflict.rawFindingIds);
     }
 
-    const conflictId = formatConflictId(conflict);
-    const existing = conflictsById.get(conflictId);
+    const matchingConflicts = findMatchingConflicts(conflictsById, conflict);
+    const existing = selectConflictSurvivor(matchingConflicts);
+    const conflictId = existing?.id ?? formatConflictId(conflict);
     const base = existing !== undefined
       ? withoutConflictResolutionFields(existing)
       : {
@@ -364,12 +391,27 @@ function reconcileLedgerConflicts(input: {
         lastSeen: observationFromContext(input.context),
       };
 
+    for (const matchingConflict of matchingConflicts) {
+      if (matchingConflict.id !== conflictId) {
+        conflictsById.delete(matchingConflict.id);
+      }
+    }
+
     conflictsById.set(conflictId, {
       ...base,
       status: 'active',
-      rawFindingIds: mergeRawFindingIds(base.rawFindingIds, conflict.rawFindingIds),
+      rawFindingIds: mergeRawFindingIds(
+        mergeRawFindingIds(
+          base.rawFindingIds,
+          matchingConflicts
+            .filter((matchingConflict) => matchingConflict.id !== conflictId)
+            .flatMap((matchingConflict) => matchingConflict.rawFindingIds),
+        ),
+        conflict.rawFindingIds,
+      ),
       description: conflict.description,
       lastSeen: observationFromContext(input.context),
+      ...mergeConflictHistory(matchingConflicts),
     });
   }
 
@@ -650,12 +692,12 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
       description: rawFinding.description,
       ...(rawFinding.suggestion !== undefined ? { suggestion: rawFinding.suggestion } : {}),
       reviewers: [rawFinding.reviewer],
-      addInterpretationEpochs: 0,
     });
   }
 
   const provisionalNewFindings = applyProvisionalFindingSpecs({
     updatedById,
+    ledger: input.previousLedger,
     specs: provisionalSpecs,
     allocateId: () => {
       const id = formatFindingId(nextId);
@@ -665,7 +707,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     context: input.context,
   });
 
-  return {
+  return normalizeProvisionalInterpretationEpochs({
     version: 1,
     workflowName: input.context.workflowName,
     nextId,
@@ -676,7 +718,7 @@ export function reconcileFindingLedger(input: ReconcileFindingLedgerInput): Find
     ...(input.previousLedger.interpretations !== undefined
       ? { interpretations: input.previousLedger.interpretations }
       : {}),
-  };
+  });
 }
 
 /**
@@ -692,7 +734,7 @@ export function applyProvisionalFindingSpecsToLedger(
   context: FindingReconcileContext,
 ): FindingLedger {
   if (specs.length === 0) {
-    return ledger;
+    return normalizeProvisionalInterpretationEpochs(ledger);
   }
   const updatedById = new Map<string, FindingRecord>(
     ledger.findings.map((finding) => [finding.id, { ...finding }]),
@@ -700,6 +742,7 @@ export function applyProvisionalFindingSpecsToLedger(
   let nextId = ledger.nextId;
   const created = applyProvisionalFindingSpecs({
     updatedById,
+    ledger,
     specs,
     allocateId: () => {
       const id = formatFindingId(nextId);
@@ -708,12 +751,12 @@ export function applyProvisionalFindingSpecsToLedger(
     },
     context,
   });
-  return {
+  return normalizeProvisionalInterpretationEpochs({
     ...ledger,
     nextId,
     updatedAt: context.timestamp,
     findings: [...updatedById.values(), ...created],
-  };
+  });
 }
 
 /**
@@ -728,6 +771,7 @@ export function applyProvisionalFindingSpecsToLedger(
  */
 function applyProvisionalFindingSpecs(input: {
   updatedById: Map<string, FindingRecord>;
+  ledger: FindingLedger;
   specs: readonly ProvisionalFindingSpec[];
   allocateId: () => string;
   context: FindingReconcileContext;
@@ -758,7 +802,7 @@ function applyProvisionalFindingSpecs(input: {
           sourceRawFindingIds: mergeRawFindingIds(existing.provisional!.sourceRawFindingIds, spec.sourceRawFindingIds),
           reason: spec.reason,
           lastObservedAt: observation,
-          interpretationEpochs: existing.provisional!.interpretationEpochs + spec.addInterpretationEpochs,
+          interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
         },
       });
       continue;
@@ -771,7 +815,7 @@ function applyProvisionalFindingSpecs(input: {
       createdExisting.provisional = {
         ...createdExisting.provisional!,
         sourceRawFindingIds: mergeRawFindingIds(createdExisting.provisional!.sourceRawFindingIds, spec.sourceRawFindingIds),
-        interpretationEpochs: createdExisting.provisional!.interpretationEpochs + spec.addInterpretationEpochs,
+        interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
       };
       continue;
     }
@@ -797,7 +841,7 @@ function applyProvisionalFindingSpecs(input: {
         reason: spec.reason,
         firstObservedAt: observation,
         lastObservedAt: observation,
-        interpretationEpochs: spec.addInterpretationEpochs,
+        interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
         gateEffect: 'block',
       },
     };

@@ -122,7 +122,6 @@ export function intakeReviewerOutputs(input: {
         severity: 'high',
         description: wire.description,
         reviewers: [subResult.subStep.name],
-        addInterpretationEpochs: 0,
       });
       log.warn('Reviewer output exceeded Finding Contract limits; replaced with a single overflow provisional', {
         reviewer: subResult.subStep.name,
@@ -136,7 +135,9 @@ export function intakeReviewerOutputs(input: {
     const candidates = createReviewerRawFindingCandidates(items, context);
     const clarification = subResult.relationClarification;
     for (const candidate of candidates) {
-      const priorCodes = clarification !== undefined && candidate.reviewerRawFindingId !== undefined
+      const priorCodes = clarification !== undefined
+        && candidate.reviewerRawFindingId !== undefined
+        && Object.hasOwn(clarification.priorAmbiguityCodesByRawId, candidate.reviewerRawFindingId)
         ? clarification.priorAmbiguityCodesByRawId[candidate.reviewerRawFindingId]
         : undefined;
       const canonicalized = canonicalizeReviewerRawFinding(candidate, {

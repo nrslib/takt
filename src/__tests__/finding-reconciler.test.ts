@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseFindingManagerOutput } from '../core/workflow/findings/schemas.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import { formatConflictId } from '../core/workflow/findings/conflict-identity.js';
+import { computeLineageKey, computeRawEvidenceHash } from '../core/workflow/findings/raw-canonicalization.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -276,7 +278,7 @@ describe('reconcileFindingLedger', () => {
 
     expect(ledger.conflicts).toEqual([
       {
-        id: 'C-1CA24A220BC7',
+        id: 'C-FA2947446963',
         status: 'active',
         findingIds: ['F-0001'],
         rawFindingIds: ['raw-conflict'],
@@ -328,7 +330,7 @@ describe('reconcileFindingLedger', () => {
 
     expect(ledger.conflicts).toEqual([
       {
-        id: 'C-AB6BC1389C77',
+        id: 'C-548C1D35CEAA',
         status: 'active',
         findingIds: [],
         rawFindingIds: ['raw-security', 'raw-architecture'],
@@ -1099,6 +1101,211 @@ describe('reconcileFindingLedger', () => {
         },
       }),
     ).toThrow('Resolved finding "F-0001" requires at least one current resolution_confirmation raw finding targeting it');
+  });
+
+  it('should reuse a legacy finding conflict when it is reobserved with different raw evidence', () => {
+    const rawFinding = makeRawFinding({ rawFindingId: 'raw-current-conflict' });
+    const legacyRawFinding = makeRawFinding({ rawFindingId: 'raw-legacy-conflict' });
+    const ledgerWithOpenFinding = makeLedgerWithOpenFinding();
+    const previousLedger = makeLedger({
+      nextId: 2,
+      findings: ledgerWithOpenFinding.findings,
+      rawFindings: [...ledgerWithOpenFinding.rawFindings, legacyRawFinding],
+      conflicts: [{
+        id: 'C-1CA24A220BC7',
+        status: 'active',
+        findingIds: ['F-0001'],
+        rawFindingIds: ['raw-legacy-conflict'],
+        description: 'Previous encoding.',
+        firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+        lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+      }],
+    });
+
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [{
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-current-conflict'],
+          description: 'Same conflict after encoding update.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]).toMatchObject({
+      id: 'C-1CA24A220BC7',
+      description: 'Same conflict after encoding update.',
+      rawFindingIds: ['raw-legacy-conflict', 'raw-current-conflict'],
+    });
+  });
+
+  it('should coalesce active legacy and generated conflicts with time-ordered adjudication histories', () => {
+    const rawFinding = makeRawFinding({ rawFindingId: 'raw-current-conflict' });
+    const ledgerWithOpenFinding = makeLedgerWithOpenFinding();
+    const legacyObservation = { runId: 'run-0', stepName: 'reviewers', timestamp: '2016-12-31T23:59:60.500Z' };
+    const generatedObservation = { runId: 'run-1', stepName: 'reviewers', timestamp: '2017-01-01T00:00:00.000Z' };
+    const generatedConflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-current-conflict'] });
+    const previousLedger = makeLedger({
+      nextId: 2,
+      findings: ledgerWithOpenFinding.findings,
+      rawFindings: [
+        ...ledgerWithOpenFinding.rawFindings,
+        makeRawFinding({ rawFindingId: 'raw-legacy-conflict' }),
+        makeRawFinding({ rawFindingId: 'raw-generated-conflict' }),
+      ],
+      conflicts: [
+        {
+          id: generatedConflictId,
+          status: 'active',
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-generated-conflict'],
+          description: 'Generated conflict.',
+          firstSeen: generatedObservation,
+          lastSeen: generatedObservation,
+          adjudications: [{
+            evidenceHash: 'z-generated-adjudication',
+            outcome: 'undetermined',
+            findingTransition: 'keep_open',
+            evidence: ['Conflicting evidence.'],
+            actionableFix: '',
+            decidedAt: generatedObservation,
+          }],
+          adjudicationAttempts: [{
+            evidenceHash: 'z-generated-attempt',
+            reservationToken: 'generated-reservation',
+            startedAt: generatedObservation,
+            originStep: 'final-gate',
+          }],
+        },
+        {
+          id: 'C-1CA24A220BC7',
+          status: 'active',
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-legacy-conflict'],
+          description: 'Legacy conflict.',
+          firstSeen: legacyObservation,
+          lastSeen: legacyObservation,
+          adjudicationAttempts: [{
+            evidenceHash: 'legacy-attempt',
+            reservationToken: 'legacy-reservation',
+            startedAt: legacyObservation,
+            originStep: 'reviewers',
+          }, {
+            evidenceHash: 'a-legacy-attempt',
+            reservationToken: 'legacy-tie-reservation',
+            startedAt: generatedObservation,
+            originStep: 'reviewers',
+          }],
+          adjudications: [{
+            evidenceHash: 'legacy-adjudication',
+            outcome: 'undetermined',
+            findingTransition: 'keep_open',
+            evidence: ['Previous conflicting evidence.'],
+            actionableFix: '',
+            decidedAt: legacyObservation,
+          }, {
+            evidenceHash: 'a-legacy-adjudication',
+            outcome: 'undetermined',
+            findingTransition: 'keep_open',
+            evidence: ['Same-timestamp conflicting evidence.'],
+            actionableFix: '',
+            decidedAt: generatedObservation,
+          }],
+        },
+      ],
+    });
+
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [{
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-current-conflict'],
+          description: 'Reobserved conflict.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]).toMatchObject({
+      id: 'C-1CA24A220BC7',
+      rawFindingIds: ['raw-legacy-conflict', 'raw-generated-conflict', 'raw-current-conflict'],
+      firstSeen: legacyObservation,
+    });
+    expect(ledger.conflicts[0]!.adjudications?.map((record) => record.evidenceHash)).toEqual([
+      'legacy-adjudication',
+      'a-legacy-adjudication',
+      'z-generated-adjudication',
+    ]);
+    expect(ledger.conflicts[0]!.adjudicationAttempts).toEqual([
+      expect.objectContaining({ evidenceHash: 'legacy-attempt', originStep: 'reviewers' }),
+      expect.objectContaining({ evidenceHash: 'a-legacy-attempt', originStep: 'reviewers' }),
+      expect.objectContaining({ evidenceHash: 'z-generated-attempt', originStep: 'final-gate' }),
+    ]);
+  });
+
+  it('should coalesce active raw-only conflicts with the same signature', () => {
+    const rawFinding = makeRawFinding({ rawFindingId: 'raw-only-conflict' });
+    const observation = { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' };
+    const generatedConflictId = formatConflictId({ findingIds: [], rawFindingIds: ['raw-only-conflict'] });
+    const previousLedger = makeLedger({
+      rawFindings: [rawFinding],
+      conflicts: [
+        {
+          id: 'C-AB6BC1389C77',
+          status: 'active',
+          findingIds: [],
+          rawFindingIds: ['raw-only-conflict'],
+          description: 'Legacy raw-only conflict.',
+          firstSeen: observation,
+          lastSeen: observation,
+        },
+        {
+          id: generatedConflictId,
+          status: 'active',
+          findingIds: [],
+          rawFindingIds: ['raw-only-conflict'],
+          description: 'Generated raw-only conflict.',
+          firstSeen: observation,
+          lastSeen: observation,
+        },
+      ],
+    });
+
+    const ledger = reconcileFindingLedger({
+      previousLedger,
+      rawFindings: [rawFinding],
+      managerOutput: makeManagerOutput({
+        conflicts: [{
+          findingIds: [],
+          rawFindingIds: ['raw-only-conflict'],
+          description: 'Reobserved raw-only conflict.',
+        }],
+      }),
+      context: makeContext(),
+    });
+
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]).toMatchObject({
+      id: 'C-AB6BC1389C77',
+      rawFindingIds: ['raw-only-conflict'],
+      description: 'Reobserved raw-only conflict.',
+    });
+  });
+
+  it('should keep NUL-delimited conflict and raw identity inputs distinct', () => {
+    expect(formatConflictId({ findingIds: [], rawFindingIds: ['a\0b'] }))
+      .not.toBe(formatConflictId({ findingIds: [], rawFindingIds: ['a', 'b'] }));
+    expect(computeLineageKey({ targetFindingId: 't\0x', location: 'p:1', title: 'same' }))
+      .not.toBe(computeLineageKey({ targetFindingId: 't', location: 'x\0p:1', title: 'same' }));
+    expect(computeRawEvidenceHash({ targetFindingId: 't\0x', location: 'p:1', title: 'same' }))
+      .not.toBe(computeRawEvidenceHash({ targetFindingId: 't', location: 'x\0p:1', title: 'same' }));
   });
 
 });

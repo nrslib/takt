@@ -5,7 +5,8 @@ import {
   mergeFindingManagerOutputs,
 } from '../core/workflow/findings/mechanical-classification.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
-import { formatConflictId, reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import { collectRegeneratedConflictIds, formatConflictId } from '../core/workflow/findings/conflict-identity.js';
 import type {
   FindingLedger,
   FindingLedgerConflict,
@@ -581,6 +582,54 @@ describe('assembleManagerOutput conflict decisions', () => {
     expect(result.output.conflicts.map((conflict) => conflict.findingIds)).toEqual([['F-0001']]);
   });
 
+  it('Given legacy and current active conflict IDs for regenerated evidence When assembled Then every matching ID is rejected and reconciliation keeps one active conflict', () => {
+    const recurringConflictShape = { findingIds: ['F-0001'], rawFindingIds: [] };
+    const currentConflictId = formatConflictId(recurringConflictShape);
+    const legacyConflictId = 'C-1CA24A220BC7';
+    const ledger = makeLedger({
+      conflicts: [
+        makeConflict({ id: legacyConflictId, rawFindingIds: [] }),
+        makeConflict({ id: currentConflictId, rawFindingIds: [] }),
+      ],
+    });
+    const raw = makeRawFinding({ rawFindingId: 'raw-legacy-conflict', familyTag: 'bug' });
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [raw],
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-legacy-conflict', decision: 'conflict', findingId: 'F-0001', evidence: 'Still contradicts.' }],
+        conflictDecisions: [
+          { conflictId: legacyConflictId, decision: 'resolve', evidence: 'Adjudicated legacy conflict.' },
+          { conflictId: currentConflictId, decision: 'resolve', evidence: 'Adjudicated current conflict.' },
+        ],
+      }),
+    });
+
+    expect(result.output.resolvedConflicts).toEqual([]);
+    expect(result.rejectedConflictDecisions.map((rejection) => rejection.conflictId)).toEqual([
+      legacyConflictId,
+      currentConflictId,
+    ]);
+    expect(result.rejectedConflictDecisions.every((rejection) => rejection.reason.includes('regenerated'))).toBe(true);
+
+    const nextLedger = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [raw],
+      managerOutput: result.output,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-06-14T00:00:00.000Z' },
+    });
+    expect(nextLedger.conflicts).toEqual([expect.objectContaining({ id: legacyConflictId, status: 'active' })]);
+  });
+
+  it('Given raw-only regenerated evidence When collecting regenerated IDs Then it includes every legacy and current ID with the raw signature', () => {
+    const rawOnlyConflict = { findingIds: [], rawFindingIds: ['raw-security', 'raw-architecture'] };
+    const currentConflictId = formatConflictId(rawOnlyConflict);
+    expect(collectRegeneratedConflictIds([
+      { id: 'C-AB6BC1389C77', ...rawOnlyConflict },
+      { id: currentConflictId, ...rawOnlyConflict },
+    ], [rawOnlyConflict])).toEqual(new Set(['C-AB6BC1389C77', currentConflictId]));
+  });
+
   // waive 変換で後から足される conflict も「今ラウンド再生成される」に含める。
   // regeneratedConflictIds を canonicalize 直後の conflicts だけから計算すると、
   // waive 由来で同じ conflict が再生成されても resolve が採用され、reconciler が
@@ -610,6 +659,102 @@ describe('assembleManagerOutput conflict decisions', () => {
     expect(result.rejectedConflictDecisions).toHaveLength(1);
     expect(result.rejectedConflictDecisions[0]?.conflictId).toBe(conflictId);
     expect(result.rejectedConflictDecisions[0]?.reason).toContain('regenerated');
+  });
+});
+
+describe('assembleManagerOutput combined decision kinds', () => {
+  it('Given independent duplicate, invalidate, waive, dispute note, and conflict resolution decisions When assembled, validated, and reconciled Then every transition is retained without rejection', () => {
+    const ledger = makeLedger({
+      nextId: 7,
+      rawFindings: [],
+      findings: [
+        makeFinding({ id: 'F-0001', location: 'src/canonical.ts:1' }),
+        makeFinding({ id: 'F-0002', location: 'src/duplicate.ts:1' }),
+        makeFinding({ id: 'F-0003', location: 'src/invalid.ts:1' }),
+        makeFinding({ id: 'F-0004', location: 'src/waive.ts:1' }),
+        makeFinding({ id: 'F-0005', location: 'src/note.ts:1' }),
+        makeFinding({ id: 'F-0006', location: 'src/conflict.ts:1' }),
+      ],
+      conflicts: [makeConflict({ id: 'C-0001', findingIds: ['F-0006'], rawFindingIds: [] })],
+    });
+    const priorStepResponseText = [
+      '## Disputed Findings',
+      '- findingId: F-0004',
+      '  reason: frozen contract',
+      '  evidence: src/waive.ts:1',
+      '- findingId: F-0005',
+      '  reason: needs a record',
+      '  evidence: src/note.ts:1',
+    ].join('\n');
+
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        duplicateDecisions: [{
+          canonicalFindingId: 'F-0001',
+          duplicateFindingIds: ['F-0002'],
+          evidence: 'src/canonical.ts:1',
+        }],
+        invalidateDecisions: [{ findingId: 'F-0003', evidence: 'src/invalid.ts:1' }],
+        disputeDecisions: [
+          { findingId: 'F-0004', decision: 'waive', reason: 'frozen contract', evidence: 'src/waive.ts:1' },
+          { findingId: 'F-0005', decision: 'note', reason: 'needs a record', evidence: 'src/note.ts:1' },
+        ],
+        conflictDecisions: [{ conflictId: 'C-0001', decision: 'resolve', evidence: 'src/conflict.ts:1' }],
+      }),
+      invalidLocationCandidateFindingIds: new Set(['F-0003']),
+      priorStepResponseText,
+    });
+
+    expect(result.rejectedRawDecisions).toEqual([]);
+    expect(result.rejectedDuplicateDecisions).toEqual([]);
+    expect(result.rejectedInvalidateDecisions).toEqual([]);
+    expect(result.rejectedDisputeDecisions).toEqual([]);
+    expect(result.rejectedConflictDecisions).toEqual([]);
+    expect(result.output.duplicateFindings).toEqual([{
+      canonicalFindingId: 'F-0001',
+      duplicateFindingIds: ['F-0002'],
+      evidence: 'src/canonical.ts:1',
+    }]);
+    expect(result.output.invalidatedFindings).toEqual([{ findingId: 'F-0003', evidence: 'src/invalid.ts:1' }]);
+    expect(result.output.waivedFindings).toEqual([{ findingId: 'F-0004', reason: 'frozen contract', evidence: 'src/waive.ts:1' }]);
+    expect(result.output.disputeNotes).toEqual([{ findingId: 'F-0005', reason: 'needs a record', evidence: 'src/note.ts:1' }]);
+    expect(result.output.resolvedConflicts).toEqual([{ conflictId: 'C-0001', evidence: 'src/conflict.ts:1' }]);
+    expect(validateFindingManagerOutput({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: result.output,
+      priorStepResponseText,
+    })).toEqual({ ok: true });
+
+    const next = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: result.output,
+      priorStepResponseText,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
+    });
+
+    expect(next.findings.map((finding) => [finding.id, finding.status])).toEqual([
+      ['F-0001', 'open'],
+      ['F-0002', 'superseded'],
+      ['F-0003', 'invalidated'],
+      ['F-0004', 'waived'],
+      ['F-0005', 'open'],
+      ['F-0006', 'open'],
+    ]);
+    const disputeNoteFinding = next.findings.find((finding) => finding.id === 'F-0005');
+    expect(disputeNoteFinding?.disputes.at(-1)).toMatchObject({
+      reason: 'needs a record',
+      evidence: 'src/note.ts:1',
+      recordedAt: {
+        timestamp: '2026-07-10T00:00:00.000Z',
+        stepName: 'reviewers',
+        runId: 'run-2',
+      },
+    });
+    expect(next.conflicts).toEqual([expect.objectContaining({ id: 'C-0001', status: 'resolved' })]);
   });
 });
 

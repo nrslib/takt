@@ -72,7 +72,7 @@ export function assertCanonicalRawFinding(value: unknown, context: string): asse
 // ---------------------------------------------------------------------------
 
 function sha256Of(...parts: string[]): string {
-  return createHash('sha256').update(parts.join('\0')).digest('hex');
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 
 export function computeReviewerStableKey(input: {

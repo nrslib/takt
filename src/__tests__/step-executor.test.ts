@@ -211,6 +211,22 @@ describe('StepExecutor', () => {
     )).toThrow(/structured_output.*provider is not resolved/i);
   });
 
+  it('非native structured_output fallback は解決済みワークフロー言語を使う', () => {
+    const executor = new StepExecutor({
+      optionsBuilder: {
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+      },
+      getLanguage: () => 'ja',
+    } as unknown as StepExecutorDeps);
+    const step = makeStep({
+      structuredOutput: { schema: { type: 'object', properties: {}, required: [] } },
+    });
+
+    expect(executor.buildPhase1Instruction('指示', step)).toContain(
+      '次の JSON schema に一致する fenced JSON block をちょうど1つ返してください',
+    );
+  });
+
   it('Team Leader親には完全な前回出力と Finding Contract ledger summary を同じ実 instruction 経路で渡す', () => {
     const previousTail = 'TAIL_FINDING: keep this review finding';
     const step = createTeamLeaderPlanningStep(makeStep({

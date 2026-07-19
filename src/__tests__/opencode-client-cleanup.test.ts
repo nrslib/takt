@@ -3118,7 +3118,7 @@ describe('OpenCodeClient stream cleanup', () => {
   });
 
   it('should fall back to formatless retry when the model does not produce structured output', async () => {
-    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const { OpenCodeProvider } = await import('../infra/providers/opencode.js');
     const schema = { type: 'object', required: ['rawFindings'], properties: { rawFindings: { type: 'array' } } };
     const subscribe = vi.fn()
       .mockResolvedValueOnce({
@@ -3165,12 +3165,13 @@ describe('OpenCodeClient stream cleanup', () => {
       server: { close: vi.fn() },
     });
 
-    const client = new OpenCodeClient();
+    const client = new OpenCodeProvider().setup({ name: 'reviewer' });
     const onStream = vi.fn();
-    const result = await client.call('reviewer', 'review it', {
+    const result = await client.call('review it', {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
       outputSchema: schema,
+      language: 'ja',
       onStream,
     });
 
@@ -3180,6 +3181,7 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(promptAsync).toHaveBeenCalledTimes(2);
     expect(promptAsync.mock.calls[0]?.[0]).toHaveProperty('format');
     expect(promptAsync.mock.calls[1]?.[0]).not.toHaveProperty('format');
+    expect(JSON.stringify(promptAsync.mock.calls[1]?.[0])).toContain('次の JSON schema に一致する');
     expectStreamTextOnce(onStream, 'format retry tail');
     expectStreamThinkingOnce(onStream, 'format reasoning tail');
     expect(JSON.stringify(onStream.mock.calls)).not.toContain('format-secret');

@@ -187,6 +187,68 @@ describe('attachStopBudgetState', () => {
     expect(stopBudgetRoundsCompleted(exhausted)).toBe(3);
   });
 
+  it('accounts for a leap second when the time budget crosses the one-minute boundary', () => {
+    const timeLimited: ResolvedStopBudgetLimits = { maxRounds: 1000, maxMinutes: 1 };
+    const startedInLeapSecond = ledger({
+      stopBudget: {
+        roundMarkers: [marker(1)],
+        firstRoundAt: '2016-12-31T23:59:60.500Z',
+        exhausted: false,
+      },
+    });
+
+    const justBeforeBoundary = attachStopBudgetState(
+      startedInLeapSecond,
+      ledger(),
+      timeLimited,
+      marker(2),
+      '2017-01-01T00:00:59.499Z',
+    );
+    const atBoundary = attachStopBudgetState(
+      startedInLeapSecond,
+      ledger(),
+      timeLimited,
+      marker(2),
+      '2017-01-01T00:00:59.500Z',
+    );
+    const afterBoundary = attachStopBudgetState(
+      startedInLeapSecond,
+      ledger(),
+      timeLimited,
+      marker(2),
+      '2017-01-01T00:00:59.501Z',
+    );
+
+    expect(justBeforeBoundary.stopBudget?.exhausted).toBe(false);
+    expect(atBoundary.stopBudget?.exhausted).toBe(true);
+    expect(afterBoundary.stopBudget?.exhausted).toBe(true);
+  });
+
+  it('should fail fast for an invalid stored time origin and honor a normalized offset origin', () => {
+    const timeLimited: ResolvedStopBudgetLimits = { maxRounds: 1000, maxMinutes: 1 };
+    const invalidPrevious = ledger({
+      stopBudget: { roundMarkers: [marker(1)], firstRoundAt: 'not-a-timestamp', exhausted: false },
+    });
+    expect(() => attachStopBudgetState(
+      invalidPrevious,
+      ledger(),
+      timeLimited,
+      marker(2),
+      '2026-07-01T00:10:00.000Z',
+    )).toThrow('Expected an RFC 3339 timestamp');
+
+    const offsetPrevious = ledger({
+      stopBudget: { roundMarkers: [marker(1)], firstRoundAt: '2026-07-01T02:00:00+02:00', exhausted: false },
+    });
+    expect(attachStopBudgetState(
+      offsetPrevious,
+      ledger(),
+      timeLimited,
+      marker(2),
+      '2026-07-01T00:01:00.000Z',
+    ).stopBudget?.exhausted).toBe(true);
+  });
+
   it('builds on the freshest persisted marker set, so a concurrent round that already added its own marker is preserved alongside this round (monotonic, no lost update)', () => {
     const concurrentMarker = computeRoundMarker({ runId: 'run-other', callNamespace: '', parentStepName: 'reviewers', stepIteration: 9 });
     const previous = ledger({ stopBudget: { roundMarkers: [marker(1), concurrentMarker], firstRoundAt: '2026-07-01T00:00:00.000Z', exhausted: false } });

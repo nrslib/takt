@@ -2147,7 +2147,7 @@
       "location": "src/app/cli/routing.ts:156,173,299",
       "description": "In `src/app/cli/routing.ts`, `prCleanupAttachments` is now awaited in the `finally` block (L299) and in early return paths for workflow or mode cancellation (L156, 173). This ensures that temporary PR image directories are always cleaned up. This resolves F-0006 and F-0009.",
       "kind": "resolution_confirmation",
-      "targetFindingId": "F-000 laT6"
+      "targetFindingId": "F-0006"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:6:contract-lifecycle-review:res-F-0007-v5",
@@ -2424,7 +2424,7 @@
       "location": "src/app/cli/routing.ts:302",
       "description": "src/app/cli/routing.ts:158, 175 および 302 にて、PR添付ファイルの一時ディレクトリを解放する `prCleanupAttachments` が、キャンセル経路および正常・異常終了後の finally ブロックで確実に await 実行される構造になっていることを確認しました。これにより F-0006 および F-0009 のリソースリークが解消されています。",
       "kind": "resolution_confirmation",
-      "targetFindingId": "F-000 la l'ai-antipattern-review-1st 指摘した F-0011 (Distributed Cleanup) に関しては、現状の各ハンドラの末尾での cleanup 呼び出しが、独立したライフサイクル管理として機能しており、実害のあるリスク（二重解放やuse-after-cleanup）がないため、妥当な設計として承認します。"
+      "targetFindingId": "F-0006"
     },
     {
       "rawFindingId": "20260710-145911-pr-task-attachments-takt-add-p:reviewers:8:arch-review:res-F-0007-final-5",

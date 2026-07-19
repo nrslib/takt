@@ -100,7 +100,6 @@ export function buildLadderCommitPlan(
           wire: pending.target.wire,
           canonical: pending.target.canonical,
           reason: `Conflict target "${pending.targetFindingId}" is no longer open; observation kept provisional`,
-          addInterpretationEpochs: 1,
         })],
         interpretationResults: withInterpretationResult(
           plan.interpretationResults,
@@ -123,7 +122,6 @@ export function buildLadderCommitPlan(
         wire: pending.target.wire,
         canonical: pending.target.canonical,
         reason: `Held as provisional while an active conflict against finding "${pending.targetFindingId}" is adjudicated`,
-        addInterpretationEpochs: 1,
       })],
       interpretationResults: withInterpretationResult(
         plan.interpretationResults,

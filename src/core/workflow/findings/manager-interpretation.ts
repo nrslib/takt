@@ -146,7 +146,6 @@ export async function runAmbiguousLadder(input: {
         severity: 'high',
         description: `Uninterpreted ambiguous observations remain (${leftover.length}); they block the final gate until a later round interprets or settles them.`,
         reviewers: ['findings-manager'],
-        addInterpretationEpochs: 0,
       }],
       stats: { ...result.stats, budgetExhaustedLineages: leftover.length },
     };

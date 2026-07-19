@@ -984,7 +984,7 @@ export class OpenCodeAttemptRunner {
     // でスキーマと fenced JSON 契約・StructuredOutput 禁止を明示したプロンプトへ
     // 包み直す。この attempt は session も fresh 強制済み（attemptPlan 参照）。
     const basePromptText = attemptPlan.structuredMode === 'formatless' && options.outputSchema !== undefined
-      ? buildFormatlessStructuredPrompt(prompt, options.outputSchema)
+      ? buildFormatlessStructuredPrompt(prompt, options.outputSchema, options.language ?? 'en')
       : prompt;
     // tool-guard recovery の attempt:
     // - correction: 同一セッション再開なので元プロンプトは再送しない

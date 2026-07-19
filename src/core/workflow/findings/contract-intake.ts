@@ -12,6 +12,7 @@ import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig, Workflow
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
+import { hasFindingContractFormat } from './finding-contract-format.js';
 import {
   RawFindingsStructuredOutput,
   runFindingManagerForStep,
@@ -52,10 +53,7 @@ export function resolveFindingContractIntakeStep(
   if (isDelegatedWorkflowStep(step)) {
     return undefined;
   }
-  const hasFindingContractFormat = (step.outputContracts ?? []).some(
-    (entry) => entry.formatRef?.endsWith('-finding-contract') === true,
-  );
-  return hasFindingContractFormat ? (step as AgentWorkflowStep) : undefined;
+  return hasFindingContractFormat(step) ? (step as AgentWorkflowStep) : undefined;
 }
 
 export interface FindingContractIntakeInput {

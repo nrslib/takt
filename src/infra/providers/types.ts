@@ -1,4 +1,4 @@
-import type { AgentResponse, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
+import type { AgentResponse, Language, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
@@ -34,6 +34,7 @@ export interface ProviderCallOptions {
   copilotGithubToken?: string;
   kiroApiKey?: string;
   outputSchema?: Record<string, unknown>;
+  language?: Language;
   imageAttachments?: ProviderImageAttachment[];
   childProcessEnv?: Readonly<Record<string, string>>;
 }

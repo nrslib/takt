@@ -63,6 +63,9 @@ export function assembleCleanManagerDecision(input: {
     });
     const landedRawIds = collectLandedRawIds(assembly.output);
     for (const rejected of assembly.rejectedRawDecisions) {
+      if (!('rawFindingId' in rejected)) {
+        continue;
+      }
       if (!landedRawIds.has(rejected.rawFindingId)) {
         landRawAsProvisional(
           rejected.rawFindingId,

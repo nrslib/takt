@@ -8,6 +8,7 @@ import {
   writePrivateFileWithModeGuarded,
 } from '../../../shared/utils/private-file.js';
 import type { FindingLedger, RawFinding } from './types.js';
+import { normalizeProvisionalInterpretationEpochs } from './interpretation-wal.js';
 import { parseFindingLedger, parseRawFindings } from './schemas.js';
 import { assertLedgerIdAllocationInvariant } from './ledger-validation.js';
 import { writeReportFile } from '../report-writer.js';
@@ -431,23 +432,52 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
   const rawFindingsDir = resolveInside(ledgerRoot, options.rawFindingsPath);
 
   const loadLedgerImpl = (): FindingLedger => {
-    return readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
+    return normalizeProvisionalInterpretationEpochs(
+      readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName),
+    );
   };
+  const normalizeLedger = (ledger: FindingLedger): FindingLedger => {
+    const parsedLedger = parseFindingLedger(normalizeProvisionalInterpretationEpochs(ledger));
+    assertLedgerWorkflowName(parsedLedger, options.workflowName, ledgerPath);
+    assertLedgerIdAllocationInvariant(parsedLedger);
+    return parsedLedger;
+  };
+  const normalizeMutation = <Result>(mutation: FindingLedgerMutation<Result>): FindingLedgerMutation<Result> => ({
+    ...mutation,
+    ledger: normalizeLedger(mutation.ledger),
+  });
+  const normalizePublicationDecision = <Result>(
+    decision: FindingLedgerPublicationDecision<Result>,
+  ): FindingLedgerPublicationDecision<Result> => ({
+    ...decision,
+    mutation: normalizeMutation(decision.mutation),
+  });
   const prepareLedgerSave = (ledger: FindingLedger): string => {
-    assertLedgerWorkflowName(ledger, options.workflowName, ledgerPath);
-    assertLedgerIdAllocationInvariant(ledger);
+    const parsedLedger = normalizeLedger(ledger);
     prepareWritableFilePath(ledgerRoot, ledgerPath);
-    return JSON.stringify(ledger, null, 2);
+    return JSON.stringify(parsedLedger, null, 2);
   };
   const saveLedgerImpl = (ledger: FindingLedger): void => {
     writePrivateFileWithMode(ledgerPath, prepareLedgerSave(ledger), PRIVATE_FILE_MODE);
   };
-  const saveLedgerGuardedImpl = (ledger: FindingLedger, publicationGuard: () => boolean): boolean => {
+  const saveLedgerGuardedImpl = (
+    ledger: FindingLedger,
+    publicationGuard: () => FindingLedgerPublicationDecision<unknown>,
+  ): boolean => {
     return writePrivateFileWithModeGuarded(
       ledgerPath,
       prepareLedgerSave(ledger),
       PRIVATE_FILE_MODE,
-      publicationGuard,
+      () => {
+        const decision = publicationGuard();
+        if (!decision.publish) {
+          return false;
+        }
+        return {
+          publish: true,
+          content: prepareLedgerSave(decision.mutation.ledger),
+        };
+      },
     );
   };
 
@@ -464,20 +494,21 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
     updateLedger: (mutator, revalidateBeforeSave) => {
       const critical = updateQueue.then(() => {
         const current = loadLedgerImpl();
-        const preparedMutation = mutator(current);
+        const mutation = mutator(current);
+        const preparedMutation = normalizeMutation(mutation);
         if (revalidateBeforeSave === undefined) {
           saveLedgerImpl(preparedMutation.ledger);
           return preparedMutation;
         }
-        const initialDecision = revalidateBeforeSave(current, preparedMutation);
+        const initialDecision = normalizePublicationDecision(revalidateBeforeSave(current, preparedMutation));
         if (!initialDecision.publish) {
           saveLedgerImpl(initialDecision.mutation.ledger);
           return initialDecision.mutation;
         }
         let publicationDecision = initialDecision;
         const published = saveLedgerGuardedImpl(initialDecision.mutation.ledger, () => {
-          publicationDecision = revalidateBeforeSave(current, initialDecision.mutation);
-          return publicationDecision.publish;
+          publicationDecision = normalizePublicationDecision(revalidateBeforeSave(current, initialDecision.mutation));
+          return publicationDecision;
         });
         if (!published) {
           saveLedgerImpl(publicationDecision.mutation.ledger);
@@ -501,7 +532,7 @@ export function createFindingLedgerStore(options: FindingLedgerStoreOptions): Fi
       adjudicationReservations.delete(reservationToken);
     },
     createRunCopy: () => {
-      const ledger = readProjectLedgerOrEmpty(ledgerRoot, ledgerPath, options.workflowName);
+      const ledger = loadLedgerImpl();
       const content = JSON.stringify(ledger, null, 2);
       prepareWritableCopyPath(options.reportDir, copyPath);
       try {

@@ -15,6 +15,7 @@
  * 跨いだ累積が無料で成立する）。
  */
 import type { FindingContractStopBudgetConfig, FindingLedger, FindingLedgerStopBudgetState } from './types.js';
+import { rfc3339TimelineMilliseconds } from '../../models/rfc3339.js';
 import { addRoundMarker } from './round-marker.js';
 
 /**
@@ -46,7 +47,7 @@ export function resolveStopBudgetLimits(
 }
 
 function elapsedMinutes(firstRoundAt: string, nowIso: string): number {
-  return (Date.parse(nowIso) - Date.parse(firstRoundAt)) / 60_000;
+  return (rfc3339TimelineMilliseconds(nowIso) - rfc3339TimelineMilliseconds(firstRoundAt)) / 60_000;
 }
 
 /** roundMarkers.length から導出する完了ラウンド数。読み取り側の唯一の入口。 */

@@ -17,7 +17,8 @@ export type DecisionCategory =
   | 'waivedFindings'
   | 'conflicts'
   | 'invalidatedFindings'
-  | 'supersededFindings';
+  | 'supersededFindings'
+  | 'canonicalFindings';
 
 /**
  * 同じ finding が2つの決定に現れてよい組み合わせ。
@@ -35,6 +36,9 @@ export type DecisionCategory =
 const ALLOWED_DECISION_PAIRS: ReadonlySet<string> = new Set([
   'conflicts|matches',
   'conflicts|reopenedFindings',
+  'canonicalFindings|conflicts',
+  'canonicalFindings|matches',
+  'canonicalFindings|canonicalFindings',
 ]);
 
 function pairKey(a: DecisionCategory, b: DecisionCategory): string {
@@ -74,10 +78,10 @@ export function collectDecisionSets(
   for (const invalidated of managerOutput.invalidatedFindings) {
     add(invalidated.findingId, 'invalidatedFindings');
   }
-  // duplicateFindings.canonicalFindingId is intentionally excluded: the
-  // canonical finding stays open and may legitimately also receive a match/
-  // conflict/etc. this round. Only the duplicate (loser) side becomes terminal.
+  // canonical は match/conflict との併存だけを許す。closed 遷移との併存を
+  // 検出しないと、同一ラウンドで duplicate 統合した指摘を waive 等で閉じられる。
   for (const duplicate of managerOutput.duplicateFindings) {
+    add(duplicate.canonicalFindingId, 'canonicalFindings');
     for (const findingId of new Set(duplicate.duplicateFindingIds)) {
       add(findingId, 'supersededFindings');
     }

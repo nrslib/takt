@@ -103,7 +103,8 @@ describe('resume boundary: {report:X} references across runs', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     const instruction = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     const inheritedPath = join(tmpDir, '.takt/runs/test-report-dir/reports/ai-antipattern-review-1st.md');
-    expect(instruction).toContain(inheritedPath);
+    expect(instruction).toContain('REJECT: findings...');
+    expect(instruction).not.toContain('{report:ai-antipattern-review-1st.md}');
     expect(readFileSync(inheritedPath, 'utf-8')).toBe('REJECT: findings...');
   });
 

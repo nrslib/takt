@@ -150,6 +150,302 @@ describe('FindingLedgerStore', () => {
     );
   });
 
+  it('should reject invalid semantic timestamps without overwriting the persisted ledger', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const ledgerPath = join(projectCwd, '.takt/findings/peer-review.json');
+    store.saveLedger(makeLedger());
+    const persistedContent = readFileSync(ledgerPath, 'utf-8');
+    const timestamp = 'not-a-timestamp';
+    const invalidLedgers: FindingLedger[] = [
+      { ...makeLedger(), updatedAt: timestamp },
+      {
+        ...makeLedger(),
+        findings: makeLedger().findings.map((finding) => ({
+          ...finding,
+          firstSeen: { ...finding.firstSeen, timestamp },
+          lastSeen: { ...finding.lastSeen, timestamp },
+          resolvedAt: timestamp,
+          invalidatedAt: timestamp,
+        })),
+      },
+      {
+        ...makeLedger(),
+        conflicts: [{
+          id: 'C-0001',
+          status: 'resolved',
+          findingIds: ['F-0001'],
+          rawFindingIds: ['raw-1'],
+          description: 'Resolved conflict.',
+          firstSeen: makeLedger().findings[0]!.firstSeen,
+          lastSeen: makeLedger().findings[0]!.lastSeen,
+          resolvedAt: timestamp,
+          resolvedEvidence: 'evidence',
+        }],
+      },
+      { ...makeLedger(), stopBudget: { roundMarkers: ['round-1'], firstRoundAt: timestamp, exhausted: false } },
+      { ...makeLedger(), reviewIntegrity: { roundMarkers: ['round-1'], firstRoundAt: timestamp, exhausted: false } },
+    ];
+
+    for (const invalidLedger of invalidLedgers) {
+      expect(() => store.saveLedger(invalidLedger)).toThrow('Expected an RFC 3339 timestamp');
+      expect(readFileSync(ledgerPath, 'utf-8')).toBe(persistedContent);
+    }
+  });
+
+  it('should normalize every semantic timestamp before saving the ledger', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const ledger = {
+      ...makeLedger(),
+      updatedAt: '2026-06-13T00:15:00+02:00',
+      findings: makeLedger().findings.map((finding) => ({
+        ...finding,
+        firstSeen: { ...finding.firstSeen, timestamp: '2026-06-13T00:15:00+02:00' },
+        lastSeen: { ...finding.lastSeen, timestamp: '2026-06-13T00:15:00+02:00' },
+        resolvedAt: '2026-06-13T00:15:00+02:00',
+        invalidatedAt: '2026-06-13T00:15:00+02:00',
+      })),
+      conflicts: [{
+        id: 'C-0001',
+        status: 'resolved',
+        findingIds: ['F-0001'],
+        rawFindingIds: ['raw-1'],
+        description: 'Resolved conflict.',
+        firstSeen: makeLedger().findings[0]!.firstSeen,
+        lastSeen: makeLedger().findings[0]!.lastSeen,
+        resolvedAt: '2026-06-13T00:15:00+02:00',
+        resolvedEvidence: 'evidence',
+      }],
+      stopBudget: { roundMarkers: ['round-1'], firstRoundAt: '2026-06-13T00:15:00+02:00', exhausted: false },
+      reviewIntegrity: { roundMarkers: ['round-1'], firstRoundAt: '2026-06-13T00:15:00+02:00', exhausted: false },
+    };
+
+    store.saveLedger(ledger);
+
+    const saved = JSON.parse(readFileSync(join(projectCwd, '.takt/findings/peer-review.json'), 'utf-8')) as FindingLedger;
+    expect(saved.findings[0]?.firstSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
+    expect(saved.findings[0]?.lastSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
+    expect(saved.updatedAt).toBe('2026-06-12T22:15:00.000Z');
+    expect(saved.findings[0]?.resolvedAt).toBe('2026-06-12T22:15:00.000Z');
+    expect(saved.findings[0]?.invalidatedAt).toBe('2026-06-12T22:15:00.000Z');
+    expect(saved.conflicts[0]?.resolvedAt).toBe('2026-06-12T22:15:00.000Z');
+    expect(saved.stopBudget?.firstRoundAt).toBe('2026-06-12T22:15:00.000Z');
+    expect(saved.reviewIntegrity?.firstRoundAt).toBe('2026-06-12T22:15:00.000Z');
+  });
+
+  it('should return the normalized ledger that it persisted from every update path', async () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const offsetTimestamp = '2026-06-13T00:15:00+02:00';
+    const revalidators = [
+      undefined,
+      (_current: FindingLedger, mutation: { ledger: FindingLedger; result: string }) => ({ mutation, publish: false }),
+      (_current: FindingLedger, mutation: { ledger: FindingLedger; result: string }) => ({ mutation, publish: true }),
+    ];
+
+    for (const revalidateBeforeSave of revalidators) {
+      store.saveLedger(makeLedger());
+      const result = await store.updateLedger(
+        (current) => ({ ledger: { ...current, updatedAt: offsetTimestamp }, result: 'saved' }),
+        revalidateBeforeSave,
+      );
+      expect(result.ledger).toEqual(store.loadLedger());
+      expect(result.ledger.updatedAt).toBe('2026-06-12T22:15:00.000Z');
+    }
+  });
+
+  it('should persist a canonical UTC leap second and return that same ledger from updateLedger', async () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    store.saveLedger(makeLedger());
+
+    const result = await store.updateLedger((current) => ({
+      ledger: { ...current, updatedAt: '2017-01-01T00:59:60.500+01:00' },
+      result: undefined,
+    }));
+
+    expect(result.ledger.updatedAt).toBe('2016-12-31T23:59:60.500Z');
+    expect(store.loadLedger()).toEqual(result.ledger);
+  });
+
+  it('should normalize every provisional interpretation epoch from the WAL at the save boundary', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const ledger = makeLedger();
+    const lineageKey = 'lineage-interrupted';
+    ledger.findings[0] = {
+      ...ledger.findings[0]!,
+      provisional: {
+        kind: 'interpretation-interrupted',
+        stableKey: 'provisional-interrupted',
+        lineageKey,
+        sourceRawFindingIds: ['raw-1'],
+        reason: 'interrupted',
+        firstObservedAt: ledger.findings[0]!.firstSeen,
+        lastObservedAt: ledger.findings[0]!.lastSeen,
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+      },
+    };
+    ledger.interpretations = [{
+      interpretationKey: 'interpretation-1',
+      reviewerStableKey: 'reviewer-1',
+      lineageKey,
+      candidateEvidenceHash: 'evidence-1',
+      policyVersion: 2,
+      stage: 'interpretation_started',
+      startedAt: ledger.findings[0]!.firstSeen,
+      promptPreconditions: [],
+    }];
+
+    store.saveLedger(ledger);
+
+    const saved = store.loadLedger();
+    expect(saved.findings[0]?.provisional?.interpretationEpochs).toBe(1);
+  });
+
+  it('should normalize provisional interpretation epochs in a run-local copy from a legacy ledger', () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const ledger = makeLedger();
+    const lineageKey = 'lineage-run-copy';
+    ledger.findings[0] = {
+      ...ledger.findings[0]!,
+      provisional: {
+        kind: 'interpretation-interrupted',
+        stableKey: 'provisional-run-copy',
+        lineageKey,
+        sourceRawFindingIds: ['raw-1'],
+        reason: 'interrupted',
+        firstObservedAt: ledger.findings[0]!.firstSeen,
+        lastObservedAt: ledger.findings[0]!.lastSeen,
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+      },
+    };
+    ledger.interpretations = [{
+      interpretationKey: 'interpretation-run-copy',
+      reviewerStableKey: 'reviewer-run-copy',
+      lineageKey,
+      candidateEvidenceHash: 'evidence-run-copy',
+      policyVersion: 2,
+      stage: 'interpretation_started',
+      startedAt: ledger.findings[0]!.firstSeen,
+      promptPreconditions: [],
+    }];
+    const projectLedgerPath = join(projectCwd, '.takt/findings/peer-review.json');
+    mkdirSync(dirname(projectLedgerPath), { recursive: true });
+    writeFileSync(projectLedgerPath, JSON.stringify(ledger), 'utf-8');
+    const store = createStore({ projectCwd, reportDir });
+
+    const copyPath = store.createRunCopy();
+
+    const copy = JSON.parse(readFileSync(copyPath, 'utf-8')) as FindingLedger;
+    expect(copy.findings[0]?.provisional?.interpretationEpochs).toBe(1);
+  });
+
+  it.each([true, false])('should normalize a revalidated mutation before returning it when publish is %s', async (publish) => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    const ledger = makeLedger();
+    const lineageKey = 'lineage-revalidated';
+    ledger.findings[0] = {
+      ...ledger.findings[0]!,
+      provisional: {
+        kind: 'interpretation-interrupted',
+        stableKey: 'provisional-revalidated',
+        lineageKey,
+        sourceRawFindingIds: ['raw-1'],
+        reason: 'interrupted',
+        firstObservedAt: ledger.findings[0]!.firstSeen,
+        lastObservedAt: ledger.findings[0]!.lastSeen,
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+      },
+    };
+    ledger.interpretations = [{
+      interpretationKey: 'interpretation-revalidated',
+      reviewerStableKey: 'reviewer-revalidated',
+      lineageKey,
+      candidateEvidenceHash: 'evidence-revalidated',
+      policyVersion: 2,
+      stage: 'interpretation_started',
+      startedAt: ledger.findings[0]!.firstSeen,
+      promptPreconditions: [],
+    }];
+    store.saveLedger(ledger);
+
+    const result = await store.updateLedger(
+      (current) => ({ ledger: current, result: undefined }),
+      (_current, mutation) => ({
+        publish,
+        mutation: {
+          ...mutation,
+          ledger: {
+            ...mutation.ledger,
+            findings: mutation.ledger.findings.map((finding) => (
+              finding.id === 'F-0001'
+                ? {
+                  ...finding,
+                  firstSeen: { ...finding.firstSeen, timestamp: '2026-06-13T00:15:00+02:00' },
+                  lastSeen: { ...finding.lastSeen, timestamp: '2026-06-13T00:15:00+02:00' },
+                  provisional: {
+                    ...finding.provisional!,
+                    interpretationEpochs: 0,
+                  },
+                }
+                : finding
+            )),
+          },
+        },
+      }),
+    );
+
+    expect(result.ledger.findings[0]?.provisional?.interpretationEpochs).toBe(1);
+    const persisted = JSON.parse(readFileSync(join(projectCwd, '.takt/findings/peer-review.json'), 'utf-8')) as FindingLedger;
+    expect(persisted.findings[0]?.provisional?.interpretationEpochs).toBe(1);
+    expect(persisted.findings[0]?.firstSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
+    expect(persisted.findings[0]?.lastSeen.timestamp).toBe('2026-06-12T22:15:00.000Z');
+    expect(store.loadLedger().findings[0]?.provisional?.interpretationEpochs).toBe(1);
+  });
+
+  it('should atomically persist the mutation from the publication-time revalidation', async () => {
+    const projectCwd = makeTempDir('takt-findings-project-');
+    const reportDir = makeTempDir('takt-findings-report-');
+    const store = createStore({ projectCwd, reportDir });
+    store.saveLedger(makeLedger());
+    let revalidationCount = 0;
+
+    const result = await store.updateLedger(
+      (current) => ({ ledger: current, result: 'initial' }),
+      (_current, mutation) => {
+        revalidationCount += 1;
+        const updatedAt = revalidationCount === 1
+          ? '2026-06-13T22:15:00.000Z'
+          : '2026-06-13T23:15:00.000Z';
+        return {
+          publish: true,
+          mutation: {
+            ledger: { ...mutation.ledger, updatedAt },
+            result: updatedAt,
+          },
+        };
+      },
+    );
+
+    expect(revalidationCount).toBe(2);
+    expect(result.ledger.updatedAt).toBe('2026-06-13T23:15:00.000Z');
+    expect(result.result).toBe('2026-06-13T23:15:00.000Z');
+    expect(store.loadLedger()).toEqual(result.ledger);
+  });
+
   it('should protect project ledger and raw findings with owner-only permissions', () => {
     const projectCwd = makeTempDir('takt-findings-project-');
     const reportDir = makeTempDir('takt-findings-report-');

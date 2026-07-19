@@ -24,7 +24,7 @@ import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { normalizeFindingText, parseFindingLocation } from './location.js';
 import { FILE_LINE_EVIDENCE_PATTERN, hasDisputeClaimFor } from './manager-output-validation.js';
 import { effectiveRawFindingRelation, mergeFindingManagerOutputs } from './mechanical-classification.js';
-import { formatConflictId } from './reconciler.js';
+import { collectRegeneratedConflictIds, formatConflictId } from './conflict-identity.js';
 
 /**
  * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
@@ -41,6 +41,12 @@ export interface RejectedRawDecision {
   // 'missing' は manager が対象 raw finding に対して decision を1件も返さな
   // かったケース用の番兵値（RawDecisionKind には該当する語彙が無い）。
   decision: RawDecisionKind | 'missing';
+  reason: string;
+}
+
+export interface RejectedCanonicalDisputeDecision {
+  findingId: string;
+  decision: 'waive';
   reason: string;
 }
 
@@ -87,7 +93,7 @@ export interface UnsupportedRawDecision {
 
 export interface AssembleManagerOutputResult {
   output: FindingManagerOutput;
-  rejectedRawDecisions: RejectedRawDecision[];
+  rejectedRawDecisions: Array<RejectedRawDecision | RejectedCanonicalDisputeDecision>;
   rejectedDisputeDecisions: RejectedDisputeDecision[];
   rejectedConflictDecisions: RejectedConflictDecision[];
   /**
@@ -740,10 +746,10 @@ function assembleConflictDecisions(input: {
   decisions: FindingManagerDecisions['conflictDecisions'];
   /**
    * 最終形の conflicts（merge + canonicalize + waive 変換 + 持ち越し統合の後）を
-   * formatConflictId でハッシュ化した集合。この中に含まれる conflictId は今ラウンド
-   * 再生成される。canonicalize 直後の conflicts だけから計算すると、waive 変換や
-   * 持ち越しで後から足される conflict を見逃し、再生成される conflict の resolve を
-   * 採用してしまう。
+   * 正準署名で照合した集合。現行生成 ID に加え、同じ署名を持つ既存の legacy/current
+   * ID も含む。この中に含まれる conflictId は今ラウンド再生成される。canonicalize
+   * 直後の conflicts だけから計算すると、waive 変換や持ち越しで後から足される
+   * conflict を見逃し、再生成される conflict の resolve を採用してしまう。
    */
   regeneratedConflictIds: ReadonlySet<string>;
 }): { resolvedConflicts: FindingManagerResolvedConflict[]; rejected: RejectedConflictDecision[] } {
@@ -780,9 +786,11 @@ function assembleConflictDecisions(input: {
       });
       continue;
     }
-    // reconciler は resolvedConflicts を先に適用し、その後 conflicts で同じ ID を
-    // active へ戻す。同じラウンドで同じ conflict が再生成されるなら、「resolve を
-    // 採用した」という記録と実状態（active のまま）が食い違うため不採用にする。
+    // reconciler は resolvedConflicts を先に適用し、その後同一の正準 conflict を
+    // active へ戻す。legacy/current ID が統合される場合もあるため、再活性化される
+    // ID は決定で指定された ID と一致しない。同じラウンドで同じ conflict が再生成
+    // されるなら、「resolve を採用した」という記録と実状態（active のまま）が
+    // 食い違うため不採用にする。
     if (input.regeneratedConflictIds.has(decision.conflictId)) {
       rejected.push({
         conflictId: decision.conflictId,
@@ -944,6 +952,14 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     transitionedFindingIds,
     unresolvedEvidenceFindingIds,
   });
+  const canonicalFindingIds = new Set(
+    duplicateResult.duplicateFindings.map((duplicate) => duplicate.canonicalFindingId),
+  );
+  const rejectedCanonicalWaivers = disputeResult.rejected.flatMap((rejection) => (
+    rejection.decision === 'waive' && canonicalFindingIds.has(rejection.findingId)
+      ? [{ findingId: rejection.findingId, decision: 'waive' as const, reason: rejection.reason }]
+      : []
+  ));
   // carried は previousLedger（保存直前の再照合では fresh ledger）の状態で検査して
   // から統合する。初回組み立てと保存の間に別の並列子が対象 finding を closed に
   // 変えていた場合、その carried を残すと reconciler の検証例外で updateLedger
@@ -957,7 +973,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     ...carriedResult.accepted,
   ]);
 
-  const regeneratedConflictIds = new Set(conflicts.map((conflict) => formatConflictId(conflict)));
+  const regeneratedConflictIds = collectRegeneratedConflictIds(input.previousLedger.conflicts, conflicts);
   const conflictResult = assembleConflictDecisions({
     previousLedger: input.previousLedger,
     decisions: input.decisions.conflictDecisions,
@@ -974,7 +990,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
       invalidatedFindings: invalidateResult.invalidatedFindings,
       duplicateFindings: duplicateResult.duplicateFindings,
     },
-    rejectedRawDecisions: rawResult.rejected,
+    rejectedRawDecisions: [...rawResult.rejected, ...rejectedCanonicalWaivers],
     rejectedDisputeDecisions: disputeResult.rejected,
     rejectedConflictDecisions: conflictResult.rejected,
     rejectedCarriedConflicts: carriedResult.rejected,

@@ -170,3 +170,26 @@ export function markInterpretationsApplied(
 export function countInterpretationEpochs(ledger: FindingLedger, lineageKey: string): number {
   return (ledger.interpretations ?? []).filter((record) => record.lineageKey === lineageKey).length;
 }
+
+/** interpretation epoch の正本は WAL だけである。 */
+export function normalizeProvisionalInterpretationEpochs(ledger: FindingLedger): FindingLedger {
+  const epochsByLineage = new Map<string, number>();
+  for (const record of ledger.interpretations ?? []) {
+    epochsByLineage.set(record.lineageKey, (epochsByLineage.get(record.lineageKey) ?? 0) + 1);
+  }
+  return {
+    ...ledger,
+    findings: ledger.findings.map((finding) => {
+      if (finding.provisional === undefined) {
+        return finding;
+      }
+      return {
+        ...finding,
+        provisional: {
+          ...finding.provisional,
+          interpretationEpochs: epochsByLineage.get(finding.provisional.lineageKey) ?? 0,
+        },
+      };
+    }),
+  };
+}

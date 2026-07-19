@@ -247,7 +247,6 @@ export function applyInterpretationDecisions(input: {
       reason: decision.decision === 'same_with_proof'
         ? 'Stored same_with_proof decision no longer matches an engine-issued proof; kept provisional'
         : decision.reason,
-      addInterpretationEpochs: 1,
     });
     return {
       ...result,

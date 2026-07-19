@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
+import { normalizeRfc3339Timestamp } from './rfc3339.js';
 import type {
   FindingConflictAdjudicationOutput,
   FindingLedger,
@@ -30,6 +31,18 @@ import {
 } from './finding-types.js';
 
 const nonEmptyString = z.string().min(1);
+
+export const Rfc3339TimestampSchema = z.string().min(1).transform((timestamp, ctx) => {
+  try {
+    return normalizeRfc3339Timestamp(timestamp);
+  } catch (error) {
+    ctx.addIssue({
+      code: 'custom',
+      message: error instanceof Error ? error.message : 'Expected a valid RFC 3339 timestamp',
+    });
+    return z.NEVER;
+  }
+});
 
 export const FindingContractManagerConfigRawSchema = z.object({
   persona: nonEmptyString,
@@ -65,7 +78,7 @@ export const FindingLifecycleSchema = z.enum(FINDING_LIFECYCLES);
 export const FindingObservationSchema = z.object({
   runId: nonEmptyString,
   stepName: nonEmptyString,
-  timestamp: nonEmptyString,
+  timestamp: Rfc3339TimestampSchema,
 }).strict();
 
 // ---------------------------------------------------------------------------
@@ -135,7 +148,7 @@ export const FindingLedgerEntrySchema = z.object({
   rawFindingIds: z.array(nonEmptyString),
   firstSeen: FindingObservationSchema,
   lastSeen: FindingObservationSchema,
-  resolvedAt: nonEmptyString.optional(),
+  resolvedAt: Rfc3339TimestampSchema.optional(),
   resolvedEvidence: nonEmptyString.optional(),
   reopenedEvidence: nonEmptyString.optional(),
   waivers: z.array(z.object({
@@ -148,7 +161,7 @@ export const FindingLedgerEntrySchema = z.object({
     evidence: nonEmptyString,
     recordedAt: FindingObservationSchema,
   }).strict()).optional(),
-  invalidatedAt: nonEmptyString.optional(),
+  invalidatedAt: Rfc3339TimestampSchema.optional(),
   invalidatedEvidence: nonEmptyString.optional(),
   supersededByFindingId: nonEmptyString.optional(),
   revision: z.number().int().positive().optional(),
@@ -305,7 +318,7 @@ export const FindingLedgerConflictSchema = z.object({
   description: nonEmptyString,
   firstSeen: FindingObservationSchema,
   lastSeen: FindingObservationSchema,
-  resolvedAt: nonEmptyString.optional(),
+  resolvedAt: Rfc3339TimestampSchema.optional(),
   resolvedEvidence: nonEmptyString.optional(),
   adjudications: z.array(FindingConflictAdjudicationRecordSchema).optional(),
   adjudicationAttempts: z.array(FindingConflictAdjudicationAttemptSchema).optional(),
@@ -412,14 +425,14 @@ export const FindingLedgerFixpointStateSchema = z.object({
 /** 有限停止予算のラウンド跨ぎ累積状態。roundsCompleted は roundMarkers.length から導出する（冪等な適用済み集合）。 */
 export const FindingLedgerStopBudgetStateSchema = z.object({
   roundMarkers: z.array(nonEmptyString),
-  firstRoundAt: nonEmptyString,
+  firstRoundAt: Rfc3339TimestampSchema,
   exhausted: z.boolean(),
 }).strict();
 
 /** review-integrity 予算（review-integrity requirement）のラウンド跨ぎ累積状態。stopBudget と同形。 */
 export const FindingLedgerReviewIntegrityStateSchema = z.object({
   roundMarkers: z.array(nonEmptyString),
-  firstRoundAt: nonEmptyString,
+  firstRoundAt: Rfc3339TimestampSchema,
   exhausted: z.boolean(),
 }).strict();
 
@@ -427,7 +440,7 @@ export const FindingLedgerSchema = z.object({
   version: z.literal(1),
   workflowName: nonEmptyString,
   nextId: z.number().int().positive(),
-  updatedAt: nonEmptyString,
+  updatedAt: Rfc3339TimestampSchema,
   findings: z.array(FindingLedgerEntrySchema),
   rawFindings: z.array(RawFindingSchema),
   conflicts: z.array(FindingLedgerConflictSchema),

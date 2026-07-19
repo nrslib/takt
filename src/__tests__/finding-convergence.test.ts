@@ -202,6 +202,10 @@ describe('item 3/6: duplicateDecisions merges duplicates into a canonical findin
     expect(result.output.waivedFindings).toEqual([]);
     expect(result.rejectedDisputeDecisions).toHaveLength(1);
     expect(result.rejectedDisputeDecisions[0]?.reason).toContain('state transition');
+    expect(result.rejectedRawDecisions).toEqual([expect.objectContaining({
+      findingId: 'F-0001',
+      decision: 'waive',
+    })]);
   });
 
   it('Given a duplicateDecisions entry where the canonical is also a duplicate of another entry When assembled Then the cyclic entry is rejected', () => {
@@ -727,6 +731,12 @@ describe('item 8: backward compatibility with a pre-existing (real) v1 ledger', 
     const ledger = parseFindingLedger(raw);
     expect(ledger.version).toBe(1);
     expect(ledger.findings.length).toBeGreaterThan(0);
+    const findingIds = new Set(ledger.findings.map((finding) => finding.id));
+    const targetFindingIds = ledger.rawFindings
+      .map((rawFinding) => rawFinding.targetFindingId)
+      .filter((targetFindingId): targetFindingId is string => targetFindingId !== undefined);
+    expect(targetFindingIds.length).toBeGreaterThan(0);
+    expect(targetFindingIds.every((targetFindingId) => findingIds.has(targetFindingId))).toBe(true);
     // 既存データは invalidated/superseded を一切含まない。新状態は追加的で
     // あり、読み込みに移行処理は要求されない。
     expect(ledger.findings.every((f) => f.status === 'open' || f.status === 'resolved' || f.status === 'waived')).toBe(true);

@@ -22,7 +22,9 @@ export function computeInvalidLocationCandidates(
 export function describeManagerRejections(assembly: AssembleManagerOutputResult): string[] {
   return [
     ...assembly.rejectedRawDecisions.map((rejection) => (
-      `rawDecisions: raw finding "${rejection.rawFindingId}" (${rejection.decision}) rejected: ${rejection.reason}`
+      'rawFindingId' in rejection
+        ? `rawDecisions: raw finding "${rejection.rawFindingId}" (${rejection.decision}) rejected: ${rejection.reason}`
+        : `rawDecisions: canonical finding "${rejection.findingId}" (${rejection.decision}) rejected: ${rejection.reason}`
     )),
     ...assembly.rejectedDisputeDecisions.map((rejection) => (
       `disputeDecisions: finding "${rejection.findingId}" (${rejection.decision}) rejected: ${rejection.reason}`

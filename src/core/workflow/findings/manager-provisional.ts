@@ -10,7 +10,6 @@ interface RawProvisionalSpecInput {
   wire: RawFinding;
   canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
   reason: string;
-  addInterpretationEpochs?: number;
 }
 
 export function provisionalSpecForRaw(input: RawProvisionalSpecInput): ProvisionalFindingSpec {
@@ -37,7 +36,6 @@ export function provisionalSpecForRawKind(
     description: input.wire.description,
     ...(input.wire.suggestion !== undefined ? { suggestion: input.wire.suggestion } : {}),
     reviewers: [input.wire.reviewer],
-    addInterpretationEpochs: input.addInterpretationEpochs ?? 0,
   };
 }
 
@@ -72,6 +70,5 @@ export function stalePreconditionSpec(input: {
     severity: 'high',
     description: input.reason,
     reviewers: ['findings-manager'],
-    addInterpretationEpochs: 0,
   };
 }

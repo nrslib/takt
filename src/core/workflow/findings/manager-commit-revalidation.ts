@@ -43,6 +43,9 @@ export function revalidateManagerPlan(input: {
   });
   const freshLandedRawIds = collectLandedRawIds(freshAssembly.output);
   const staleDecisionSpecs = freshAssembly.rejectedRawDecisions.flatMap((rejected) => {
+    if (!('rawFindingId' in rejected)) {
+      return [];
+    }
     if (freshLandedRawIds.has(rejected.rawFindingId)) {
       return [];
     }
